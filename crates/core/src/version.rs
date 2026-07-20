@@ -5,6 +5,7 @@
 
 //! Tag-derived current versions and intent-derived next versions.
 
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::model::Bump;
 use semver::Version;
@@ -48,6 +49,52 @@ pub fn aggregate_bumps<'a>(
         }
     }
     aggregate
+}
+
+/// Propagate the configured minimum bump to internal dependents in a shared ecosystem.
+pub fn effective_bumps(
+    config: &Config,
+    declared: &BTreeMap<String, Bump>,
+) -> BTreeMap<String, Bump> {
+    let mut effective = declared.clone();
+    for id in config.packages.keys() {
+        effective.entry(id.clone()).or_default();
+    }
+
+    loop {
+        let mut changed = false;
+        for (id, package) in &config.packages {
+            for dependency in &package.depends_on {
+                if effective[dependency] == Bump::None || !share_ecosystem(config, id, dependency) {
+                    continue;
+                }
+                let required = config.settings.internal_dependency_bump;
+                if effective[id] < required {
+                    effective.insert(id.clone(), required);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    effective
+}
+
+fn share_ecosystem(config: &Config, left: &str, right: &str) -> bool {
+    config.packages[left]
+        .projections
+        .iter()
+        .any(|left_projection| {
+            left_projection.adapter.ecosystem().is_some()
+                && config.packages[right]
+                    .projections
+                    .iter()
+                    .any(|right_projection| {
+                        left_projection.adapter.ecosystem() == right_projection.adapter.ecosystem()
+                    })
+        })
 }
 
 /// Apply strict SemVer bump semantics, including pre-1.0 versions.
@@ -223,5 +270,33 @@ mod tests {
     fn bump_removes_prerelease_and_build_metadata() {
         let current = Version::parse("1.2.3-beta.2+build.1").expect("valid version");
         assert_eq!(bump_version(&current, Bump::Patch), Version::new(1, 2, 4));
+    }
+
+    #[test]
+    fn dependency_bumps_propagate_only_in_shared_ecosystems() {
+        let config = Config::from_yaml(
+            r#"
+packages:
+  library:
+    path: library
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+  application:
+    path: application
+    depends-on: [library]
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+  unrelated:
+    path: unrelated
+    depends-on: [library]
+    projections:
+      - { adapter: cargo, file: Cargo.toml, mode: committed }
+"#,
+        )
+        .expect("valid config");
+        let declared = BTreeMap::from([("library".to_owned(), Bump::Minor)]);
+        let effective = effective_bumps(&config, &declared);
+        assert_eq!(effective["application"], Bump::Patch);
+        assert_eq!(effective["unrelated"], Bump::None);
     }
 }

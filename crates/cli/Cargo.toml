@@ -19,4 +19,3 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 itentional-core = { path = "../core", version = "0.1.0" }
-
