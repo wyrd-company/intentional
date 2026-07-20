@@ -12,7 +12,9 @@ repository.workspace = true
 description = "Core model and release planning for itentional"
 
 [dependencies]
+gix.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+tagver.workspace = true
 thiserror.workspace = true

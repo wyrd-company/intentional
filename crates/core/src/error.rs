@@ -29,6 +29,14 @@ pub enum Error {
     /// YAML could not be parsed or serialized.
     #[error("invalid YAML: {0}")]
     Yaml(#[from] serde_yaml::Error),
+
+    /// Git state could not be discovered or traversed.
+    #[error("git operation failed: {0}")]
+    Git(String),
+
+    /// A semantic version could not be represented.
+    #[error("invalid semantic version: {0}")]
+    Semver(#[from] semver::Error),
 }
 
 impl Error {

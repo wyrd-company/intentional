@@ -236,9 +236,9 @@ fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
 }
 
 fn validate_tag_template(id: &str, template: &str) -> Result<()> {
-    if !template.contains("{id}") || !template.contains("{version}") {
+    if template.matches("{id}").count() != 1 || template.matches("{version}").count() != 1 {
         return Err(Error::Validation(format!(
-            "package {id} tag template must contain {{id}} and {{version}}"
+            "package {id} tag template must contain exactly one {{id}} and {{version}}"
         )));
     }
     if template.contains("v{version}") {
