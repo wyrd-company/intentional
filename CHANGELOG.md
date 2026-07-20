@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+### Fixes
+
+- Include the project README in both published Rust crates.
+
 ## 0.1.0
 
 Initial release.
