@@ -1,0 +1,36 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+version: "3"
+
+tasks:
+  build:
+    desc: Build the complete Rust workspace
+    cmds:
+      - cargo build --workspace
+
+  test:
+    desc: Run all workspace tests
+    cmds:
+      - cargo test --workspace
+
+  lint:
+    desc: Run Clippy with warnings denied
+    cmds:
+      - cargo clippy --workspace --all-targets -- -D warnings
+
+  fmt:
+    desc: Format all Rust code
+    cmds:
+      - cargo fmt --all
+
+  fmt-check:
+    desc: Verify Rust formatting
+    cmds:
+      - cargo fmt --all -- --check
+
+  ci:
+    desc: Run all continuous-integration checks locally
+    deps: [fmt-check, lint, test]
+

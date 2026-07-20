@@ -1,0 +1,16 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+[package]
+name = "itentional-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core model and release planning for itentional"
+
+[dependencies]
+thiserror.workspace = true
+

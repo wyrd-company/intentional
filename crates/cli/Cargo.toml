@@ -1,0 +1,22 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+[package]
+name = "itentional-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Polyglot intent-driven release CLI"
+
+[[bin]]
+name = "itentional"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+itentional-core = { path = "../core", version = "0.1.0" }
+
