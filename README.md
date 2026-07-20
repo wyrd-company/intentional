@@ -1,4 +1,5 @@
 # itentional
+
 A polyglot release and versioning tool
 
 - Manage change intents across various languages / frameworks including:
@@ -7,3 +8,4 @@ A polyglot release and versioning tool
   - Dart pubspec.yaml
   - Dotnet csproj
   - Python pyproject
+  - Go modules (tag-only)

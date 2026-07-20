@@ -1,0 +1,174 @@
+$schema: https://refinery.systems/ontology/technical-design
+objective: >-
+  Provide a single, fast, dependency-free CLI that manages change intents,
+  version computation, manifest projection, changelogs, tags, and a verifiable
+  release plan across polyglot repositories — node, Rust, Dart, .NET, Python,
+  and Go — replacing per-ecosystem versioning tools and bespoke CD glue.
+background:
+  current-design: >-
+    Changesets-style workflows are ecosystem-bound. Changesets itself is
+    npm-only: packages in other ecosystems must be listed in its ignore
+    configuration and handled by hand-written CD jobs (for example, cutting a
+    Dart git tag after an npm publish). Repositories that need release rigor
+    beyond changesets build bespoke release-contract scripts that implement
+    deterministic planning, publication ordering, and verification per
+    repository. Tag-driven calculators (MinVer, tagver) compute versions from
+    git tags but cannot know whether pending work is breaking, so they guess
+    the next version.
+  problems:
+    - No existing tool covers node, Rust, Dart, .NET, Python, and Go manifests
+      as a single static binary; knope is closest but does not cover csproj or
+      pubspec, covector is JavaScript, changie does not bump manifests,
+      release-plz is Rust-only.
+    - Ecosystem-name package identity forces polyglot packages out of the
+      versioning workflow entirely (ignore lists plus CD duct tape).
+    - Tag-driven and manifest-driven versioning models conflict when aimed at
+      the same repository, and each has a known weakness the other repairs.
+    - Release planning, ordering, and verification logic gets rebuilt per
+      repository as untested CI scripts.
+design-challenges:
+  version-source-of-truth: >-
+    Manifest-driven ecosystems (npm, cargo, pub, msbuild, python) and
+    tag-driven ecosystems (Go modules) appear to demand opposing models. The
+    real invariant is narrower: every registry except Go's requires the
+    version to be materialized in the artifact at publish time — none require
+    it to be stored in git. The design must reconcile both without forking the
+    mental model per repository.
+  cross-ecosystem-identity: >-
+    One logical package may ship to multiple ecosystems at one version (an npm
+    and a pub build of the same runtime). Ecosystem package names cannot serve
+    as identity without recreating the ignore-list problem.
+  choreography-diversity: >-
+    Release choreography varies legitimately per repository: local
+    commit-and-push, bot-authored version PRs, and deterministic
+    source-to-release commit pipelines. The tool must compose with all of them
+    without owning any of them.
+  format-preserving-writes: >-
+    Projecting versions into manifests must not destroy comments or formatting
+    in YAML, TOML, or JSON files that humans also edit.
+  bump-evidence: >-
+    Declared bump levels are claims. Public API surface diffs can ground those
+    claims, but API scanning is ecosystem-specific and must not expand the
+    tool into a polyglot static-analysis project.
+proposed-design:
+  high-level-overview: >-
+    Intents answer what the next version should be; tags answer what was
+    released; manifests are projections, never sources. Accumulated intent
+    files determine the next bump per logical package. The tool always tags on
+    release; tags are the canonical release record in every mode. Manifests
+    receive the version by per-projection policy — committed, injected at
+    build time, or none (Go's degenerate case). Between releases the two
+    models compose: the next version from intents plus tag height from tagver
+    yields deterministic ephemeral build versions with no stored state. The
+    tool's boundary is git state plus a canonical, digest-bound release plan
+    that CD executes; it never speaks a registry protocol, and it never
+    commits, pushes, or opens pull requests.
+  core-model: >-
+    A workspace declares an inventory of logical packages in
+    .itentional/config.yml. Each package has a path, one or more projections,
+    a tag template (default "{id}@{version}", no v prefix), and optional
+    explicit depends-on edges. The current version of a package is the latest
+    matching tag (tagver supplies tag discovery and height); the next version
+    is that tag plus the maximum accumulated intent bump. No version field
+    exists in config, so nothing drifts by construction; hand-edited manifest
+    versions are drift that status reports — the tag is authoritative.
+    Monorepo support is first-class: per-package intents, internal-dependency
+    bumping with auto-generated changelog entries, fixed/linked groups when
+    needed, and changed/unchanged partitioning per release. An opt-in
+    workspace-level global tag (plain X.Y.Z, max bump across the release) is
+    available as a CD trigger. Within one ecosystem the dependency graph is
+    derived from manifests to assist and verify; the authored config is the
+    authority because cross-ecosystem edges are invisible to manifests.
+  intent-files: >-
+    Intents live in .itentional/intents/ as markdown files with a YAML
+    frontmatter block mapping logical package ids to bump levels; the markdown
+    body is the changelog prose. Filenames are generated memorable slugs so
+    parallel branches do not conflict. Intents reference logical ids, never
+    ecosystem names. A logical package with npm and pub projections is one
+    package with one version — cross-ecosystem linked versioning falls out of
+    identity rather than being a feature.
+  projections-and-adapters: >-
+    Ecosystem adapters (npm, cargo, pub, msbuild, python, go) know where the
+    version lives in their manifest, how to rewrite internal dependency
+    ranges, and later, publish-command templates for the release plan. Format
+    adapters (json, yaml, toml) take a file path and pointer and cover
+    arbitrary version-bearing files (for example a devcontainer feature
+    manifest). All writers are format-preserving (toml_edit-class libraries).
+    Ecosystem adapters are thin specializations of format adapters. The go
+    adapter is tag-only, except that a major bump rewrites the module path
+    suffix. Projection modes: committed (version bump lands in a commit),
+    injected (a placeholder is stamped at build time), none.
+  version-computation: >-
+    Ephemeral build versions compose statelessly: next version from intents,
+    prerelease identifier, height from tagver — for example 1.3.0-alpha.5.
+    Channel releases (beta and similar) are opt-in per invocation via
+    --channel on plan, apply, and tag; the iteration number derives from
+    existing tags (max existing channel tag for that version, plus one). No
+    stored pre-mode state exists. Channel releases do not consume intents;
+    intents survive until the final channel-less release, so every channel
+    release recomputes from the full intent set. Pre-1.0 bump mapping is
+    version-aware per ecosystem semantics.
+  command-surface: >-
+    init scans manifests and generates config plus inventory. add authors an
+    intent (flags or interactive). status reports pending intents, computed
+    next versions, and drift. plan emits the canonical release plan, read-only.
+    apply materializes a release — writes projections and changelogs, consumes
+    intents — mutating the working tree only. stamp writes computed (optionally
+    prerelease) versions into projections and touches nothing else; it is the
+    build-time command for injected projections and the MinVer replacement.
+    tag creates per-package and optional global tags for an applied release
+    and is the only git-writing command. check is the CI gate: config, schema,
+    and intent validity plus plan determinism. Every writing verb takes
+    --dry-run and prints exactly what the real run would do. The tool never
+    commits, pushes, or opens pull requests; choreography belongs to the
+    harness.
+  release-plan: >-
+    plan emits canonical JSON listing packages, old and new versions,
+    contributing intent ids, tags, publication order (dependency-ordered), and
+    rendered release notes per package, sealed with a digest of the canonical
+    serialization. CD executes the plan with ecosystem publishers and creates
+    forge releases from the carried notes. Source-to-release commit
+    choreography, artifact digests, and evidence binding are deliberate future
+    extensions; artifact digests require running ecosystem pack tooling, which
+    crosses the registry boundary and is excluded from the first version.
+  changelog-model: >-
+    apply writes each affected package's CHANGELOG.md from the consumed intent
+    bodies; a multi-package intent's body lands in each affected package's
+    changelog, and a multi-projection package has exactly one changelog.
+    Sections group by bump level (breaking, features, fixes); an optional kind
+    frontmatter field can refine grouping later without schema breakage.
+    Internal dependency bumps generate their own entries. Channel releases
+    write a section for the channel version; the final release replaces that
+    version's prerelease sections with the consolidated section. Output is
+    deterministic, lintable CommonMark. Enrichment (PR links, contributors)
+    would arrive as data passed into the tool, never fetched by it.
+  api-approval-gate: >-
+    Future scope, first increment after the core ships. The tool orchestrates
+    an approval-test loop over public API surfaces but never scans a language
+    itself: per-package config names a command that emits a deterministic,
+    line-oriented surface (cargo public-api, api-extractor, PublicApiGenerator,
+    griffe, apidiff, dart_apitool). A golden surface file is checked into git;
+    api check regenerates, diffs, and on failure leaves the received file
+    behind; api approve blesses it. Classification floors: additions-only
+    implies at least minor, mutation or removal implies at least major, no
+    change implies patch; the mapping is version-aware pre-1.0. check fails
+    when a declared bump is below the floor; declaring above the floor is
+    always allowed because behavioral breaks are invisible to surfaces. The
+    gate is opt-in per package, and add can prefill the suggested bump from
+    the current diff.
+  crate-layout-and-distribution: >-
+    A Cargo workspace mirroring tagver: itentional-core (model, adapters,
+    planning; no CLI dependencies) and itentional-cli (thin clap binary).
+    Config and intent-frontmatter schemas publish under
+    https://intentional.foo/schemas/. The
+    tagver library crate supplies tag discovery and height math, gitoxide
+    transitively. Distribution: crates.io, the wyrd-company/tools Homebrew
+    tap, and a plumbing GitHub Action that runs the binary; a higher-level
+    orchestration action (version-PR choreography) is future scope. MSRV and
+    CI conventions follow tagver.
+  out-of-scope: >-
+    Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
+    committing, pushing, or opening pull requests permanently; language
+    parsing and API surface scanning permanently (delegated to per-package
+    commands); forge API calls for changelog enrichment; artifact digests and
+    evidence binding in the first version.
