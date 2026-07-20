@@ -12,5 +12,7 @@ repository.workspace = true
 description = "Core model and release planning for itentional"
 
 [dependencies]
+semver.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
 thiserror.workspace = true
-
