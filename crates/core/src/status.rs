@@ -86,7 +86,7 @@ impl WorkspaceStatus {
                 let relative = package.path.join(&projection.file);
                 let text = std::fs::read_to_string(root.join(&relative))
                     .map_err(|error| crate::Error::io(root.join(&relative), error))?;
-                let actual = read_projection_version(root, projection, &text)?;
+                let actual = read_projection_version(root, &relative, projection, &text)?;
                 if actual != expected {
                     drift.push(Drift {
                         package: id.clone(),
@@ -107,6 +107,7 @@ impl WorkspaceStatus {
 
 fn read_projection_version(
     root: &Path,
+    relative: &Path,
     projection: &crate::Projection,
     text: &str,
 ) -> Result<String> {
@@ -115,8 +116,9 @@ fn read_projection_version(
         Adapter::Cargo => match CargoAdapter.version(text)? {
             Some(version) => Ok(version),
             None => {
-                let workspace = std::fs::read_to_string(root.join("Cargo.toml"))
-                    .map_err(|error| crate::Error::io(root.join("Cargo.toml"), error))?;
+                let workspace_path = crate::apply::workspace_manifest(root, relative)?;
+                let workspace = std::fs::read_to_string(root.join(&workspace_path))
+                    .map_err(|error| crate::Error::io(root.join(&workspace_path), error))?;
                 TomlFormat.read_text(&workspace, "/workspace/package/version")
             }
         },

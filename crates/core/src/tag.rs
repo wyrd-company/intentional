@@ -7,9 +7,9 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::plan::ReleasePlan;
-use crate::version::VersionRepository;
-use semver::Version;
+use crate::model::Bump;
+use crate::version::{bump_version, VersionRepository};
+use semver::{Prerelease, Version};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -25,45 +25,43 @@ impl TagResult {
     pub fn build(root: &Path, channel: Option<&str>) -> Result<Self> {
         let config = Config::load(root)?;
         let mut tags = BTreeSet::new();
-        if let Some(channel) = channel {
-            let plan = ReleasePlan::build(root, Some(channel))?;
-            for package in &plan.packages {
-                tags.extend(package.tags.iter().cloned());
+        let versions = VersionRepository::discover(root)?;
+        let mut max_bump = Bump::None;
+        for (id, package) in &config.packages {
+            let changelog_path = root.join(&package.path).join("CHANGELOG.md");
+            let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
+                continue;
+            };
+            let Some(version) = leading_changelog_version(&changelog)? else {
+                continue;
+            };
+            let matches_channel = match channel {
+                Some(channel) => channel_iteration(&version, channel).is_some(),
+                None => version.pre.is_empty(),
+            };
+            if !matches_channel {
+                continue;
             }
-            if let Some(global) = plan.global_tag {
-                tags.insert(global);
+            let current = versions.current_version(id, &package.tag)?;
+            if version <= current {
+                continue;
             }
-        } else {
-            let versions = VersionRepository::discover(root)?;
-            let mut applied = Vec::new();
-            for (id, package) in &config.packages {
-                let changelog_path = root.join(&package.path).join("CHANGELOG.md");
-                let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
-                    continue;
-                };
-                let Some(version) = leading_changelog_version(&changelog)? else {
-                    continue;
-                };
-                if !version.pre.is_empty() {
-                    continue;
-                }
-                let current = versions.current_version(id, &package.tag)?;
-                if version <= current {
-                    continue;
-                }
-                tags.insert(
-                    package
-                        .tag
-                        .replace("{id}", id)
-                        .replace("{version}", &version.to_string()),
-                );
-                applied.push(version);
-            }
-            if config.settings.global_tag {
-                if let Some(version) = applied.into_iter().max() {
-                    tags.insert(version.to_string());
-                }
-            }
+            max_bump = max_bump.max(infer_bump(&current, &version));
+            tags.insert(
+                package
+                    .tag
+                    .replace("{id}", id)
+                    .replace("{version}", &version.to_string()),
+            );
+        }
+        if config.settings.global_tag && max_bump != Bump::None {
+            let current = versions.current_version("", "{version}")?;
+            let base = bump_version(&current, max_bump);
+            let version = match channel {
+                Some(channel) => global_channel_version(&versions, &base, channel)?,
+                None => base,
+            };
+            tags.insert(version.to_string());
         }
         if tags.is_empty() {
             return Err(Error::Validation(
@@ -128,6 +126,45 @@ fn leading_changelog_version(changelog: &str) -> Result<Option<Version>> {
         .map_err(Error::from)
 }
 
+fn channel_iteration(version: &Version, channel: &str) -> Option<u64> {
+    let (name, iteration) = version.pre.as_str().split_once('.')?;
+    (name == channel).then(|| iteration.parse().ok()).flatten()
+}
+
+fn infer_bump(current: &Version, applied: &Version) -> Bump {
+    if applied.major > current.major {
+        Bump::Major
+    } else if applied.minor > current.minor {
+        Bump::Minor
+    } else if applied.patch > current.patch {
+        Bump::Patch
+    } else {
+        Bump::None
+    }
+}
+
+fn global_channel_version(
+    repository: &VersionRepository,
+    base: &Version,
+    channel: &str,
+) -> Result<Version> {
+    let iteration = repository
+        .all_versions("", "{version}")?
+        .into_iter()
+        .filter(|version| {
+            version.major == base.major
+                && version.minor == base.minor
+                && version.patch == base.patch
+        })
+        .filter_map(|version| channel_iteration(&version, channel))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let mut version = base.clone();
+    version.pre = Prerelease::new(&format!("{channel}.{iteration}"))?;
+    Ok(version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +175,18 @@ mod tests {
         assert_eq!(
             leading_changelog_version(changelog).expect("valid changelog"),
             Some(Version::new(2, 1, 0))
+        );
+    }
+
+    #[test]
+    fn infers_highest_semantic_bump() {
+        assert_eq!(
+            infer_bump(&Version::new(4, 2, 1), &Version::new(4, 3, 0)),
+            Bump::Minor
+        );
+        assert_eq!(
+            infer_bump(&Version::new(4, 2, 1), &Version::new(5, 0, 0)),
+            Bump::Major
         );
     }
 }

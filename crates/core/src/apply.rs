@@ -420,9 +420,7 @@ fn update_changelog(
         boundaries.insert(0, 0);
     }
     let preamble_end = boundaries.first().copied().unwrap_or(existing.len());
-    let mut kept = String::new();
-    kept.push_str(existing[..preamble_end].trim_end());
-    kept.push_str("\n\n");
+    let mut kept = Vec::new();
     for (index, start) in boundaries.iter().enumerate() {
         let end = boundaries.get(index + 1).copied().unwrap_or(existing.len());
         let candidate = &existing[*start..end];
@@ -430,18 +428,19 @@ fn update_changelog(
         let exact = heading == format!("## {version}");
         let prerelease = final_release && heading.starts_with(&format!("## {version}-"));
         if !exact && !prerelease {
-            kept.push_str(candidate.trim());
-            kept.push_str("\n\n");
+            kept.push(candidate.trim());
         }
     }
-    let insertion = preamble_end.min(kept.len());
     let mut output = String::new();
-    output.push_str(kept[..insertion].trim_end());
+    output.push_str(existing[..preamble_end].trim_end());
     output.push_str("\n\n");
     output.push_str(section.trim());
-    output.push_str("\n\n");
-    output.push_str(kept[insertion..].trim());
     output.push('\n');
+    for candidate in kept {
+        output.push('\n');
+        output.push_str(candidate);
+        output.push('\n');
+    }
     output
 }
 
@@ -461,5 +460,19 @@ mod tests {
         assert!(output.contains("## 1.2.0\n"));
         assert!(!output.contains("beta.2"));
         assert!(output.contains("## 1.1.0"));
+    }
+
+    #[test]
+    fn new_changelog_has_lintable_spacing() {
+        let output = update_changelog(
+            None,
+            "## 1.0.1\n\n### Fixes\n\n- Correct a defect.",
+            "1.0.1",
+            true,
+        );
+        assert_eq!(
+            output,
+            "# Changelog\n\n## 1.0.1\n\n### Fixes\n\n- Correct a defect.\n"
+        );
     }
 }

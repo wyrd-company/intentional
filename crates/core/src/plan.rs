@@ -134,12 +134,19 @@ impl ReleasePlan {
 
         let publication_order = publication_order(config, &changed);
         let channel = channel.map(str::to_owned);
-        let global_tag = if config.settings.global_tag {
-            packages
+        let global_tag = if config.settings.global_tag && !packages.is_empty() {
+            let current = repository.current_version("", "{version}")?;
+            let bump = packages
                 .iter()
-                .filter_map(|package| Version::parse(&package.new_version).ok())
+                .map(|package| package.bump)
                 .max()
-                .map(|version| version.to_string())
+                .unwrap_or(Bump::None);
+            let base = bump_version(&current, bump);
+            let version = match channel.as_deref() {
+                Some(channel) => channel_version(&repository, "", "{version}", &base, channel)?,
+                None => base,
+            };
+            Some(version.to_string())
         } else {
             None
         };

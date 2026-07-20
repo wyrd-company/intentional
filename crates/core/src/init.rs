@@ -56,6 +56,9 @@ pub fn discover_config(root: &Path) -> Result<InitResult> {
         let Some(adapter) = adapter_for(entry.path()) else {
             continue;
         };
+        if !is_project_manifest(entry.path(), adapter)? {
+            continue;
+        }
         let directory = entry.path().parent().expect("manifest has parent");
         let relative_directory = directory.strip_prefix(root).map_err(|error| {
             Error::Validation(format!("manifest is outside workspace: {error}"))
@@ -137,6 +140,17 @@ fn adapter_for(path: &Path) -> Option<Adapter> {
         name if name.ends_with(".csproj") => Some(Adapter::Msbuild),
         _ => None,
     }
+}
+
+fn is_project_manifest(path: &Path, adapter: Adapter) -> Result<bool> {
+    if adapter != Adapter::Cargo {
+        return Ok(true);
+    }
+    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+    let document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| Error::Validation(format!("invalid Cargo.toml: {error}")))?;
+    Ok(document.get("package").is_some())
 }
 
 #[cfg(test)]

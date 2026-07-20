@@ -90,6 +90,11 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.commit("add fixture");
 
     repo.cli().arg("init").assert().success();
+    let generated = fs::read_to_string(repo.root.join(".itentional/config.yml")).unwrap();
+    repo.write(
+        ".itentional/config.yml",
+        &generated.replace("global-tag: false", "global-tag: true"),
+    );
     repo.cli()
         .args([
             "add",
@@ -113,6 +118,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
     assert_eq!(plan["packages"][0]["old_version"], "0.0.0");
     assert_eq!(plan["packages"][0]["new_version"], "0.0.1");
     assert_eq!(plan["publication_order"][0], "sample");
+    assert_eq!(plan["global_tag"], "0.0.1");
     assert!(plan["digest"].as_str().unwrap().starts_with("sha256:"));
 
     repo.cli().arg("apply").assert().success();
@@ -126,12 +132,37 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.commit("apply release");
 
     repo.cli().arg("tag").assert().success();
-    assert_eq!(git(&repo.root, &["tag", "--list"]), "sample@0.0.1");
+    let tags = git(&repo.root, &["tag", "--list"]);
+    assert!(tags.contains("0.0.1"));
+    assert!(tags.contains("sample@0.0.1"));
     repo.cli()
         .arg("status")
         .assert()
         .success()
         .stdout(predicate::str::contains("Drift: none"));
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn init_ignores_cargo_workspace_only_manifests() {
+    let repo = TestRepo::new();
+    repo.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/library\"]\nresolver = \"2\"\n",
+    );
+    repo.write(
+        "crates/library/Cargo.toml",
+        "[package]\nname = \"sample-library\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.commit("add fixture");
+
+    repo.cli().arg("init").assert().success();
+    let config = itentional_core::Config::load(&repo.root).expect("generated config");
+    assert_eq!(config.packages.len(), 1);
+    assert_eq!(
+        config.packages["library"].path,
+        PathBuf::from("crates/library")
+    );
 }
 
 #[test]
@@ -214,6 +245,14 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
         .args(["tag", "--channel", "beta"])
         .assert()
         .success();
+    repo.cli()
+        .args(["tag", "--channel", "beta"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "tag sample@1.1.0-beta.1 already exists",
+        ));
+    assert!(!git(&repo.root, &["tag", "--list"]).contains("beta.2"));
 
     let second: Value = serde_json::from_slice(
         &repo
@@ -255,6 +294,45 @@ fn status_reports_manifest_drift_from_tag_version() {
         .assert()
         .success()
         .stdout(predicate::str::contains("manifest 9.9.9 != tag 1.0.0"));
+}
+
+#[test]
+fn global_tag_advances_its_own_stream_by_the_highest_bump() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".itentional/config.yml",
+        &config("committed").replace(
+            "packages:",
+            "settings:\n  global-tag: true\n  internal-dependency-bump: patch\npackages:",
+        ),
+    );
+    repo.write(".itentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.tag("sample@1.0.0");
+    repo.tag("4.0.0");
+    repo.write(
+        ".itentional/intents/gentle-willow-1234.md",
+        &intent("minor", "Add a user-visible capability."),
+    );
+    repo.commit("add intent");
+
+    let plan: Value = serde_json::from_slice(
+        &repo
+            .cli()
+            .arg("plan")
+            .output()
+            .expect("plan command")
+            .stdout,
+    )
+    .expect("plan JSON");
+    assert_eq!(plan["packages"][0]["new_version"], "1.1.0");
+    assert_eq!(plan["global_tag"], "4.1.0");
+
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo.cli().arg("tag").assert().success();
+    assert!(git(&repo.root, &["tag", "--list"]).contains("4.1.0"));
 }
 
 #[test]

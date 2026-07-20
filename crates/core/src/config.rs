@@ -139,7 +139,7 @@ impl Config {
             for projection in &package.projections {
                 validate_relative_path(&projection.file, &format!("package {id} projection file"))?;
                 if projection.adapter.requires_pointer()
-                    && projection.pointer.as_deref().map_or(true, str::is_empty)
+                    && projection.pointer.as_deref().is_none_or(str::is_empty)
                 {
                     return Err(Error::Validation(format!(
                         "package {id} generic {:?} projection requires a pointer",
