@@ -150,7 +150,10 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          find . -type f -exec sha256sum {} + > SHA256SUMS
+          find . -mindepth 2 -type f -exec sha256sum {} + \
+            | sed -E 's#  \./[^/]+/#  #' \
+            | sort -k2 \
+            > SHA256SUMS
 
       - name: Extract leading changelog section
         id: notes
