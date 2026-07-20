@@ -7,6 +7,7 @@
 
 pub mod adapters;
 pub mod apply;
+pub mod check;
 pub mod config;
 pub mod error;
 pub mod init;
@@ -19,6 +20,7 @@ pub mod tag;
 pub mod version;
 
 pub use apply::{ApplyResult, FileWrite};
+pub use check::check_workspace;
 pub use config::{Config, PackageConfig, Projection, Settings, CONFIG_PATH};
 pub use error::{Error, Result};
 pub use init::{discover_config, InitResult};

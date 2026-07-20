@@ -6,8 +6,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use itentional_core::{
-    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, StampResult, TagResult,
-    WorkspaceStatus, CONFIG_PATH,
+    check_workspace, discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan,
+    StampResult, TagResult, WorkspaceStatus, CONFIG_PATH,
 };
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -44,6 +44,8 @@ enum Command {
     Stamp(StampArgs),
     /// Create lightweight tags for an applied release.
     Tag(ChannelDryRunArgs),
+    /// Validate config, intents, and deterministic planning for CI.
+    Check,
 }
 
 #[derive(Debug, Args)]
@@ -107,7 +109,14 @@ fn main() -> Result<()> {
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
         Command::Tag(args) => tag(&cli.directory, args.channel.as_deref(), args.dry_run),
+        Command::Check => check(&cli.directory),
     }
+}
+
+fn check(root: &std::path::Path) -> Result<()> {
+    check_workspace(root)?;
+    println!("check passed");
+    Ok(())
 }
 
 fn tag(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result<()> {
