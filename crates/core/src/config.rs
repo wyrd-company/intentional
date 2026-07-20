@@ -175,6 +175,19 @@ impl Config {
             }
         }
 
+        let mut resolved_tag_patterns = BTreeMap::new();
+        if self.settings.global_tag {
+            resolved_tag_patterns.insert("{version}".to_owned(), "the global tag".to_owned());
+        }
+        for (id, package) in &self.packages {
+            let pattern = package.tag.replace("{id}", id);
+            if let Some(other) = resolved_tag_patterns.insert(pattern, format!("package {id}")) {
+                return Err(Error::Validation(format!(
+                    "package {id} tag template collides with {other}"
+                )));
+            }
+        }
+
         self.validate_acyclic()
     }
 
@@ -236,9 +249,9 @@ fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
 }
 
 fn validate_tag_template(id: &str, template: &str) -> Result<()> {
-    if template.matches("{id}").count() != 1 || template.matches("{version}").count() != 1 {
+    if template.matches("{version}").count() != 1 || template.matches("{id}").count() > 1 {
         return Err(Error::Validation(format!(
-            "package {id} tag template must contain exactly one {{id}} and {{version}}"
+            "package {id} tag template must contain exactly one {{version}} and at most one {{id}}"
         )));
     }
     if template.contains("v{version}") {
@@ -297,6 +310,44 @@ packages:
         );
         let error = Config::from_yaml(&invalid).expect_err("cycle rejected");
         assert!(error.to_string().contains("dependency cycle"));
+    }
+
+    #[test]
+    fn accepts_plain_version_tag_template() {
+        let valid = VALID
+            .replace("global-tag: true", "global-tag: false")
+            .replace(
+                "path: packages/library",
+                "path: packages/library\n    tag: '{version}'",
+            );
+        let config = Config::from_yaml(&valid).expect("plain version template accepted");
+        assert_eq!(config.packages["library"].tag, "{version}");
+    }
+
+    #[test]
+    fn rejects_colliding_tag_templates() {
+        let invalid = VALID
+            .replace("global-tag: true", "global-tag: false")
+            .replace(
+                "path: packages/library",
+                "path: packages/library\n    tag: 'shared@{version}'",
+            )
+            .replace(
+                "path: packages/application",
+                "path: packages/application\n    tag: 'shared@{version}'",
+            );
+        let error = Config::from_yaml(&invalid).expect_err("collision rejected");
+        assert!(error.to_string().contains("collides"));
+    }
+
+    #[test]
+    fn rejects_plain_version_template_colliding_with_global_tag() {
+        let invalid = VALID.replace(
+            "path: packages/library",
+            "path: packages/library\n    tag: '{version}'",
+        );
+        let error = Config::from_yaml(&invalid).expect_err("global tag collision rejected");
+        assert!(error.to_string().contains("collides with the global tag"));
     }
 
     #[test]
