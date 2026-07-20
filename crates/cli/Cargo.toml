@@ -19,3 +19,9 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 itentional-core = { path = "../core", version = "0.1.0" }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+serde_json.workspace = true
+tempfile = "3.8"

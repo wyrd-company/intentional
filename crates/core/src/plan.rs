@@ -41,6 +41,9 @@ pub struct PlanPackage {
 pub struct ReleasePlan {
     /// SHA-256 digest of the canonical plan payload excluding this seal.
     pub digest: String,
+    /// Optional release channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
     /// Changed packages ordered by id.
     pub packages: Vec<PlanPackage>,
     /// Dependency-ordered package ids.
@@ -52,6 +55,8 @@ pub struct ReleasePlan {
 
 #[derive(Serialize)]
 struct PlanPayload<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: &'a Option<String>,
     packages: &'a [PlanPackage],
     publication_order: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +133,7 @@ impl ReleasePlan {
         }
 
         let publication_order = publication_order(config, &changed);
+        let channel = channel.map(str::to_owned);
         let global_tag = if config.settings.global_tag {
             packages
                 .iter()
@@ -138,6 +144,7 @@ impl ReleasePlan {
             None
         };
         let payload = PlanPayload {
+            channel: &channel,
             packages: &packages,
             publication_order: &publication_order,
             global_tag: &global_tag,
@@ -146,6 +153,7 @@ impl ReleasePlan {
         let digest = format!("sha256:{:x}", Sha256::digest(payload_json.as_bytes()));
         Ok(Self {
             digest,
+            channel,
             packages,
             publication_order,
             global_tag,
@@ -375,6 +383,7 @@ mod tests {
         let order = vec!["sample".to_owned()];
         let global = None;
         let payload = PlanPayload {
+            channel: &None,
             packages: &packages,
             publication_order: &order,
             global_tag: &global,
