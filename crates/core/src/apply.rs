@@ -6,7 +6,8 @@
 //! Tree-only release materialization.
 
 use crate::adapters::{
-    CargoAdapter, FormatAdapter, JsonFormat, NpmAdapter, TomlFormat, YamlFormat,
+    CargoAdapter, FormatAdapter, GoAdapter, JsonFormat, MsbuildAdapter, NpmAdapter, PubAdapter,
+    PythonAdapter, TomlFormat, YamlFormat,
 };
 use crate::config::{Config, PackageConfig, Projection};
 use crate::error::{Error, Result};
@@ -32,6 +33,8 @@ pub struct ApplyResult {
     pub writes: Vec<FileWrite>,
     /// Consumed intent files in path order.
     pub deletes: Vec<PathBuf>,
+    /// Prominent operational notices.
+    pub notices: Vec<String>,
     /// Canonical plan materialized by these changes.
     pub plan: ReleasePlan,
 }
@@ -49,11 +52,14 @@ impl ApplyResult {
             .map(|package| (package.id.as_str(), package))
             .collect();
         let mut workspace_versions = BTreeMap::new();
+        let mut notices = Vec::new();
 
         for package in &plan.packages {
             let config_package = &config.packages[&package.id];
             for projection in &config_package.projections {
-                if projection.mode != ProjectionMode::Committed {
+                let go_major =
+                    projection.adapter == Adapter::Go && package.bump == crate::model::Bump::Major;
+                if projection.mode != ProjectionMode::Committed && !go_major {
                     continue;
                 }
                 edit_projection_version(
@@ -64,6 +70,12 @@ impl ApplyResult {
                     &package.new_version,
                     &mut workspace_versions,
                 )?;
+                if go_major {
+                    notices.push(format!(
+                        "rewrite Go module major path {}",
+                        config_package.path.join(&projection.file).display()
+                    ));
+                }
             }
             let changelog = config_package.path.join("CHANGELOG.md");
             let current = tree.read_optional(&changelog)?;
@@ -95,15 +107,21 @@ impl ApplyResult {
         Ok(Self {
             writes: tree.finish(),
             deletes,
+            notices,
             plan,
         })
     }
 
     /// Human-readable operations printed identically for dry and real runs.
     pub fn operations(&self) -> Vec<String> {
-        self.writes
+        self.notices
             .iter()
-            .map(|write| format!("write {}", write.path.display()))
+            .cloned()
+            .chain(
+                self.writes
+                    .iter()
+                    .map(|write| format!("write {}", write.path.display())),
+            )
             .chain(
                 self.deletes
                     .iter()
@@ -243,11 +261,10 @@ fn edit_projection_version(
             projection.pointer.as_deref().expect("validated pointer"),
             version,
         )?,
-        adapter => {
-            return Err(Error::Validation(format!(
-                "adapter {adapter:?} is not implemented yet"
-            )));
-        }
+        Adapter::Pub => PubAdapter.edit_version(&text, version)?,
+        Adapter::Python => PythonAdapter.edit_version(&text, version)?,
+        Adapter::Msbuild => MsbuildAdapter.edit_version(&text, version)?,
+        Adapter::Go => GoAdapter.edit_major_module_path(&text, version)?,
     };
     tree.set(relative, edited);
     Ok(())
@@ -268,7 +285,14 @@ fn rewrite_internal_dependencies(
                 continue;
             };
             let dependency = &config.packages[dependency_id];
-            for adapter in [Adapter::Npm, Adapter::Cargo] {
+            for adapter in [
+                Adapter::Npm,
+                Adapter::Cargo,
+                Adapter::Pub,
+                Adapter::Python,
+                Adapter::Msbuild,
+                Adapter::Go,
+            ] {
                 let Some(source_projection) = dependency
                     .projections
                     .iter()
@@ -286,6 +310,12 @@ fn rewrite_internal_dependencies(
                 let dependency_name = match adapter {
                     Adapter::Npm => NpmAdapter.name(&source_text)?,
                     Adapter::Cargo => CargoAdapter.name(&source_text)?,
+                    Adapter::Pub => PubAdapter.name(&source_text)?,
+                    Adapter::Python => PythonAdapter.name(&source_text)?,
+                    Adapter::Msbuild => MsbuildAdapter
+                        .name(&source_text)
+                        .unwrap_or_else(|_| dependency_id.clone()),
+                    Adapter::Go => GoAdapter.name(&source_text)?,
                     _ => unreachable!(),
                 };
                 let target_path = dependent.path.join(&target_projection.file);
@@ -315,6 +345,26 @@ fn rewrite_internal_dependencies(
                             )?
                         }
                     }
+                    Adapter::Pub => PubAdapter.edit_dependency(
+                        &target_text,
+                        &dependency_name,
+                        &dependency_release.new_version,
+                    )?,
+                    Adapter::Python => PythonAdapter.edit_dependency(
+                        &target_text,
+                        &dependency_name,
+                        &dependency_release.new_version,
+                    )?,
+                    Adapter::Msbuild => MsbuildAdapter.edit_dependency(
+                        &target_text,
+                        &dependency_name,
+                        &dependency_release.new_version,
+                    )?,
+                    Adapter::Go => GoAdapter.edit_dependency(
+                        &target_text,
+                        &dependency_name,
+                        &dependency_release.new_version,
+                    )?,
                     _ => unreachable!(),
                 };
                 tree.set(target_path, edited);

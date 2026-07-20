@@ -159,6 +159,20 @@ fn status(root: &std::path::Path) -> Result<()> {
             package.id, package.current, package.next, package.bump
         );
     }
+    if status.drift.is_empty() {
+        println!("Drift: none");
+    } else {
+        println!("Drift:");
+        for drift in status.drift {
+            println!(
+                "  {} {}: manifest {} != tag {}",
+                drift.package,
+                drift.file.display(),
+                drift.actual,
+                drift.expected
+            );
+        }
+    }
     Ok(())
 }
 
