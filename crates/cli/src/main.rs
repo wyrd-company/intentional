@@ -6,7 +6,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use itentional_core::{
-    discover_config, Bump, Config, IntentDraft, ReleasePlan, WorkspaceStatus, CONFIG_PATH,
+    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, WorkspaceStatus,
+    CONFIG_PATH,
 };
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -37,6 +38,8 @@ enum Command {
     Status,
     /// Emit canonical digest-bound release-plan JSON.
     Plan(ChannelArgs),
+    /// Materialize versions, changelogs, dependencies, and intent consumption.
+    Apply(ChannelDryRunArgs),
 }
 
 #[derive(Debug, Args)]
@@ -68,6 +71,17 @@ struct ChannelArgs {
     channel: Option<String>,
 }
 
+#[derive(Debug, Args)]
+struct ChannelDryRunArgs {
+    /// Release channel, such as beta.
+    #[arg(long)]
+    channel: Option<String>,
+
+    /// Print mutations without changing the workspace.
+    #[arg(long)]
+    dry_run: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -75,7 +89,17 @@ fn main() -> Result<()> {
         Command::Add(args) => add(&cli.directory, args),
         Command::Status => status(&cli.directory),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
+        Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
     }
+}
+
+fn apply(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result<()> {
+    let result = ApplyResult::build(root, channel)?;
+    for operation in result.operations() {
+        println!("{operation}");
+    }
+    result.apply(root, dry_run)?;
+    Ok(())
 }
 
 fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {

@@ -6,6 +6,7 @@
 //! Core model and release operations for `itentional`.
 
 pub mod adapters;
+pub mod apply;
 pub mod config;
 pub mod error;
 pub mod init;
@@ -15,6 +16,7 @@ pub mod plan;
 pub mod status;
 pub mod version;
 
+pub use apply::{ApplyResult, FileWrite};
 pub use config::{Config, PackageConfig, Projection, Settings, CONFIG_PATH};
 pub use error::{Error, Result};
 pub use init::{discover_config, InitResult};

@@ -1,0 +1,14 @@
+# ---
+# relationships:
+#   tests: intent-driven-polyglot-release
+# ---
+[package]
+name = "sample-library"
+version = "1.2.3" # version comment
+
+[dependencies]
+sample-dependency = { path = "../dependency", version = "1.0.0" } # dependency comment
+sample-string = "1.0.0"
+
+[workspace.dependencies]
+sample-workspace = { path = "../workspace", version = "1.0.0" }

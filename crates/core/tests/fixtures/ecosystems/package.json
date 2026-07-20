@@ -1,0 +1,11 @@
+{
+  "_relationships": { "tests": "intent-driven-polyglot-release" },
+  "name": "sample-library",
+  "version": "1.2.3",
+  "dependencies": {
+    "sample-dependency": "^1.0.0"
+  },
+  "peerDependencies": {
+    "sample-peer": "workspace:^1.0.0"
+  }
+}
