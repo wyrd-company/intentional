@@ -26,23 +26,23 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: itentional-linux-x86_64
-            bin_path: target/x86_64-unknown-linux-gnu/release/itentional
+            artifact_name: intentional-linux-x86_64
+            bin_path: target/x86_64-unknown-linux-gnu/release/intentional
             archive_ext: tar.gz
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact_name: itentional-linux-arm64
-            bin_path: target/aarch64-unknown-linux-gnu/release/itentional
+            artifact_name: intentional-linux-arm64
+            bin_path: target/aarch64-unknown-linux-gnu/release/intentional
             archive_ext: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: itentional-macos-arm64
-            bin_path: target/aarch64-apple-darwin/release/itentional
+            artifact_name: intentional-macos-arm64
+            bin_path: target/aarch64-apple-darwin/release/intentional
             archive_ext: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: itentional-windows-x86_64
-            bin_path: target/x86_64-pc-windows-msvc/release/itentional.exe
+            artifact_name: intentional-windows-x86_64
+            bin_path: target/x86_64-pc-windows-msvc/release/intentional.exe
             archive_ext: zip
     steps:
       - name: Checkout
@@ -213,19 +213,19 @@ jobs:
         run: cargo generate-lockfile
 
       - name: Cargo publish dry-run (core)
-        run: cargo publish -p itentional-core --locked --dry-run
+        run: cargo publish -p intentional-core --locked --dry-run
 
       - name: Publish core
-        run: cargo publish -p itentional-core --locked
+        run: cargo publish -p intentional-core --locked
 
       - name: Wait for crate index to update
         run: sleep 20
 
       - name: Cargo publish dry-run (cli)
-        run: cargo publish -p itentional-cli --locked --dry-run
+        run: cargo publish -p intentional-cli --locked --dry-run
 
       - name: Publish cli
-        run: cargo publish -p itentional-cli --locked
+        run: cargo publish -p intentional-cli --locked
 
   update-major-tag:
     name: Update Major Version Tag
@@ -292,9 +292,9 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           REPOSITORY: ${{ github.repository }}
         run: |
-          LINUX_X86_64_ARCHIVE="artifacts/itentional-linux-x86_64/itentional-linux-x86_64.tar.gz"
-          LINUX_ARM64_ARCHIVE="artifacts/itentional-linux-arm64/itentional-linux-arm64.tar.gz"
-          MACOS_ARM64_ARCHIVE="artifacts/itentional-macos-arm64/itentional-macos-arm64.tar.gz"
+          LINUX_X86_64_ARCHIVE="artifacts/intentional-linux-x86_64/intentional-linux-x86_64.tar.gz"
+          LINUX_ARM64_ARCHIVE="artifacts/intentional-linux-arm64/intentional-linux-arm64.tar.gz"
+          MACOS_ARM64_ARCHIVE="artifacts/intentional-macos-arm64/intentional-macos-arm64.tar.gz"
 
           for archive in "$LINUX_X86_64_ARCHIVE" "$LINUX_ARM64_ARCHIVE" "$MACOS_ARM64_ARCHIVE"; do
             if [[ ! -f "$archive" ]]; then
@@ -307,8 +307,8 @@ jobs:
           LINUX_ARM64_SHA256="$(sha256sum "$LINUX_ARM64_ARCHIVE" | cut -d' ' -f1)"
           MACOS_ARM64_SHA256="$(sha256sum "$MACOS_ARM64_ARCHIVE" | cut -d' ' -f1)"
 
-          cat > homebrew-tools/Formula/itentional.rb <<EOF
-            class Itentional < Formula
+          cat > homebrew-tools/Formula/intentional.rb <<EOF
+            class Intentional < Formula
               desc "Intent-driven polyglot release and versioning tool"
               homepage "https://github.com/${REPOSITORY}"
               license "Apache-2.0"
@@ -316,30 +316,30 @@ jobs:
 
               on_macos do
                 on_arm do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/itentional-macos-arm64.tar.gz"
+                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-macos-arm64.tar.gz"
                   sha256 "${MACOS_ARM64_SHA256}"
                 end
               end
 
               on_linux do
                 on_arm do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/itentional-linux-arm64.tar.gz"
+                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-linux-arm64.tar.gz"
                   sha256 "${LINUX_ARM64_SHA256}"
                 end
 
                 on_intel do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/itentional-linux-x86_64.tar.gz"
+                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-linux-x86_64.tar.gz"
                   sha256 "${LINUX_X86_64_SHA256}"
                 end
               end
 
               def install
-                bin.install "itentional"
+                bin.install "intentional"
                 prefix.install_metafiles
               end
 
               test do
-                assert_match "Intent-driven", shell_output("#{bin}/itentional --help")
+                assert_match "Intent-driven", shell_output("#{bin}/intentional --help")
               end
             end
           EOF
@@ -354,14 +354,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add Formula/itentional.rb
+          git add Formula/intentional.rb
 
           # --cached so a newly-added (previously untracked) formula is
           # detected; plain `git diff` only inspects tracked files.
-          if git diff --cached --quiet -- Formula/itentional.rb; then
+          if git diff --cached --quiet -- Formula/intentional.rb; then
             echo "Formula already up to date."
             exit 0
           fi
 
-          git commit -m "itentional ${VERSION}"
+          git commit -m "intentional ${VERSION}"
           git push origin HEAD

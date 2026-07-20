@@ -65,7 +65,7 @@ proposed-design:
     commits, pushes, or opens pull requests.
   core-model: >-
     A workspace declares an inventory of logical packages in
-    .itentional/config.yml. Each package has a path, one or more projections,
+    .intentional/config.yml. Each package has a path, one or more projections,
     a tag template (default "{id}@{version}", no v prefix), and optional
     explicit depends-on edges. The current version of a package is the latest
     matching tag (tagver supplies tag discovery and height); the next version
@@ -80,7 +80,7 @@ proposed-design:
     derived from manifests to assist and verify; the authored config is the
     authority because cross-ecosystem edges are invisible to manifests.
   intent-files: >-
-    Intents live in .itentional/intents/ as markdown files with a YAML
+    Intents live in .intentional/intents/ as markdown files with a YAML
     frontmatter block mapping logical package ids to bump levels; the markdown
     body is the changelog prose. Filenames are generated memorable slugs so
     parallel branches do not conflict. Intents reference logical ids, never
@@ -180,7 +180,7 @@ proposed-design:
     release rather than trusting a materialized artifact. In CD, tag accepts
     --plan with the digest-sealed plan the harness is executing. Locally, tag
     locates the release commit — the most recent commit since the last
-    release tags that deletes files under .itentional/intents/ — reads the
+    release tags that deletes files under .intentional/intents/ — reads the
     deleted intents from that commit's parent, and recomputes bumps and
     versions from first principles under the contract recorded in the
     previous release's tag. In both paths the recomputed result must match
@@ -189,8 +189,8 @@ proposed-design:
     reports the divergence. Channel releases need no recovery, since channel
     applies retain intents.
   crate-layout-and-distribution: >-
-    A Cargo workspace mirroring tagver: itentional-core (model, adapters,
-    planning; no CLI dependencies) and itentional-cli (thin clap binary).
+    A Cargo workspace mirroring tagver: intentional-core (model, adapters,
+    planning; no CLI dependencies) and intentional-cli (thin clap binary).
     Config and intent-frontmatter schemas publish under
     https://intentional.foo/schemas/. The
     tagver library crate supplies tag discovery and height math, gitoxide

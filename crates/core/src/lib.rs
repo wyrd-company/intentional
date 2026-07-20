@@ -3,7 +3,7 @@
 //   implements: intent-driven-polyglot-release
 // ---
 
-//! Core model and release operations for `itentional`.
+//! Core model and release operations for `intentional`.
 
 pub mod adapters;
 pub mod apply;

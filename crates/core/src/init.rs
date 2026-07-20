@@ -3,7 +3,7 @@
 //   implements: intent-driven-polyglot-release
 // ---
 
-//! Manifest discovery for `itentional init`.
+//! Manifest discovery for `intentional init`.
 
 use crate::config::{Config, PackageConfig, Projection, Settings, CONFIG_SCHEMA};
 use crate::error::{Error, Result};
@@ -125,7 +125,7 @@ pub fn discover_config(root: &Path) -> Result<InitResult> {
 fn should_visit(entry: &DirEntry) -> bool {
     !matches!(
         entry.file_name().to_str(),
-        Some(".git" | ".itentional" | "node_modules" | "target")
+        Some(".git" | ".intentional" | "node_modules" | "target")
     )
 }
 

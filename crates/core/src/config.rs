@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 /// Location of the workspace configuration.
-pub const CONFIG_PATH: &str = ".itentional/config.yml";
+pub const CONFIG_PATH: &str = ".intentional/config.yml";
 
 /// Published configuration schema identifier.
 pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";

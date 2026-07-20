@@ -3,13 +3,13 @@
 #   implements: intent-driven-polyglot-release
 # ---
 [package]
-name = "itentional-core"
+name = "intentional-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Core model and release planning for itentional"
+description = "Core model and release planning for intentional"
 
 [dependencies]
 gix.workspace = true

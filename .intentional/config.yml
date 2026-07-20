@@ -3,7 +3,7 @@ settings:
   global-tag: false
   internal-dependency-bump: patch
 packages:
-  itentional:
+  intentional:
     path: .
     projections:
     - adapter: toml
@@ -12,6 +12,6 @@ packages:
       mode: committed
     - adapter: toml
       file: crates/cli/Cargo.toml
-      pointer: /dependencies/itentional-core/version
+      pointer: /dependencies/intentional-core/version
       mode: committed
     tag: '{version}'

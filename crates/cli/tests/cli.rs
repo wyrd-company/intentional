@@ -45,7 +45,7 @@ impl TestRepo {
     }
 
     fn cli(&self) -> Command {
-        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("itentional"));
+        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
         command.arg("-C").arg(&self.root);
         command
     }
@@ -90,9 +90,9 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.commit("add fixture");
 
     repo.cli().arg("init").assert().success();
-    let generated = fs::read_to_string(repo.root.join(".itentional/config.yml")).unwrap();
+    let generated = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
     repo.write(
-        ".itentional/config.yml",
+        ".intentional/config.yml",
         &generated.replace("global-tag: false", "global-tag: true"),
     );
     repo.cli()
@@ -125,7 +125,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
     assert!(fs::read_to_string(repo.root.join("package.json"))
         .unwrap()
         .contains("\"version\": \"0.0.1\""));
-    assert!(fs::read_dir(repo.root.join(".itentional/intents"))
+    assert!(fs::read_dir(repo.root.join(".intentional/intents"))
         .unwrap()
         .next()
         .is_none());
@@ -157,7 +157,7 @@ fn init_ignores_cargo_workspace_only_manifests() {
     repo.commit("add fixture");
 
     repo.cli().arg("init").assert().success();
-    let config = itentional_core::Config::load(&repo.root).expect("generated config");
+    let config = intentional_core::Config::load(&repo.root).expect("generated config");
     assert_eq!(config.packages.len(), 1);
     assert_eq!(
         config.packages["library"].path,
@@ -169,14 +169,14 @@ fn init_ignores_cargo_workspace_only_manifests() {
 fn stamp_uses_first_parent_height_and_preserves_intents() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write(".itentional/config.yml", &config("injected"));
-    repo.write(".itentional/intents/.keep", "");
+    repo.write(".intentional/config.yml", &config("injected"));
+    repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
     repo.tag("sample@1.0.0");
     repo.write("first.txt", "first\n");
     repo.commit("first change");
     repo.write(
-        ".itentional/intents/clear-river-1234.md",
+        ".intentional/intents/clear-river-1234.md",
         &intent("minor", "Add a user-visible capability."),
     );
     repo.commit("add intent");
@@ -201,7 +201,7 @@ fn stamp_uses_first_parent_height_and_preserves_intents() {
         .contains("1.1.0-alpha.2"));
     assert!(repo
         .root
-        .join(".itentional/intents/clear-river-1234.md")
+        .join(".intentional/intents/clear-river-1234.md")
         .exists());
     assert!(!repo.root.join("CHANGELOG.md").exists());
 }
@@ -210,12 +210,12 @@ fn stamp_uses_first_parent_height_and_preserves_intents() {
 fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write(".itentional/config.yml", &config("committed"));
-    repo.write(".itentional/intents/.keep", "");
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
     repo.tag("sample@1.0.0");
     repo.write(
-        ".itentional/intents/quiet-lantern-1234.md",
+        ".intentional/intents/quiet-lantern-1234.md",
         &intent("minor", "Add a user-visible capability."),
     );
     repo.commit("add intent");
@@ -238,7 +238,7 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
         .success();
     assert!(repo
         .root
-        .join(".itentional/intents/quiet-lantern-1234.md")
+        .join(".intentional/intents/quiet-lantern-1234.md")
         .exists());
     repo.commit("apply beta");
     repo.cli()
@@ -271,7 +271,7 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
     assert!(!changelog.contains("beta.1"));
     assert!(!repo
         .root
-        .join(".itentional/intents/quiet-lantern-1234.md")
+        .join(".intentional/intents/quiet-lantern-1234.md")
         .exists());
     repo.commit("apply final");
     repo.cli().arg("tag").assert().success();
@@ -284,8 +284,8 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
 fn status_reports_manifest_drift_from_tag_version() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("9.9.9"));
-    repo.write(".itentional/config.yml", &config("committed"));
-    repo.write(".itentional/intents/.keep", "");
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
     repo.tag("sample@1.0.0");
 
@@ -301,18 +301,18 @@ fn global_tag_advances_its_own_stream_by_the_highest_bump() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write(
-        ".itentional/config.yml",
+        ".intentional/config.yml",
         &config("committed").replace(
             "packages:",
             "settings:\n  global-tag: true\n  internal-dependency-bump: patch\npackages:",
         ),
     );
-    repo.write(".itentional/intents/.keep", "");
+    repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
     repo.tag("sample@1.0.0");
     repo.tag("4.0.0");
     repo.write(
-        ".itentional/intents/gentle-willow-1234.md",
+        ".intentional/intents/gentle-willow-1234.md",
         &intent("minor", "Add a user-visible capability."),
     );
     repo.commit("add intent");
@@ -345,8 +345,8 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .args(["init", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("write .itentional/config.yml"));
-    assert!(!repo.root.join(".itentional").exists());
+        .stdout(predicate::str::contains("write .intentional/config.yml"));
+    assert!(!repo.root.join(".intentional").exists());
     repo.cli().arg("init").assert().success();
     repo.cli()
         .args([
@@ -359,8 +359,8 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("write .itentional/intents/"));
-    assert!(fs::read_dir(repo.root.join(".itentional/intents"))
+        .stdout(predicate::str::contains("write .intentional/intents/"));
+    assert!(fs::read_dir(repo.root.join(".intentional/intents"))
         .unwrap()
         .next()
         .is_none());
@@ -376,7 +376,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .success();
 
     let manifest_before = fs::read_to_string(repo.root.join("package.json")).unwrap();
-    let intents_before = fs::read_dir(repo.root.join(".itentional/intents"))
+    let intents_before = fs::read_dir(repo.root.join(".intentional/intents"))
         .unwrap()
         .count();
     let tags_before = git(&repo.root, &["tag", "--list"]);
@@ -384,13 +384,13 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .args(["apply", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("delete .itentional/intents/"));
+        .stdout(predicate::str::contains("delete .intentional/intents/"));
     assert_eq!(
         fs::read_to_string(repo.root.join("package.json")).unwrap(),
         manifest_before
     );
     assert_eq!(
-        fs::read_dir(repo.root.join(".itentional/intents"))
+        fs::read_dir(repo.root.join(".intentional/intents"))
             .unwrap()
             .count(),
         intents_before

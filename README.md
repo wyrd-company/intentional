@@ -3,9 +3,9 @@ relationships:
   implements: intent-driven-polyglot-release
 ---
 
-# itentional
+# intentional
 
-`itentional` is an intent-driven, polyglot release and versioning CLI. Pending
+`intentional` is an intent-driven, polyglot release and versioning CLI. Pending
 intent files say what the next version should be, Git tags say what has been
 released, and manifests are format-preserving projections of that state.
 
@@ -20,35 +20,35 @@ With Homebrew:
 
 ```console
 brew tap wyrd-company/tools
-brew install itentional
+brew install intentional
 ```
 
 With Cargo:
 
 ```console
-cargo install itentional-cli --locked
+cargo install intentional-cli --locked
 ```
 
 ## Build
 
 ```console
 task build
-cargo run --bin itentional -- --help
+cargo run --bin intentional -- --help
 ```
 
 The workspace version is `0.1.0` and the minimum supported Rust version is
-1.82. The library crate is `itentional-core`; the binary package is
-`itentional-cli` and installs the `itentional` executable.
+1.82. The library crate is `intentional-core`; the binary package is
+`intentional-cli` and installs the `intentional` executable.
 
 ## Initialize a repository
 
 ```console
-itentional init
+intentional init
 ```
 
 `init` scans for `package.json`, package-bearing `Cargo.toml`, `pubspec.yaml`,
 `*.csproj`, `pyproject.toml`, and `go.mod` files. It writes a logical package
-inventory to `.itentional/config.yml` and creates `.itentional/intents/`.
+inventory to `.intentional/config.yml` and creates `.intentional/intents/`.
 
 A package with npm and Pub projections at one shared version can be configured
 like this:
@@ -90,13 +90,13 @@ as `/metadata/version`.
 ## Author and inspect intents
 
 ```console
-itentional add \
+intentional add \
   --package sample-runtime:minor \
   --package sample-application:patch \
   --message "Add a user-visible capability."
 
-itentional status
-itentional check
+intentional status
+intentional check
 ```
 
 Without flags, `add` prompts for a package, bump, and changelog message. It
@@ -123,14 +123,14 @@ tag using strict SemVer rules.
 ## Plan and apply a final release
 
 ```console
-itentional plan > release-plan.json
-itentional apply
+intentional plan > release-plan.json
+intentional apply
 
 # The surrounding harness owns commit choreography.
 git add -A
 git commit -m "chore: apply release"
 
-itentional tag
+intentional tag
 ```
 
 `plan` writes compact canonical JSON to standard output. Its object keys are
@@ -149,8 +149,8 @@ For an `injected` projection, stamp the intent-derived version without touching
 changelogs or intents:
 
 ```console
-itentional stamp
-itentional stamp --prerelease alpha
+intentional stamp
+intentional stamp --prerelease alpha
 ```
 
 The prerelease form composes the next intent version with first-parent commit
@@ -162,11 +162,11 @@ height since the latest matching package tag, for example
 Channel state is derived entirely from existing tags:
 
 ```console
-itentional plan --channel beta > release-plan.json
-itentional apply --channel beta
+intentional plan --channel beta > release-plan.json
+intentional apply --channel beta
 git add -A
 git commit -m "chore: apply beta release"
-itentional tag --channel beta
+intentional tag --channel beta
 ```
 
 The first release is `X.Y.Z-beta.1`; the next iteration is the highest matching
@@ -179,11 +179,11 @@ consolidated final section.
 Every mutating command supports `--dry-run`:
 
 ```console
-itentional init --dry-run
-itentional add --package sample-runtime:patch --message "Correct a defect." --dry-run
-itentional apply --dry-run
-itentional stamp --prerelease alpha --dry-run
-itentional tag --dry-run
+intentional init --dry-run
+intentional add --package sample-runtime:patch --message "Correct a defect." --dry-run
+intentional apply --dry-run
+intentional stamp --prerelease alpha --dry-run
+intentional tag --dry-run
 ```
 
 Dry runs print the same operation list as a real invocation and make no
@@ -192,7 +192,7 @@ filesystem or Git changes.
 ## GitHub Action
 
 The plumbing action downloads a released Linux binary and runs one command.
-Pin the action to a plain SemVer tag because itentional tags do not use a `v`
+Pin the action to a plain SemVer tag because intentional tags do not use a `v`
 prefix. This example validates the repository, exposes the canonical plan as
 an output, and records whether that plan contains any changed packages:
 
@@ -206,11 +206,11 @@ jobs:
           fetch-depth: 0
 
       - name: Validate release intent
-        uses: wyrd-company/itentional@0.1.1
+        uses: wyrd-company/intentional@0.1.1
 
       - name: Build release plan
         id: release-plan
-        uses: wyrd-company/itentional@0.1.1
+        uses: wyrd-company/intentional@0.1.1
         with:
           command: plan
 
@@ -227,11 +227,11 @@ applies to the mutating commands.
 
 ## Release pipeline
 
-A release is prepared with `itentional apply`, committed, tagged with
-`itentional tag`, and sent to GitHub by pushing the plain SemVer tag. The
+A release is prepared with `intentional apply`, committed, tagged with
+`intentional tag`, and sent to GitHub by pushing the plain SemVer tag. The
 tag-triggered release workflow builds platform archives, creates the GitHub
-Release, publishes `itentional-core` followed by `itentional-cli` to crates.io,
-updates the stable major action tag after 1.0, and publishes the `itentional`
+Release, publishes `intentional-core` followed by `intentional-cli` to crates.io,
+updates the stable major action tag after 1.0, and publishes the `intentional`
 formula to the `wyrd-company/tools` Homebrew tap.
 
 ## Development checks

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Core operation result.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Errors produced by `itentional-core`.
+/// Errors produced by `intentional-core`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// A configuration or intent is invalid.

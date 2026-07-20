@@ -5,7 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use itentional_core::{
+use intentional_core::{
     check_workspace, discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan,
     StampResult, TagResult, WorkspaceStatus, CONFIG_PATH,
 };
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "itentional",
+    name = "intentional",
     version,
     about = "Intent-driven polyglot releases"
 )]
@@ -155,7 +155,7 @@ fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
 fn init(root: &std::path::Path, dry_run: bool) -> Result<()> {
     let result = discover_config(root)?;
     println!("write {}", result.path.display());
-    println!("create .itentional/intents/");
+    println!("create .intentional/intents/");
     result.apply(root, dry_run)?;
     Ok(())
 }

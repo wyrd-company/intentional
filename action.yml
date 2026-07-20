@@ -2,8 +2,8 @@
 # relationships:
 #   implements: intent-driven-polyglot-release
 # ---
-name: "itentional"
-description: "Run one itentional release or versioning command"
+name: "intentional"
+description: "Run one intentional release or versioning command"
 author: "wyrd-company"
 branding:
   icon: "git-commit"
@@ -28,8 +28,8 @@ inputs:
     description: "Workspace directory to process"
     required: false
     default: "."
-  itentional-version:
-    description: "Released itentional version without a v prefix, or latest"
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
     required: false
     default: "latest"
 
@@ -44,41 +44,41 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Install itentional
+    - name: Install intentional
       shell: bash
       env:
-        REQUESTED_VERSION: ${{ inputs.itentional-version }}
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
       run: |
         set -euo pipefail
 
         if [[ "$(uname -s)" != "Linux" ]]; then
-          echo "::error::The itentional action supports Linux runners."
+          echo "::error::The intentional action supports Linux runners."
           exit 1
         fi
 
         case "$(uname -m)" in
           x86_64)
-            ASSET_NAME="itentional-linux-x86_64.tar.gz"
+            ASSET_NAME="intentional-linux-x86_64.tar.gz"
             ;;
           aarch64|arm64)
-            ASSET_NAME="itentional-linux-arm64.tar.gz"
+            ASSET_NAME="intentional-linux-arm64.tar.gz"
             ;;
           *)
-            echo "::error::No released itentional binary for architecture $(uname -m)."
+            echo "::error::No released intentional binary for architecture $(uname -m)."
             exit 1
             ;;
         esac
 
         if [[ "$REQUESTED_VERSION" == "latest" ]]; then
-          DOWNLOAD_URL="https://github.com/wyrd-company/itentional/releases/latest/download/$ASSET_NAME"
+          DOWNLOAD_URL="https://github.com/wyrd-company/intentional/releases/latest/download/$ASSET_NAME"
         elif [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          DOWNLOAD_URL="https://github.com/wyrd-company/itentional/releases/download/$REQUESTED_VERSION/$ASSET_NAME"
+          DOWNLOAD_URL="https://github.com/wyrd-company/intentional/releases/download/$REQUESTED_VERSION/$ASSET_NAME"
         else
-          echo "::error::itentional-version must be latest or a plain SemVer version."
+          echo "::error::intentional-version must be latest or a plain SemVer version."
           exit 1
         fi
 
-        INSTALL_DIR="$RUNNER_TEMP/itentional/bin"
+        INSTALL_DIR="$RUNNER_TEMP/intentional/bin"
         ARCHIVE_DIR="$(mktemp -d)"
         ARCHIVE_PATH="$ARCHIVE_DIR/$ASSET_NAME"
         trap 'rm -rf "$ARCHIVE_DIR"' EXIT
@@ -86,11 +86,11 @@ runs:
         wget -q -O "$ARCHIVE_PATH" "$DOWNLOAD_URL"
         tar -xzf "$ARCHIVE_PATH" -C "$ARCHIVE_DIR"
         mkdir -p "$INSTALL_DIR"
-        cp "$ARCHIVE_DIR/${ASSET_NAME%.tar.gz}/itentional" "$INSTALL_DIR/itentional"
-        chmod +x "$INSTALL_DIR/itentional"
+        cp "$ARCHIVE_DIR/${ASSET_NAME%.tar.gz}/intentional" "$INSTALL_DIR/intentional"
+        chmod +x "$INSTALL_DIR/intentional"
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 
-    - name: Run itentional
+    - name: Run intentional
       id: run
       shell: bash
       env:
@@ -150,7 +150,7 @@ runs:
 
         cd "$GITHUB_WORKSPACE"
         if [[ "$INPUT_COMMAND" == "plan" ]]; then
-          PLAN_OUTPUT="$(itentional "${ARGS[@]}")"
+          PLAN_OUTPUT="$(intentional "${ARGS[@]}")"
           echo "$PLAN_OUTPUT"
           echo "plan=$PLAN_OUTPUT" >> "$GITHUB_OUTPUT"
           export PLAN_OUTPUT
@@ -164,7 +164,7 @@ runs:
           )"
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
         else
-          itentional "${ARGS[@]}"
+          intentional "${ARGS[@]}"
           echo "plan=" >> "$GITHUB_OUTPUT"
           echo "changed=false" >> "$GITHUB_OUTPUT"
         fi

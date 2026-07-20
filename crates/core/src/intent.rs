@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Directory containing pending intent files.
-pub const INTENTS_PATH: &str = ".itentional/intents";
+pub const INTENTS_PATH: &str = ".intentional/intents";
 
 const ADJECTIVES: &[&str] = &[
     "amber", "brisk", "calm", "clear", "gentle", "lucky", "quiet", "swift",
