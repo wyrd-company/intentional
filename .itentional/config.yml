@@ -1,0 +1,17 @@
+$schema: https://intentional.foo/schemas/config.yml
+settings:
+  global-tag: false
+  internal-dependency-bump: patch
+packages:
+  itentional:
+    path: .
+    projections:
+    - adapter: toml
+      file: Cargo.toml
+      pointer: /workspace/package/version
+      mode: committed
+    - adapter: toml
+      file: crates/cli/Cargo.toml
+      pointer: /dependencies/itentional-core/version
+      mode: committed
+    tag: '{version}'
