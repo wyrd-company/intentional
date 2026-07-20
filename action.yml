@@ -1,0 +1,170 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+name: "itentional"
+description: "Run one itentional release or versioning command"
+author: "wyrd-company"
+branding:
+  icon: "git-commit"
+  color: "orange"
+
+inputs:
+  command:
+    description: "Command to run: check, status, plan, stamp, apply, or tag"
+    required: false
+    default: "check"
+  channel:
+    description: "Optional release channel for plan, apply, or tag"
+    required: false
+  prerelease:
+    description: "Optional prerelease identifier for stamp"
+    required: false
+  dry-run:
+    description: "Preview stamp, apply, or tag without changing the workspace"
+    required: false
+    default: "false"
+  working-directory:
+    description: "Workspace directory to process"
+    required: false
+    default: "."
+  itentional-version:
+    description: "Released itentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  plan:
+    description: "Canonical JSON emitted when command is plan"
+    value: ${{ steps.run.outputs.plan }}
+  changed:
+    description: "Whether a plan contains at least one changed package"
+    value: ${{ steps.run.outputs.changed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install itentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.itentional-version }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$(uname -s)" != "Linux" ]]; then
+          echo "::error::The itentional action supports Linux runners."
+          exit 1
+        fi
+
+        case "$(uname -m)" in
+          x86_64)
+            ASSET_NAME="itentional-linux-x86_64.tar.gz"
+            ;;
+          aarch64|arm64)
+            ASSET_NAME="itentional-linux-arm64.tar.gz"
+            ;;
+          *)
+            echo "::error::No released itentional binary for architecture $(uname -m)."
+            exit 1
+            ;;
+        esac
+
+        if [[ "$REQUESTED_VERSION" == "latest" ]]; then
+          DOWNLOAD_URL="https://github.com/wyrd-company/itentional/releases/latest/download/$ASSET_NAME"
+        elif [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          DOWNLOAD_URL="https://github.com/wyrd-company/itentional/releases/download/$REQUESTED_VERSION/$ASSET_NAME"
+        else
+          echo "::error::itentional-version must be latest or a plain SemVer version."
+          exit 1
+        fi
+
+        INSTALL_DIR="$RUNNER_TEMP/itentional/bin"
+        ARCHIVE_DIR="$(mktemp -d)"
+        ARCHIVE_PATH="$ARCHIVE_DIR/$ASSET_NAME"
+        trap 'rm -rf "$ARCHIVE_DIR"' EXIT
+
+        wget -q -O "$ARCHIVE_PATH" "$DOWNLOAD_URL"
+        tar -xzf "$ARCHIVE_PATH" -C "$ARCHIVE_DIR"
+        mkdir -p "$INSTALL_DIR"
+        cp "$ARCHIVE_DIR/${ASSET_NAME%.tar.gz}/itentional" "$INSTALL_DIR/itentional"
+        chmod +x "$INSTALL_DIR/itentional"
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+    - name: Run itentional
+      id: run
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_CHANNEL: ${{ inputs.channel }}
+        INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        case "$INPUT_COMMAND" in
+          check|status|plan|stamp|apply|tag) ;;
+          *)
+            echo "::error::command must be check, status, plan, stamp, apply, or tag."
+            exit 1
+            ;;
+        esac
+
+        case "$INPUT_DRY_RUN" in
+          true|false) ;;
+          *)
+            echo "::error::dry-run must be true or false."
+            exit 1
+            ;;
+        esac
+
+        ARGS=(--directory "$INPUT_WORKING_DIRECTORY" "$INPUT_COMMAND")
+
+        if [[ -n "$INPUT_CHANNEL" ]]; then
+          case "$INPUT_COMMAND" in
+            plan|apply|tag) ARGS+=(--channel "$INPUT_CHANNEL") ;;
+            *)
+              echo "::error::channel is only valid for plan, apply, or tag."
+              exit 1
+              ;;
+          esac
+        fi
+
+        if [[ -n "$INPUT_PRERELEASE" ]]; then
+          if [[ "$INPUT_COMMAND" != "stamp" ]]; then
+            echo "::error::prerelease is only valid for stamp."
+            exit 1
+          fi
+          ARGS+=(--prerelease "$INPUT_PRERELEASE")
+        fi
+
+        if [[ "$INPUT_DRY_RUN" == "true" ]]; then
+          case "$INPUT_COMMAND" in
+            stamp|apply|tag) ARGS+=(--dry-run) ;;
+            *)
+              echo "::error::dry-run is only valid for stamp, apply, or tag."
+              exit 1
+              ;;
+          esac
+        fi
+
+        cd "$GITHUB_WORKSPACE"
+        if [[ "$INPUT_COMMAND" == "plan" ]]; then
+          PLAN_OUTPUT="$(itentional "${ARGS[@]}")"
+          echo "$PLAN_OUTPUT"
+          echo "plan=$PLAN_OUTPUT" >> "$GITHUB_OUTPUT"
+          export PLAN_OUTPUT
+          CHANGED="$(python3 - <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["PLAN_OUTPUT"])
+          print("true" if plan.get("packages") else "false")
+          PY
+          )"
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+        else
+          itentional "${ARGS[@]}"
+          echo "plan=" >> "$GITHUB_OUTPUT"
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+        fi
