@@ -97,11 +97,29 @@ fn share_ecosystem(config: &Config, left: &str, right: &str) -> bool {
         })
 }
 
-/// Apply strict SemVer bump semantics, including pre-1.0 versions.
+/// Apply compatibility-significance mapping before 1.0 and strict SemVer after it.
+///
+/// For a `0.x.y` version, `major` advances the compatibility boundary to
+/// `0.(x+1).0`, while both `minor` and `patch` advance to `0.x.(y+1)`. This
+/// matches caret-range compatibility semantics across npm, Cargo, and Pub.
+/// Graduation to `1.0.0` is deliberately never inferred from an intent: a
+/// human tags `1.0.0` explicitly, and subsequent releases compute from that
+/// tag using strict SemVer semantics.
 pub fn bump_version(current: &Version, bump: Bump) -> Version {
     let mut next = current.clone();
     next.pre = semver::Prerelease::EMPTY;
     next.build = semver::BuildMetadata::EMPTY;
+    if next.major == 0 {
+        match bump {
+            Bump::None => {}
+            Bump::Major => {
+                next.minor += 1;
+                next.patch = 0;
+            }
+            Bump::Minor | Bump::Patch => next.patch += 1,
+        }
+        return next;
+    }
     match bump {
         Bump::None => {}
         Bump::Patch => next.patch += 1,
@@ -259,11 +277,19 @@ mod tests {
     }
 
     #[test]
-    fn strict_pre_1_0_mapping() {
-        let current = Version::parse("0.4.7").expect("valid version");
-        assert_eq!(bump_version(&current, Bump::Major), Version::new(1, 0, 0));
-        assert_eq!(bump_version(&current, Bump::Minor), Version::new(0, 5, 0));
-        assert_eq!(bump_version(&current, Bump::Patch), Version::new(0, 4, 8));
+    fn compatibility_significance_pre_1_0_mapping() {
+        let current = Version::parse("0.4.1").expect("valid version");
+        assert_eq!(bump_version(&current, Bump::Major), Version::new(0, 5, 0));
+        assert_eq!(bump_version(&current, Bump::Minor), Version::new(0, 4, 2));
+        assert_eq!(bump_version(&current, Bump::Patch), Version::new(0, 4, 2));
+    }
+
+    #[test]
+    fn strict_semver_mapping_at_1_0_and_later() {
+        let current = Version::parse("1.4.1").expect("valid version");
+        assert_eq!(bump_version(&current, Bump::Major), Version::new(2, 0, 0));
+        assert_eq!(bump_version(&current, Bump::Minor), Version::new(1, 5, 0));
+        assert_eq!(bump_version(&current, Bump::Patch), Version::new(1, 4, 2));
     }
 
     #[test]

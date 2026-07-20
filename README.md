@@ -99,6 +99,12 @@ Add a user-visible capability.
 versions, and manifest drift. `check` validates the config and intent package
 references and confirms that plan generation is deterministic.
 
+Before `1.0.0`, bumps express compatibility significance uniformly across
+ecosystems: `major` advances `0.x.y` to `0.(x+1).0`, while both `minor` and
+`patch` advance it to `0.x.(y+1)`. Reaching `1.0.0` is always an explicit human
+act: deliberately tag `1.0.0`, after which the next release computes from that
+tag using strict SemVer rules.
+
 ## Plan and apply a final release
 
 ```console
