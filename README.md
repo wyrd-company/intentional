@@ -36,8 +36,8 @@ task build
 cargo run --bin intentional -- --help
 ```
 
-The workspace version is `0.1.0` and the minimum supported Rust version is
-1.82. The library crate is `intentional-core`; the binary package is
+The minimum supported Rust version is 1.82. The library crate is
+`intentional-core`; the binary package is
 `intentional-cli` and installs the `intentional` executable.
 
 ## Initialize a repository
