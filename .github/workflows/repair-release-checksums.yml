@@ -1,0 +1,36 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+name: Repair release checksums
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to repair
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'intentional-*'
+
+      - name: Replace checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          sha256sum intentional-* | sort -k2 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          gh release delete-asset "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --yes
+          gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY"
