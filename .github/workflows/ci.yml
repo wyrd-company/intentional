@@ -28,3 +28,5 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Check this repository with itentional
+        run: cargo run --bin itentional -- check
