@@ -6,8 +6,8 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use itentional_core::{
-    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, WorkspaceStatus,
-    CONFIG_PATH,
+    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, StampResult,
+    WorkspaceStatus, CONFIG_PATH,
 };
 use std::collections::BTreeMap;
 use std::io::{self, Write};
@@ -40,6 +40,8 @@ enum Command {
     Plan(ChannelArgs),
     /// Materialize versions, changelogs, dependencies, and intent consumption.
     Apply(ChannelDryRunArgs),
+    /// Write computed versions into injected projections only.
+    Stamp(StampArgs),
 }
 
 #[derive(Debug, Args)]
@@ -82,6 +84,17 @@ struct ChannelDryRunArgs {
     dry_run: bool,
 }
 
+#[derive(Debug, Args)]
+struct StampArgs {
+    /// Prerelease identifier composed with first-parent tag height.
+    #[arg(long)]
+    prerelease: Option<String>,
+
+    /// Print mutations without changing the workspace.
+    #[arg(long)]
+    dry_run: bool,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -90,7 +103,17 @@ fn main() -> Result<()> {
         Command::Status => status(&cli.directory),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
+        Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
     }
+}
+
+fn stamp(root: &std::path::Path, prerelease: Option<&str>, dry_run: bool) -> Result<()> {
+    let result = StampResult::build(root, prerelease)?;
+    for operation in result.operations() {
+        println!("{operation}");
+    }
+    result.apply(root, dry_run)?;
+    Ok(())
 }
 
 fn apply(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result<()> {

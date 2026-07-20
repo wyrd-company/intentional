@@ -374,7 +374,7 @@ fn rewrite_internal_dependencies(
     Ok(())
 }
 
-fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> {
+pub(crate) fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> {
     let absolute_member = root.join(member);
     let mut directory = absolute_member.parent();
     while let Some(candidate) = directory {
