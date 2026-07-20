@@ -15,6 +15,7 @@ pub mod model;
 pub mod plan;
 pub mod stamp;
 pub mod status;
+pub mod tag;
 pub mod version;
 
 pub use apply::{ApplyResult, FileWrite};
@@ -28,6 +29,7 @@ pub use plan::{
 };
 pub use stamp::StampResult;
 pub use status::{Drift, PackageStatus, WorkspaceStatus};
+pub use tag::TagResult;
 pub use version::{
     aggregate_bumps, bump_version, effective_bumps, PackageVersion, VersionRepository,
 };

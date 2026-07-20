@@ -6,7 +6,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use itentional_core::{
-    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, StampResult,
+    discover_config, ApplyResult, Bump, Config, IntentDraft, ReleasePlan, StampResult, TagResult,
     WorkspaceStatus, CONFIG_PATH,
 };
 use std::collections::BTreeMap;
@@ -42,6 +42,8 @@ enum Command {
     Apply(ChannelDryRunArgs),
     /// Write computed versions into injected projections only.
     Stamp(StampArgs),
+    /// Create lightweight tags for an applied release.
+    Tag(ChannelDryRunArgs),
 }
 
 #[derive(Debug, Args)]
@@ -104,7 +106,17 @@ fn main() -> Result<()> {
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
+        Command::Tag(args) => tag(&cli.directory, args.channel.as_deref(), args.dry_run),
     }
+}
+
+fn tag(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result<()> {
+    let result = TagResult::build(root, channel)?;
+    for operation in result.operations() {
+        println!("{operation}");
+    }
+    result.apply(root, dry_run)?;
+    Ok(())
 }
 
 fn stamp(root: &std::path::Path, prerelease: Option<&str>, dry_run: bool) -> Result<()> {
