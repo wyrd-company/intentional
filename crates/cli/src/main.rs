@@ -5,7 +5,9 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use itentional_core::{discover_config, Bump, Config, IntentDraft, WorkspaceStatus, CONFIG_PATH};
+use itentional_core::{
+    discover_config, Bump, Config, IntentDraft, ReleasePlan, WorkspaceStatus, CONFIG_PATH,
+};
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -33,6 +35,8 @@ enum Command {
     Add(AddArgs),
     /// Show pending intents and computed package versions.
     Status,
+    /// Emit canonical digest-bound release-plan JSON.
+    Plan(ChannelArgs),
 }
 
 #[derive(Debug, Args)]
@@ -57,13 +61,27 @@ struct AddArgs {
     dry_run: bool,
 }
 
+#[derive(Debug, Args)]
+struct ChannelArgs {
+    /// Release channel, such as beta.
+    #[arg(long)]
+    channel: Option<String>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init(args) => init(&cli.directory, args.dry_run),
         Command::Add(args) => add(&cli.directory, args),
         Command::Status => status(&cli.directory),
+        Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
     }
+}
+
+fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
+    let plan = ReleasePlan::build(root, channel)?;
+    println!("{}", plan.to_canonical_json()?);
+    Ok(())
 }
 
 fn init(root: &std::path::Path, dry_run: bool) -> Result<()> {

@@ -10,6 +10,7 @@ pub mod error;
 pub mod init;
 pub mod intent;
 pub mod model;
+pub mod plan;
 pub mod status;
 pub mod version;
 
@@ -18,6 +19,9 @@ pub use error::{Error, Result};
 pub use init::{discover_config, InitResult};
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{Adapter, Bump, ProjectionMode};
+pub use plan::{
+    canonical_json, render_changelog_section, ChangelogEntry, PlanPackage, ReleasePlan,
+};
 pub use status::{PackageStatus, WorkspaceStatus};
 pub use version::{
     aggregate_bumps, bump_version, effective_bumps, PackageVersion, VersionRepository,
