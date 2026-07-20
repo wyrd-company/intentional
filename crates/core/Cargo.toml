@@ -21,4 +21,5 @@ serde_yaml.workspace = true
 sha2.workspace = true
 tagver.workspace = true
 thiserror.workspace = true
+toml_edit.workspace = true
 walkdir.workspace = true

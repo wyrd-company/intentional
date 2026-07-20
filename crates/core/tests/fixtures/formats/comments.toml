@@ -1,0 +1,11 @@
+# ---
+# relationships:
+#   tests: intent-driven-polyglot-release
+# ---
+# Package comment
+[package]
+name    = "sample"
+version = "1.2.3" # keep this comment
+
+[unrelated]
+version = "9.9.9"

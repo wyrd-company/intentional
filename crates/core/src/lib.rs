@@ -5,6 +5,7 @@
 
 //! Core model and release operations for `itentional`.
 
+pub mod adapters;
 pub mod config;
 pub mod error;
 pub mod init;

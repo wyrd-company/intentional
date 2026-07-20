@@ -1,0 +1,8 @@
+{
+    "_relationships": { "tests": "intent-driven-polyglot-release" },
+    "name" : "sample",
+    "metadata": {
+      "version"  :  "1.2.3",
+      "description": "version 1.2.3 remains text"
+    }
+}

@@ -25,6 +25,7 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 thiserror = "2.0"
 tagver = "0.1.0"
+toml_edit = "0.22"
 walkdir = "2.5"
 
 [profile.release]
