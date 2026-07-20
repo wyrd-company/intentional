@@ -156,6 +156,38 @@ proposed-design:
     always allowed because behavioral breaks are invisible to surfaces. The
     gate is opt-in per package, and add can prefill the suggested bump from
     the current diff.
+  interpretation-contract: >-
+    Interpretation semantics — bump aggregation, the pre-1.0 mapping,
+    canonicalization rules, changelog grouping — are versioned as a contract,
+    distinct from file-shape schemas. Config declares `contract` (written by
+    init); the binary carries an interpreter per contract it supports, so any
+    tool version interpreting a contract-1 workspace applies contract-1
+    semantics regardless of the binary's age. The release plan embeds the
+    contract and a generator record (tool name and version) inside the
+    digested payload, making the plan self-describing evidence of what was
+    decided and under which rules. Tags are annotated, carrying a small
+    canonical message: contract, tool version, and plan digest — each tag is
+    thereby a complete, self-describing release record, which also gives
+    releases with no registry publish (pub-by-git-tag, Go) a real evidence
+    record. Intent files and changelogs stay unbranded; they are authoring
+    artifacts interpreted under the workspace contract. Pre-1.0 bumps express
+    compatibility significance uniformly across ecosystems (major advances
+    0.x.y to 0.(x+1).0; minor and patch advance to 0.x.(y+1)), and reaching
+    1.0.0 is always an explicit human act — deliberately tagging 1.0.0 —
+    never a side effect of aggregation.
+  release-recovery-and-verification: >-
+    Because apply consumes intents before tag runs, tag re-derives the
+    release rather than trusting a materialized artifact. In CD, tag accepts
+    --plan with the digest-sealed plan the harness is executing. Locally, tag
+    locates the release commit — the most recent commit since the last
+    release tags that deletes files under .itentional/intents/ — reads the
+    deleted intents from that commit's parent, and recomputes bumps and
+    versions from first principles under the contract recorded in the
+    previous release's tag. In both paths the recomputed result must match
+    the materialized tree (projections and the leading changelog section,
+    which serves as witness, not source); on mismatch, tag refuses and
+    reports the divergence. Channel releases need no recovery, since channel
+    applies retain intents.
   crate-layout-and-distribution: >-
     A Cargo workspace mirroring tagver: itentional-core (model, adapters,
     planning; no CLI dependencies) and itentional-cli (thin clap binary).
