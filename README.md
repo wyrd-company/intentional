@@ -14,6 +14,21 @@ Go modules, and arbitrary JSON, TOML, and YAML version fields. It never
 publishes packages, commits, pushes, or opens pull requests. `tag` is its only
 Git-writing command, and it creates lightweight tags without a `v` prefix.
 
+## Install
+
+With Homebrew:
+
+```console
+brew tap wyrd-company/tools
+brew install itentional
+```
+
+With Cargo:
+
+```console
+cargo install itentional-cli --locked
+```
+
 ## Build
 
 ```console
@@ -173,6 +188,51 @@ itentional tag --dry-run
 
 Dry runs print the same operation list as a real invocation and make no
 filesystem or Git changes.
+
+## GitHub Action
+
+The plumbing action downloads a released Linux binary and runs one command.
+Pin the action to a plain SemVer tag because itentional tags do not use a `v`
+prefix. This example validates the repository, exposes the canonical plan as
+an output, and records whether that plan contains any changed packages:
+
+```yaml
+jobs:
+  release-intent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release intent
+        uses: wyrd-company/itentional@0.1.1
+
+      - name: Build release plan
+        id: release-plan
+        uses: wyrd-company/itentional@0.1.1
+        with:
+          command: plan
+
+      - name: Save changed release plan
+        if: steps.release-plan.outputs.changed == 'true'
+        env:
+          PLAN_JSON: ${{ steps.release-plan.outputs.plan }}
+        run: printf '%s\n' "$PLAN_JSON" > release-plan.json
+```
+
+The action also accepts `status`, `stamp`, `apply`, and `tag`. `channel` applies
+to `plan`, `apply`, and `tag`; `prerelease` applies to `stamp`; and `dry-run`
+applies to the mutating commands.
+
+## Release pipeline
+
+A release is prepared with `itentional apply`, committed, tagged with
+`itentional tag`, and sent to GitHub by pushing the plain SemVer tag. The
+tag-triggered release workflow builds platform archives, creates the GitHub
+Release, publishes `itentional-core` followed by `itentional-cli` to crates.io,
+updates the stable major action tag after 1.0, and publishes the `itentional`
+formula to the `wyrd-company/tools` Homebrew tap.
 
 ## Development checks
 
