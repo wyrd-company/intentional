@@ -1,17 +1,21 @@
 $schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
 settings:
-  global-tag: false
   internal-dependency-bump: patch
+  pre-1-0-bump-mapping: compatibility
 packages:
   intentional:
     path: .
     projections:
-    - adapter: toml
-      file: Cargo.toml
-      pointer: /workspace/package/version
-      mode: committed
-    - adapter: toml
-      file: crates/cli/Cargo.toml
-      pointer: /dependencies/intentional-core/version
-      mode: committed
-    tag: '{version}'
+      - adapter: toml
+        file: Cargo.toml
+        pointer: /workspace/package/version
+        mode: committed
+      - adapter: toml
+        file: crates/cli/Cargo.toml
+        pointer: /dependencies/intentional-core/version
+        mode: committed
+    tags:
+      primary:
+        role: primary
+        template: "{version}"

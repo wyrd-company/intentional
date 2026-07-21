@@ -15,6 +15,21 @@ use std::path::Path;
 pub fn check_workspace(root: &Path) -> Result<()> {
     let config = Config::load(root)?;
     Intent::load_all(root, &config)?;
+    let status = crate::status::WorkspaceStatus::load(root)?;
+    if !status.missing_baselines.is_empty() {
+        return Err(Error::Validation(format!(
+            "[{}] missing baseline tags for {}; run {}",
+            crate::status::MISSING_BASELINE_CODE,
+            status.missing_baselines.join(", "),
+            crate::status::MISSING_BASELINE_NEXT_ACTION
+        )));
+    }
+    if !status.tag_record_issues.is_empty() {
+        return Err(Error::Validation(format!(
+            "tag record validation failed: {}",
+            status.tag_record_issues.join("; ")
+        )));
+    }
     let first = ReleasePlan::build(root, None)?.to_canonical_json()?;
     let second = ReleasePlan::build(root, None)?.to_canonical_json()?;
     if first != second {

@@ -75,7 +75,7 @@ fn npm_manifest(version: &str) -> String {
 
 fn config(mode: &str) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\npackages:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n"
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\npackages:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
     )
 }
 
@@ -93,13 +93,16 @@ fn init_add_status_plan_apply_tag_round_trip() {
     let generated = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
     repo.write(
         ".intentional/config.yml",
-        &generated.replace("global-tag: false", "global-tag: true"),
+        &generated.replace(
+            "packages:",
+            "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
+        ),
     );
     repo.cli()
         .args([
             "add",
             "--package",
-            "sample:patch",
+            "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",
         ])
@@ -110,15 +113,25 @@ fn init_add_status_plan_apply_tag_round_trip() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains("sample: 0.0.0 -> 0.0.1 (patch)"));
+        .stdout(predicate::str::contains(
+            "sample-library: 0.0.0 -> 0.0.1 (patch)",
+        ));
 
     let output = repo.cli().arg("plan").output().expect("plan command");
     assert!(output.status.success());
     let plan: Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
     assert_eq!(plan["packages"][0]["old_version"], "0.0.0");
     assert_eq!(plan["packages"][0]["new_version"], "0.0.1");
-    assert_eq!(plan["publication_order"][0], "sample");
-    assert_eq!(plan["global_tag"], "0.0.1");
+    assert!(plan["tag_order"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|id| id == "workspace/release"));
+    assert!(plan["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag["name"] == "0.0.1"));
     assert!(plan["digest"].as_str().unwrap().starts_with("sha256:"));
 
     repo.cli().arg("apply").assert().success();
@@ -134,7 +147,8 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.cli().arg("tag").assert().success();
     let tags = git(&repo.root, &["tag", "--list"]);
     assert!(tags.contains("0.0.1"));
-    assert!(tags.contains("sample@0.0.1"));
+    assert!(tags.contains("sample-library@0.0.1"));
+    assert_eq!(git(&repo.root, &["cat-file", "-t", "0.0.1"]), "tag");
     repo.cli()
         .arg("status")
         .assert()
@@ -160,7 +174,7 @@ fn init_ignores_cargo_workspace_only_manifests() {
     let config = intentional_core::Config::load(&repo.root).expect("generated config");
     assert_eq!(config.packages.len(), 1);
     assert_eq!(
-        config.packages["library"].path,
+        config.packages["sample-library"].path,
         PathBuf::from("crates/library")
     );
 }
@@ -297,14 +311,14 @@ fn status_reports_manifest_drift_from_tag_version() {
 }
 
 #[test]
-fn global_tag_advances_its_own_stream_by_the_highest_bump() {
+fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write(
         ".intentional/config.yml",
         &config("committed").replace(
             "packages:",
-            "settings:\n  global-tag: true\n  internal-dependency-bump: patch\npackages:",
+            "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
         ),
     );
     repo.write(".intentional/intents/.keep", "");
@@ -327,7 +341,11 @@ fn global_tag_advances_its_own_stream_by_the_highest_bump() {
     )
     .expect("plan JSON");
     assert_eq!(plan["packages"][0]["new_version"], "1.1.0");
-    assert_eq!(plan["global_tag"], "4.1.0");
+    assert!(plan["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tag| tag["name"] == "4.1.0"));
 
     repo.cli().arg("apply").assert().success();
     repo.commit("apply release");
@@ -352,7 +370,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .args([
             "add",
             "--package",
-            "sample:patch",
+            "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",
             "--dry-run",
@@ -368,7 +386,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .args([
             "add",
             "--package",
-            "sample:patch",
+            "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",
         ])
@@ -404,6 +422,8 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         .args(["tag", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("create tag sample@0.0.1"));
+        .stdout(predicate::str::contains(
+            "create annotated tag sample-library@0.0.1",
+        ));
     assert_eq!(git(&repo.root, &["tag", "--list"]), tags_before);
 }

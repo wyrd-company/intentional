@@ -21,19 +21,31 @@ pub mod version;
 
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
-pub use config::{Config, PackageConfig, Projection, Settings, CONFIG_PATH};
+pub use config::{
+    Config, PackageConfig, Projection, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
+    CURRENT_CONTRACT,
+};
 pub use error::{Error, Result};
-pub use init::{discover_config, InitResult};
+pub use init::{
+    discover_config, initialize, ConvertedIntent, InitDiagnostic, InitPlan, InitResult, InitState,
+    ParityPackage, ParityResult, SourceEvidence, INIT_PLAN_PATH,
+};
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
-pub use model::{Adapter, Bump, ProjectionMode};
+pub use model::{
+    Adapter, Bump, PackageDisposition, Pre1BumpMapping, ProjectionMode, TagPhase, TagRole,
+};
 pub use plan::{
-    canonical_json, render_changelog_section, ChangelogEntry, PlanPackage, ReleasePlan,
+    canonical_json, render_changelog_section, ChangelogEntry, Generator, PlanPackage, PlanTag,
+    ReleasePlan,
 };
 pub use stamp::StampResult;
-pub use status::{Drift, PackageStatus, WorkspaceStatus};
-pub use tag::TagResult;
+pub use status::{
+    Drift, PackageStatus, WorkspaceStatus, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+};
+pub use tag::{tag_record_issues, PlannedTag, TagResult};
 pub use version::{
-    aggregate_bumps, bump_version, effective_bumps, PackageVersion, VersionRepository,
+    aggregate_bumps, bump_version, bump_version_with_mapping, effective_bumps, resolve_versions,
+    PackageVersion, VersionRepository,
 };
 
 /// Version of the core release model.

@@ -1,0 +1,68 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/release-plan.yml
+title: Intentional release plan
+type: object
+additionalProperties: false
+required: [ digest, contract, generator, packages, tags, tag_order ]
+properties:
+  digest:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  contract:
+    const: contract-1
+  generator:
+    type: object
+    additionalProperties: false
+    required: [ tool, version ]
+    properties:
+      tool: { const: intentional }
+      version: { type: string }
+  channel: { type: string }
+  packages:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - old_version
+        - new_version
+        - bump
+        - contributing_intent_ids
+        - tag_ids
+        - release_notes
+      properties:
+        id: { type: string }
+        old_version: { type: string }
+        new_version: { type: string }
+        bump: { enum: [ major, minor, patch ] }
+        contributing_intent_ids:
+          type: array
+          items: { type: string }
+        tag_ids:
+          type: array
+          items: { type: string }
+        release_notes: { type: string }
+  tags:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ id, name, version ]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: string }
+        package: { type: string }
+        role: { enum: [ primary, projection ] }
+        require_phase: { enum: [ before-publication, after-publication ] }
+        tag_after:
+          type: array
+          items: { type: string }
+  tag_order:
+    type: array
+    items: { type: string }

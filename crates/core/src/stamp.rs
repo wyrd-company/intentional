@@ -39,10 +39,11 @@ impl StampResult {
         let mut workspace_versions = BTreeMap::<PathBuf, String>::new();
 
         for (id, package) in &config.packages {
-            let current = repository.current_version(id, &package.tag)?;
+            let (_, primary) = config.primary_tag(id)?;
+            let current = repository.current_version(id, &primary.template)?;
             let mut version = bump_version(&current, bumps[id]);
             if let Some(identifier) = prerelease {
-                let height = repository.height(id, &package.tag)?;
+                let height = repository.height(id, &primary.template)?;
                 version.pre = Prerelease::new(&format!("{identifier}.{height}"))?;
             }
             for projection in package

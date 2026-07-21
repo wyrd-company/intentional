@@ -62,6 +62,57 @@ pub enum ProjectionMode {
     None,
 }
 
+/// How bump names are interpreted before semantic version 1.0.0.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Pre1BumpMapping {
+    /// Bump the named semantic-version component, matching Changesets.
+    Component,
+    /// Treat bump names as compatibility significance.
+    #[default]
+    Compatibility,
+}
+
+/// Whether a discovered logical package participates in releases.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageDisposition {
+    /// The package is configured and eligible for release.
+    #[default]
+    Managed,
+    /// The package remains configured, but any release requiring it is blocked.
+    Suspended,
+}
+
+/// Version-authority role of a logical-package tag.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TagRole {
+    /// The single tag stream used to discover the package's current version.
+    Primary,
+    /// An additional release record carrying the same logical version.
+    Projection,
+}
+
+/// Executor-declared phase required to create a configured tag.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TagPhase {
+    /// The executor declares that publication has not begun.
+    BeforePublication,
+    /// The executor declares that publication has completed.
+    AfterPublication,
+}
+
+impl fmt::Display for TagPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::BeforePublication => "before-publication",
+            Self::AfterPublication => "after-publication",
+        })
+    }
+}
+
 /// Manifest or generic format adapter used by a projection.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]

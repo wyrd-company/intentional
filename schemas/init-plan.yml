@@ -1,0 +1,118 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/init-plan.yml
+title: Intentional initialization plan
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - state
+  - source-kind
+  - source-fingerprint
+  - inferred-config
+  - diagnostics
+  - converted-intents
+  - parity
+  - planned-operations
+  - post-commit-action
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/init-plan.yml
+  state:
+    enum: [ needs-input, ready ]
+  source-kind:
+    const: changesets
+  source-fingerprint:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  inferred-config:
+    $ref: config.yml
+  diagnostics:
+    type: array
+    items:
+      $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/diagnostic"
+  converted-intents:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ id, packages, message, source, target ]
+      properties:
+        id: { type: string }
+        packages:
+          type: object
+          additionalProperties:
+            enum: [ major, minor, patch ]
+        message: { type: string }
+        source: { type: string }
+        target: { type: string }
+  parity:
+    type: object
+    additionalProperties: false
+    required: [ status, packages ]
+    properties:
+      status:
+        enum: [ equivalent, blocked ]
+      packages:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [ package, current-version ]
+          properties:
+            package: { type: string }
+            current-version: { type: string }
+            source:
+              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+            proposed:
+              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+  planned-operations:
+    type: array
+    items: { type: string }
+  post-commit-action:
+    const: intentional tag --baseline
+$defs:
+  parity-release:
+    type: object
+    additionalProperties: false
+    required: [ requested-bump, next-version ]
+    properties:
+      requested-bump: { enum: [ major, minor, patch ] }
+      next-version: { type: string }
+  evidence:
+    type: object
+    additionalProperties: false
+    required: [ path, digest ]
+    properties:
+      path: { type: string }
+      digest:
+        type: string
+        pattern: "^sha256:[0-9a-f]{64}$"
+      lines:
+        type: array
+        items:
+          type: integer
+          minimum: 1
+  diagnostic:
+    type: object
+    additionalProperties: false
+    required: [ id, code, message, evidence, verified ]
+    properties:
+      id: { type: string }
+      code: { type: string }
+      message: { type: string }
+      evidence:
+        type: array
+        items:
+          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+      choices:
+        type: array
+        items: { type: string }
+      recommended: { type: string }
+      resolution:
+        type: [ string, "null" ]
+      verified: { type: boolean }
+      invalidated-resolution: { type: boolean }

@@ -8,8 +8,10 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
-use crate::model::Bump;
-use crate::version::{aggregate_bumps, bump_version, effective_bumps, VersionRepository};
+use crate::model::{Bump, TagPhase, TagRole};
+use crate::version::{
+    aggregate_bumps, bump_version_with_mapping, resolve_versions, VersionRepository,
+};
 use semver::{Prerelease, Version};
 use serde::Serialize;
 use serde_json::Value;
@@ -30,10 +32,42 @@ pub struct PlanPackage {
     pub bump: Bump,
     /// Directly contributing intent ids.
     pub contributing_intent_ids: Vec<String>,
-    /// Package tags to create.
-    pub tags: Vec<String>,
+    /// Canonical ids of package tags to create.
+    pub tag_ids: Vec<String>,
     /// Deterministically rendered changelog section.
     pub release_notes: String,
+}
+
+/// Generator identity embedded inside the sealed payload.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Generator {
+    /// Tool name.
+    pub tool: String,
+    /// Tool version.
+    pub version: String,
+}
+
+/// One annotated tag record in creation order.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PlanTag {
+    /// Canonical configuration tag id.
+    pub id: String,
+    /// Rendered Git tag name.
+    pub name: String,
+    /// Version recorded by the tag.
+    pub version: String,
+    /// Logical package id for package tags.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Package tag role. Workspace tags have no package role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<TagRole>,
+    /// Required executor declaration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_phase: Option<TagPhase>,
+    /// Canonical prerequisite tag ids.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag_after: Vec<String>,
 }
 
 /// Canonical digest-bound release plan.
@@ -41,26 +75,30 @@ pub struct PlanPackage {
 pub struct ReleasePlan {
     /// SHA-256 digest of the canonical plan payload excluding this seal.
     pub digest: String,
+    /// Interpretation contract used to compute the plan.
+    pub contract: String,
+    /// Generator identity included in the digest.
+    pub generator: Generator,
     /// Optional release channel.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Changed packages ordered by id.
     pub packages: Vec<PlanPackage>,
-    /// Dependency-ordered package ids.
-    pub publication_order: Vec<String>,
-    /// Optional global plain SemVer tag.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub global_tag: Option<String>,
+    /// All package and workspace tags in canonical id order.
+    pub tags: Vec<PlanTag>,
+    /// Observable tag creation order derived only from `tag-after` edges.
+    pub tag_order: Vec<String>,
 }
 
 #[derive(Serialize)]
 struct PlanPayload<'a> {
+    contract: &'a str,
+    generator: &'a Generator,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
     packages: &'a [PlanPackage],
-    publication_order: &'a [String],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    global_tag: &'a Option<String>,
+    tags: &'a [PlanTag],
+    tag_order: &'a [String],
 }
 
 /// One release note assigned to a semantic bump group.
@@ -92,19 +130,29 @@ impl ReleasePlan {
         }
         let repository = VersionRepository::discover(root)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.packages));
-        let effective = effective_bumps(config, &declared);
-        let changed: BTreeSet<_> = effective
+        let mut current_versions = BTreeMap::new();
+        for id in config.packages.keys() {
+            let (_, primary) = config.primary_tag(id)?;
+            current_versions.insert(
+                id.clone(),
+                repository.current_version(id, &primary.template)?,
+            );
+        }
+        let resolved = resolve_versions(config, &declared, &current_versions)?;
+        let changed: BTreeSet<_> = resolved
             .iter()
-            .filter(|(_, bump)| **bump != Bump::None)
+            .filter(|(_, versions)| versions.bump != Bump::None)
             .map(|(id, _)| id.clone())
             .collect();
         let mut versions = BTreeMap::new();
         for id in &changed {
-            let package = &config.packages[id];
-            let current = repository.current_version(id, &package.tag)?;
-            let base = bump_version(&current, effective[id]);
+            let (_, primary) = config.primary_tag(id)?;
+            let current = resolved[id].current.clone();
+            let base = resolved[id].next.clone();
             let release = match channel {
-                Some(channel) => channel_version(&repository, id, &package.tag, &base, channel)?,
+                Some(channel) => {
+                    channel_version(&repository, id, &primary.template, &base, channel)?
+                }
                 None => base,
             };
             versions.insert(id.clone(), (current, release));
@@ -112,58 +160,104 @@ impl ReleasePlan {
 
         let mut packages = Vec::with_capacity(changed.len());
         for id in &changed {
-            let package = &config.packages[id];
             let (current, release) = &versions[id];
             let intent_ids = intents
                 .iter()
                 .filter(|intent| intent.packages.contains_key(id))
                 .map(|intent| intent.id.clone())
                 .collect::<Vec<_>>();
+            let effective = resolved
+                .iter()
+                .map(|(id, versions)| (id.clone(), versions.bump))
+                .collect();
             let entries = note_entries(id, config, intents, &effective, &versions);
             let release_notes = render_changelog_section(release, &entries);
             packages.push(PlanPackage {
                 id: id.clone(),
                 old_version: current.to_string(),
                 new_version: release.to_string(),
-                bump: effective[id],
+                bump: resolved[id].bump,
                 contributing_intent_ids: intent_ids,
-                tags: vec![render_tag(&package.tag, id, release)],
+                tag_ids: config.packages[id]
+                    .tags
+                    .keys()
+                    .map(|tag_id| Config::package_tag_id(id, tag_id))
+                    .collect(),
                 release_notes,
             });
         }
 
-        let publication_order = publication_order(config, &changed);
         let channel = channel.map(str::to_owned);
-        let global_tag = if config.settings.global_tag && !packages.is_empty() {
-            let current = repository.current_version("", "{version}")?;
-            let bump = packages
-                .iter()
-                .map(|package| package.bump)
-                .max()
-                .unwrap_or(Bump::None);
-            let base = bump_version(&current, bump);
-            let version = match channel.as_deref() {
-                Some(channel) => channel_version(&repository, "", "{version}", &base, channel)?,
-                None => base,
-            };
-            Some(version.to_string())
-        } else {
-            None
+        let mut tags = Vec::new();
+        for package in &packages {
+            let config_package = &config.packages[&package.id];
+            let version = Version::parse(&package.new_version)?;
+            for (tag_id, tag) in &config_package.tags {
+                tags.push(PlanTag {
+                    id: Config::package_tag_id(&package.id, tag_id),
+                    name: render_tag(&tag.template, &package.id, &version),
+                    version: version.to_string(),
+                    package: Some(package.id.clone()),
+                    role: Some(tag.role),
+                    require_phase: tag.require_phase,
+                    tag_after: tag.tag_after.clone(),
+                });
+            }
+        }
+        let highest_bump = packages
+            .iter()
+            .map(|package| package.bump)
+            .max()
+            .unwrap_or(Bump::None);
+        if highest_bump != Bump::None {
+            for (tag_id, tag) in &config.workspace_tags {
+                let current = repository.current_version(tag_id, &tag.template)?;
+                let base = bump_version_with_mapping(
+                    &current,
+                    highest_bump,
+                    config.settings.pre_1_0_bump_mapping,
+                );
+                let version = match channel.as_deref() {
+                    Some(channel) => {
+                        channel_version(&repository, tag_id, &tag.template, &base, channel)?
+                    }
+                    None => base,
+                };
+                tags.push(PlanTag {
+                    id: Config::workspace_tag_id(tag_id),
+                    name: render_tag(&tag.template, tag_id, &version),
+                    version: version.to_string(),
+                    package: None,
+                    role: None,
+                    require_phase: tag.require_phase,
+                    tag_after: tag.tag_after.clone(),
+                });
+            }
+        }
+        tags.sort_by(|left, right| left.id.cmp(&right.id));
+        let tag_order = tag_order(&tags)?;
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: crate::VERSION.to_owned(),
         };
         let payload = PlanPayload {
+            contract: &config.contract,
+            generator: &generator,
             channel: &channel,
             packages: &packages,
-            publication_order: &publication_order,
-            global_tag: &global_tag,
+            tags: &tags,
+            tag_order: &tag_order,
         };
         let payload_json = canonical_json(&payload)?;
         let digest = format!("sha256:{:x}", Sha256::digest(payload_json.as_bytes()));
         Ok(Self {
             digest,
+            contract: config.contract.clone(),
+            generator,
             channel,
             packages,
-            publication_order,
-            global_tag,
+            tags,
+            tag_order,
         })
     }
 
@@ -335,31 +429,37 @@ pub fn render_changelog_section(version: &Version, entries: &[ChangelogEntry]) -
     output
 }
 
-fn publication_order(config: &Config, changed: &BTreeSet<String>) -> Vec<String> {
-    fn visit(
-        id: &str,
-        config: &Config,
-        changed: &BTreeSet<String>,
-        visited: &mut BTreeSet<String>,
-        order: &mut Vec<String>,
-    ) {
-        if !visited.insert(id.to_owned()) {
-            return;
-        }
-        for dependency in &config.packages[id].depends_on {
-            if changed.contains(dependency) {
-                visit(dependency, config, changed, visited, order);
-            }
-        }
-        order.push(id.to_owned());
-    }
-
+fn tag_order(tags: &[PlanTag]) -> Result<Vec<String>> {
+    let by_id = tags
+        .iter()
+        .map(|tag| (tag.id.as_str(), tag))
+        .collect::<BTreeMap<_, _>>();
     let mut visited = BTreeSet::new();
     let mut order = Vec::new();
-    for id in changed {
-        visit(id, config, changed, &mut visited, &mut order);
+    fn visit(
+        id: &str,
+        by_id: &BTreeMap<&str, &PlanTag>,
+        visited: &mut BTreeSet<String>,
+        order: &mut Vec<String>,
+    ) -> Result<()> {
+        if !visited.insert(id.to_owned()) {
+            return Ok(());
+        }
+        for prerequisite in &by_id[id].tag_after {
+            if !by_id.contains_key(prerequisite.as_str()) {
+                return Err(Error::Validation(format!(
+                    "release tag {id} requires {prerequisite}, which is not part of this release"
+                )));
+            }
+            visit(prerequisite, by_id, visited, order)?;
+        }
+        order.push(id.to_owned());
+        Ok(())
     }
-    order
+    for id in by_id.keys() {
+        visit(id, &by_id, &mut visited, &mut order)?;
+    }
+    Ok(order)
 }
 
 #[cfg(test)]
@@ -384,16 +484,22 @@ mod tests {
             new_version: "1.1.0".to_owned(),
             bump: Bump::Minor,
             contributing_intent_ids: vec!["clear-river-1234".to_owned()],
-            tags: vec!["sample@1.1.0".to_owned()],
+            tag_ids: vec!["package/sample/primary".to_owned()],
             release_notes: "## 1.1.0\n".to_owned(),
         }];
-        let order = vec!["sample".to_owned()];
-        let global = None;
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: "1.0.0".to_owned(),
+        };
+        let tags = Vec::new();
+        let order = Vec::new();
         let payload = PlanPayload {
+            contract: "contract-1",
+            generator: &generator,
             channel: &None,
             packages: &packages,
-            publication_order: &order,
-            global_tag: &global,
+            tags: &tags,
+            tag_order: &order,
         };
         let json = canonical_json(&payload).expect("canonical payload");
         let first = format!("sha256:{:x}", Sha256::digest(json.as_bytes()));

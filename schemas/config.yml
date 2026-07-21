@@ -1,0 +1,124 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/config.yml
+title: Intentional workspace configuration
+type: object
+additionalProperties: false
+required: [ contract, packages ]
+properties:
+  $schema:
+    type: string
+    format: uri
+  contract:
+    const: contract-1
+  settings:
+    type: object
+    additionalProperties: false
+    properties:
+      internal-dependency-bump:
+        $ref: "#/$defs/bump"
+        default: patch
+      pre-1-0-bump-mapping:
+        enum: [ component, compatibility ]
+        default: compatibility
+  fixed:
+    $ref: "#/$defs/groups"
+  linked:
+    $ref: "#/$defs/groups"
+  workspace-tags:
+    type: object
+    additionalProperties:
+      $ref: "#/$defs/workspace-tag"
+  packages:
+    type: object
+    minProperties: 1
+    additionalProperties:
+      $ref: "#/$defs/package"
+$defs:
+  bump:
+    enum: [ major, minor, patch ]
+  groups:
+    type: array
+    items:
+      type: array
+      minItems: 2
+      uniqueItems: true
+      items:
+        type: string
+  phase:
+    enum: [ before-publication, after-publication ]
+  package:
+    type: object
+    additionalProperties: false
+    required: [ path, tags ]
+    properties:
+      path:
+        type: string
+        minLength: 1
+      disposition:
+        enum: [ managed, suspended ]
+        default: managed
+      projections:
+        type: array
+        items:
+          $ref: "#/$defs/projection"
+      depends-on:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+      tags:
+        type: object
+        minProperties: 1
+        additionalProperties:
+          $ref: "#/$defs/package-tag"
+  projection:
+    type: object
+    additionalProperties: false
+    required: [ adapter, file, mode ]
+    properties:
+      adapter:
+        enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
+      file:
+        type: string
+        minLength: 1
+      mode:
+        enum: [ committed, injected, none ]
+      pointer:
+        type: string
+        minLength: 1
+  package-tag:
+    type: object
+    additionalProperties: false
+    required: [ role, template ]
+    properties:
+      role:
+        enum: [ primary, projection ]
+      template:
+        type: string
+        pattern: "\\{version\\}"
+      require-phase:
+        $ref: "#/$defs/phase"
+      tag-after:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+  workspace-tag:
+    type: object
+    additionalProperties: false
+    required: [ template ]
+    properties:
+      template:
+        type: string
+        pattern: "\\{version\\}"
+      require-phase:
+        $ref: "#/$defs/phase"
+      tag-after:
+        type: array
+        uniqueItems: true
+        items:
+          type: string

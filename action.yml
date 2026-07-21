@@ -11,7 +11,7 @@ branding:
 
 inputs:
   command:
-    description: "Command to run: check, status, plan, stamp, apply, or tag"
+    description: "Command to run: init, check, status, plan, stamp, apply, or tag"
     required: false
     default: "check"
   channel:
@@ -20,6 +20,28 @@ inputs:
   prerelease:
     description: "Optional prerelease identifier for stamp"
     required: false
+  phase:
+    description: "Optional tag executor phase: before-publication or after-publication"
+    required: false
+  baseline:
+    description: "Establish baseline tags when command is tag"
+    required: false
+    default: "false"
+  baseline-versions:
+    description: "Optional newline-delimited id=X.Y.Z baseline values"
+    required: false
+  scan-all:
+    description: "Include supported manifests outside package-manager workspace membership during init"
+    required: false
+    default: "false"
+  take-over:
+    description: "Perform a validated Changesets authority handoff during init"
+    required: false
+    default: "false"
+  json:
+    description: "Emit structured JSON during init"
+    required: false
+    default: "false"
   dry-run:
     description: "Preview stamp, apply, or tag without changing the workspace"
     required: false
@@ -97,26 +119,34 @@ runs:
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_CHANNEL: ${{ inputs.channel }}
         INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        INPUT_PHASE: ${{ inputs.phase }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_BASELINE_VERSIONS: ${{ inputs.baseline-versions }}
+        INPUT_SCAN_ALL: ${{ inputs.scan-all }}
+        INPUT_TAKE_OVER: ${{ inputs.take-over }}
+        INPUT_JSON: ${{ inputs.json }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
 
         case "$INPUT_COMMAND" in
-          check|status|plan|stamp|apply|tag) ;;
+          init|check|status|plan|stamp|apply|tag) ;;
           *)
-            echo "::error::command must be check, status, plan, stamp, apply, or tag."
+            echo "::error::command must be init, check, status, plan, stamp, apply, or tag."
             exit 1
             ;;
         esac
 
-        case "$INPUT_DRY_RUN" in
-          true|false) ;;
-          *)
-            echo "::error::dry-run must be true or false."
-            exit 1
-            ;;
-        esac
+        for value in "$INPUT_DRY_RUN" "$INPUT_BASELINE" "$INPUT_SCAN_ALL" "$INPUT_TAKE_OVER" "$INPUT_JSON"; do
+          case "$value" in
+            true|false) ;;
+            *)
+              echo "::error::boolean inputs must be true or false."
+              exit 1
+              ;;
+          esac
+        done
 
         ARGS=(--directory "$INPUT_WORKING_DIRECTORY" "$INPUT_COMMAND")
 
@@ -138,11 +168,52 @@ runs:
           ARGS+=(--prerelease "$INPUT_PRERELEASE")
         fi
 
+        if [[ -n "$INPUT_PHASE" ]]; then
+          if [[ "$INPUT_COMMAND" != "tag" ]]; then
+            echo "::error::phase is only valid for tag."
+            exit 1
+          fi
+          ARGS+=(--phase "$INPUT_PHASE")
+        fi
+
+        if [[ "$INPUT_BASELINE" == "true" ]]; then
+          if [[ "$INPUT_COMMAND" != "tag" ]]; then
+            echo "::error::baseline is only valid for tag."
+            exit 1
+          fi
+          ARGS+=(--baseline)
+        fi
+
+        if [[ -n "$INPUT_BASELINE_VERSIONS" ]]; then
+          if [[ "$INPUT_COMMAND" != "tag" || "$INPUT_BASELINE" != "true" ]]; then
+            echo "::error::baseline-versions requires tag with baseline enabled."
+            exit 1
+          fi
+          while IFS= read -r value; do
+            [[ -n "$value" ]] && ARGS+=(--version "$value")
+          done <<< "$INPUT_BASELINE_VERSIONS"
+        fi
+
+        if [[ "$INPUT_SCAN_ALL" == "true" ]]; then
+          [[ "$INPUT_COMMAND" == "init" ]] || { echo "::error::scan-all is only valid for init."; exit 1; }
+          ARGS+=(--scan-all)
+        fi
+
+        if [[ "$INPUT_TAKE_OVER" == "true" ]]; then
+          [[ "$INPUT_COMMAND" == "init" ]] || { echo "::error::take-over is only valid for init."; exit 1; }
+          ARGS+=(--take-over)
+        fi
+
+        if [[ "$INPUT_JSON" == "true" ]]; then
+          [[ "$INPUT_COMMAND" == "init" ]] || { echo "::error::json is only valid for init."; exit 1; }
+          ARGS+=(--json)
+        fi
+
         if [[ "$INPUT_DRY_RUN" == "true" ]]; then
           case "$INPUT_COMMAND" in
-            stamp|apply|tag) ARGS+=(--dry-run) ;;
+            init|stamp|apply|tag) ARGS+=(--dry-run) ;;
             *)
-              echo "::error::dry-run is only valid for stamp, apply, or tag."
+              echo "::error::dry-run is only valid for init, stamp, apply, or tag."
               exit 1
               ;;
           esac
@@ -155,12 +226,12 @@ runs:
           echo "plan=$PLAN_OUTPUT" >> "$GITHUB_OUTPUT"
           export PLAN_OUTPUT
           CHANGED="$(python3 - <<'PY'
-          import json
-          import os
+        import json
+        import os
 
-          plan = json.loads(os.environ["PLAN_OUTPUT"])
-          print("true" if plan.get("packages") else "false")
-          PY
+        plan = json.loads(os.environ["PLAN_OUTPUT"])
+        print("true" if plan.get("packages") else "false")
+        PY
           )"
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
         else

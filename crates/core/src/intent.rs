@@ -180,11 +180,14 @@ mod tests {
     fn config() -> Config {
         Config::from_yaml(
             r#"
+contract: contract-1
 packages:
   library:
     path: .
     projections:
       - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
 "#,
         )
         .expect("valid config")
