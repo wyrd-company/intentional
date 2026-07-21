@@ -1,4 +1,5 @@
 $schema: https://refinery.systems/ontology/technical-design
+relationships: {}
 objective: >-
   Provide a single, fast, dependency-free CLI that manages change intents,
   version computation, manifest projection, changelogs, tags, and a verifiable
@@ -11,7 +12,7 @@ background:
     configuration and handled by hand-written CD jobs (for example, cutting a
     Dart git tag after an npm publish). Repositories that need release rigor
     beyond changesets build bespoke release-contract scripts that implement
-    deterministic planning, publication ordering, and verification per
+    deterministic planning and coordinate ecosystem-specific delivery per
     repository. Tag-driven calculators (MinVer, tagver) compute versions from
     git tags but cannot know whether pending work is breaking, so they guess
     the next version.
@@ -24,8 +25,8 @@ background:
       versioning workflow entirely (ignore lists plus CD duct tape).
     - Tag-driven and manifest-driven versioning models conflict when aimed at
       the same repository, and each has a known weakness the other repairs.
-    - Release planning, ordering, and verification logic gets rebuilt per
-      repository as untested CI scripts.
+    - Release planning and tag verification logic gets rebuilt per repository
+      as untested CI scripts.
 design-challenges:
   version-source-of-truth: >-
     Manifest-driven ecosystems (npm, cargo, pub, msbuild, python) and
@@ -50,6 +51,22 @@ design-challenges:
     Declared bump levels are claims. Public API surface diffs can ground those
     claims, but API scanning is ecosystem-specific and must not expand the
     tool into a polyglot static-analysis project.
+  adoption-authority: >-
+    A repository adopting Intentional may already contain pending release
+    intent, versioning configuration, and executable integrations owned by
+    another tool. Discovery must preserve that authority until the imported
+    contract is complete, unambiguous, and equivalent.
+  incomplete-discovery: >-
+    Manifest discovery can prove package identity and version projections but
+    cannot infer repository-specific choices such as ignored-package
+    disposition, tag roles, or the meaning of bespoke release automation.
+    Initialization needs a durable, editable handoff that records evidence and
+    requests only the decisions discovery cannot prove.
+  takeover-continuity: >-
+    Intentional writes working-tree state but does not create commits. The
+    authority handoff and the baseline tags therefore occur on opposite sides
+    of an externally created commit without relying on retained terminal
+    output or a permanent migration-state file.
 proposed-design:
   high-level-overview: >-
     Intents answer what the next version should be; tags answer what was
@@ -66,19 +83,20 @@ proposed-design:
   core-model: >-
     A workspace declares an inventory of logical packages in
     .intentional/config.yml. Each package has a path, one or more projections,
-    a tag template (default "{id}@{version}", no v prefix), and optional
-    explicit depends-on edges. The current version of a package is the latest
-    matching tag (tagver supplies tag discovery and height); the next version
-    is that tag plus the maximum accumulated intent bump. No version field
-    exists in config, so nothing drifts by construction; hand-edited manifest
-    versions are drift that status reports — the tag is authoritative.
-    Monorepo support is first-class: per-package intents, internal-dependency
-    bumping with auto-generated changelog entries, fixed/linked groups when
-    needed, and changed/unchanged partitioning per release. An opt-in
-    workspace-level global tag (plain X.Y.Z, max bump across the release) is
-    available as a CD trigger. Within one ecosystem the dependency graph is
-    derived from manifests to assist and verify; the authored config is the
-    authority because cross-ecosystem edges are invisible to manifests.
+    named tags, and optional explicit depends-on edges. Exactly one package tag
+    is primary and supplies current-version authority; any projection tags
+    record that same logical release in additional tag namespaces. Named
+    workspace tags represent repository-level release records and CD triggers
+    without becoming package version authority. Tag templates never add a v
+    prefix. The next version is the primary tag version plus the accumulated
+    intent bump interpreted by the workspace contract. No version field exists
+    in config, so hand-edited manifest versions are observable drift rather
+    than competing authority. Monorepo support includes per-package intents,
+    internal-dependency bumping with generated changelog entries, fixed and
+    linked release groups, and changed/unchanged partitioning. Within one
+    ecosystem the dependency graph is derived from manifests to assist and
+    verify; the authored config remains authoritative because
+    cross-ecosystem edges are invisible to manifests.
   intent-files: >-
     Intents live in .intentional/intents/ as markdown files with a YAML
     frontmatter block mapping logical package ids to bump levels; the markdown
@@ -89,15 +107,14 @@ proposed-design:
     identity rather than being a feature.
   projections-and-adapters: >-
     Ecosystem adapters (npm, cargo, pub, msbuild, python, go) know where the
-    version lives in their manifest, how to rewrite internal dependency
-    ranges, and later, publish-command templates for the release plan. Format
-    adapters (json, yaml, toml) take a file path and pointer and cover
-    arbitrary version-bearing files (for example a devcontainer feature
+    version lives in their manifest and how to rewrite internal dependency
+    ranges. Format adapters (json, yaml, toml) take a file path and pointer and
+    cover arbitrary version-bearing files (for example a devcontainer feature
     manifest). All writers are format-preserving (toml_edit-class libraries).
     Ecosystem adapters are thin specializations of format adapters. The go
     adapter is tag-only, except that a major bump rewrites the module path
-    suffix. Projection modes: committed (version bump lands in a commit),
-    injected (a placeholder is stamped at build time), none.
+    suffix. Projection modes are committed (the version bump lands in a
+    commit), injected (stamp materializes a build-time version), and none.
   version-computation: >-
     Ephemeral build versions compose statelessly: next version from intents,
     prerelease identifier, height from tagver — for example 1.3.0-alpha.5.
@@ -106,31 +123,158 @@ proposed-design:
     existing tags (max existing channel tag for that version, plus one). No
     stored pre-mode state exists. Channel releases do not consume intents;
     intents survive until the final channel-less release, so every channel
-    release recomputes from the full intent set. Pre-1.0 bump mapping is
-    version-aware per ecosystem semantics.
+    release recomputes from the full intent set. The workspace config selects
+    pre-1-0-bump-mapping. Component mapping applies major, minor, and patch to
+    the corresponding SemVer component. Compatibility mapping treats bump
+    names as compatibility significance: major advances 0.x.y to 0.(x+1).0,
+    while minor and patch advance to 0.x.(y+1). New workspaces use
+    compatibility mapping; Changesets adoption recommends component mapping.
+  release-groups: >-
+    Fixed and linked groups contain logical package ids. When any managed
+    member of a fixed group receives a direct or dependency-derived bump, all
+    managed members release. The group takes the highest current member
+    version, selects the highest requested bump, applies the configured
+    pre-1.0 mapping once, and assigns the result to every member. A suspended
+    member blocks a fixed-group release because the shared release cannot be
+    completed. In a linked group, only members with direct or
+    dependency-derived bumps release. Every releasing member uses the highest
+    current version across the full group and the highest requested bump among
+    the releasing members; unaffected members retain their versions. A
+    suspended linked member blocks only when it would release. Excluded
+    packages cannot appear in either group, and a package belongs to at most
+    one release group. Dependency propagation and group constraints are
+    evaluated to a fixed point before the release plan is sealed.
+  tag-contract: >-
+    Every tag is an annotated release record carrying the interpretation
+    contract, generator name and version, and release-plan digest. A logical
+    package has exactly one primary tag and any number of projection tags. All
+    tags for one logical release target the same commit and agree on package
+    version, contract, and plan digest. A projection tag can trigger external
+    automation but does not become lesser evidence or an alternate version
+    source. Named workspace tags carry the same record for a workspace release
+    and can use a plain {version} template. Each workspace tag has its own
+    version stream: its latest matching tag supplies the current version and
+    the highest bump among participating packages supplies its next bump. A
+    workspace tag without an existing stream requires an explicit baseline
+    version. A tag can declare require-phase as before-publication or
+    after-publication; creating it requires an equal --phase value. The phase
+    is an executor declaration bound to the plan. Publication state and
+    registry evidence belong to the external release executor.
+  tag-ordering: >-
+    Tags express observable prerequisites with tag-after. Before creating a
+    tag, Intentional resolves every prerequisite tag expected by the plan and
+    verifies its target commit, expected version, interpretation contract, and
+    plan digest. Missing or conflicting prerequisites block that tag. The
+    release plan contains tag order only; external CD determines how tag
+    creation relates to publication and other side effects.
+  initialization-discovery: >-
+    Init derives its default inventory boundary from package-manager workspace
+    membership and derives package identities from manifest-native names.
+    Directory basenames are evidence only and never package ids, so repeated
+    basenames in different subtrees do not collide. --scan-all explicitly
+    broadens discovery beyond workspace membership. Discovery records every
+    manifest and workspace file used as evidence, recognizes existing
+    Intentional or Changesets authority, and locates executable Changesets
+    references in workflows, package scripts, dependency declarations,
+    lockfiles, release scripts, and tests.
+  initialization-plan: |-
+    Init writes canonical config only when the complete configuration is
+    proven. Otherwise it writes one transient `.intentional/init-plan.yml`.
+    The plan is deterministic and schema-backed. It contains the discovered
+    source kind, source fingerprint, inferred configuration, diagnostics,
+    evidence locations and digests, planned operations, parity result, finite
+    resolution choices, recommendations, and editable resolution fields. Its
+    computed state is `needs-input` or `ready`; editing the state cannot bypass
+    validation. Stable diagnostic codes identify conditions, while diagnostic
+    ids combine the code with the affected package, tag, or repository
+    location so agents can reconcile reruns.
+
+    YAML choices are compact scalar values with one inline comment explaining
+    each value, followed by recommended and resolution fields. Dry-run emits
+    the same plan without writing it. Human-readable and
+    structured JSON output expose the same state, diagnostics, evidence,
+    choices, and next actions. Success, needs-input, and failure are distinct
+    process outcomes. On rerun, init recomputes the source fingerprint,
+    preserves a resolution only while its evidence remains valid, and reports
+    invalidated resolutions with their changed evidence.
+  changesets-adoption: >-
+    A .changeset/config.json source activates the Changesets importer. The
+    importer maps package identities, pending changes, fixed and linked groups,
+    internal-dependency bump policy, ignored packages, and private-package
+    version behavior into the initialization plan. Changesets bump names use
+    component pre-1.0 mapping. Each pending Changesets file becomes one
+    Intentional intent: its markdown body is preserved and its manifest-native
+    package names are mapped to logical package ids. The importer independently
+    computes the source Changesets release result and the proposed Intentional
+    release result, including dependency propagation and group constraints,
+    then records package membership, requested bumps, and next-version parity.
+    Unsupported settings and repository-specific release metadata remain
+    explicit diagnostics with source evidence rather than inferred behavior.
+  package-disposition: >-
+    Managed packages belong to the inventory and participate in release
+    computation. Suspended packages remain configured and visible to status
+    and check, but any release that requires them is blocked. Excluded
+    discovery candidates do not enter the inventory. Every Changesets ignore
+    entry produces a suspended, excluded, or managed resolution; suspended is
+    recommended because it preserves the identity and blocks release until the
+    repository owner resolves its contract. Package privacy is separate from
+    package disposition and does not imply exclusion or suspension.
+  repository-integration-resolutions: >-
+    Changesets references outside .changeset are repository integrations, not
+    state owned by Intentional. The initialization plan reports each reference
+    with its exact location and requires an explicit resolution describing the
+    repository edit. A resolution is accepted only when a rerun inspects the
+    referenced file and observes the declared outcome. An acknowledgement
+    without the corresponding file change does not advance the plan to ready.
+  takeover-transaction: >-
+    Ordinary init leaves a Changesets repository under Changesets authority,
+    including when the initialization plan is ready. Intentional init
+    --take-over is the sole authority handoff. It verifies the current source
+    fingerprint, every resolution, release-plan parity, and the complete
+    operation set immediately before mutation. A rollback-capable filesystem
+    transaction writes canonical Intentional config and converted intents,
+    removes recognized .changeset state, and consumes the initialization plan
+    as one all-or-nothing operation. Transient staging and rollback data are
+    removed after success and are recoverable on the next init after an
+    interrupted process. Takeover changes only .intentional and .changeset;
+    verified repository integrations are edited by the user or agent that owns
+    the repository.
+  baseline-establishment: >-
+    Takeover output identifies intentional tag --baseline as the post-commit
+    continuation in human-readable and structured forms. Status and check
+    independently rediscover the missing-baseline condition and emit the same
+    stable diagnostic and command until the tags exist. Baseline creation runs
+    against the externally created takeover commit. It infers a logical
+    package version only when every version-bearing projection agrees and
+    reports per-file evidence when they differ. A tag-only package requires an
+    explicit baseline version. Baseline tags use the configured primary,
+    projection, and workspace templates, are annotated with the contract and
+    plan digest, target the takeover commit, and do not require a phase.
   command-surface: >-
-    init scans manifests and generates config plus inventory. add authors an
-    intent (flags or interactive). status reports pending intents, computed
-    next versions, and drift. plan emits the canonical release plan, read-only.
-    apply materializes a release — writes projections and changelogs, consumes
-    intents — mutating the working tree only. stamp writes computed (optionally
-    prerelease) versions into projections and touches nothing else; it is the
-    build-time command for injected projections and the MinVer replacement.
-    tag creates per-package and optional global tags for an applied release
-    and is the only git-writing command. check is the CI gate: config, schema,
-    and intent validity plus plan determinism. Every writing verb takes
-    --dry-run and prints exactly what the real run would do. The tool never
-    commits, pushes, or opens pull requests; choreography belongs to the
+    init discovers the inventory, writes complete configuration for an
+    unambiguous new workspace, and otherwise produces or reconciles the single
+    initialization plan. --scan-all broadens discovery and --take-over performs
+    a validated authority handoff. add authors an intent through flags or an
+    interactive prompt. status reports pending intents, computed next
+    versions, drift, suspended release blockers, and missing baselines. plan
+    emits the canonical release plan without mutation. apply writes projections
+    and changelogs and consumes intents in the working tree. stamp writes
+    computed versions into injected projections and touches nothing else. tag
+    creates configured package and workspace tags, accepts --phase for tags
+    with a required phase, and accepts --baseline to establish initial release
+    authority. Tag is the only git-writing command. check is the CI gate for
+    config, schema, intent validity, tag-record consistency, baseline presence,
+    and plan determinism. Every writing verb supports --dry-run and reports the
+    exact operation set. Commit, push, and forge choreography belong to the
     harness.
   release-plan: >-
-    plan emits canonical JSON listing packages, old and new versions,
-    contributing intent ids, tags, publication order (dependency-ordered), and
-    rendered release notes per package, sealed with a digest of the canonical
-    serialization. CD executes the plan with ecosystem publishers and creates
-    forge releases from the carried notes. Source-to-release commit
-    choreography, artifact digests, and evidence binding are deliberate future
-    extensions; artifact digests require running ecosystem pack tooling, which
-    crosses the registry boundary and is excluded from the first version.
+    Plan emits canonical JSON listing packages, old and new versions,
+    contributing intent ids, primary, projection, and workspace tags, tag-after
+    prerequisites, required phase declarations, and rendered release notes per
+    package. The interpretation contract and generator record are part of the
+    canonical payload sealed by its digest. CD consumes the plan as release
+    input and owns all publication and forge operations. The plan's only
+    ordering edges are tag-after prerequisites.
   changelog-model: >-
     apply writes each affected package's CHANGELOG.md from the consumed intent
     bodies; a multi-package intent's body lands in each affected package's
@@ -170,11 +314,10 @@ proposed-design:
     thereby a complete, self-describing release record, which also gives
     releases with no registry publish (pub-by-git-tag, Go) a real evidence
     record. Intent files and changelogs stay unbranded; they are authoring
-    artifacts interpreted under the workspace contract. Pre-1.0 bumps express
-    compatibility significance uniformly across ecosystems (major advances
-    0.x.y to 0.(x+1).0; minor and patch advance to 0.x.(y+1)), and reaching
-    1.0.0 is always an explicit human act — deliberately tagging 1.0.0 —
-    never a side effect of aggregation.
+    artifacts interpreted under the workspace contract. The configured
+    pre-1-0-bump-mapping is an input to that contract, so component and
+    compatibility workspaces remain deterministic under every supporting tool
+    version.
   release-recovery-and-verification: >-
     Because apply consumes intents before tag runs, tag re-derives the
     release rather than trusting a materialized artifact. In CD, tag accepts
