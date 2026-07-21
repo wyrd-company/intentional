@@ -316,6 +316,7 @@ enum NpmDependencyKind {
     Dependency,
     Optional,
     Peer,
+    Dev,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,11 +390,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
-    if let Some(private_packages) = changesets["privatePackages"].as_object() {
-        let versions_private = private_packages
-            .get("version")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(true);
+    if let Some((versions_private, tags_private)) =
+        changesets_private_package_settings(&changesets["privatePackages"])
+    {
         diagnostics.push(InitDiagnostic {
             id: "private-package-versioning".to_owned(),
             code: "private-package-versioning".to_owned(),
@@ -413,7 +412,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             verified: versions_private,
             invalidated_resolution: false,
         });
-        if private_packages.get("tag").and_then(JsonValue::as_bool) == Some(false) {
+        if !tags_private {
             diagnostics.push(InitDiagnostic {
                 id: "private-package-tagging".to_owned(),
                 code: "private-package-tagging".to_owned(),
@@ -562,7 +561,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
                 aggregate
             });
     let suppress_private_versions =
-        changesets["privatePackages"]["version"].as_bool() == Some(false);
+        changesets_private_package_settings(&changesets["privatePackages"])
+            .is_some_and(|(versions_private, _)| !versions_private);
     let mut skipped_packages = ignored
         .iter()
         .map(|id| identity_map.get(id).cloned().unwrap_or_else(|| id.clone()))
@@ -875,6 +875,9 @@ fn expand_workspace_pattern(
     pattern: &str,
     directories: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
+    let (excluded, pattern) = pattern
+        .strip_prefix('!')
+        .map_or((false, pattern), |pattern| (true, pattern));
     let absolute = root.join(pattern).to_string_lossy().to_string();
     for entry in glob(&absolute).map_err(|error| {
         Error::Validation(format!("invalid workspace pattern {pattern}: {error}"))
@@ -882,7 +885,11 @@ fn expand_workspace_pattern(
         let path = entry
             .map_err(|error| Error::Validation(format!("workspace pattern failed: {error}")))?;
         if path.is_dir() {
-            directories.insert(path);
+            if excluded {
+                directories.remove(&path);
+            } else {
+                directories.insert(path);
+            }
         }
     }
     Ok(())
@@ -1083,6 +1090,7 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
             ("dependencies", NpmDependencyKind::Dependency),
             ("optionalDependencies", NpmDependencyKind::Optional),
             ("peerDependencies", NpmDependencyKind::Peer),
+            ("devDependencies", NpmDependencyKind::Dev),
         ] {
             if let Some(entries) = value[group].as_object() {
                 for (dependency, range) in entries {
@@ -1193,6 +1201,23 @@ fn collect_json_strings(value: &JsonValue, output: &mut BTreeSet<String>) {
             }
         }
         _ => {}
+    }
+}
+
+fn changesets_private_package_settings(value: &JsonValue) -> Option<(bool, bool)> {
+    match value {
+        JsonValue::Bool(enabled) => Some((*enabled, *enabled)),
+        JsonValue::Object(settings) => Some((
+            settings
+                .get("version")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true),
+            settings
+                .get("tag")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true),
+        )),
+        _ => None,
     }
 }
 
@@ -1752,7 +1777,11 @@ fn resolve_changesets_source(
                 Pre1BumpMapping::Component,
             );
             for id in group {
-                let releases = highest_bump != Bump::None && (fixed || effective[id] != Bump::None);
+                let suppressed =
+                    semantics.suppress_private_versions && semantics.private_packages.contains(id);
+                let releases = !suppressed
+                    && highest_bump != Bump::None
+                    && (fixed || effective[id] != Bump::None);
                 resolved.insert(
                     id.clone(),
                     PackageVersion {
@@ -1807,11 +1836,9 @@ fn npm_range_satisfies(range: &str, current: &Version, next: &Version) -> Result
         Some(range) => range.to_owned(),
         None => range.to_owned(),
     };
-    let range = NodeRange::parse(&normalized).map_err(|error| {
-        Error::Validation(format!(
-            "unsupported npm dependency range {normalized:?}: {error}"
-        ))
-    })?;
+    let Ok(range) = NodeRange::parse(&normalized) else {
+        return Ok(false);
+    };
     let next = NodeVersion::parse(next.to_string())
         .map_err(|error| Error::Validation(format!("invalid next npm version: {error}")))?;
     Ok(range.satisfies(&next))
@@ -1843,6 +1870,15 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
             source.insert(
                 path.to_string_lossy().to_string(),
                 evidence(root, path, Vec::new())?.digest,
+            );
+        }
+    }
+    for path in ["package.json", "pnpm-workspace.yaml", "Cargo.toml"] {
+        let path = PathBuf::from(path);
+        if root.join(&path).is_file() {
+            source.insert(
+                path.to_string_lossy().to_string(),
+                evidence(root, &path, Vec::new())?.digest,
             );
         }
     }
@@ -1935,35 +1971,48 @@ fn apply_takeover_transaction(
     if transaction.exists() {
         recover_interrupted_takeover(root)?;
     }
-    std::fs::create_dir_all(transaction.join("original"))
-        .map_err(|error| Error::io(&transaction, error))?;
-    let affected = writes
-        .iter()
-        .map(|(path, _)| path.clone())
-        .chain(deletes.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    for relative in &affected {
-        let source = root.join(relative);
-        if source.is_file() {
-            let backup = transaction.join("original").join(relative);
-            if let Some(parent) = backup.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+    let setup = (|| {
+        std::fs::create_dir_all(transaction.join("original"))
+            .map_err(|error| Error::io(&transaction, error))?;
+        let affected = writes
+            .iter()
+            .map(|(path, _)| path.clone())
+            .chain(deletes.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        for relative in &affected {
+            let source = root.join(relative);
+            if source.is_file() {
+                let backup = transaction.join("original").join(relative);
+                if let Some(parent) = backup.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+                }
+                std::fs::copy(&source, &backup).map_err(|error| Error::io(&source, error))?;
             }
-            std::fs::copy(&source, &backup).map_err(|error| Error::io(&source, error))?;
+        }
+        let manifest = serde_yaml::to_string(
+            &affected
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect::<Vec<_>>(),
+        )?;
+        let manifest_path = transaction.join("manifest.yml");
+        let manifest_temporary = transaction.join("manifest-tmp.yml");
+        std::fs::write(&manifest_temporary, manifest)
+            .map_err(|error| Error::io(&manifest_temporary, error))?;
+        std::fs::rename(&manifest_temporary, &manifest_path)
+            .map_err(|error| Error::io(&manifest_path, error))?;
+        Ok::<(), Error>(())
+    })();
+    match setup {
+        Ok(()) => {}
+        Err(error) => {
+            if transaction.exists() {
+                std::fs::remove_dir_all(&transaction)
+                    .map_err(|cleanup| Error::io(&transaction, cleanup))?;
+            }
+            return Err(error);
         }
     }
-    let manifest = serde_yaml::to_string(
-        &affected
-            .iter()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect::<Vec<_>>(),
-    )?;
-    let manifest_path = transaction.join("manifest.yml");
-    let manifest_temporary = transaction.join("manifest-tmp.yml");
-    std::fs::write(&manifest_temporary, manifest)
-        .map_err(|error| Error::io(&manifest_temporary, error))?;
-    std::fs::rename(&manifest_temporary, &manifest_path)
-        .map_err(|error| Error::io(&manifest_path, error))?;
     let result = (|| {
         for (relative, contents) in writes {
             let path = root.join(relative);

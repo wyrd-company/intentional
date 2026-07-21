@@ -319,7 +319,7 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
     );
     repository.write(
         "packages/package-b/package.json",
-        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"devDependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
     );
     repository.write(
         ".changeset/config.json",
@@ -621,7 +621,7 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
   "linked": [],
   "updateInternalDependencies": "patch",
   "ignore": [],
-  "privatePackages": { "version": false, "tag": false }
+  "privatePackages": false
 }
 "#,
     );
@@ -919,6 +919,78 @@ packages:
         .success();
     assert_eq!(
         git(&repository.root, &["cat-file", "-t", "mirror@1.1.0"]),
+        "tag"
+    );
+    repository.cli().arg("check").assert().success();
+}
+
+#[test]
+fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
+    let repository = Repository::new();
+    repository.write(
+        ".intentional/config.yml",
+        r#"contract: contract-1
+packages:
+  package-a:
+    path: packages/package-a
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary:
+        role: primary
+        template: 'package-a@{version}'
+        require-phase: before-publication
+  package-b:
+    path: packages/package-b
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary:
+        role: primary
+        template: 'package-b@{version}'
+        require-phase: after-publication
+"#,
+    );
+    for id in ["package-a", "package-b"] {
+        repository.write(
+            &format!("packages/{id}/package.json"),
+            &format!("{{\n  \"name\": \"{id}\",\n  \"version\": \"1.0.0\"\n}}\n"),
+        );
+    }
+    repository.write(
+        ".intentional/intents/useful-capability.md",
+        "---\npackage-a: minor\npackage-b: minor\n---\n\nAdd a useful capability.\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "add release intent"],
+    );
+    git(&repository.root, &["tag", "package-a@1.0.0"]);
+    git(&repository.root, &["tag", "package-b@1.0.0"]);
+
+    repository.cli().arg("apply").assert().success();
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "apply release intent"],
+    );
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication"])
+        .assert()
+        .success();
+    assert_eq!(
+        git(&repository.root, &["cat-file", "-t", "package-a@1.1.0"]),
+        "tag"
+    );
+    repository
+        .cli()
+        .args(["tag", "--phase", "after-publication"])
+        .assert()
+        .success();
+    assert_eq!(
+        git(&repository.root, &["cat-file", "-t", "package-b@1.1.0"]),
         "tag"
     );
     repository.cli().arg("check").assert().success();

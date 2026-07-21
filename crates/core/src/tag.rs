@@ -90,18 +90,6 @@ impl TagResult {
             if version < current {
                 continue;
             }
-            if version == current {
-                let all_exist = package.tags.values().all(|tag| {
-                    let name = render_tag(&tag.template, id, &version.to_string());
-                    git.try_find_reference(format!("refs/tags/{name}").as_str())
-                        .ok()
-                        .flatten()
-                        .is_some()
-                });
-                if all_exist && config.workspace_tags.is_empty() {
-                    continue;
-                }
-            }
             versions_by_package.insert(id.clone(), version);
         }
         if versions_by_package.is_empty() {
