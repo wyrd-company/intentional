@@ -380,7 +380,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             id: format!("ignored-package-disposition:{package}"),
             code: "ignored-package-disposition".to_owned(),
             message: format!(
-                "Choose whether Changesets-ignored package {package} is suspended, excluded, or managed."
+                "Choose whether Changesets-ignored package {package} is suspended, excluded, or managed. Selecting managed requires removing it from Changesets ignore before takeover."
             ),
             evidence: vec![config_evidence.clone()],
             choices: vec!["suspended".to_owned(), "excluded".to_owned(), "managed".to_owned()],
@@ -1566,7 +1566,10 @@ fn parity_result(
                 packages: Vec::new(),
             },
             source_error: None,
-            proposed_error: None,
+            proposed_error: Some(format!(
+                "missing current versions for release packages: {}",
+                missing.into_iter().collect::<Vec<_>>().join(", ")
+            )),
         });
     }
     let (source, source_error) =

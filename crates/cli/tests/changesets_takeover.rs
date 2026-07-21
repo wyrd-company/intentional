@@ -679,6 +679,46 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
 }
 
 #[test]
+fn releasing_versionless_package_has_a_stable_parity_diagnostic() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\"\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": patch\n---\n\nCorrect a user-visible defect.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("versionless package plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert!(plan.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "proposed-release-invalid" && diagnostic.message.contains("package-a")
+    }));
+}
+
+#[test]
 fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
     for fixture in [
         Path::new("/workspaces/shared/the-wyrding-way/design-system"),
