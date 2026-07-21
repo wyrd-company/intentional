@@ -77,7 +77,12 @@ impl Intent {
     /// Load and validate one intent file.
     pub fn load(path: &Path, config: &Config) -> Result<Self> {
         let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-        let (frontmatter, message) = split_frontmatter(&text)?;
+        Self::parse(path, &text, config)
+    }
+
+    /// Parse and validate one intent from supplied contents.
+    pub fn parse(path: &Path, text: &str, config: &Config) -> Result<Self> {
+        let (frontmatter, message) = split_frontmatter(text)?;
         let packages: BTreeMap<String, Bump> = serde_yaml::from_str(frontmatter)?;
         validate_draft(&packages, message, config)?;
         let id = path

@@ -47,6 +47,20 @@ pub struct Config {
     pub packages: BTreeMap<String, PackageConfig>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            schema: Some(CONFIG_SCHEMA.to_owned()),
+            contract: CURRENT_CONTRACT.to_owned(),
+            settings: Settings::default(),
+            fixed: Vec::new(),
+            linked: Vec::new(),
+            workspace_tags: BTreeMap::new(),
+            packages: BTreeMap::new(),
+        }
+    }
+}
+
 /// Workspace-wide release behavior.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]

@@ -140,8 +140,10 @@ evidence supports another disposition.
 
 Pending Changesets Markdown bodies and package bumps are converted losslessly.
 Fixed and linked groups, internal dependency bump policy, and component-mapped
-pre-1.0 versions participate in the parity comparison. Unsupported or
-repository-specific behavior remains an explicit diagnostic.
+pre-1.0 versions participate in the parity comparison. Private-package version
+and tag settings are recorded explicitly because Intentional separates version
+management from publication privacy and annotates every managed release.
+Unsupported or repository-specific behavior remains an explicit diagnostic.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes
@@ -228,7 +230,7 @@ intentional apply
 git add -A
 git commit -m "chore: apply release"
 
-intentional tag
+intentional tag --plan release-plan.json
 ```
 
 `plan` writes compact canonical JSON sealed by SHA-256. The sealed payload
@@ -239,13 +241,16 @@ no publication graph.
 
 `apply` updates committed projections, internal dependency ranges, and
 changelogs, then consumes final-release intents. It changes only the working
-tree. `tag` creates annotated records at the release commit.
+tree. `tag` verifies the supplied sealed plan against the materialized tree and
+creates annotated records at the release commit. Without `--plan`, a final
+release is recovered from the intents deleted by the release commit; a channel
+release is recovered from its retained intents.
 
 A tag with `require-phase` is created only by an equal executor declaration:
 
 ```console
-intentional tag --phase before-publication
-intentional tag --phase after-publication
+intentional tag --plan release-plan.json --phase before-publication
+intentional tag --plan release-plan.json --phase after-publication
 ```
 
 The declaration does not assert or verify publication. `tag-after` expresses
@@ -275,7 +280,7 @@ intentional plan --channel beta > release-plan.json
 intentional apply --channel beta
 git add -A
 git commit -m "chore: apply beta release"
-intentional tag --channel beta
+intentional tag --channel beta --plan release-plan.json
 ```
 
 The first release is `X.Y.Z-beta.1`; each iteration advances from existing tag

@@ -108,6 +108,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
         ])
         .assert()
         .success();
+    repo.commit("add release intent");
 
     repo.cli()
         .arg("status")
@@ -144,11 +145,20 @@ fn init_add_status_plan_apply_tag_round_trip() {
         .is_none());
     repo.commit("apply release");
 
-    repo.cli().arg("tag").assert().success();
+    fs::write(repo.root.join("release-plan.json"), &output.stdout).unwrap();
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
     let tags = git(&repo.root, &["tag", "--list"]);
     assert!(tags.contains("0.0.1"));
     assert!(tags.contains("sample-library@0.0.1"));
     assert_eq!(git(&repo.root, &["cat-file", "-t", "0.0.1"]), "tag");
+    let record = git(&repo.root, &["cat-file", "-p", "sample-library@0.0.1"]);
+    assert!(record.contains(&format!(
+        "plan-digest: {}",
+        plan["digest"].as_str().unwrap()
+    )));
     repo.cli()
         .arg("status")
         .assert()
@@ -392,6 +402,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
         ])
         .assert()
         .success();
+    repo.commit("add release intent");
 
     let manifest_before = fs::read_to_string(repo.root.join("package.json")).unwrap();
     let intents_before = fs::read_dir(repo.root.join(".intentional/intents"))

@@ -127,6 +127,10 @@ struct TagArgs {
     #[arg(long)]
     phase: Option<String>,
 
+    /// Digest-sealed release plan to verify before creating release tags.
+    #[arg(long, value_name = "PATH")]
+    plan: Option<PathBuf>,
+
     /// Print mutations without changing the workspace.
     #[arg(long)]
     dry_run: bool,
@@ -189,13 +193,23 @@ fn tag(root: &std::path::Path, args: TagArgs) -> Result<()> {
     if args.baseline && args.channel.is_some() {
         bail!("--baseline and --channel cannot be combined");
     }
+    if args.baseline && args.plan.is_some() {
+        bail!("--baseline and --plan cannot be combined");
+    }
     if !args.baseline && !explicit.is_empty() {
         bail!("--version is valid only with --baseline");
     }
     let result = if args.baseline {
         TagResult::build_baseline(root, &explicit)?
     } else {
-        TagResult::build(root, args.channel.as_deref(), phase)?
+        let plan_path = args.plan.as_ref().map(|path| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                root.join(path)
+            }
+        });
+        TagResult::build_with_plan(root, args.channel.as_deref(), phase, plan_path.as_deref())?
     };
     for operation in result.operations() {
         println!("{operation}");

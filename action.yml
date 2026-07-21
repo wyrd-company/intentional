@@ -23,6 +23,9 @@ inputs:
   phase:
     description: "Optional tag executor phase: before-publication or after-publication"
     required: false
+  release-plan:
+    description: "Optional digest-sealed release plan path for tag verification"
+    required: false
   baseline:
     description: "Establish baseline tags when command is tag"
     required: false
@@ -43,7 +46,7 @@ inputs:
     required: false
     default: "false"
   dry-run:
-    description: "Preview stamp, apply, or tag without changing the workspace"
+    description: "Preview init, stamp, apply, or tag without changing the workspace"
     required: false
     default: "false"
   working-directory:
@@ -120,6 +123,7 @@ runs:
         INPUT_CHANNEL: ${{ inputs.channel }}
         INPUT_PRERELEASE: ${{ inputs.prerelease }}
         INPUT_PHASE: ${{ inputs.phase }}
+        INPUT_RELEASE_PLAN: ${{ inputs.release-plan }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_BASELINE_VERSIONS: ${{ inputs.baseline-versions }}
         INPUT_SCAN_ALL: ${{ inputs.scan-all }}
@@ -174,6 +178,14 @@ runs:
             exit 1
           fi
           ARGS+=(--phase "$INPUT_PHASE")
+        fi
+
+        if [[ -n "$INPUT_RELEASE_PLAN" ]]; then
+          if [[ "$INPUT_COMMAND" != "tag" ]]; then
+            echo "::error::release-plan is only valid for tag."
+            exit 1
+          fi
+          ARGS+=(--plan "$INPUT_RELEASE_PLAN")
         fi
 
         if [[ "$INPUT_BASELINE" == "true" ]]; then

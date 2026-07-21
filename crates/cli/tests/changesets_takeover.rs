@@ -4,7 +4,7 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{InitPlan, InitState};
+use intentional_core::{initialize, InitPlan, InitState};
 use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
@@ -183,7 +183,15 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     git(&repository.root, &["add", "-A"]);
     git(&repository.root, &["commit", "-q", "-m", "add fixture"]);
 
+    let interrupted = repository
+        .root
+        .join(".intentional/.takeover-transaction/original");
+    fs::create_dir_all(&interrupted).unwrap();
     repository.cli().args(["init"]).assert().code(2);
+    assert!(!repository
+        .root
+        .join(".intentional/.takeover-transaction")
+        .exists());
     let plan_path = repository.root.join(".intentional/init-plan.yml");
     let mut plan: InitPlan =
         serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("init plan");
@@ -210,6 +218,20 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         .iter()
         .filter(|diagnostic| diagnostic.code == "repository-integration")
         .all(|diagnostic| diagnostic.verified));
+
+    let takeover = initialize(&repository.root, false, true).expect("planned takeover");
+    let intent_path = repository.root.join(".changeset/useful-change.md");
+    let original_intent = fs::read_to_string(&intent_path).unwrap();
+    fs::write(
+        &intent_path,
+        format!("{original_intent}\nChanged after planning.\n"),
+    )
+    .unwrap();
+    let stale = takeover
+        .apply(&repository.root, false)
+        .expect_err("stale takeover must fail");
+    assert!(stale.to_string().contains("source evidence became stale"));
+    fs::write(&intent_path, original_intent).unwrap();
 
     repository
         .cli()
@@ -431,15 +453,24 @@ packages:
     );
     repository.write(
         "package.json",
-        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.1.0\"\n}\n",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
     );
-    repository.write("CHANGELOG.md", "# Changelog\n\n## 1.1.0\n\nNotes.\n");
+    repository.write(
+        ".intentional/intents/useful-capability.md",
+        "---\npackage-a: minor\n---\n\nAdd a useful capability.\n",
+    );
     git(&repository.root, &["add", "-A"]);
     git(
         &repository.root,
-        &["commit", "-q", "-m", "add applied fixture"],
+        &["commit", "-q", "-m", "add release intent"],
     );
     git(&repository.root, &["tag", "package-a@1.0.0"]);
+    repository.cli().arg("apply").assert().success();
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "apply release intent"],
+    );
 
     repository
         .cli()

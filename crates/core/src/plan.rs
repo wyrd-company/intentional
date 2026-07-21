@@ -13,14 +13,14 @@ use crate::version::{
     aggregate_bumps, bump_version_with_mapping, resolve_versions, VersionRepository,
 };
 use semver::{Prerelease, Version};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// One package in a canonical release plan.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PlanPackage {
     /// Logical package id.
     pub id: String,
@@ -39,7 +39,7 @@ pub struct PlanPackage {
 }
 
 /// Generator identity embedded inside the sealed payload.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Generator {
     /// Tool name.
     pub tool: String,
@@ -48,7 +48,7 @@ pub struct Generator {
 }
 
 /// One annotated tag record in creation order.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PlanTag {
     /// Canonical configuration tag id.
     pub id: String,
@@ -57,21 +57,21 @@ pub struct PlanTag {
     /// Version recorded by the tag.
     pub version: String,
     /// Logical package id for package tags.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
     /// Package tag role. Workspace tags have no package role.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<TagRole>,
     /// Required executor declaration.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub require_phase: Option<TagPhase>,
     /// Canonical prerequisite tag ids.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tag_after: Vec<String>,
 }
 
 /// Canonical digest-bound release plan.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReleasePlan {
     /// SHA-256 digest of the canonical plan payload excluding this seal.
     pub digest: String,
@@ -80,7 +80,7 @@ pub struct ReleasePlan {
     /// Generator identity included in the digest.
     pub generator: Generator,
     /// Optional release channel.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Changed packages ordered by id.
     pub packages: Vec<PlanPackage>,
@@ -264,6 +264,29 @@ impl ReleasePlan {
     /// Serialize this plan as compact canonical JSON with sorted object keys.
     pub fn to_canonical_json(&self) -> Result<String> {
         canonical_json(self)
+    }
+
+    /// Verify that the embedded digest seals the complete plan payload.
+    pub fn verify_digest(&self) -> Result<()> {
+        let payload = PlanPayload {
+            contract: &self.contract,
+            generator: &self.generator,
+            channel: &self.channel,
+            packages: &self.packages,
+            tags: &self.tags,
+            tag_order: &self.tag_order,
+        };
+        let actual = format!(
+            "sha256:{:x}",
+            Sha256::digest(canonical_json(&payload)?.as_bytes())
+        );
+        if actual != self.digest {
+            return Err(Error::Validation(format!(
+                "release plan digest mismatch: expected {}, computed {actual}",
+                self.digest
+            )));
+        }
+        Ok(())
     }
 }
 

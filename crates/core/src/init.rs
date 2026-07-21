@@ -6,8 +6,7 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
-    Config, PackageConfig, Projection, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
-    CONFIG_SCHEMA, CURRENT_CONTRACT,
+    Config, PackageConfig, Projection, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -205,6 +204,7 @@ pub struct InitResult {
     writes: Vec<(PathBuf, String)>,
     deletes: Vec<PathBuf>,
     takeover: bool,
+    takeover_evidence: Option<(String, BTreeSet<PathBuf>)>,
 }
 
 impl InitResult {
@@ -214,6 +214,16 @@ impl InitResult {
             return Ok(());
         }
         if self.takeover {
+            let (expected_fingerprint, evidence_paths) = self
+                .takeover_evidence
+                .as_ref()
+                .expect("takeover carries evidence");
+            verify_takeover_preconditions(
+                root,
+                &self.writes,
+                expected_fingerprint,
+                evidence_paths,
+            )?;
             return apply_takeover_transaction(root, &self.writes, &self.deletes);
         }
         for (relative, contents) in &self.writes {
@@ -278,6 +288,7 @@ pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitRe
         writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
         deletes: Vec::new(),
         takeover: false,
+        takeover_evidence: None,
     })
 }
 
@@ -291,20 +302,6 @@ struct Discovery {
     config: Config,
     versions: BTreeMap<String, Version>,
     evidence: BTreeSet<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            schema: Some(CONFIG_SCHEMA.to_owned()),
-            contract: CURRENT_CONTRACT.to_owned(),
-            settings: Settings::default(),
-            fixed: Vec::new(),
-            linked: Vec::new(),
-            workspace_tags: BTreeMap::new(),
-            packages: BTreeMap::new(),
-        }
-    }
 }
 
 fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
@@ -354,6 +351,70 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             evidence: vec![config_evidence.clone()],
             choices: vec!["suspended".to_owned(), "excluded".to_owned(), "managed".to_owned()],
             recommended: Some("suspended".to_owned()),
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
+    if let Some(private_packages) = changesets["privatePackages"].as_object() {
+        let versions_private = private_packages
+            .get("version")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(true);
+        diagnostics.push(InitDiagnostic {
+            id: "private-package-versioning".to_owned(),
+            code: "private-package-versioning".to_owned(),
+            message: if versions_private {
+                "Changesets versions private packages; Intentional preserves that behavior because package privacy is independent from version management.".to_owned()
+            } else {
+                "Changesets suppresses private-package versions; Intentional manages versions independently from publication privacy, so accepting Intentional semantics is a deliberate contract change.".to_owned()
+            },
+            evidence: vec![config_evidence.clone()],
+            choices: if versions_private {
+                Vec::new()
+            } else {
+                vec!["intentional".to_owned()]
+            },
+            recommended: (!versions_private).then(|| "intentional".to_owned()),
+            resolution: None,
+            verified: versions_private,
+            invalidated_resolution: false,
+        });
+        if private_packages.get("tag").and_then(JsonValue::as_bool) == Some(false) {
+            diagnostics.push(InitDiagnostic {
+                id: "private-package-tagging".to_owned(),
+                code: "private-package-tagging".to_owned(),
+                message: "Changesets suppresses private-package tags; Intentional creates annotated records for every managed logical release, independently from publication privacy.".to_owned(),
+                evidence: vec![config_evidence.clone()],
+                choices: vec!["intentional".to_owned()],
+                recommended: Some("intentional".to_owned()),
+                resolution: None,
+                verified: false,
+                invalidated_resolution: false,
+            });
+        }
+    }
+    if changesets["changelog"] != JsonValue::Bool(false) && !changesets["changelog"].is_null() {
+        diagnostics.push(InitDiagnostic {
+            id: "changesets-changelog".to_owned(),
+            code: "changesets-changelog".to_owned(),
+            message: "Intentional renders its contract-defined logical-package changelogs instead of invoking the configured Changesets changelog generator.".to_owned(),
+            evidence: vec![config_evidence.clone()],
+            choices: vec!["intentional".to_owned()],
+            recommended: Some("intentional".to_owned()),
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
+    if changesets["commit"] != JsonValue::Bool(false) && !changesets["commit"].is_null() {
+        diagnostics.push(InitDiagnostic {
+            id: "changesets-commit".to_owned(),
+            code: "changesets-commit".to_owned(),
+            message: "Intentional never creates commits; repository orchestration must retain the configured commit behavior externally.".to_owned(),
+            evidence: vec![config_evidence.clone()],
+            choices: vec!["external".to_owned()],
+            recommended: Some("external".to_owned()),
             resolution: None,
             verified: false,
             invalidated_resolution: false,
@@ -508,6 +569,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             writes.push((intent.target.clone(), intent.contents()?));
         }
         let deletes = takeover_deletes(root);
+        verify_takeover_preconditions(root, &writes, &plan.source_fingerprint, &evidence_paths)?;
+        let takeover_evidence = Some((plan.source_fingerprint.clone(), evidence_paths));
         return Ok(InitResult {
             state: InitState::Success,
             path: PathBuf::from(CONFIG_PATH),
@@ -517,6 +580,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             writes,
             deletes,
             takeover: true,
+            takeover_evidence,
         });
     }
 
@@ -529,6 +593,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
         deletes: Vec::new(),
         takeover: false,
+        takeover_evidence: None,
     })
 }
 
@@ -1415,6 +1480,29 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
     ))
 }
 
+fn verify_takeover_preconditions(
+    root: &Path,
+    writes: &[(PathBuf, String)],
+    expected_fingerprint: &str,
+    evidence_paths: &BTreeSet<PathBuf>,
+) -> Result<()> {
+    let actual_fingerprint = fingerprint(root, evidence_paths)?;
+    if actual_fingerprint != expected_fingerprint {
+        return Err(Error::Validation(
+            "initialization plan source evidence became stale; rerun intentional init".to_owned(),
+        ));
+    }
+    for (relative, _) in writes {
+        if root.join(relative).exists() {
+            return Err(Error::Validation(format!(
+                "takeover target {} already exists; resolve the competing Intentional state first",
+                relative.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn takeover_operations(root: &Path, intents: &[ConvertedIntent]) -> Vec<String> {
     let mut operations = vec![format!("write {CONFIG_PATH}")];
     operations.extend(intents.iter().map(|intent| {
@@ -1483,8 +1571,12 @@ fn apply_takeover_transaction(
             .map(|path| path.to_string_lossy().to_string())
             .collect::<Vec<_>>(),
     )?;
-    std::fs::write(transaction.join("manifest.yml"), manifest)
-        .map_err(|error| Error::io(transaction.join("manifest.yml"), error))?;
+    let manifest_path = transaction.join("manifest.yml");
+    let manifest_temporary = transaction.join("manifest-tmp.yml");
+    std::fs::write(&manifest_temporary, manifest)
+        .map_err(|error| Error::io(&manifest_temporary, error))?;
+    std::fs::rename(&manifest_temporary, &manifest_path)
+        .map_err(|error| Error::io(&manifest_path, error))?;
     let result = (|| {
         for (relative, contents) in writes {
             let path = root.join(relative);
@@ -1501,6 +1593,16 @@ fn apply_takeover_transaction(
                 std::fs::remove_file(&path).map_err(|error| Error::io(&path, error))?;
             }
         }
+        let changeset_directory = root.join(".changeset");
+        if changeset_directory.is_dir()
+            && std::fs::read_dir(&changeset_directory)
+                .map_err(|error| Error::io(&changeset_directory, error))?
+                .next()
+                .is_none()
+        {
+            std::fs::remove_dir(&changeset_directory)
+                .map_err(|error| Error::io(&changeset_directory, error))?;
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -1508,16 +1610,6 @@ fn apply_takeover_transaction(
         return result;
     }
     std::fs::remove_dir_all(&transaction).map_err(|error| Error::io(&transaction, error))?;
-    let changeset_directory = root.join(".changeset");
-    if changeset_directory.is_dir()
-        && std::fs::read_dir(&changeset_directory)
-            .map_err(|error| Error::io(&changeset_directory, error))?
-            .next()
-            .is_none()
-    {
-        std::fs::remove_dir(&changeset_directory)
-            .map_err(|error| Error::io(&changeset_directory, error))?;
-    }
     Ok(())
 }
 
@@ -1527,6 +1619,10 @@ fn recover_interrupted_takeover(root: &Path) -> Result<()> {
         return Ok(());
     }
     let manifest_path = transaction.join("manifest.yml");
+    if !manifest_path.is_file() {
+        return std::fs::remove_dir_all(&transaction)
+            .map_err(|error| Error::io(&transaction, error));
+    }
     let manifest = std::fs::read_to_string(&manifest_path)
         .map_err(|error| Error::io(&manifest_path, error))?;
     let affected: Vec<String> = serde_yaml::from_str(&manifest)?;
@@ -1559,6 +1655,7 @@ fn annotate_choice_lines(yaml: &str) -> String {
             "external",
             "publication sequencing remains with the external executor",
         ),
+        ("intentional", "Intentional's contract owns this behavior"),
     ]);
     let mut output = String::new();
     let mut choices_indent = None;
