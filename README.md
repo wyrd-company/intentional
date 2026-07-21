@@ -139,11 +139,12 @@ release that requires it, so it is the default recommendation unless repository
 evidence supports another disposition.
 
 Pending Changesets Markdown bodies and package bumps are converted losslessly.
-Fixed and linked groups, internal dependency bump policy, and component-mapped
-pre-1.0 versions participate in the parity comparison. Private-package version
-and tag settings are recorded explicitly because Intentional separates version
-management from publication privacy and annotates every managed release.
-Unsupported or repository-specific behavior remains an explicit diagnostic.
+Fixed and linked groups, npm dependency ranges and peer edges, internal
+dependency policy, and component-mapped pre-1.0 versions participate in the
+parity comparison. Private-package version and tag settings are recorded
+explicitly because Intentional separates version management from publication
+privacy and annotates every managed release. Unsupported or repository-specific
+behavior remains an explicit diagnostic.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes

@@ -125,6 +125,16 @@ impl ReleasePlan {
         intents: &[Intent],
         channel: Option<&str>,
     ) -> Result<Self> {
+        Self::from_inputs_before(root, config, intents, channel, None)
+    }
+
+    pub(crate) fn from_inputs_before(
+        root: &Path,
+        config: &Config,
+        intents: &[Intent],
+        channel: Option<&str>,
+        excluded_target: Option<gix::ObjectId>,
+    ) -> Result<Self> {
         if channel.is_some_and(str::is_empty) {
             return Err(Error::Validation("channel must not be empty".to_owned()));
         }
@@ -133,10 +143,11 @@ impl ReleasePlan {
         let mut current_versions = BTreeMap::new();
         for id in config.packages.keys() {
             let (_, primary) = config.primary_tag(id)?;
-            current_versions.insert(
-                id.clone(),
-                repository.current_version(id, &primary.template)?,
-            );
+            let current = match excluded_target {
+                Some(target) => repository.current_version_before(id, &primary.template, target)?,
+                None => repository.current_version(id, &primary.template)?,
+            };
+            current_versions.insert(id.clone(), current);
         }
         let resolved = resolve_versions(config, &declared, &current_versions)?;
         let changed: BTreeSet<_> = resolved
@@ -150,9 +161,14 @@ impl ReleasePlan {
             let current = resolved[id].current.clone();
             let base = resolved[id].next.clone();
             let release = match channel {
-                Some(channel) => {
-                    channel_version(&repository, id, &primary.template, &base, channel)?
-                }
+                Some(channel) => channel_version(
+                    &repository,
+                    id,
+                    &primary.template,
+                    &base,
+                    channel,
+                    excluded_target,
+                )?,
                 None => base,
             };
             versions.insert(id.clone(), (current, release));
@@ -211,16 +227,26 @@ impl ReleasePlan {
             .unwrap_or(Bump::None);
         if highest_bump != Bump::None {
             for (tag_id, tag) in &config.workspace_tags {
-                let current = repository.current_version(tag_id, &tag.template)?;
+                let current = match excluded_target {
+                    Some(target) => {
+                        repository.current_version_before(tag_id, &tag.template, target)?
+                    }
+                    None => repository.current_version(tag_id, &tag.template)?,
+                };
                 let base = bump_version_with_mapping(
                     &current,
                     highest_bump,
                     config.settings.pre_1_0_bump_mapping,
                 );
                 let version = match channel.as_deref() {
-                    Some(channel) => {
-                        channel_version(&repository, tag_id, &tag.template, &base, channel)?
-                    }
+                    Some(channel) => channel_version(
+                        &repository,
+                        tag_id,
+                        &tag.template,
+                        &base,
+                        channel,
+                        excluded_target,
+                    )?,
                     None => base,
                 };
                 tags.push(PlanTag {
@@ -342,9 +368,13 @@ fn channel_version(
     template: &str,
     base: &Version,
     channel: &str,
+    excluded_target: Option<gix::ObjectId>,
 ) -> Result<Version> {
-    let max_iteration = repository
-        .all_versions(package_id, template)?
+    let versions = match excluded_target {
+        Some(target) => repository.all_versions_before(package_id, template, target)?,
+        None => repository.all_versions(package_id, template)?,
+    };
+    let max_iteration = versions
         .into_iter()
         .filter(|version| {
             version.major == base.major

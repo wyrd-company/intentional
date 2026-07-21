@@ -15,6 +15,7 @@ description = "Core model and release planning for intentional"
 [dependencies]
 gix.workspace = true
 glob.workspace = true
+node-semver.workspace = true
 rand.workspace = true
 semver.workspace = true
 serde.workspace = true

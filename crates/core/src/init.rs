@@ -13,8 +13,11 @@ use crate::model::{
     Adapter, Bump, PackageDisposition, Pre1BumpMapping, ProjectionMode, TagPhase, TagRole,
 };
 use crate::plan::canonical_json;
-use crate::version::{bump_version_with_mapping, resolve_versions, PackageVersion};
+use crate::version::{
+    bump_version_with_mapping, effective_bumps, resolve_versions, PackageVersion,
+};
 use glob::glob;
+use node_semver::{Range as NodeRange, Version as NodeVersion};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -31,6 +34,7 @@ pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/init-plan.ym
 
 const CHANGESETS_CONFIG: &str = ".changeset/config.json";
 const TRANSACTION_PATH: &str = ".intentional/.takeover-transaction";
+const TRANSACTION_STATE_PATH: &str = ".intentional/.takeover-state";
 
 /// Process outcome for initialization.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -302,6 +306,33 @@ struct Discovery {
     config: Config,
     versions: BTreeMap<String, Version>,
     evidence: BTreeSet<PathBuf>,
+    workspace_packages: BTreeSet<String>,
+    private_packages: BTreeSet<String>,
+    npm_dependencies: Vec<NpmDependencyEdge>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NpmDependencyKind {
+    Dependency,
+    Optional,
+    Peer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NpmDependencyEdge {
+    dependent: String,
+    dependency: String,
+    kind: NpmDependencyKind,
+    range: String,
+}
+
+struct ChangesetsSourceSemantics<'a> {
+    private_packages: &'a BTreeSet<String>,
+    suppress_private_versions: bool,
+    npm_dependencies: &'a [NpmDependencyEdge],
+    update_internal_dependents_always: bool,
+    only_update_peer_dependents_when_out_of_range: bool,
+    preflight_error: Option<String>,
 }
 
 fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
@@ -311,7 +342,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .map_err(|error| Error::io(&changesets_config_path, error))?;
     let changesets: JsonValue = serde_json::from_str(&changesets_text)
         .map_err(|error| Error::Validation(format!("invalid Changesets config: {error}")))?;
-    let converted_intents = load_changesets_intents(root)?;
+    let mut converted_intents = load_changesets_intents(root)?;
     let mut referenced_names = converted_intents
         .iter()
         .flat_map(|intent| intent.packages.keys().cloned())
@@ -334,7 +365,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .unwrap_or(Bump::Patch);
     discovery.config.fixed = parse_groups(&changesets["fixed"])?;
     discovery.config.linked = parse_groups(&changesets["linked"])?;
-    merge_release_profile(root, &mut discovery)?;
+    let identity_map = merge_release_profile(root, &mut discovery)?;
+    remap_converted_intents(&mut converted_intents, &identity_map, &discovery.config)?;
 
     let mut diagnostics = Vec::new();
     let config_evidence = evidence(root, Path::new(CHANGESETS_CONFIG), Vec::new())?;
@@ -420,10 +452,12 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
+    let mut unmapped_packages = BTreeSet::new();
     for package in discovery.config.packages.keys() {
-        if referenced_names.contains(package) {
+        if referenced_names.contains(package) || discovery.workspace_packages.contains(package) {
             continue;
         }
+        unmapped_packages.insert(package.clone());
         let package_config = &discovery.config.packages[package];
         let manifest = package_config
             .projections
@@ -492,7 +526,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .filter_map(JsonValue::as_str)
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    exclude_packages(&mut source_config, &ignored);
+    let source_excluded = ignored.union(&unmapped_packages).cloned().collect();
+    exclude_packages(&mut source_config, &source_excluded);
     apply_disposition_resolutions(&mut discovery.config, &diagnostics)?;
     discovery.config.validate()?;
 
@@ -508,16 +543,76 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
                 }
                 aggregate
             });
+    let suppress_private_versions =
+        changesets["privatePackages"]["version"].as_bool() == Some(false);
+    let mut skipped_packages = ignored
+        .iter()
+        .map(|id| identity_map.get(id).cloned().unwrap_or_else(|| id.clone()))
+        .collect::<BTreeSet<_>>();
+    if suppress_private_versions {
+        skipped_packages.extend(discovery.private_packages.iter().cloned());
+    }
+    skipped_packages.extend(
+        discovery
+            .config
+            .packages
+            .keys()
+            .filter(|id| !discovery.versions.contains_key(*id))
+            .cloned(),
+    );
+    let source_semantics = ChangesetsSourceSemantics {
+        private_packages: &discovery.private_packages,
+        suppress_private_versions,
+        npm_dependencies: &discovery.npm_dependencies,
+        update_internal_dependents_always: changesets
+            ["___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH"]["updateInternalDependents"]
+            .as_str()
+            == Some("always"),
+        only_update_peer_dependents_when_out_of_range: changesets
+            ["___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH"]
+            ["onlyUpdatePeerDependentsWhenOutOfRange"]
+            .as_bool()
+            .unwrap_or(false),
+        preflight_error: mixed_skipped_changeset(&converted_intents, &skipped_packages),
+    };
     let parity = parity_result(
         &source_config,
         &discovery.config,
         &discovery.versions,
         &declared,
+        &source_semantics,
     )?;
+    if let Some(message) = &parity.source_error {
+        diagnostics.push(InitDiagnostic {
+            id: "changesets-release-invalid".to_owned(),
+            code: "changesets-release-invalid".to_owned(),
+            message: format!("The source Changesets release is invalid: {message}"),
+            evidence: vec![config_evidence.clone()],
+            choices: Vec::new(),
+            recommended: None,
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
+    if let Some(message) = &parity.proposed_error {
+        diagnostics.push(InitDiagnostic {
+            id: "proposed-release-invalid".to_owned(),
+            code: "proposed-release-invalid".to_owned(),
+            message: format!("The proposed Intentional release is invalid: {message}"),
+            evidence: vec![config_evidence.clone()],
+            choices: Vec::new(),
+            recommended: None,
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+        diagnostics.sort_by(|left, right| left.id.cmp(&right.id));
+    }
     let unresolved = diagnostics.iter().any(|diagnostic| {
         !diagnostic.choices.is_empty() && (diagnostic.resolution.is_none() || !diagnostic.verified)
     });
-    let state = if unresolved || parity.status != "equivalent" {
+    let state = if unresolved || parity.result.status != "equivalent" {
         InitState::NeedsInput
     } else {
         InitState::Ready
@@ -543,7 +638,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         inferred_config: discovery.config,
         diagnostics,
         converted_intents,
-        parity,
+        parity: parity.result,
         planned_operations: planned_operations.clone(),
         post_commit_action: "intentional tag --baseline".to_owned(),
     };
@@ -556,12 +651,6 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             return Err(Error::Validation(
                 "takeover requires a ready initialization plan with verified resolutions and parity"
                     .to_owned(),
-            ));
-        }
-        let current_fingerprint = fingerprint(root, &evidence_paths)?;
-        if current_fingerprint != plan.source_fingerprint {
-            return Err(Error::Validation(
-                "initialization plan source evidence became stale".to_owned(),
             ));
         }
         let mut writes = vec![(PathBuf::from(CONFIG_PATH), plan.inferred_config.to_yaml()?)];
@@ -598,10 +687,11 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
 }
 
 fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) -> Result<Discovery> {
+    let workspace_paths = workspace_manifest_paths(root)?;
     let mut manifest_paths = if scan_all {
         all_manifest_paths(root)
     } else {
-        workspace_manifest_paths(root)?
+        workspace_paths.clone()
     };
     if !referenced_names.is_empty() {
         for path in all_manifest_paths(root) {
@@ -627,6 +717,8 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             continue;
         }
         let (id, version) = manifest_identity(&path, adapter)?;
+        let workspace_package = workspace_paths.contains(&path);
+        let private_package = adapter == Adapter::Npm && npm_manifest_is_private(&path)?;
         let directory = path.parent().expect("manifest has parent");
         let relative_directory = directory.strip_prefix(root).map_err(|error| {
             Error::Validation(format!("manifest is outside workspace: {error}"))
@@ -679,7 +771,15 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             );
         }
         if let Some(version) = version {
-            discovery.versions.insert(id, Version::parse(&version)?);
+            discovery
+                .versions
+                .insert(id.clone(), Version::parse(&version)?);
+        }
+        if workspace_package {
+            discovery.workspace_packages.insert(id.clone());
+        }
+        if private_package {
+            discovery.private_packages.insert(id);
         }
         discovery
             .evidence
@@ -690,7 +790,7 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             "no supported workspace manifests found".to_owned(),
         ));
     }
-    derive_npm_dependencies(root, &mut discovery.config)?;
+    discovery.npm_dependencies = derive_npm_dependencies(root, &mut discovery.config)?;
     Ok(discovery)
 }
 
@@ -923,6 +1023,13 @@ fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<St
     }
 }
 
+fn npm_manifest_is_private(path: &Path) -> Result<bool> {
+    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+    let value: JsonValue = serde_json::from_str(&text)
+        .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
+    Ok(value["private"].as_bool() == Some(true))
+}
+
 fn required_string(value: &JsonValue, path: &Path, field: &str) -> Result<String> {
     value
         .as_str()
@@ -939,9 +1046,10 @@ fn xml_element(text: &str, name: &str) -> Option<String> {
         .map(|(value, _)| value.trim().to_owned())
 }
 
-fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<()> {
+fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDependencyEdge>> {
     let ids = config.packages.keys().cloned().collect::<BTreeSet<_>>();
-    for package in config.packages.values_mut() {
+    let mut edges = Vec::new();
+    for (id, package) in &mut config.packages {
         let npm = package
             .projections
             .iter()
@@ -952,14 +1060,43 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<()> {
         let value: JsonValue = serde_json::from_str(&text)
             .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
         let mut dependencies = BTreeSet::new();
-        for group in ["dependencies", "peerDependencies", "optionalDependencies"] {
+        for (group, kind) in [
+            ("dependencies", NpmDependencyKind::Dependency),
+            ("optionalDependencies", NpmDependencyKind::Optional),
+            ("peerDependencies", NpmDependencyKind::Peer),
+        ] {
             if let Some(entries) = value[group].as_object() {
-                dependencies.extend(entries.keys().filter(|id| ids.contains(*id)).cloned());
+                for (dependency, range) in entries {
+                    if !ids.contains(dependency) {
+                        continue;
+                    }
+                    dependencies.insert(dependency.clone());
+                    edges.push(NpmDependencyEdge {
+                        dependent: id.clone(),
+                        dependency: dependency.clone(),
+                        kind,
+                        range: range.as_str().unwrap_or_default().to_owned(),
+                    });
+                }
             }
         }
         package.depends_on = dependencies.into_iter().collect();
     }
-    Ok(())
+    edges.sort_by(|left, right| {
+        (
+            &left.dependent,
+            &left.dependency,
+            left.kind as u8,
+            &left.range,
+        )
+            .cmp(&(
+                &right.dependent,
+                &right.dependency,
+                right.kind as u8,
+                &right.range,
+            ))
+    });
+    Ok(edges)
 }
 
 fn load_changesets_intents(root: &Path) -> Result<Vec<ConvertedIntent>> {
@@ -969,6 +1106,7 @@ fn load_changesets_intents(root: &Path) -> Result<Vec<ConvertedIntent>> {
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| path.file_name().is_none_or(|name| name != "README.md"))
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -1055,10 +1193,14 @@ fn load_release_profile(root: &Path) -> Result<Option<JsonValue>> {
         .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))
 }
 
-fn merge_release_profile(root: &Path, discovery: &mut Discovery) -> Result<()> {
+fn merge_release_profile(
+    root: &Path,
+    discovery: &mut Discovery,
+) -> Result<BTreeMap<String, String>> {
     let Some(profile) = load_release_profile(root)? else {
-        return Ok(());
+        return Ok(BTreeMap::new());
     };
+    let mut identity_map = BTreeMap::new();
     let profile_path = existing_release_profile(root).expect("loaded profile path");
     discovery.evidence.insert(profile_path);
     let entries = profile["packages"].as_array().cloned().unwrap_or_default();
@@ -1070,9 +1212,16 @@ fn merge_release_profile(root: &Path, discovery: &mut Discovery) -> Result<()> {
         if source == name {
             continue;
         }
+        identity_map.insert(name.to_owned(), source.to_owned());
         let Some(projected) = discovery.config.packages.remove(name) else {
             continue;
         };
+        if discovery.workspace_packages.remove(name) {
+            discovery.workspace_packages.insert(source.to_owned());
+        }
+        if discovery.private_packages.remove(name) {
+            discovery.private_packages.insert(source.to_owned());
+        }
         let source_package = discovery.config.packages.get_mut(source).ok_or_else(|| {
             Error::Validation(format!(
                 "release profile versionSource {source} for {name} was not discovered"
@@ -1104,6 +1253,28 @@ fn merge_release_profile(root: &Path, discovery: &mut Discovery) -> Result<()> {
         );
         discovery.versions.remove(name);
     }
+    for package in discovery.config.packages.values_mut() {
+        for dependency in &mut package.depends_on {
+            if let Some(source) = identity_map.get(dependency) {
+                *dependency = source.clone();
+            }
+        }
+        package.depends_on.sort();
+        package.depends_on.dedup();
+    }
+    for edge in &mut discovery.npm_dependencies {
+        if let Some(source) = identity_map.get(&edge.dependent) {
+            edge.dependent = source.clone();
+        }
+        if let Some(source) = identity_map.get(&edge.dependency) {
+            edge.dependency = source.clone();
+        }
+    }
+    discovery.npm_dependencies.retain(|edge| {
+        edge.dependent != edge.dependency
+            && discovery.config.packages.contains_key(&edge.dependent)
+            && discovery.config.packages.contains_key(&edge.dependency)
+    });
     discovery.config.workspace_tags.insert(
         "release".to_owned(),
         WorkspaceTagConfig {
@@ -1112,6 +1283,31 @@ fn merge_release_profile(root: &Path, discovery: &mut Discovery) -> Result<()> {
             tag_after: Vec::new(),
         },
     );
+    Ok(identity_map)
+}
+
+fn remap_converted_intents(
+    intents: &mut [ConvertedIntent],
+    identity_map: &BTreeMap<String, String>,
+    config: &Config,
+) -> Result<()> {
+    for intent in intents {
+        let mut packages = BTreeMap::<String, Bump>::new();
+        for (id, bump) in std::mem::take(&mut intent.packages) {
+            let logical_id = identity_map.get(&id).cloned().unwrap_or(id);
+            if !config.packages.contains_key(&logical_id) {
+                return Err(Error::Validation(format!(
+                    "Changesets intent {} references package {logical_id}, which has no logical Intentional identity",
+                    intent.id
+                )));
+            }
+            packages
+                .entry(logical_id)
+                .and_modify(|existing| *existing = (*existing).max(bump))
+                .or_insert(bump);
+        }
+        intent.packages = packages;
+    }
     Ok(())
 }
 
@@ -1278,7 +1474,40 @@ fn parity_result(
     proposed_config: &Config,
     current: &BTreeMap<String, Version>,
     declared: &BTreeMap<String, Bump>,
-) -> Result<ParityResult> {
+    source_semantics: &ChangesetsSourceSemantics<'_>,
+) -> Result<ParityComputation> {
+    let mut source_config = source_config.clone();
+    let mut proposed_config = proposed_config.clone();
+    let effective = effective_bumps(&proposed_config, declared);
+    let non_releasing_without_versions = proposed_config
+        .packages
+        .keys()
+        .filter(|id| !current.contains_key(*id) && effective[*id] == Bump::None)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    exclude_packages(&mut source_config, &non_releasing_without_versions);
+    exclude_packages(&mut proposed_config, &non_releasing_without_versions);
+    let excluded_pending = declared
+        .keys()
+        .filter(|id| !proposed_config.packages.contains_key(*id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let proposed_preflight_error = (!excluded_pending.is_empty()).then(|| {
+        format!(
+            "converted intents reference packages excluded from the proposed inventory: {}",
+            excluded_pending.join(", ")
+        )
+    });
+    if source_semantics.preflight_error.is_some() || proposed_preflight_error.is_some() {
+        return Ok(ParityComputation {
+            result: ParityResult {
+                status: "blocked".to_owned(),
+                packages: Vec::new(),
+            },
+            source_error: source_semantics.preflight_error.clone(),
+            proposed_error: proposed_preflight_error,
+        });
+    }
     let missing = source_config
         .packages
         .keys()
@@ -1287,15 +1516,24 @@ fn parity_result(
         .cloned()
         .collect::<BTreeSet<_>>();
     if !missing.is_empty() {
-        return Ok(ParityResult {
-            status: "blocked".to_owned(),
-            packages: Vec::new(),
+        return Ok(ParityComputation {
+            result: ParityResult {
+                status: "blocked".to_owned(),
+                packages: Vec::new(),
+            },
+            source_error: None,
+            proposed_error: None,
         });
     }
-    let source = resolve_changesets_source(source_config, declared, current)?;
-    let proposed = match resolve_versions(proposed_config, declared, current) {
-        Ok(resolved) => resolved,
-        Err(Error::Validation(_)) => BTreeMap::new(),
+    let (source, source_error) =
+        match resolve_changesets_source(&source_config, declared, current, source_semantics) {
+            Ok(resolved) => (resolved, None),
+            Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
+            Err(error) => return Err(error),
+        };
+    let (proposed, proposed_error) = match resolve_versions(&proposed_config, declared, current) {
+        Ok(resolved) => (resolved, None),
+        Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
         Err(error) => return Err(error),
     };
     let release_ids = source
@@ -1313,13 +1551,47 @@ fn parity_result(
             package,
         })
         .collect::<Vec<_>>();
-    let equivalent = packages
-        .iter()
-        .all(|package| package.source == package.proposed);
-    Ok(ParityResult {
-        status: if equivalent { "equivalent" } else { "blocked" }.to_owned(),
-        packages,
+    let equivalent = source_error.is_none()
+        && proposed_error.is_none()
+        && packages
+            .iter()
+            .all(|package| package.source == package.proposed);
+    Ok(ParityComputation {
+        result: ParityResult {
+            status: if equivalent { "equivalent" } else { "blocked" }.to_owned(),
+            packages,
+        },
+        source_error,
+        proposed_error,
     })
+}
+
+fn mixed_skipped_changeset(
+    intents: &[ConvertedIntent],
+    skipped_packages: &BTreeSet<String>,
+) -> Option<String> {
+    intents.iter().find_map(|intent| {
+        let has_skipped = intent
+            .packages
+            .keys()
+            .any(|id| skipped_packages.contains(id));
+        let has_managed = intent
+            .packages
+            .keys()
+            .any(|id| !skipped_packages.contains(id));
+        (has_skipped && has_managed).then(|| {
+            format!(
+                "Changesets intent {} mixes skipped and managed packages; split or revise the source changeset before takeover",
+                intent.id
+            )
+        })
+    })
+}
+
+struct ParityComputation {
+    result: ParityResult,
+    source_error: Option<String>,
+    proposed_error: Option<String>,
 }
 
 fn parity_release(version: Option<&PackageVersion>) -> Option<ParityRelease> {
@@ -1340,23 +1612,54 @@ fn resolve_changesets_source(
     config: &Config,
     declared: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
+    semantics: &ChangesetsSourceSemantics<'_>,
 ) -> Result<BTreeMap<String, PackageVersion>> {
     let mut effective = config
         .packages
         .keys()
-        .map(|id| (id.clone(), declared.get(id).copied().unwrap_or(Bump::None)))
+        .map(|id| {
+            let suppressed =
+                semantics.suppress_private_versions && semantics.private_packages.contains(id);
+            (
+                id.clone(),
+                if suppressed {
+                    Bump::None
+                } else {
+                    declared.get(id).copied().unwrap_or(Bump::None)
+                },
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     loop {
         let before = effective.clone();
-        for (id, package) in &config.packages {
-            if package
-                .depends_on
-                .iter()
-                .any(|dependency| effective[dependency] != Bump::None)
+        for edge in semantics.npm_dependencies {
+            if !config.packages.contains_key(&edge.dependent)
+                || !config.packages.contains_key(&edge.dependency)
+                || (semantics.suppress_private_versions
+                    && semantics.private_packages.contains(&edge.dependent))
             {
-                effective.entry(id.clone()).and_modify(|bump| {
-                    *bump = (*bump).max(config.settings.internal_dependency_bump)
-                });
+                continue;
+            }
+            let dependency_bump = effective[&edge.dependency];
+            if dependency_bump == Bump::None {
+                continue;
+            }
+            let next = changesets_dependency_next(config, &edge.dependency, &effective, current);
+            let in_range = npm_range_satisfies(&edge.range, &current[&edge.dependency], &next)?;
+            let required = if edge.kind == NpmDependencyKind::Peer
+                && dependency_bump >= Bump::Minor
+                && (!semantics.only_update_peer_dependents_when_out_of_range || !in_range)
+            {
+                Bump::Major
+            } else if semantics.update_internal_dependents_always || !in_range {
+                Bump::Patch
+            } else {
+                Bump::None
+            };
+            if required != Bump::None {
+                effective
+                    .entry(edge.dependent.clone())
+                    .and_modify(|bump| *bump = (*bump).max(required));
             }
         }
         for group in &config.fixed {
@@ -1367,7 +1670,11 @@ fn resolve_changesets_source(
                 .unwrap_or_default();
             if bump != Bump::None {
                 for id in group {
-                    effective.insert(id.clone(), bump);
+                    if !semantics.suppress_private_versions
+                        || !semantics.private_packages.contains(id)
+                    {
+                        effective.insert(id.clone(), bump);
+                    }
                 }
             }
         }
@@ -1445,6 +1752,52 @@ fn resolve_changesets_source(
     Ok(resolved)
 }
 
+fn changesets_dependency_next(
+    config: &Config,
+    id: &str,
+    effective: &BTreeMap<String, Bump>,
+    current: &BTreeMap<String, Version>,
+) -> Version {
+    for group in config.fixed.iter().chain(&config.linked) {
+        if group.iter().any(|member| member == id) && effective[id] != Bump::None {
+            let highest_current = group
+                .iter()
+                .map(|member| &current[member])
+                .max()
+                .expect("validated group");
+            let highest_bump = group
+                .iter()
+                .map(|member| effective[member])
+                .max()
+                .unwrap_or_default();
+            return bump_version_with_mapping(
+                highest_current,
+                highest_bump,
+                Pre1BumpMapping::Component,
+            );
+        }
+    }
+    bump_version_with_mapping(&current[id], effective[id], Pre1BumpMapping::Component)
+}
+
+fn npm_range_satisfies(range: &str, current: &Version, next: &Version) -> Result<bool> {
+    let normalized = match range.strip_prefix("workspace:") {
+        Some("*") => current.to_string(),
+        Some("^") => format!("^{current}"),
+        Some("~") => format!("~{current}"),
+        Some(range) => range.to_owned(),
+        None => range.to_owned(),
+    };
+    let range = NodeRange::parse(&normalized).map_err(|error| {
+        Error::Validation(format!(
+            "unsupported npm dependency range {normalized:?}: {error}"
+        ))
+    })?;
+    let next = NodeVersion::parse(next.to_string())
+        .map_err(|error| Error::Validation(format!("invalid next npm version: {error}")))?;
+    Ok(range.satisfies(&next))
+}
+
 fn load_previous_plan(root: &Path) -> Result<Option<InitPlan>> {
     let path = root.join(INIT_PLAN_PATH);
     match std::fs::read_to_string(&path) {
@@ -1473,6 +1826,21 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
                 evidence(root, path, Vec::new())?.digest,
             );
         }
+    }
+    for entry in WalkDir::new(root.join(".changeset"))
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry
+            .path()
+            .strip_prefix(root)
+            .unwrap_or(entry.path())
+            .to_owned();
+        source.insert(
+            path.to_string_lossy().to_string(),
+            evidence(root, &path, Vec::new())?.digest,
+        );
     }
     Ok(format!(
         "sha256:{:x}",
@@ -1583,7 +1951,10 @@ fn apply_takeover_transaction(
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
             }
-            let temporary = path.with_extension("intentional-tmp");
+            let temporary = transaction.join("staged").join(relative);
+            if let Some(parent) = temporary.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+            }
             std::fs::write(&temporary, contents).map_err(|error| Error::io(&temporary, error))?;
             std::fs::rename(&temporary, &path).map_err(|error| Error::io(&path, error))?;
         }
@@ -1609,12 +1980,19 @@ fn apply_takeover_transaction(
         recover_interrupted_takeover(root)?;
         return result;
     }
-    std::fs::remove_dir_all(&transaction).map_err(|error| Error::io(&transaction, error))?;
-    Ok(())
+    if let Err(error) = write_transaction_state(root, "committed") {
+        recover_interrupted_takeover(root)?;
+        return Err(error);
+    }
+    finish_transaction_cleanup(root)
 }
 
 fn recover_interrupted_takeover(root: &Path) -> Result<()> {
     let transaction = root.join(TRANSACTION_PATH);
+    let state_path = root.join(TRANSACTION_STATE_PATH);
+    if state_path.is_file() {
+        return finish_transaction_cleanup(root);
+    }
     if !transaction.exists() {
         return Ok(());
     }
@@ -1639,7 +2017,31 @@ fn recover_interrupted_takeover(root: &Path) -> Result<()> {
             std::fs::remove_file(&target).map_err(|error| Error::io(&target, error))?;
         }
     }
-    std::fs::remove_dir_all(&transaction).map_err(|error| Error::io(&transaction, error))
+    write_transaction_state(root, "rolled-back")?;
+    finish_transaction_cleanup(root)
+}
+
+fn write_transaction_state(root: &Path, state: &str) -> Result<()> {
+    let path = root.join(TRANSACTION_STATE_PATH);
+    let temporary = root.join(".intentional/.takeover-state-tmp");
+    std::fs::write(&temporary, state).map_err(|error| Error::io(&temporary, error))?;
+    std::fs::rename(&temporary, &path).map_err(|error| Error::io(&path, error))
+}
+
+fn finish_transaction_cleanup(root: &Path) -> Result<()> {
+    let transaction = root.join(TRANSACTION_PATH);
+    if transaction.exists() {
+        std::fs::remove_dir_all(&transaction).map_err(|error| Error::io(&transaction, error))?;
+    }
+    for path in [
+        root.join(TRANSACTION_STATE_PATH),
+        root.join(".intentional/.takeover-state-tmp"),
+    ] {
+        if path.is_file() {
+            std::fs::remove_file(&path).map_err(|error| Error::io(&path, error))?;
+        }
+    }
+    Ok(())
 }
 
 fn annotate_choice_lines(yaml: &str) -> String {

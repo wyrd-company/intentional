@@ -208,6 +208,11 @@ proposed-design:
     computes the source Changesets release result and the proposed Intentional
     release result, including dependency propagation and group constraints,
     then records package membership, requested bumps, and next-version parity.
+    Source dependency propagation preserves npm dependency kinds, npm and
+    workspace ranges, Changesets' out-of-range default, peer-major behavior,
+    and its supported experimental dependent-update switches. Release-profile
+    versionSource mappings rewrite manifest-native intent keys to the selected
+    logical package identity before comparison and conversion.
     Unsupported settings and repository-specific release metadata remain
     explicit diagnostics with source evidence rather than inferred behavior.
   package-disposition: >-

@@ -5,14 +5,14 @@
 
 //! Annotated release records and baseline establishment.
 
-use crate::config::{Config, WorkspaceTagConfig};
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
-use crate::model::{Adapter, Bump, ProjectionMode, TagPhase};
+use crate::model::{Adapter, ProjectionMode, TagPhase};
 use crate::plan::{canonical_json, ReleasePlan};
 use crate::status::read_projection_version;
-use crate::version::{bump_version_with_mapping, VersionRepository};
-use semver::{Prerelease, Version};
+use crate::version::VersionRepository;
+use semver::Version;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -70,7 +70,6 @@ impl TagResult {
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions_by_package = BTreeMap::new();
-        let mut max_bump = Bump::None;
         for (id, package) in &config.packages {
             let changelog_path = root.join(&package.path).join("CHANGELOG.md");
             let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
@@ -99,11 +98,9 @@ impl TagResult {
                         .flatten()
                         .is_some()
                 });
-                if all_exist {
+                if all_exist && config.workspace_tags.is_empty() {
                     continue;
                 }
-            } else {
-                max_bump = max_bump.max(infer_bump(&current, &version));
             }
             versions_by_package.insert(id.clone(), version);
         }
@@ -113,29 +110,25 @@ impl TagResult {
             ));
         }
 
-        let mut versions = versions_by_package
+        let package_versions = versions_by_package
             .iter()
             .map(|(id, version)| (id.clone(), version.to_string()))
             .collect::<BTreeMap<_, _>>();
-        for (id, tag) in &config.workspace_tags {
-            let current = repository.current_version(id, &tag.template)?;
-            let base =
-                bump_version_with_mapping(&current, max_bump, config.settings.pre_1_0_bump_mapping);
-            let version = match channel {
-                Some(channel) => workspace_channel_version(&repository, id, tag, &base, channel)?,
-                None => base,
-            };
-            versions.insert(Config::workspace_tag_id(id), version.to_string());
-        }
-        verify_version_projections(root, &config, &versions)?;
-        let digest = match plan_path {
-            Some(path) => supplied_release_digest(root, &config, &versions, channel, path)?,
-            None => match existing_tag_set_digest(&git, &config, &versions, false)? {
-                Some(digest) => digest,
-                None => recovered_release_digest(root, &config, &versions, channel)?,
-            },
+        verify_version_projections(root, &config, &package_versions)?;
+        let plan = match plan_path {
+            Some(path) => supplied_release_plan(root, &config, &package_versions, channel, path)?,
+            None => recovered_release_plan(root, &config, &package_versions, channel)?,
         };
-        Self::from_versions(root, &config, &versions, phase, false, Some(&digest))
+        let versions = plan_versions(&plan)?;
+        match existing_tag_set_digest(&git, &config, &versions, false)? {
+            Some(existing) if existing != plan.digest => {
+                return Err(Error::Validation(
+                    "release plan disagrees with existing release records".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        Self::from_versions(root, &config, &versions, phase, false, Some(&plan.digest))
     }
 
     /// Infer and plan initial annotated baseline tags.
@@ -518,13 +511,75 @@ fn existing_tag_set_digest(
     Ok(digest)
 }
 
-fn supplied_release_digest(
+fn existing_head_release_digest(
+    repository: &gix::Repository,
+    config: &Config,
+) -> Result<Option<String>> {
+    let head = repository
+        .head_id()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+        .detach();
+    let mut canonical_ids = config
+        .packages
+        .iter()
+        .flat_map(|(package_id, package)| {
+            package
+                .tags
+                .keys()
+                .map(|tag_id| Config::package_tag_id(package_id, tag_id))
+        })
+        .collect::<BTreeSet<_>>();
+    canonical_ids.extend(
+        config
+            .workspace_tags
+            .keys()
+            .map(|tag_id| Config::workspace_tag_id(tag_id)),
+    );
+    let references = repository
+        .references()
+        .map_err(|error| Error::Git(format!("failed to read references: {error}")))?;
+    let tags = references
+        .tags()
+        .map_err(|error| Error::Git(format!("failed to read tags: {error}")))?;
+    let mut digest = None;
+    for reference in tags.flatten() {
+        let name = reference.name().shorten().to_string();
+        let Some(record) = read_tag_record(repository, &name)? else {
+            continue;
+        };
+        let relevant = record.target == head
+            && record.fields.get("contract") == Some(&config.contract)
+            && record.fields.get("baseline").map(String::as_str) == Some("false")
+            && record
+                .fields
+                .get("tag-id")
+                .is_some_and(|id| canonical_ids.contains(id));
+        if !relevant {
+            continue;
+        }
+        let record_digest = record.fields.get("plan-digest").cloned().ok_or_else(|| {
+            Error::Validation(format!("existing release tag {name} has no plan-digest"))
+        })?;
+        if digest
+            .as_ref()
+            .is_some_and(|existing| existing != &record_digest)
+        {
+            return Err(Error::Validation(
+                "existing release tags at HEAD disagree on plan-digest".to_owned(),
+            ));
+        }
+        digest = Some(record_digest);
+    }
+    Ok(digest)
+}
+
+fn supplied_release_plan(
     root: &Path,
     config: &Config,
     versions: &BTreeMap<String, String>,
     channel: Option<&str>,
     path: &Path,
-) -> Result<String> {
+) -> Result<ReleasePlan> {
     let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
     let plan: ReleasePlan = serde_json::from_str(&text)
         .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
@@ -548,11 +603,13 @@ fn supplied_release_digest(
             "release plan channel does not match tag invocation".to_owned(),
         ));
     }
-    verify_plan_versions(versions, &plan)?;
+    verify_plan_package_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-    match existing_tag_set_digest(&repository, config, versions, false)? {
+    let partial_digest = existing_head_release_digest(&repository, config)?;
+    let plan_versions = plan_versions(&plan)?;
+    match existing_tag_set_digest(&repository, config, &plan_versions, false)? {
         Some(existing) if existing != plan.digest => {
             return Err(Error::Validation(
                 "supplied release plan disagrees with existing release records".to_owned(),
@@ -564,7 +621,23 @@ fn supplied_release_digest(
                 Some(_) => Intent::load_all(root, config)?,
                 None => recover_deleted_intents(root, config)?,
             };
-            let expected = ReleasePlan::from_inputs(root, config, &intents, channel)?;
+            let expected = match partial_digest {
+                Some(_) => ReleasePlan::from_inputs_before(
+                    root,
+                    config,
+                    &intents,
+                    channel,
+                    Some(
+                        repository
+                            .head_id()
+                            .map_err(|error| {
+                                Error::Git(format!("failed to resolve HEAD: {error}"))
+                            })?
+                            .detach(),
+                    ),
+                )?,
+                None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
+            };
             if expected != plan {
                 return Err(Error::Validation(
                     "supplied release plan does not match the release recovered from intents"
@@ -573,7 +646,7 @@ fn supplied_release_digest(
             }
         }
     }
-    Ok(plan.digest)
+    Ok(plan)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -621,23 +694,48 @@ fn collect_existing_digest(
     Ok(())
 }
 
-fn recovered_release_digest(
+fn recovered_release_plan(
     root: &Path,
     config: &Config,
     versions: &BTreeMap<String, String>,
     channel: Option<&str>,
-) -> Result<String> {
+) -> Result<ReleasePlan> {
     let intents = match channel {
         Some(_) => Intent::load_all(root, config)?,
         None => recover_deleted_intents(root, config)?,
     };
-    let plan = ReleasePlan::from_inputs(root, config, &intents, channel)?;
-    verify_plan_versions(versions, &plan)?;
+    let repository = gix::discover(root)
+        .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+    let partial_digest = existing_head_release_digest(&repository, config)?;
+    let plan = match &partial_digest {
+        Some(_) => ReleasePlan::from_inputs_before(
+            root,
+            config,
+            &intents,
+            channel,
+            Some(
+                repository
+                    .head_id()
+                    .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+                    .detach(),
+            ),
+        )?,
+        None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
+    };
+    if partial_digest
+        .as_ref()
+        .is_some_and(|digest| digest != &plan.digest)
+    {
+        return Err(Error::Validation(
+            "existing release records disagree with the recovered release plan".to_owned(),
+        ));
+    }
+    verify_plan_package_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
-    Ok(plan.digest)
+    Ok(plan)
 }
 
-fn verify_plan_versions(versions: &BTreeMap<String, String>, plan: &ReleasePlan) -> Result<()> {
+fn plan_versions(plan: &ReleasePlan) -> Result<BTreeMap<String, String>> {
     let mut planned_versions = BTreeMap::new();
     for tag in &plan.tags {
         let key = tag.package.as_ref().unwrap_or(&tag.id);
@@ -649,9 +747,21 @@ fn verify_plan_versions(versions: &BTreeMap<String, String>, plan: &ReleasePlan)
             }
         }
     }
-    if &planned_versions != versions {
+    Ok(planned_versions)
+}
+
+fn verify_plan_package_versions(
+    versions: &BTreeMap<String, String>,
+    plan: &ReleasePlan,
+) -> Result<()> {
+    let planned_versions = plan_versions(plan)?;
+    let planned_packages = planned_versions
+        .into_iter()
+        .filter(|(id, _)| !id.starts_with("workspace/"))
+        .collect::<BTreeMap<_, _>>();
+    if &planned_packages != versions {
         return Err(Error::Validation(format!(
-            "applied release does not match recovered release plan: expected {planned_versions:?}, found {versions:?}"
+            "applied release does not match recovered release plan: expected {planned_packages:?}, found {versions:?}"
         )));
     }
     Ok(())
@@ -697,24 +807,100 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
 fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-    let head = repository
+    let mut boundaries = release_tag_targets(root, config, &repository)?;
+    let mut release = repository
         .head_commit()
         .map_err(|error| Error::Git(format!("failed to resolve HEAD commit: {error}")))?;
-    let parent = head
-        .parent_ids()
-        .next()
-        .ok_or_else(|| Error::Validation("release commit has no parent".to_owned()))?
-        .object()
-        .map_err(|error| Error::Git(format!("failed to read release parent: {error}")))?
-        .try_into_commit()
-        .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
+    boundaries.remove(&release.id);
+    let deleted = loop {
+        if boundaries.contains(&release.id) {
+            return Err(Error::Validation(
+                "no commit since the latest release tags deletes Intentional intents; supply the sealed release plan"
+                    .to_owned(),
+            ));
+        }
+        let Some(parent_id) = release.parent_ids().next() else {
+            return Err(Error::Validation(
+                "no first-parent commit deletes Intentional intents; supply the sealed release plan"
+                    .to_owned(),
+            ));
+        };
+        let parent = parent_id
+            .object()
+            .map_err(|error| Error::Git(format!("failed to read release parent: {error}")))?
+            .try_into_commit()
+            .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
+        let deleted = deleted_intents_between(&parent, &release)?;
+        if !deleted.is_empty() {
+            break deleted;
+        }
+        release = parent;
+    };
+    deleted
+        .into_iter()
+        .map(|(path, bytes)| {
+            let text = std::str::from_utf8(&bytes).map_err(|error| {
+                Error::Validation(format!(
+                    "deleted intent {} is not UTF-8: {error}",
+                    path.display()
+                ))
+            })?;
+            Intent::parse(&path, text, config)
+        })
+        .collect()
+}
+
+fn release_tag_targets(
+    root: &Path,
+    config: &Config,
+    repository: &gix::Repository,
+) -> Result<BTreeSet<gix::ObjectId>> {
+    let versions = VersionRepository::discover(root)?;
+    let mut tags = Vec::new();
+    for id in config.packages.keys() {
+        let (_, primary) = config.primary_tag(id)?;
+        if versions.has_matching_tag(id, &primary.template)? {
+            let version = versions.current_version(id, &primary.template)?;
+            tags.push(render_tag(&primary.template, id, &version.to_string()));
+        }
+    }
+    for (id, tag) in &config.workspace_tags {
+        if versions.has_matching_tag(id, &tag.template)? {
+            let version = versions.current_version(id, &tag.template)?;
+            tags.push(render_tag(&tag.template, id, &version.to_string()));
+        }
+    }
+    let mut targets = BTreeSet::new();
+    for name in tags {
+        let Some(mut reference) = repository
+            .try_find_reference(format!("refs/tags/{name}").as_str())
+            .map_err(|error| {
+                Error::Git(format!("failed to inspect release tag {name}: {error}"))
+            })?
+        else {
+            continue;
+        };
+        targets.insert(
+            reference
+                .peel_to_id()
+                .map_err(|error| Error::Git(format!("failed to peel release tag {name}: {error}")))?
+                .detach(),
+        );
+    }
+    Ok(targets)
+}
+
+fn deleted_intents_between(
+    parent: &gix::Commit<'_>,
+    release: &gix::Commit<'_>,
+) -> Result<Vec<(std::path::PathBuf, Vec<u8>)>> {
     let old_tree = parent
         .tree()
         .map_err(|error| Error::Git(format!("failed to read release parent tree: {error}")))?;
-    let new_tree = head
+    let new_tree = release
         .tree()
         .map_err(|error| Error::Git(format!("failed to read release tree: {error}")))?;
-    let mut deleted = Vec::<(std::path::PathBuf, Vec<u8>)>::new();
+    let mut deleted = Vec::new();
     let mut changes = old_tree
         .changes()
         .map_err(|error| Error::Git(format!("failed to configure release diff: {error}")))?;
@@ -738,24 +924,7 @@ fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> 
         })
         .map_err(|error| Error::Git(format!("failed to inspect release diff: {error}")))?;
     deleted.sort_by(|left, right| left.0.cmp(&right.0));
-    if deleted.is_empty() {
-        return Err(Error::Validation(
-            "release commit does not delete any Intentional intents; supply an applied release commit"
-                .to_owned(),
-        ));
-    }
-    deleted
-        .into_iter()
-        .map(|(path, bytes)| {
-            let text = std::str::from_utf8(&bytes).map_err(|error| {
-                Error::Validation(format!(
-                    "deleted intent {} is not UTF-8: {error}",
-                    path.display()
-                ))
-            })?;
-            Intent::parse(&path, text, config)
-        })
-        .collect()
+    Ok(deleted)
 }
 
 /// Validate annotated package tag sets without rewriting recoverable omissions.
@@ -960,42 +1129,6 @@ fn leading_changelog_version(changelog: &str) -> Result<Option<Version>> {
 fn channel_iteration(version: &Version, channel: &str) -> Option<u64> {
     let (name, iteration) = version.pre.as_str().split_once('.')?;
     (name == channel).then(|| iteration.parse().ok()).flatten()
-}
-
-fn infer_bump(current: &Version, applied: &Version) -> Bump {
-    if applied.major > current.major {
-        Bump::Major
-    } else if applied.minor > current.minor {
-        Bump::Minor
-    } else if applied.patch > current.patch {
-        Bump::Patch
-    } else {
-        Bump::None
-    }
-}
-
-fn workspace_channel_version(
-    repository: &VersionRepository,
-    id: &str,
-    tag: &WorkspaceTagConfig,
-    base: &Version,
-    channel: &str,
-) -> Result<Version> {
-    let iteration = repository
-        .all_versions(id, &tag.template)?
-        .into_iter()
-        .filter(|version| {
-            version.major == base.major
-                && version.minor == base.minor
-                && version.patch == base.patch
-        })
-        .filter_map(|version| channel_iteration(&version, channel))
-        .max()
-        .unwrap_or(0)
-        + 1;
-    let mut version = base.clone();
-    version.pre = Prerelease::new(&format!("{channel}.{iteration}"))?;
-    Ok(version)
 }
 
 #[cfg(test)]

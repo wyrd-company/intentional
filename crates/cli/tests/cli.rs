@@ -323,21 +323,26 @@ fn status_reports_manifest_drift_from_tag_version() {
 #[test]
 fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
     let repo = TestRepo::new();
-    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write("package.json", &npm_manifest("0.1.0"));
     repo.write(
         ".intentional/config.yml",
-        &config("committed").replace(
-            "packages:",
-            "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
-        ),
+        &config("committed")
+            .replace(
+                "pre-1-0-bump-mapping: component",
+                "pre-1-0-bump-mapping: compatibility",
+            )
+            .replace(
+                "packages:",
+                "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
+            ),
     );
     repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
-    repo.tag("sample@1.0.0");
+    repo.tag("sample@0.1.0");
     repo.tag("4.0.0");
     repo.write(
         ".intentional/intents/gentle-willow-1234.md",
-        &intent("minor", "Add a user-visible capability."),
+        &intent("major", "Change a public contract."),
     );
     repo.commit("add intent");
 
@@ -350,17 +355,17 @@ fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
             .stdout,
     )
     .expect("plan JSON");
-    assert_eq!(plan["packages"][0]["new_version"], "1.1.0");
+    assert_eq!(plan["packages"][0]["new_version"], "0.2.0");
     assert!(plan["tags"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|tag| tag["name"] == "4.1.0"));
+        .any(|tag| tag["name"] == "5.0.0"));
 
     repo.cli().arg("apply").assert().success();
     repo.commit("apply release");
     repo.cli().arg("tag").assert().success();
-    assert!(git(&repo.root, &["tag", "--list"]).contains("4.1.0"));
+    assert!(git(&repo.root, &["tag", "--list"]).contains("5.0.0"));
 }
 
 #[test]

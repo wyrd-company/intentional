@@ -180,6 +180,10 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         ".changeset/useful-change.md",
         "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
     );
+    repository.write(
+        ".changeset/README.md",
+        "# Changesets\n\nThis folder contains pending release descriptions.\n",
+    );
     git(&repository.root, &["add", "-A"]);
     git(&repository.root, &["commit", "-q", "-m", "add fixture"]);
 
@@ -232,6 +236,15 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         .expect_err("stale takeover must fail");
     assert!(stale.to_string().contains("source evidence became stale"));
     fs::write(&intent_path, original_intent).unwrap();
+    repository.write(
+        ".changeset/added-after-planning.md",
+        "---\n\"package-a\": patch\n---\n\nLate release intent.\n",
+    );
+    let added = takeover
+        .apply(&repository.root, false)
+        .expect_err("new source file must make takeover stale");
+    assert!(added.to_string().contains("source evidence became stale"));
+    fs::remove_file(repository.root.join(".changeset/added-after-planning.md")).unwrap();
 
     repository
         .cli()
@@ -250,6 +263,32 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     assert!(converted.contains("package-a: minor"));
     assert!(converted.ends_with("Add a useful capability.\n"));
 
+    let interrupted = repository
+        .root
+        .join(".intentional/.takeover-transaction/original/.changeset");
+    fs::create_dir_all(&interrupted).unwrap();
+    fs::write(interrupted.join("config.json"), "stale backup").unwrap();
+    repository.write(
+        ".intentional/.takeover-transaction/manifest.yml",
+        "- .intentional/config.yml\n- .changeset/config.json\n",
+    );
+    repository.write(".intentional/.takeover-state", "committed");
+    let completed = initialize(&repository.root, false, false)
+        .expect_err("completed takeover remains initialized");
+    assert!(completed
+        .to_string()
+        .contains("configuration already exists"));
+    assert!(repository.root.join(".intentional/config.yml").is_file());
+    assert!(!repository.root.join(".changeset").exists());
+    assert!(!repository
+        .root
+        .join(".intentional/.takeover-transaction")
+        .exists());
+    assert!(!repository
+        .root
+        .join(".intentional/.takeover-state")
+        .exists());
+
     git(&repository.root, &["add", "-A"]);
     git(
         &repository.root,
@@ -265,6 +304,266 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         "tag"
     );
     repository.cli().arg("check").assert().success();
+}
+
+#[test]
+fn workspace_inventory_participates_in_changesets_dependency_propagation() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("workspace parity plan");
+    assert_eq!(output.status.code(), Some(0));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "equivalent");
+    assert!(plan
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code != "unmapped-package-disposition"));
+    let dependent = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-b")
+        .expect("dependency-propagated package");
+    assert_eq!(dependent.source, dependent.proposed);
+    assert_eq!(dependent.source.as_ref().unwrap().next_version, "1.0.1");
+}
+
+#[test]
+fn changesets_dependency_ranges_and_peer_edges_are_independently_compared() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"peerDependencies\": { \"package-a\": \"^1.0.0\" }\n}\n",
+    );
+    repository.write(
+        "packages/package-c/package.json",
+        "{\n  \"name\": \"package-c\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"package-a\": \"^1.0.0\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("dependency parity plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "blocked");
+    let peer = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-b")
+        .expect("peer dependent");
+    assert_eq!(
+        peer.source.as_ref().unwrap().requested_bump,
+        intentional_core::Bump::Major
+    );
+    assert_eq!(
+        peer.proposed.as_ref().unwrap().requested_bump,
+        intentional_core::Bump::Patch
+    );
+    let in_range = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-c")
+        .expect("in-range dependent");
+    assert!(in_range.source.is_none());
+    assert_eq!(
+        in_range.proposed.as_ref().unwrap().requested_bump,
+        intentional_core::Bump::Patch
+    );
+}
+
+#[test]
+fn release_profile_version_sources_remap_pending_intent_identity() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "scripts/release-contract-profile.json",
+        r#"{
+  "packages": [
+    { "name": "package-a" },
+    { "name": "package-b", "versionSource": "package-a" }
+  ]
+}
+"#,
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-b\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("identity-remapped plan");
+    assert_eq!(output.status.code(), Some(0));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "equivalent");
+    assert_eq!(
+        plan.converted_intents[0]
+            .packages
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["package-a"]
+    );
+    assert!(plan.inferred_config.packages.contains_key("package-a"));
+    assert!(!plan.inferred_config.packages.contains_key("package-b"));
+}
+
+#[test]
+fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": [],
+  "privatePackages": { "version": false, "tag": false }
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("private package plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "blocked");
+    let package = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-a")
+        .expect("private package parity");
+    assert!(package.source.is_none());
+    assert_eq!(package.proposed.as_ref().unwrap().next_version, "0.2.0");
+
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": ["package-a"]
+}
+"#,
+    );
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("initial plan");
+    plan.diagnostics
+        .iter_mut()
+        .find(|diagnostic| diagnostic.code == "ignored-package-disposition")
+        .expect("ignored disposition")
+        .resolution = Some("suspended".to_owned());
+    fs::write(&plan_path, plan.to_yaml().unwrap()).expect("resolved plan");
+    repository.cli().arg("init").assert().code(2);
+    let rerun: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("rerun plan");
+    assert!(rerun.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "proposed-release-invalid"
+            && diagnostic.message.contains("suspended package package-a")
+    }));
 }
 
 #[test]
@@ -470,6 +769,12 @@ packages:
     git(
         &repository.root,
         &["commit", "-q", "-m", "apply release intent"],
+    );
+    repository.write("release-notes.md", "Release executor notes.\n");
+    git(&repository.root, &["add", "release-notes.md"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "record executor notes"],
     );
 
     repository

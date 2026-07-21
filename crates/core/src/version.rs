@@ -61,7 +61,11 @@ pub fn effective_bumps(
     config: &Config,
     declared: &BTreeMap<String, Bump>,
 ) -> BTreeMap<String, Bump> {
-    let mut effective = declared.clone();
+    let mut effective = declared
+        .iter()
+        .filter(|(id, _)| config.packages.contains_key(*id))
+        .map(|(id, bump)| (id.clone(), *bump))
+        .collect::<BTreeMap<_, _>>();
     for id in config.packages.keys() {
         effective.entry(id.clone()).or_default();
     }
@@ -299,6 +303,19 @@ impl VersionRepository {
         Ok(version.unwrap_or_else(|| Version::new(0, 0, 0)))
     }
 
+    /// Find the latest final SemVer before tags created at `excluded_target`.
+    pub fn current_version_before(
+        &self,
+        package_id: &str,
+        template: &str,
+        excluded_target: gix::ObjectId,
+    ) -> Result<Version> {
+        let mut matches = self.matching_tags(package_id, template)?;
+        matches.remove(&excluded_target);
+        let (version, _) = self.walk_to_tag(&matches, false)?;
+        Ok(version.unwrap_or_else(|| Version::new(0, 0, 0)))
+    }
+
     /// Return whether at least one matching tag exists on the repository history.
     pub fn has_matching_tag(&self, package_id: &str, template: &str) -> Result<bool> {
         Ok(!self.matching_tags(package_id, template)?.is_empty())
@@ -314,6 +331,21 @@ impl VersionRepository {
     /// Return all matching versions, used to derive channel iterations.
     pub fn all_versions(&self, package_id: &str, template: &str) -> Result<Vec<Version>> {
         let tags = self.matching_tags(package_id, template)?;
+        let mut versions: Vec<_> = tags.into_values().flatten().collect();
+        versions.sort();
+        versions.dedup();
+        Ok(versions)
+    }
+
+    /// Return matching versions excluding tags created at one target commit.
+    pub fn all_versions_before(
+        &self,
+        package_id: &str,
+        template: &str,
+        excluded_target: gix::ObjectId,
+    ) -> Result<Vec<Version>> {
+        let mut tags = self.matching_tags(package_id, template)?;
+        tags.remove(&excluded_target);
         let mut versions: Vec<_> = tags.into_values().flatten().collect();
         versions.sort();
         versions.dedup();
