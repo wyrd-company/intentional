@@ -213,7 +213,10 @@ proposed-design:
     and its supported experimental dependent-update switches.
     Range-conditional peer updates are also surfaced as an explicit contract
     choice because canonical Intentional `depends-on` edges are uniform; a
-    current release difference remains a parity blocker. Release-profile
+    current release difference remains a parity blocker. Internal
+    devDependencies participate in the source computation without becoming
+    durable Intentional `depends-on` edges; that contract choice is explicit
+    and current divergence remains blocking. Release-profile
     versionSource mappings rewrite manifest-native intent keys to the selected
     logical package identity before comparison and conversion.
     Unsupported settings and repository-specific release metadata remain

@@ -264,6 +264,10 @@ impl InitResult {
 
 /// Discover or reconcile initialization, optionally executing explicit takeover.
 pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| Error::io(root, error))?;
+    let root = root.as_path();
     recover_interrupted_takeover(root)?;
     if root.join(CONFIG_PATH).exists() && !root.join(CHANGESETS_CONFIG).exists() {
         return Err(Error::Validation(format!(
@@ -462,6 +466,37 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             code: "changesets-peer-dependent-policy".to_owned(),
             message: "Changesets conditionally updates peer dependents from npm ranges; Intentional applies explicit depends-on edges uniformly. Accept Intentional's dependency contract, and resolve any current release divergence shown by parity before takeover.".to_owned(),
             evidence: vec![config_evidence.clone()],
+            choices: vec!["intentional".to_owned()],
+            recommended: Some("intentional".to_owned()),
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
+    let dev_dependents = discovery
+        .npm_dependencies
+        .iter()
+        .filter(|edge| edge.kind == NpmDependencyKind::Dev)
+        .map(|edge| edge.dependent.clone())
+        .collect::<BTreeSet<_>>();
+    if !dev_dependents.is_empty() {
+        let evidence = dev_dependents
+            .iter()
+            .filter_map(|id| {
+                let package = &discovery.config.packages[id];
+                package
+                    .projections
+                    .iter()
+                    .find(|projection| projection.adapter == Adapter::Npm)
+                    .map(|projection| package.path.join(&projection.file))
+            })
+            .map(|path| evidence(root, &path, Vec::new()))
+            .collect::<Result<Vec<_>>>()?;
+        diagnostics.push(InitDiagnostic {
+            id: "changesets-dev-dependency-policy".to_owned(),
+            code: "changesets-dev-dependency-policy".to_owned(),
+            message: "Changesets propagates releases through internal devDependencies; Intentional reserves depends-on for durable release dependencies. Accept Intentional's dependency contract, and resolve any current release divergence shown by parity before takeover.".to_owned(),
+            evidence,
             choices: vec!["intentional".to_owned()],
             recommended: Some("intentional".to_owned()),
             resolution: None,
@@ -821,11 +856,15 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
         found_workspace = true;
         let text = std::fs::read_to_string(&pnpm).map_err(|error| Error::io(&pnpm, error))?;
         let value: serde_yaml::Value = serde_yaml::from_str(&text)?;
-        for pattern in value["packages"].as_sequence().into_iter().flatten() {
-            if let Some(pattern) = pattern.as_str() {
-                expand_workspace_pattern(root, pattern, &mut directories)?;
-            }
-        }
+        expand_workspace_patterns(
+            root,
+            value["packages"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_yaml::Value::as_str),
+            &mut directories,
+        )?;
     }
     let package_json = root.join("package.json");
     if package_json.exists() {
@@ -838,9 +877,11 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
             .or_else(|| value["workspaces"]["packages"].as_array());
         if let Some(workspaces) = workspaces {
             found_workspace = true;
-            for pattern in workspaces.iter().filter_map(JsonValue::as_str) {
-                expand_workspace_pattern(root, pattern, &mut directories)?;
-            }
+            expand_workspace_patterns(
+                root,
+                workspaces.iter().filter_map(JsonValue::as_str),
+                &mut directories,
+            )?;
         }
     }
     let cargo = root.join("Cargo.toml");
@@ -855,9 +896,11 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
             .and_then(toml_edit::Item::as_array)
         {
             found_workspace = true;
-            for member in members.iter().filter_map(toml_edit::Value::as_str) {
-                expand_workspace_pattern(root, member, &mut directories)?;
-            }
+            expand_workspace_patterns(
+                root,
+                members.iter().filter_map(toml_edit::Value::as_str),
+                &mut directories,
+            )?;
         }
     }
     if !found_workspace {
@@ -889,6 +932,22 @@ fn expand_workspace_pattern(
                 directories.remove(&path);
             } else {
                 directories.insert(path);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn expand_workspace_patterns<'a>(
+    root: &Path,
+    patterns: impl IntoIterator<Item = &'a str>,
+    directories: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let patterns = patterns.into_iter().collect::<Vec<_>>();
+    for excluded in [false, true] {
+        for pattern in &patterns {
+            if pattern.starts_with('!') == excluded {
+                expand_workspace_pattern(root, pattern, directories)?;
             }
         }
     }
@@ -1097,7 +1156,9 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
                     if !ids.contains(dependency) {
                         continue;
                     }
-                    dependencies.insert(dependency.clone());
+                    if kind != NpmDependencyKind::Dev {
+                        dependencies.insert(dependency.clone());
+                    }
                     edges.push(NpmDependencyEdge {
                         dependent: id.clone(),
                         dependency: dependency.clone(),

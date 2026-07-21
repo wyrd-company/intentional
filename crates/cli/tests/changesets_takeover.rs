@@ -319,7 +319,7 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
     );
     repository.write(
         "packages/package-b/package.json",
-        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"devDependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
     );
     repository.write(
         ".changeset/config.json",
@@ -541,6 +541,50 @@ fn conditional_peer_dependency_policy_is_an_actionable_takeover_choice() {
         dependent.proposed.as_ref().unwrap().requested_bump,
         intentional_core::Bump::Patch
     );
+}
+
+#[test]
+fn dev_dependency_cycles_produce_an_actionable_plan() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\",\n  \"devDependencies\": { \"package-b\": \"^1.0.0\" }\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"devDependencies\": { \"package-a\": \"^1.0.0\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("dev dependency cycle plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "changesets-dev-dependency-policy")
+        .expect("actionable dev dependency diagnostic");
+    assert_eq!(diagnostic.choices, vec!["intentional"]);
+    assert_eq!(diagnostic.recommended.as_deref(), Some("intentional"));
 }
 
 #[test]

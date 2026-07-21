@@ -148,6 +148,9 @@ behavior remains an explicit diagnostic.
 Changesets' range-conditional peer-dependent option is one such explicit
 contract choice because Intentional applies configured `depends-on` edges
 uniformly; any pending-release difference remains a parity blocker.
+Internal `devDependencies` participate in the Changesets source computation but
+are not authored as durable Intentional `depends-on` edges; adopting that
+contract is also explicit, and current divergence remains blocking.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes
