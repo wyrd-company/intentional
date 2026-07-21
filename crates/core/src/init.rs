@@ -330,6 +330,7 @@ struct ChangesetsSourceSemantics<'a> {
     private_packages: &'a BTreeSet<String>,
     suppress_private_versions: bool,
     npm_dependencies: &'a [NpmDependencyEdge],
+    internal_dependency_bump: Bump,
     update_internal_dependents_always: bool,
     only_update_peer_dependents_when_out_of_range: bool,
     preflight_error: Option<String>,
@@ -452,6 +453,23 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
+    if changesets["___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH"]
+        ["onlyUpdatePeerDependentsWhenOutOfRange"]
+        .as_bool()
+        == Some(true)
+    {
+        diagnostics.push(InitDiagnostic {
+            id: "changesets-peer-dependent-policy".to_owned(),
+            code: "changesets-peer-dependent-policy".to_owned(),
+            message: "Changesets conditionally updates peer dependents from npm ranges; Intentional applies explicit depends-on edges uniformly. Accept Intentional's dependency contract, and resolve any current release divergence shown by parity before takeover.".to_owned(),
+            evidence: vec![config_evidence.clone()],
+            choices: vec!["intentional".to_owned()],
+            recommended: Some("intentional".to_owned()),
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
     let mut unmapped_packages = BTreeSet::new();
     for package in discovery.config.packages.keys() {
         if referenced_names.contains(package) || discovery.workspace_packages.contains(package) {
@@ -564,6 +582,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         private_packages: &discovery.private_packages,
         suppress_private_versions,
         npm_dependencies: &discovery.npm_dependencies,
+        internal_dependency_bump: discovery.config.settings.internal_dependency_bump,
         update_internal_dependents_always: changesets
             ["___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH"]["updateInternalDependents"]
             .as_str()
@@ -1652,7 +1671,7 @@ fn resolve_changesets_source(
             {
                 Bump::Major
             } else if semantics.update_internal_dependents_always || !in_range {
-                Bump::Patch
+                semantics.internal_dependency_bump
             } else {
                 Bump::None
             };

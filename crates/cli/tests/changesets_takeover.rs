@@ -432,6 +432,118 @@ fn changesets_dependency_ranges_and_peer_edges_are_independently_compared() {
 }
 
 #[test]
+fn changesets_minor_internal_dependency_policy_is_preserved() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"package-a\": \"~1.0.0\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "minor",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("minor dependency policy plan");
+    assert_eq!(output.status.code(), Some(0));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "equivalent");
+    let dependent = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-b")
+        .expect("dependency-propagated package");
+    assert_eq!(dependent.source, dependent.proposed);
+    assert_eq!(dependent.source.as_ref().unwrap().next_version, "1.1.0");
+}
+
+#[test]
+fn conditional_peer_dependency_policy_is_an_actionable_takeover_choice() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\",\n  \"peerDependencies\": { \"package-a\": \"^1.0.0\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": [],
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  }
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a useful capability.\n",
+    );
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("conditional peer policy plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "changesets-peer-dependent-policy")
+        .expect("actionable peer policy diagnostic");
+    assert_eq!(diagnostic.choices, vec!["intentional"]);
+    assert_eq!(diagnostic.recommended.as_deref(), Some("intentional"));
+    let dependent = plan
+        .parity
+        .packages
+        .iter()
+        .find(|package| package.package == "package-b")
+        .expect("peer dependent divergence");
+    assert!(dependent.source.is_none());
+    assert_eq!(
+        dependent.proposed.as_ref().unwrap().requested_bump,
+        intentional_core::Bump::Patch
+    );
+}
+
+#[test]
 fn release_profile_version_sources_remap_pending_intent_identity() {
     let repository = Repository::new();
     repository.write(
@@ -775,6 +887,12 @@ packages:
     git(
         &repository.root,
         &["commit", "-q", "-m", "record executor notes"],
+    );
+    repository.write("release-audit.md", "Release executor audit.\n");
+    git(&repository.root, &["add", "release-audit.md"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "record executor audit"],
     );
 
     repository

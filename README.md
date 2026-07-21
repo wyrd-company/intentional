@@ -145,6 +145,9 @@ parity comparison. Private-package version and tag settings are recorded
 explicitly because Intentional separates version management from publication
 privacy and annotates every managed release. Unsupported or repository-specific
 behavior remains an explicit diagnostic.
+Changesets' range-conditional peer-dependent option is one such explicit
+contract choice because Intentional applies configured `depends-on` edges
+uniformly; any pending-release difference remains a parity blocker.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes

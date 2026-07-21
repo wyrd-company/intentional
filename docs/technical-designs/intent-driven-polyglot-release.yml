@@ -210,7 +210,10 @@ proposed-design:
     then records package membership, requested bumps, and next-version parity.
     Source dependency propagation preserves npm dependency kinds, npm and
     workspace ranges, Changesets' out-of-range default, peer-major behavior,
-    and its supported experimental dependent-update switches. Release-profile
+    and its supported experimental dependent-update switches.
+    Range-conditional peer updates are also surfaced as an explicit contract
+    choice because canonical Intentional `depends-on` edges are uniform; a
+    current release difference remains a parity blocker. Release-profile
     versionSource mappings rewrite manifest-native intent keys to the selected
     logical package identity before comparison and conversion.
     Unsupported settings and repository-specific release metadata remain
