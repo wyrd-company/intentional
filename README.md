@@ -31,6 +31,23 @@ With Cargo:
 cargo install intentional-cli --locked
 ```
 
+With npm:
+
+```console
+npm install --global @wyrd-company/intentional
+```
+
+Or run the scoped package without a global installation:
+
+```console
+npx --yes @wyrd-company/intentional --version
+```
+
+The npm package downloads the matching checksum-verified GitHub Release binary.
+It supports Linux x64 and arm64, macOS arm64, and Windows x64. GitHub Releases
+also publish those archives and `SHA256SUMS` for direct installation. Other
+platforms can build from source with `cargo install --path crates/cli --locked`.
+
 The minimum supported Rust version is 1.82. The library crate is
 `intentional-core`; the binary package is `intentional-cli` and installs the
 `intentional` executable.

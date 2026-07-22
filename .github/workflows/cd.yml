@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,33 +45,24 @@ jobs:
             bin_path: target/x86_64-pc-windows-msvc/release/intentional.exe
             archive_ext: zip
     steps:
-      - name: Checkout
+      - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Guard tag and workspace version agreement
+      - name: Guard tag, Cargo, and npm version agreement
         shell: bash
         run: |
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
-            echo "Release workflow must run against a SemVer tag." >&2
-            exit 1
+          echo "Release workflow must run against a SemVer tag." >&2
+          exit 1
           fi
-
           TAG="${GITHUB_REF##*/}"
-          MANIFEST_VERSION="$(python - <<'PY'
-          import pathlib
-          import tomllib
-
-          manifest = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
-          print(manifest["workspace"]["package"]["version"])
-          PY
-          )"
-
-          if [[ "$TAG" != "$MANIFEST_VERSION" ]]; then
-            echo "Release tag $TAG does not match Cargo.toml workspace version $MANIFEST_VERSION." >&2
-            exit 1
+          if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Release tag must be plain Semantic Versioning." >&2
+          exit 1
           fi
+          python3 scripts/release/verify-versions.py --expected "$TAG"
 
       - name: Install cross
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -80,44 +71,41 @@ jobs:
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Regenerate lockfile for committed version
-        run: cargo generate-lockfile
-
-      - name: Cache cargo registry and build artifacts
+      - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-      - name: Build (release)
+      - name: Build release binary
         shell: bash
         run: |
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            cross build --workspace --release --locked --target ${{ matrix.target }}
+          cross build --workspace --release --locked --target "${{ matrix.target }}"
           else
-            cargo build --workspace --release --locked --target ${{ matrix.target }}
+          cargo build --workspace --release --locked --target "${{ matrix.target }}"
           fi
 
-      - name: Test (Linux only)
+      - name: Test release source
         if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --workspace --locked --target ${{ matrix.target }}
+        run: cargo test --workspace --locked --target "${{ matrix.target }}"
 
-      - name: Package (unix)
+      - name: Package Unix archive
         if: runner.os != 'Windows'
         shell: bash
         run: |
           artifact="${{ matrix.artifact_name }}"
-          mkdir -p dist/"${artifact}"
-          cp "${{ matrix.bin_path }}" dist/"${artifact}"/
-          cp LICENSE README.md dist/"${artifact}"/
-          tar -C dist -czf "${artifact}.tar.gz" "${artifact}"
+          mkdir -p "dist/$artifact"
+          cp "${{ matrix.bin_path }}" "dist/$artifact/"
+          cp LICENSE README.md "dist/$artifact/"
+          tar -C dist -czf "$artifact.tar.gz" "$artifact"
 
-      - name: Package (windows)
+      - name: Package Windows archive
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -127,112 +115,255 @@ jobs:
           Copy-Item -Path "LICENSE","README.md" -Destination "dist/$artifact/"
           Compress-Archive -Path "dist/$artifact/*" -DestinationPath "$artifact.zip"
 
-      - name: Upload artifact
+      - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            *.${{ matrix.archive_ext }}
+          path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          retention-days: 1
 
   release:
-    name: Create GitHub Release
+    name: Publish GitHub Release assets
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate checksums
-        run: |
-          cd artifacts
-          find . -mindepth 2 -type f -exec sha256sum {} + \
-            | sed -E 's#  \./[^/]+/#  #' \
-            | sort -k2 \
-            > SHA256SUMS
-
-      - name: Extract leading changelog section
-        id: notes
-        shell: bash
-        run: |
-          if [[ ! -f CHANGELOG.md ]]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          awk '
-            /^## / {
-              if (found) exit
-              found = 1
-            }
-            found { print }
-          ' CHANGELOG.md > release-notes.md
-
-          if [[ -s release-notes.md ]]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish GitHub Release with changelog notes
-        if: steps.notes.outputs.found == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: release-notes.md
-          files: artifacts/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Publish GitHub Release with generated notes
-        if: steps.notes.outputs.found != 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/**/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish:
-    name: Publish to crates.io
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-    steps:
-      - name: Checkout
+      - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate portable checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum \
+          intentional-linux-arm64.tar.gz \
+          intentional-linux-x86_64.tar.gz \
+          intentional-macos-arm64.tar.gz \
+          intentional-windows-x86_64.zip \
+          > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Extract leading changelog section
+        shell: bash
+        run: |
+          awk '
+          /^## / {
+          if (found) exit
+          found = 1
+          }
+          found { print }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+
+      - name: Create or verify GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          scripts/release/ensure-github-release.sh "$TAG" dist release-notes.md
+
+  publish-crates:
+    name: Publish crates.io packages
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - name: Publish or verify matching crates
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          python3 scripts/release/verify-versions.py --expected "$TAG"
+          scripts/release/ensure-crate.sh intentional-core "$TAG"
+          scripts/release/ensure-crate.sh intentional-cli "$TAG"
 
-      - name: Regenerate lockfile for committed version
-        run: cargo generate-lockfile
+  publish-npm:
+    name: Publish npm launcher
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js for npmjs
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Use an OIDC-capable npm client
+        run: npm install --global npm@11.5.1
+      - name: Verify launcher and exact package contents
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          python3 scripts/release/verify-versions.py --expected "$TAG"
+          npm test --prefix npm
+          npm pack ./npm --dry-run --json --ignore-scripts --userconfig=/dev/null
+      - name: Publish or verify matching npm package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          scripts/release/ensure-npm.sh npm "$TAG"
 
-      - name: Cargo publish dry-run (core)
-        run: cargo publish -p intentional-core --locked --dry-run
+  verify-action:
+    name: Verify released plumbing Action
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run the tagged Action contract through its released binary
+        uses: ./
+        with:
+          command: check
+          intentional-version: ${{ github.ref_name }}
 
-      - name: Publish core
-        run: cargo publish -p intentional-core --locked
+  publish-homebrew-tap:
+    name: Publish Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@v4
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: wyrd-company/homebrew-tools
+          path: homebrew-tools
+          ssh-key: ${{ secrets.FORMULAE_PUBLISH_KEY }}
+      - name: Generate, compare, and publish formula
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          FORMULA="homebrew-tools/Formula/intentional.rb"
+          GENERATED="$RUNNER_TEMP/intentional.rb"
+          scripts/release/render-homebrew-formula.sh "$TAG" dist "$GENERATED"
 
-      - name: Wait for crate index to update
-        run: sleep 20
+          if [[ -f "$FORMULA" ]]; then
+          CURRENT_VERSION="$(sed -nE 's/^[[:space:]]*version "([^"]+)"/\1/p' "$FORMULA")"
+          if [[ "$CURRENT_VERSION" == "$TAG" ]]; then
+          if ! cmp --silent "$FORMULA" "$GENERATED"; then
+          echo "Homebrew formula $TAG already exists with different contents." >&2
+          exit 1
+          fi
+          echo "Homebrew formula $TAG already matches; skipping publication."
+          exit 0
+          fi
+          HIGHEST="$(printf '%s\n%s\n' "$CURRENT_VERSION" "$TAG" | sort -V | tail -1)"
+          if [[ "$HIGHEST" == "$CURRENT_VERSION" ]]; then
+          echo "Refusing to replace newer Homebrew formula $CURRENT_VERSION with $TAG." >&2
+          exit 1
+          fi
+          fi
 
-      - name: Cargo publish dry-run (cli)
-        run: cargo publish -p intentional-cli --locked --dry-run
+          install -m 0644 "$GENERATED" "$FORMULA"
+          cd homebrew-tools
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/intentional.rb
+          git commit -m "intentional $TAG"
+          git push origin HEAD
 
-      - name: Publish cli
-        run: cargo publish -p intentional-cli --locked
+  verify-cargo-client:
+    name: Verify clean Cargo client
+    needs: publish-crates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install released CLI from crates.io
+        shell: bash
+        run: |
+          INSTALL_ROOT="$(mktemp -d)"
+          cargo install intentional-cli \
+          --version "$GITHUB_REF_NAME" \
+          --locked \
+          --root "$INSTALL_ROOT"
+          "$INSTALL_ROOT/bin/intentional" --version | grep -F "$GITHUB_REF_NAME"
+          "$INSTALL_ROOT/bin/intentional" init --help | grep -F -- '--take-over'
+          "$INSTALL_ROOT/bin/intentional" tag --help | grep -F -- '--baseline'
+
+  verify-npm-clients:
+    name: Verify clean npm client (${{ matrix.os }})
+    needs: publish-npm
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest ]
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Install and exercise the released launcher
+        shell: bash
+        run: |
+          npm install --global \
+          "@wyrd-company/intentional@$GITHUB_REF_NAME" \
+          --registry=https://registry.npmjs.org
+          intentional --version | grep -F "$GITHUB_REF_NAME"
+          intentional init --help | grep -F -- '--take-over'
+          intentional tag --help | grep -F -- '--baseline'
+          npx --yes \
+          --package "@wyrd-company/intentional@$GITHUB_REF_NAME" \
+          -- intentional --version | grep -F "$GITHUB_REF_NAME"
+
+  verify-homebrew-clients:
+    name: Verify clean Homebrew client (${{ matrix.os }})
+    needs: publish-homebrew-tap
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-14 ]
+    steps:
+      - name: Install and exercise the released formula
+        shell: bash
+        run: |
+          brew install wyrd-company/tools/intentional
+          intentional --version | grep -F "$GITHUB_REF_NAME"
+          intentional init --help | grep -F -- '--take-over'
+          intentional tag --help | grep -F -- '--baseline'
 
   update-major-tag:
-    name: Update Major Version Tag
-    needs: release
+    name: Update major version tag
+    needs:
+      - verify-action
+      - verify-cargo-client
+      - verify-homebrew-clients
+      - verify-npm-clients
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -240,131 +371,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Update Major Tag
-        shell: bash
-        run: |
-          TAG=${GITHUB_REF##*/}
-          MAJOR=${TAG%%.*}
-
-          # Don't float a major tag pre-1.0: every 0.x bump may be breaking,
-          # so consumers should pin to specific versions until 1.0.0.
-          if [[ "$MAJOR" == "0" ]]; then
-            echo "Skipping major tag update for pre-1.0 release ($TAG)."
-            exit 0
-          fi
-
-          echo "Updating $MAJOR to point to $TAG"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git tag -fa "$MAJOR" -m "Update $MAJOR to $TAG"
-          git push origin "$MAJOR" --force
-
-  publish-homebrew-tap:
-    name: Publish Homebrew formula
-    needs: release
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Extract version from tag
-        id: version
+      - name: Update major tag for stable releases
         shell: bash
         run: |
           TAG="${GITHUB_REF##*/}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG}" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout tap repository
-        uses: actions/checkout@v4
-        with:
-          repository: wyrd-company/homebrew-tools
-          path: homebrew-tools
-          ssh-key: ${{ secrets.FORMULAE_PUBLISH_KEY }}
-
-      - name: Generate formula
-        shell: bash
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          LINUX_X86_64_ARCHIVE="artifacts/intentional-linux-x86_64/intentional-linux-x86_64.tar.gz"
-          LINUX_ARM64_ARCHIVE="artifacts/intentional-linux-arm64/intentional-linux-arm64.tar.gz"
-          MACOS_ARM64_ARCHIVE="artifacts/intentional-macos-arm64/intentional-macos-arm64.tar.gz"
-
-          for archive in "$LINUX_X86_64_ARCHIVE" "$LINUX_ARM64_ARCHIVE" "$MACOS_ARM64_ARCHIVE"; do
-            if [[ ! -f "$archive" ]]; then
-              echo "Missing expected release artifact: $archive" >&2
-              exit 1
-            fi
-          done
-
-          LINUX_X86_64_SHA256="$(sha256sum "$LINUX_X86_64_ARCHIVE" | cut -d' ' -f1)"
-          LINUX_ARM64_SHA256="$(sha256sum "$LINUX_ARM64_ARCHIVE" | cut -d' ' -f1)"
-          MACOS_ARM64_SHA256="$(sha256sum "$MACOS_ARM64_ARCHIVE" | cut -d' ' -f1)"
-
-          cat > homebrew-tools/Formula/intentional.rb <<EOF
-            class Intentional < Formula
-              desc "Intent-driven polyglot release and versioning tool"
-              homepage "https://github.com/${REPOSITORY}"
-              license "Apache-2.0"
-              version "${VERSION}"
-
-              on_macos do
-                on_arm do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-macos-arm64.tar.gz"
-                  sha256 "${MACOS_ARM64_SHA256}"
-                end
-              end
-
-              on_linux do
-                on_arm do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-linux-arm64.tar.gz"
-                  sha256 "${LINUX_ARM64_SHA256}"
-                end
-
-                on_intel do
-                  url "https://github.com/${REPOSITORY}/releases/download/${TAG}/intentional-linux-x86_64.tar.gz"
-                  sha256 "${LINUX_X86_64_SHA256}"
-                end
-              end
-
-              def install
-                bin.install "intentional"
-                prefix.install_metafiles
-              end
-
-              test do
-                assert_match "Intent-driven", shell_output("#{bin}/intentional --help")
-              end
-            end
-          EOF
-
-      - name: Commit and push formula
-        shell: bash
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          cd homebrew-tools
-
+          MAJOR="${TAG%%.*}"
+          if [[ "$MAJOR" == "0" ]]; then
+          echo "Skipping major tag update for pre-1.0 release $TAG."
+          exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add Formula/intentional.rb
-
-          # --cached so a newly-added (previously untracked) formula is
-          # detected; plain `git diff` only inspects tracked files.
-          if git diff --cached --quiet -- Formula/intentional.rb; then
-            echo "Formula already up to date."
-            exit 0
-          fi
-
-          git commit -m "intentional ${VERSION}"
-          git push origin HEAD
+          git tag -fa "$MAJOR" -m "Update $MAJOR to $TAG"
+          git push origin "$MAJOR" --force

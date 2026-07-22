@@ -37,7 +37,27 @@ tasks:
 
   ci:
     desc: Run all continuous-integration checks locally
-    deps: [ docs:check, fmt-check, lint, self-check, test ]
+    deps: [ docs:check, fmt-check, lint, npm:test, release:check, self-check, test ]
+
+  npm:test:
+    desc: Test the public npm launcher and its exact package contents
+    cmds:
+      - npm test --prefix npm
+
+  release:check:
+    desc: Validate release automation and cross-channel version agreement
+    cmds:
+      - actionlint .github/workflows/*.yml
+      - shellcheck scripts/release/*.sh
+      - ryl check .github/workflows/*.yml Taskfile.yml .intentional/config.yml
+      - python3 scripts/release/verify-versions.py
+      - >-
+        yq -e
+        '[.release-units.intentional.projections[] |
+        select(.adapter == "npm" and .file == "npm/package.json" and .mode == "committed")] |
+        length == 1'
+        .intentional/config.yml >/dev/null
+      - scripts/release/test-retry.sh
 
   docs:demo:
     desc: Regenerate and optimize the public documentation demo

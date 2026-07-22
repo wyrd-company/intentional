@@ -106,12 +106,34 @@ runs:
         INSTALL_DIR="$RUNNER_TEMP/intentional/bin"
         ARCHIVE_DIR="$(mktemp -d)"
         ARCHIVE_PATH="$ARCHIVE_DIR/$ASSET_NAME"
+        CHECKSUM_PATH="$ARCHIVE_DIR/SHA256SUMS"
         trap 'rm -rf "$ARCHIVE_DIR"' EXIT
 
-        wget -q -O "$ARCHIVE_PATH" "$DOWNLOAD_URL"
-        tar -xzf "$ARCHIVE_PATH" -C "$ARCHIVE_DIR"
+        RELEASE_BASE="${DOWNLOAD_URL%/$ASSET_NAME}"
+        curl --fail --silent --show-error --location --max-redirs 5 \
+          --proto '=https' --tlsv1.2 \
+          --output "$CHECKSUM_PATH" "$RELEASE_BASE/SHA256SUMS"
+        curl --fail --silent --show-error --location --max-redirs 5 \
+          --proto '=https' --tlsv1.2 \
+          --output "$ARCHIVE_PATH" "$DOWNLOAD_URL"
+
+        EXPECTED_CHECKSUM="$(awk -v asset="$ASSET_NAME" '$2 == asset { print $1 }' "$CHECKSUM_PATH")"
+        if [[ ! "$EXPECTED_CHECKSUM" =~ ^[a-fA-F0-9]{64}$ ]] || \
+           [[ "$(awk -v asset="$ASSET_NAME" '$2 == asset { count++ } END { print count + 0 }' "$CHECKSUM_PATH")" != "1" ]]; then
+          echo "::error::SHA256SUMS must contain exactly one checksum for $ASSET_NAME."
+          exit 1
+        fi
+        ACTUAL_CHECKSUM="$(sha256sum "$ARCHIVE_PATH" | cut -d' ' -f1)"
+        if [[ "${ACTUAL_CHECKSUM,,}" != "${EXPECTED_CHECKSUM,,}" ]]; then
+          echo "::error::Checksum verification failed for $ASSET_NAME."
+          exit 1
+        fi
+
         mkdir -p "$INSTALL_DIR"
-        cp "$ARCHIVE_DIR/${ASSET_NAME%.tar.gz}/intentional" "$INSTALL_DIR/intentional"
+        tar -xOzf "$ARCHIVE_PATH" "${ASSET_NAME%.tar.gz}/intentional" \
+          > "$INSTALL_DIR/intentional.partial"
+        test -s "$INSTALL_DIR/intentional.partial"
+        mv "$INSTALL_DIR/intentional.partial" "$INSTALL_DIR/intentional"
         chmod +x "$INSTALL_DIR/intentional"
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 

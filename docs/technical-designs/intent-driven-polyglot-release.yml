@@ -382,10 +382,14 @@ proposed-design:
     Config and intent-frontmatter schemas publish under
     https://intentional.foo/schemas/. The
     tagver library crate supplies tag discovery and height math, gitoxide
-    transitively. Distribution: crates.io, the wyrd-company/tools Homebrew
-    tap, and a plumbing GitHub Action that runs the binary; a higher-level
-    orchestration action (version-PR choreography) is future scope. MSRV and
-    CI conventions follow tagver.
+    transitively. Distribution includes the intentional-core and
+    intentional-cli crates on crates.io, native archives and portable
+    checksums on GitHub Releases, the @wyrd-company/intentional npm launcher,
+    the wyrd-company/tools Homebrew tap, and a plumbing GitHub Action that runs
+    the binary. The npm launcher selects only release-matrix platforms and
+    installs the matching archive after checksum verification. A higher-level
+    orchestration action (version-PR choreography) is future scope. MSRV and CI
+    conventions follow tagver.
   out-of-scope: >-
     Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
     committing, pushing, or opening pull requests permanently; language

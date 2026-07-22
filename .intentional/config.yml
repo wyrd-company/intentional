@@ -15,6 +15,9 @@ release-units:
         file: crates/cli/Cargo.toml
         pointer: /dependencies/intentional-core/version
         mode: committed
+      - adapter: npm
+        file: npm/package.json
+        mode: committed
     tags:
       primary:
         role: primary

@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
 
 permissions:
@@ -30,3 +30,20 @@ jobs:
         run: cargo test --workspace
       - name: Check this repository with intentional
         run: cargo run --bin intentional -- check
+
+  npm-launcher:
+    name: npm launcher (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: false
+      - name: Test launcher, installer, and package allowlist
+        run: npm test --prefix npm

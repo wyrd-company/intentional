@@ -1,0 +1,39 @@
+{
+  "name": "@wyrd-company/intentional",
+  "version": "0.1.1",
+  "description": "Public npm launcher for the Intentional release and versioning CLI.",
+  "keywords": [
+    "release",
+    "versioning",
+    "cli",
+    "semver"
+  ],
+  "homepage": "https://github.com/wyrd-company/intentional#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wyrd-company/intentional.git"
+  },
+  "license": "Apache-2.0",
+  "bin": {
+    "intentional": "bin/intentional.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js",
+    "test": "node --test test/*.test.js"
+  },
+  "files": [
+    "README.md",
+    "bin/intentional.js",
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "relationships": {
+    "implements": "intent-driven-polyglot-release"
+  }
+}
