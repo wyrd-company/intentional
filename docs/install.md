@@ -35,7 +35,7 @@ cargo install intentional-cli --locked
 ```
 
 `--locked` builds against the crate's published lockfile. The minimum supported
-Rust version is 1.82.
+Rust version is 1.85.
 
 ## npm and npx
 

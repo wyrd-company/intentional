@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+### Features
+
+- Detect Dev Container Features and Templates as explicit release-unit candidates.
+
+### Fixes
+
+- Generate portable release checksums that validate downloaded assets directly.
+
 ## 0.1.1
 
 ### Fixes

@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.82.0
-      - name: Test the locked workspace with Rust 1.82
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Test the locked workspace with Rust 1.85
         run: cargo test --workspace --locked
 
   test:
