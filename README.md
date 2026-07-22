@@ -105,6 +105,71 @@ Generic `json`, `toml`, and `yaml` projections also require a `pointer`, such
 as `/metadata/version`. A release unit with no version-bearing projection is
 tag-only.
 
+### Discovery candidates and receipts
+
+Every detector emits the same artifact-neutral candidate shape. Candidate ids
+are stable hashes of the detector id and exact workspace-relative path. File
+digests, native identity, and raw version text remain initialization evidence;
+projection and tag suggestions appear only when extraction supplies the fields
+they require. Extraction diagnostics report unreadable or missing fields but do
+not claim that an artifact is publishable.
+
+An initialization-plan candidate has this shape (shown as an excerpt):
+
+```yaml
+discovery-candidates:
+  - id: candidate:d888bb15d92b6478bbb66e9f2a01a12da7113e30d3a59440365a25e8f317ce0f
+    detector: sample-manifest
+    path: packages/library/manifest.json
+    evidence:
+      - path: packages/library/manifest.json
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    native-identity: library
+    raw-version:
+      value: "1.2.3"
+      evidence:
+        - path: packages/library/manifest.json
+          digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    projection:
+      adapter: json
+      path: packages/library/manifest.json
+      mode: committed
+      pointer: /version
+    tag:
+      id: primary
+      role: primary
+      template: "{id}@{version}"
+    resolution:
+      kind: independent
+      release-unit: library
+```
+
+A resolution is `independent`, `projection`, or `excluded`. Independent and
+projection resolutions name the final release-unit id. A projection names
+`target-candidate` when it follows an independent candidate in the same plan;
+without that field it targets an already configured release unit. Initialization
+rejects duplicate release-unit creators, absent targets, identity disagreement,
+and projection cycles.
+
+Applied choices leave generic discovery receipts in canonical configuration:
+
+```yaml
+discovery:
+  managed-paths:
+    - detector: sample-manifest
+      path: packages/library/manifest.json
+      release-unit: library
+  excluded-paths:
+    - detector: sample-manifest
+      path: examples/example/manifest.json
+      evidence-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+```
+
+Managed receipts preserve the chosen release-unit relationship. Excluded
+receipts bind the exact detector/path identity to its evidence digest, so
+changed evidence requires a new resolution rather than silently inheriting an
+old exclusion. Paths are literal workspace-relative paths, not globs.
+
 ## Adopt a Changesets repository
 
 When `.changeset/config.json` exists, ordinary `intentional init` preserves

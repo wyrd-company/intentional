@@ -32,6 +32,8 @@ properties:
     type: object
     additionalProperties:
       $ref: "#/$defs/workspace-tag"
+  discovery:
+    $ref: "#/$defs/discovery"
   release-units:
     type: object
     minProperties: 1
@@ -50,6 +52,48 @@ $defs:
         type: string
   phase:
     enum: [ before-publication, after-publication ]
+  detector-id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+  exact-path:
+    type: string
+    minLength: 1
+    not: { const: "." }
+    pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*[*?\[\]{}])[^/]+(?:/[^/]+)*$'
+  discovery:
+    type: object
+    additionalProperties: false
+    properties:
+      managed-paths:
+        type: array
+        uniqueItems: true
+        items:
+          type: object
+          additionalProperties: false
+          required: [ detector, path, release-unit ]
+          properties:
+            detector:
+              $ref: "#/$defs/detector-id"
+            path:
+              $ref: "#/$defs/exact-path"
+            release-unit:
+              type: string
+              minLength: 1
+      excluded-paths:
+        type: array
+        uniqueItems: true
+        items:
+          type: object
+          additionalProperties: false
+          required: [ detector, path, evidence-digest ]
+          properties:
+            detector:
+              $ref: "#/$defs/detector-id"
+            path:
+              $ref: "#/$defs/exact-path"
+            evidence-digest:
+              type: string
+              pattern: "^sha256:[0-9a-f]{64}$"
   release-unit:
     type: object
     additionalProperties: false

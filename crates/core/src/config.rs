@@ -43,6 +43,9 @@ pub struct Config {
     /// Repository-level release tag streams.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub workspace_tags: BTreeMap<String, WorkspaceTagConfig>,
+    /// Receipts for discovery candidates already resolved by initialization.
+    #[serde(default, skip_serializing_if = "DiscoveryConfig::is_empty")]
+    pub discovery: DiscoveryConfig,
     /// Release-unit inventory keyed by stable release-unit id.
     pub release_units: BTreeMap<String, ReleaseUnitConfig>,
 }
@@ -56,9 +59,52 @@ impl Default for Config {
             fixed: Vec::new(),
             linked: Vec::new(),
             workspace_tags: BTreeMap::new(),
+            discovery: DiscoveryConfig::default(),
             release_units: BTreeMap::new(),
         }
     }
+}
+
+/// Durable receipts for resolved discovery candidates.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DiscoveryConfig {
+    /// Candidate paths incorporated into configured release units.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub managed_paths: Vec<ManagedPathReceipt>,
+    /// Candidate paths explicitly excluded at an exact evidence digest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_paths: Vec<ExcludedPathReceipt>,
+}
+
+impl DiscoveryConfig {
+    fn is_empty(&self) -> bool {
+        self.managed_paths.is_empty() && self.excluded_paths.is_empty()
+    }
+}
+
+/// Receipt connecting one detector/path identity to a configured release unit.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ManagedPathReceipt {
+    /// Stable detector id.
+    pub detector: String,
+    /// Exact workspace-relative candidate path.
+    pub path: PathBuf,
+    /// Configured release unit that owns the candidate projection.
+    pub release_unit: String,
+}
+
+/// Receipt excluding one detector/path identity while its evidence is unchanged.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ExcludedPathReceipt {
+    /// Stable detector id.
+    pub detector: String,
+    /// Exact workspace-relative candidate path.
+    pub path: PathBuf,
+    /// SHA-256 digest of the evidence at the time of exclusion.
+    pub evidence_digest: String,
 }
 
 /// Workspace-wide release behavior.
@@ -293,9 +339,49 @@ impl Config {
             }
         }
 
+        self.validate_discovery()?;
         self.validate_release_groups()?;
         self.validate_dependency_acyclic()?;
         self.validate_tag_graph(&canonical_tags)
+    }
+
+    fn validate_discovery(&self) -> Result<()> {
+        let mut identities = BTreeSet::new();
+        for receipt in &self.discovery.managed_paths {
+            validate_detector_id(&receipt.detector)?;
+            validate_exact_discovery_path(&receipt.path, "managed discovery path")?;
+            validate_id(&receipt.release_unit, "managed discovery release unit")?;
+            if !self.release_units.contains_key(&receipt.release_unit) {
+                return Err(Error::Validation(format!(
+                    "managed discovery path {} references unknown release unit {}",
+                    receipt.path.display(),
+                    receipt.release_unit
+                )));
+            }
+            if !identities.insert((&receipt.detector, &receipt.path)) {
+                return Err(Error::Validation(format!(
+                    "duplicate discovery receipt for detector {} at {}",
+                    receipt.detector,
+                    receipt.path.display()
+                )));
+            }
+        }
+        for receipt in &self.discovery.excluded_paths {
+            validate_detector_id(&receipt.detector)?;
+            validate_exact_discovery_path(&receipt.path, "excluded discovery path")?;
+            validate_sha256(
+                &receipt.evidence_digest,
+                "excluded discovery evidence digest",
+            )?;
+            if !identities.insert((&receipt.detector, &receipt.path)) {
+                return Err(Error::Validation(format!(
+                    "duplicate discovery receipt for detector {} at {}",
+                    receipt.detector,
+                    receipt.path.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn validate_release_groups(&self) -> Result<()> {
@@ -461,6 +547,37 @@ fn validate_id(id: &str, kind: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_detector_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || !id.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || "-_.".contains(character)
+        })
+    {
+        return Err(Error::Validation(format!("invalid detector id {id:?}")));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_sha256(value: &str, description: &str) -> Result<()> {
+    let Some(digest) = value.strip_prefix("sha256:") else {
+        return Err(Error::Validation(format!(
+            "{description} must be sha256 followed by 64 lowercase hexadecimal digits"
+        )));
+    };
+    if digest.len() != 64
+        || !digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase())
+    {
+        return Err(Error::Validation(format!(
+            "{description} must be sha256 followed by 64 lowercase hexadecimal digits"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
@@ -470,6 +587,29 @@ fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
     {
         return Err(Error::Validation(format!(
             "{description} must be a non-empty relative path without .."
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_exact_discovery_path(path: &Path, description: &str) -> Result<()> {
+    validate_relative_path(path, description)?;
+    let rendered = path.to_string_lossy();
+    let normalized = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    if rendered.replace('\\', "/") != normalized
+        || rendered
+            .chars()
+            .any(|character| matches!(character, '*' | '?' | '[' | ']' | '{' | '}'))
+    {
+        return Err(Error::Validation(format!(
+            "{description} must identify one exact workspace-relative path"
         )));
     }
     Ok(())
@@ -537,6 +677,60 @@ release-units:
             Pre1BumpMapping::Component
         );
         assert_eq!(config.primary_tag("library").expect("primary").0, "primary");
+    }
+
+    #[test]
+    fn validates_managed_and_exact_excluded_discovery_receipts() {
+        let receipts = VALID.replace(
+            "release-units:\n",
+            "discovery:\n  managed-paths:\n    - detector: npm-package\n      path: packages/library/package.json\n      release-unit: library\n  excluded-paths:\n    - detector: npm-package\n      path: examples/package.json\n      evidence-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\nrelease-units:\n",
+        );
+        let config = Config::from_yaml(&receipts).expect("discovery receipts accepted");
+        assert_eq!(config.discovery.managed_paths.len(), 1);
+        assert_eq!(config.discovery.excluded_paths.len(), 1);
+
+        let unknown = receipts.replace("release-unit: library", "release-unit: missing");
+        assert!(Config::from_yaml(&unknown)
+            .expect_err("unknown managed target rejected")
+            .to_string()
+            .contains("unknown release unit missing"));
+
+        let glob = receipts.replace("examples/package.json", "examples/*.json");
+        assert!(Config::from_yaml(&glob)
+            .expect_err("glob exclusion rejected")
+            .to_string()
+            .contains("one exact workspace-relative path"));
+
+        let stale_shape = receipts.replace(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:abcd",
+        );
+        assert!(Config::from_yaml(&stale_shape)
+            .expect_err("invalid exclusion digest rejected")
+            .to_string()
+            .contains("64 lowercase hexadecimal digits"));
+    }
+
+    #[test]
+    fn published_config_schema_carries_discovery_receipt_contracts() {
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../schemas/config.yml"))
+                .expect("config schema parses");
+        let discovery = &schema["$defs"]["discovery"];
+        assert_eq!(discovery["additionalProperties"].as_bool(), Some(false));
+        assert_eq!(
+            discovery["properties"]["managed-paths"]["items"]["required"]
+                .as_sequence()
+                .expect("managed receipt required fields")
+                .len(),
+            3
+        );
+        assert_eq!(
+            discovery["properties"]["excluded-paths"]["items"]["properties"]["evidence-digest"]
+                ["pattern"]
+                .as_str(),
+            Some("^sha256:[0-9a-f]{64}$")
+        );
     }
 
     #[test]

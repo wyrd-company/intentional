@@ -6,7 +6,8 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
-    Config, Projection, ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
+    validate_detector_id, validate_exact_discovery_path, validate_sha256, Config, Projection,
+    ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -59,6 +60,351 @@ pub struct SourceEvidence {
     /// Relevant one-based source lines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<usize>,
+}
+
+/// Optional raw version text together with the evidence from which it was extracted.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct RawVersionEvidence {
+    /// Uninterpreted version text supplied by the artifact.
+    pub value: String,
+    /// Exact evidence supporting the extracted text.
+    pub evidence: Vec<SourceEvidence>,
+}
+
+/// A projection a detector can suggest when its required fields were extracted.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CandidateProjectionSuggestion {
+    /// Adapter specialization.
+    pub adapter: Adapter,
+    /// Exact workspace-relative projection path.
+    pub path: PathBuf,
+    /// Projection materialization mode.
+    pub mode: ProjectionMode,
+    /// JSON Pointer or dotted TOML/YAML key path for generic formats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pointer: Option<String>,
+}
+
+/// A tag a detector can suggest without granting it version authority.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CandidateTagSuggestion {
+    /// Suggested tag id within the resolved release unit.
+    pub id: String,
+    /// Suggested primary or projection role.
+    pub role: TagRole,
+    /// Suggested template containing exactly one `{version}` placeholder.
+    pub template: String,
+}
+
+/// Evidence-backed extraction problem that does not assert artifact invalidity.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct ExtractionDiagnostic {
+    /// Stable diagnostic identity within the candidate.
+    pub id: String,
+    /// Stable extraction category.
+    pub code: String,
+    /// Human-readable extraction problem.
+    pub message: String,
+    /// Exact evidence encountered by the detector.
+    pub evidence: Vec<SourceEvidence>,
+}
+
+/// Explicit user or agent resolution for one discovery candidate.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CandidateResolution {
+    /// Create one independently versioned release unit from this candidate.
+    Independent {
+        /// Stable id for the new release unit.
+        release_unit: String,
+    },
+    /// Add this candidate as a projection of a release unit.
+    Projection {
+        /// Final configured or planned release-unit id.
+        release_unit: String,
+        /// Planned candidate to follow; omitted when the release unit is already configured.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_candidate: Option<String>,
+    },
+    /// Keep this exact detector/path evidence outside the release-unit inventory.
+    Excluded,
+}
+
+/// Artifact-neutral evidence emitted by any release-unit detector.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DiscoveryCandidate {
+    /// Stable hash of detector and exact path identity.
+    pub id: String,
+    /// Stable detector id, independent from adapter or ecosystem names.
+    pub detector: String,
+    /// Exact workspace-relative artifact path.
+    pub path: PathBuf,
+    /// All evidence used to create this candidate.
+    pub evidence: Vec<SourceEvidence>,
+    /// Manifest-native identity, when extraction succeeds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_identity: Option<String>,
+    /// Uninterpreted version evidence, when present and readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_version: Option<RawVersionEvidence>,
+    /// Projection suggestion, only when the detector has enough evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<CandidateProjectionSuggestion>,
+    /// Tag suggestion, only when the detector has enough evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<CandidateTagSuggestion>,
+    /// Narrow extraction diagnostics; these do not validate publication or artifact completeness.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<ExtractionDiagnostic>,
+    /// Editable independent, projection, or excluded choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<CandidateResolution>,
+}
+
+impl DiscoveryCandidate {
+    /// Derive the stable candidate id from detector and exact path identity.
+    pub fn stable_id(detector: &str, path: &Path) -> Result<String> {
+        validate_detector_id(detector)?;
+        validate_exact_discovery_path(path, "discovery candidate path")?;
+        let mut path_parts = Vec::new();
+        for component in path.components() {
+            if let std::path::Component::Normal(value) = component {
+                path_parts.push(value.to_str().ok_or_else(|| {
+                    Error::Validation("discovery candidate path must be valid UTF-8".to_owned())
+                })?);
+            }
+        }
+        let path = path_parts.join("/");
+        let mut identity = Sha256::new();
+        identity.update(detector.as_bytes());
+        identity.update([0]);
+        identity.update(path.as_bytes());
+        Ok(format!("candidate:{:x}", identity.finalize()))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let expected = Self::stable_id(&self.detector, &self.path)?;
+        if self.id != expected {
+            return Err(Error::Validation(format!(
+                "discovery candidate {} does not match detector {} and path {}",
+                self.id,
+                self.detector,
+                self.path.display()
+            )));
+        }
+        if self.evidence.is_empty() {
+            return Err(Error::Validation(format!(
+                "discovery candidate {} must contain evidence",
+                self.id
+            )));
+        }
+        validate_source_evidence(&self.evidence, &format!("discovery candidate {}", self.id))?;
+        if !self.evidence.iter().any(|item| item.path == self.path) {
+            return Err(Error::Validation(format!(
+                "discovery candidate {} evidence must include its exact path {}",
+                self.id,
+                self.path.display()
+            )));
+        }
+        if self.native_identity.as_deref().is_some_and(str::is_empty) {
+            return Err(Error::Validation(format!(
+                "discovery candidate {} native identity must not be empty",
+                self.id
+            )));
+        }
+        if let Some(version) = &self.raw_version {
+            if version.value.is_empty() {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} raw version must not be empty",
+                    self.id
+                )));
+            }
+            validate_source_evidence(
+                &version.evidence,
+                &format!("discovery candidate {} raw version", self.id),
+            )?;
+            if !version
+                .evidence
+                .iter()
+                .all(|item| self.evidence.contains(item))
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} raw version references evidence outside the candidate",
+                    self.id
+                )));
+            }
+        }
+        if let Some(projection) = &self.projection {
+            validate_exact_discovery_path(&projection.path, "candidate projection path")?;
+            if !self
+                .evidence
+                .iter()
+                .any(|item| item.path == projection.path)
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} projection path lacks candidate evidence",
+                    self.id
+                )));
+            }
+            if projection.adapter.requires_pointer()
+                && projection.pointer.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} generic projection requires a pointer",
+                    self.id
+                )));
+            }
+        }
+        if let Some(tag) = &self.tag {
+            if tag.id.is_empty()
+                || !tag
+                    .id
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} has invalid tag id {:?}",
+                    self.id, tag.id
+                )));
+            }
+            if tag.template.matches("{version}").count() != 1
+                || tag.template.matches("{id}").count() > 1
+                || tag.template.contains("v{version}")
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} tag template must contain exactly one {{version}}, at most one {{id}}, and no v prefix",
+                    self.id
+                )));
+            }
+        }
+        let mut diagnostic_ids = BTreeSet::new();
+        for diagnostic in &self.diagnostics {
+            if diagnostic.id.is_empty()
+                || diagnostic.code.is_empty()
+                || diagnostic.message.is_empty()
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} has an incomplete extraction diagnostic",
+                    self.id
+                )));
+            }
+            if !diagnostic_ids.insert(&diagnostic.id) {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} repeats extraction diagnostic {}",
+                    self.id, diagnostic.id
+                )));
+            }
+            validate_source_evidence(
+                &diagnostic.evidence,
+                &format!(
+                    "discovery candidate {} diagnostic {}",
+                    self.id, diagnostic.id
+                ),
+            )?;
+            if !diagnostic
+                .evidence
+                .iter()
+                .all(|item| self.evidence.contains(item))
+            {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} diagnostic {} references evidence outside the candidate",
+                    self.id, diagnostic.id
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One detector invocation before its candidates are flattened into an initialization plan.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DetectorResult {
+    /// Stable detector id.
+    pub detector: String,
+    /// Candidates emitted in stable path order.
+    pub candidates: Vec<DiscoveryCandidate>,
+}
+
+impl DetectorResult {
+    /// Validate detector identity and candidate ownership.
+    pub fn validate(&self) -> Result<()> {
+        validate_detector_id(&self.detector)?;
+        let mut paths = BTreeSet::new();
+        for candidate in &self.candidates {
+            if candidate.detector != self.detector {
+                return Err(Error::Validation(format!(
+                    "detector {} returned candidate owned by {}",
+                    self.detector, candidate.detector
+                )));
+            }
+            candidate.validate()?;
+            if !paths.insert(&candidate.path) {
+                return Err(Error::Validation(format!(
+                    "detector {} repeated candidate path {}",
+                    self.detector,
+                    candidate.path.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Return candidates in deterministic path order for plan serialization.
+    pub fn into_candidates(mut self) -> Result<Vec<DiscoveryCandidate>> {
+        self.validate()?;
+        self.candidates
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(self.candidates)
+    }
+}
+
+fn validate_source_evidence(evidence: &[SourceEvidence], description: &str) -> Result<()> {
+    if evidence.is_empty() {
+        return Err(Error::Validation(format!(
+            "{description} must contain evidence"
+        )));
+    }
+    let mut paths = BTreeSet::new();
+    if evidence.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(Error::Validation(format!(
+            "{description} evidence must be ordered by path"
+        )));
+    }
+    for item in evidence {
+        validate_exact_discovery_path(&item.path, &format!("{description} evidence path"))?;
+        validate_sha256(&item.digest, &format!("{description} evidence digest"))?;
+        if !paths.insert(&item.path) {
+            return Err(Error::Validation(format!(
+                "{description} repeats evidence path {}",
+                item.path.display()
+            )));
+        }
+        if item.lines.contains(&0) {
+            return Err(Error::Validation(format!(
+                "{description} evidence lines must be one-based"
+            )));
+        }
+        let unique_lines = item.lines.iter().collect::<BTreeSet<_>>();
+        if unique_lines.len() != item.lines.len() {
+            return Err(Error::Validation(format!(
+                "{description} repeats an evidence line for {}",
+                item.path.display()
+            )));
+        }
+        if item.lines.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(Error::Validation(format!(
+                "{description} evidence lines for {} must be ordered",
+                item.path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// One finite initialization decision or warning.
@@ -167,6 +513,9 @@ pub struct InitPlan {
     pub source_fingerprint: String,
     /// Complete confidently inferred canonical configuration.
     pub inferred_config: Config,
+    /// Artifact-neutral candidates awaiting or carrying explicit resolutions.
+    #[serde(default)]
+    pub discovery_candidates: Vec<DiscoveryCandidate>,
     /// Finite choices, warnings, and verified repository integration outcomes.
     pub diagnostics: Vec<InitDiagnostic>,
     /// Pending source intents and their lossless targets.
@@ -180,15 +529,180 @@ pub struct InitPlan {
 }
 
 impl InitPlan {
+    /// Validate candidate evidence and its projection resolution graph.
+    pub fn validate(&self) -> Result<()> {
+        self.inferred_config.validate()?;
+        let mut candidates = BTreeMap::new();
+        for candidate in &self.discovery_candidates {
+            candidate.validate()?;
+            if candidates
+                .insert(candidate.id.as_str(), candidate)
+                .is_some()
+            {
+                return Err(Error::Validation(format!(
+                    "duplicate discovery candidate {}",
+                    candidate.id
+                )));
+            }
+        }
+
+        let mut creators = self
+            .inferred_config
+            .release_units
+            .keys()
+            .map(|id| (id.as_str(), "configured release unit"))
+            .collect::<BTreeMap<_, _>>();
+        let mut edges = BTreeMap::<&str, &str>::new();
+        for candidate in &self.discovery_candidates {
+            match &candidate.resolution {
+                Some(CandidateResolution::Independent { release_unit }) => {
+                    validate_resolution_release_unit(release_unit)?;
+                    if let Some(previous) = creators.insert(release_unit, candidate.id.as_str()) {
+                        return Err(Error::Validation(format!(
+                            "duplicate creator for release unit {release_unit}: {previous} and {}",
+                            candidate.id
+                        )));
+                    }
+                }
+                Some(CandidateResolution::Projection {
+                    release_unit,
+                    target_candidate,
+                }) => {
+                    validate_resolution_release_unit(release_unit)?;
+                    if let Some(target) = target_candidate {
+                        if !candidates.contains_key(target.as_str()) {
+                            return Err(Error::Validation(format!(
+                                "discovery candidate {} projects onto absent candidate {target}",
+                                candidate.id
+                            )));
+                        }
+                        edges.insert(candidate.id.as_str(), target.as_str());
+                    } else if !self
+                        .inferred_config
+                        .release_units
+                        .contains_key(release_unit)
+                    {
+                        return Err(Error::Validation(format!(
+                            "discovery candidate {} projects onto absent configured release unit {release_unit}",
+                            candidate.id
+                        )));
+                    }
+                }
+                Some(CandidateResolution::Excluded) | None => {}
+            }
+        }
+
+        validate_candidate_graph_acyclic(&edges)?;
+        for candidate in &self.discovery_candidates {
+            let Some(CandidateResolution::Projection {
+                release_unit,
+                target_candidate: Some(target),
+            }) = &candidate.resolution
+            else {
+                continue;
+            };
+            validate_projection_target(candidate, release_unit, target, &candidates)?;
+        }
+        Ok(())
+    }
+
     /// Serialize deterministically with compact, explained YAML enum choices.
     pub fn to_yaml(&self) -> Result<String> {
+        self.validate()?;
         let yaml = serde_yaml::to_string(self)?;
         Ok(annotate_choice_lines(&yaml))
     }
 
     /// Equivalent structured JSON for agent consumers.
     pub fn to_json(&self) -> Result<String> {
+        self.validate()?;
         canonical_json(self)
+    }
+}
+
+fn validate_resolution_release_unit(id: &str) -> Result<()> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.@/".contains(character))
+    {
+        return Err(Error::Validation(format!(
+            "invalid candidate resolution release-unit id {id:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_candidate_graph_acyclic(edges: &BTreeMap<&str, &str>) -> Result<()> {
+    fn visit<'a>(
+        id: &'a str,
+        edges: &BTreeMap<&'a str, &'a str>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+    ) -> Result<()> {
+        if visited.contains(id) {
+            return Ok(());
+        }
+        if !visiting.insert(id) {
+            return Err(Error::Validation(format!(
+                "discovery candidate projection cycle includes {id}"
+            )));
+        }
+        if let Some(target) = edges.get(id) {
+            visit(target, edges, visiting, visited)?;
+        }
+        visiting.remove(id);
+        visited.insert(id);
+        Ok(())
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for id in edges.keys() {
+        visit(id, edges, &mut visiting, &mut visited)?;
+    }
+    Ok(())
+}
+
+fn validate_projection_target(
+    source: &DiscoveryCandidate,
+    release_unit: &str,
+    target: &str,
+    candidates: &BTreeMap<&str, &DiscoveryCandidate>,
+) -> Result<()> {
+    let target = candidates[target];
+    match &target.resolution {
+        Some(CandidateResolution::Independent {
+            release_unit: target_release_unit,
+        }) => {
+            if target_release_unit != release_unit {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} resolves to {release_unit} but target {} creates {target_release_unit}",
+                    source.id, target.id
+                )));
+            }
+            Ok(())
+        }
+        Some(CandidateResolution::Projection {
+            release_unit: target_release_unit,
+            target_candidate,
+        }) => {
+            if target_release_unit != release_unit {
+                return Err(Error::Validation(format!(
+                    "discovery candidate {} resolves to {release_unit} but target {} resolves to {target_release_unit}",
+                    source.id, target.id
+                )));
+            }
+            if let Some(next) = target_candidate {
+                validate_projection_target(source, release_unit, next, candidates)
+            } else {
+                Ok(())
+            }
+        }
+        Some(CandidateResolution::Excluded) | None => Err(Error::Validation(format!(
+            "discovery candidate {} projects onto target {} without an independent or configured resolution",
+            source.id, target.id
+        ))),
     }
 }
 
@@ -692,6 +1206,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         source_kind: "changesets".to_owned(),
         source_fingerprint,
         inferred_config: discovery.config,
+        discovery_candidates: Vec::new(),
         diagnostics,
         converted_intents,
         parity: parity.result,
@@ -1925,7 +2440,11 @@ fn npm_range_satisfies(range: &str, current: &Version, next: &Version) -> Result
 fn load_previous_plan(root: &Path) -> Result<Option<InitPlan>> {
     let path = root.join(INIT_PLAN_PATH);
     match std::fs::read_to_string(&path) {
-        Ok(text) => serde_yaml::from_str(&text).map(Some).map_err(Error::from),
+        Ok(text) => {
+            let plan: InitPlan = serde_yaml::from_str(&text)?;
+            plan.validate()?;
+            Ok(Some(plan))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::io(path, error)),
     }
@@ -2238,6 +2757,69 @@ fn annotate_choice_lines(yaml: &str) -> String {
 mod tests {
     use super::*;
 
+    const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn candidate(path: &str, resolution: Option<CandidateResolution>) -> DiscoveryCandidate {
+        let path = PathBuf::from(path);
+        let evidence = SourceEvidence {
+            path: path.clone(),
+            digest: DIGEST.to_owned(),
+            lines: vec![1],
+        };
+        DiscoveryCandidate {
+            id: DiscoveryCandidate::stable_id("sample-detector", &path).expect("stable id"),
+            detector: "sample-detector".to_owned(),
+            path: path.clone(),
+            evidence: vec![evidence.clone()],
+            native_identity: Some("sample-native-id".to_owned()),
+            raw_version: Some(RawVersionEvidence {
+                value: "raw-version-text".to_owned(),
+                evidence: vec![evidence.clone()],
+            }),
+            projection: Some(CandidateProjectionSuggestion {
+                adapter: Adapter::Npm,
+                path,
+                mode: ProjectionMode::Committed,
+                pointer: None,
+            }),
+            tag: Some(CandidateTagSuggestion {
+                id: "primary".to_owned(),
+                role: TagRole::Primary,
+                template: "{id}@{version}".to_owned(),
+            }),
+            diagnostics: vec![ExtractionDiagnostic {
+                id: "sample-diagnostic".to_owned(),
+                code: "sample-extraction".to_owned(),
+                message: "Sample extraction evidence is incomplete.".to_owned(),
+                evidence: vec![evidence],
+            }],
+            resolution,
+        }
+    }
+
+    fn candidate_plan(candidates: Vec<DiscoveryCandidate>) -> InitPlan {
+        let config = Config::from_yaml(
+            "contract: contract-1\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+        )
+        .expect("candidate test config");
+        InitPlan {
+            schema: INIT_PLAN_SCHEMA.to_owned(),
+            state: InitState::NeedsInput,
+            source_kind: "changesets".to_owned(),
+            source_fingerprint: DIGEST.to_owned(),
+            inferred_config: config,
+            discovery_candidates: candidates,
+            diagnostics: Vec::new(),
+            converted_intents: Vec::new(),
+            parity: ParityResult {
+                status: "equivalent".to_owned(),
+                release_units: Vec::new(),
+            },
+            planned_operations: Vec::new(),
+            post_commit_action: "intentional tag --baseline".to_owned(),
+        }
+    }
+
     #[test]
     fn recognizes_supported_manifests() {
         assert_eq!(adapter_for(Path::new("package.json")), Some(Adapter::Npm));
@@ -2254,5 +2836,169 @@ mod tests {
         let rendered = annotate_choice_lines(yaml);
         assert!(rendered.contains("- suspended # configured, but releases are blocked"));
         assert!(rendered.contains("- excluded # outside Intentional's release-unit inventory"));
+    }
+
+    #[test]
+    fn candidate_identity_and_detector_results_are_stable() {
+        let first = candidate(
+            "examples/first.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "sample-unit".to_owned(),
+            }),
+        );
+        let second = candidate("examples/second.json", Some(CandidateResolution::Excluded));
+        assert_eq!(
+            first.id,
+            DiscoveryCandidate::stable_id("sample-detector", Path::new("examples/first.json"))
+                .expect("same identity")
+        );
+        assert_ne!(first.id, second.id);
+        assert_ne!(
+            first.id,
+            DiscoveryCandidate::stable_id("other-detector", Path::new("examples/first.json"))
+                .expect("different detector")
+        );
+
+        let result = DetectorResult {
+            detector: "sample-detector".to_owned(),
+            candidates: vec![second.clone(), first.clone()],
+        };
+        let ordered = result.into_candidates().expect("detector result valid");
+        assert!(ordered[0].path < ordered[1].path);
+
+        let yaml = candidate_plan(vec![first, second])
+            .to_yaml()
+            .expect("candidate plan serializes");
+        assert!(yaml.contains("kind: independent"));
+        assert!(yaml.contains("kind: excluded"));
+        assert!(yaml.contains("raw-version:"));
+        assert!(yaml.contains("diagnostics:"));
+    }
+
+    #[test]
+    fn published_init_schema_carries_candidate_resolution_variants() {
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../schemas/init-plan.yml"))
+                .expect("initialization-plan schema parses");
+        assert!(schema["required"]
+            .as_sequence()
+            .expect("required plan fields")
+            .iter()
+            .any(|field| field.as_str() == Some("discovery-candidates")));
+        let variants = schema["$defs"]["candidate-resolution"]["oneOf"]
+            .as_sequence()
+            .expect("candidate resolution variants");
+        assert_eq!(variants.len(), 3);
+        let kinds = variants
+            .iter()
+            .map(|variant| {
+                variant["properties"]["kind"]["const"]
+                    .as_str()
+                    .expect("resolution kind")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            kinds,
+            BTreeSet::from(["excluded", "independent", "projection"])
+        );
+    }
+
+    #[test]
+    fn accepts_configured_and_same_plan_projection_targets() {
+        let configured = candidate(
+            "examples/configured.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        let independent = candidate(
+            "examples/independent.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "planned".to_owned(),
+            }),
+        );
+        let projection = candidate(
+            "examples/projection.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "planned".to_owned(),
+                target_candidate: Some(independent.id.clone()),
+            }),
+        );
+        candidate_plan(vec![configured, independent, projection])
+            .validate()
+            .expect("both projection target kinds accepted");
+    }
+
+    #[test]
+    fn rejects_duplicate_creators_and_absent_projection_targets() {
+        let first = candidate(
+            "examples/first.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "duplicate".to_owned(),
+            }),
+        );
+        let second = candidate(
+            "examples/second.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "duplicate".to_owned(),
+            }),
+        );
+        assert!(candidate_plan(vec![first, second])
+            .validate()
+            .expect_err("duplicate creators rejected")
+            .to_string()
+            .contains("duplicate creator"));
+
+        let absent = candidate(
+            "examples/absent.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "missing".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        assert!(candidate_plan(vec![absent])
+            .validate()
+            .expect_err("absent configured target rejected")
+            .to_string()
+            .contains("absent configured release unit"));
+    }
+
+    #[test]
+    fn rejects_projection_cycles_and_release_unit_mismatches() {
+        let mut first = candidate("examples/first.json", None);
+        let mut second = candidate("examples/second.json", None);
+        first.resolution = Some(CandidateResolution::Projection {
+            release_unit: "planned".to_owned(),
+            target_candidate: Some(second.id.clone()),
+        });
+        second.resolution = Some(CandidateResolution::Projection {
+            release_unit: "planned".to_owned(),
+            target_candidate: Some(first.id.clone()),
+        });
+        assert!(candidate_plan(vec![first, second])
+            .validate()
+            .expect_err("candidate cycle rejected")
+            .to_string()
+            .contains("projection cycle"));
+
+        let independent = candidate(
+            "examples/independent.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "planned".to_owned(),
+            }),
+        );
+        let mismatched = candidate(
+            "examples/mismatched.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "other".to_owned(),
+                target_candidate: Some(independent.id.clone()),
+            }),
+        );
+        assert!(candidate_plan(vec![independent, mismatched])
+            .validate()
+            .expect_err("mismatched target rejected")
+            .to_string()
+            .contains("target"));
     }
 }

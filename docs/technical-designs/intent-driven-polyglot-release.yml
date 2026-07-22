@@ -176,7 +176,11 @@ proposed-design:
     manifest and workspace file used as evidence, recognizes existing
     Intentional or Changesets authority, and locates executable Changesets
     references in workflows, package scripts, dependency declarations,
-    lockfiles, release scripts, and tests.
+    lockfiles, release scripts, and tests. Every detector returns the same
+    artifact-neutral candidate contract: stable detector/path identity,
+    evidence digests, optional native identity and raw version evidence,
+    conditional projection and tag suggestions, and narrow extraction
+    diagnostics. Detector evidence does not infer publication.
   initialization-plan: |-
     Init writes canonical config only when the complete configuration is
     proven. Otherwise it writes one transient `.intentional/init-plan.yml`.
@@ -188,6 +192,13 @@ proposed-design:
     validation. Stable diagnostic codes identify conditions, while diagnostic
     ids combine the code with the affected release unit, tag, or repository
     location so agents can reconcile reruns.
+
+    Discovery candidates resolve as independent, projection, or excluded.
+    Independent and projection choices name the final release-unit id. A
+    projection either targets an existing configured release unit or follows a
+    candidate in the same plan to an independent creator. Validation rejects
+    duplicate creators, absent targets, release-unit disagreement, and
+    projection cycles before configuration is written.
 
     YAML choices are compact scalar values with one inline comment explaining
     each value, followed by recommended and resolution fields. Dry-run emits
@@ -230,6 +241,10 @@ proposed-design:
     recommended because it preserves the identity and blocks release until the
     repository owner resolves its contract. Package privacy is separate from
     release-unit disposition and does not imply exclusion or suspension.
+    Applied discovery choices leave generic detector/path receipts in config.
+    Managed receipts retain their release-unit relationship; excluded receipts
+    bind an exact path identity to its evidence digest, so changed evidence is
+    presented for resolution again. Receipt paths are literal and never globs.
   repository-integration-resolutions: >-
     Changesets references outside .changeset are repository integrations, not
     state owned by Intentional. The initialization plan reports each reference

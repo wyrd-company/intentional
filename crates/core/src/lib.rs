@@ -22,13 +22,15 @@ pub mod version;
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
-    Config, Projection, ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
-    CURRENT_CONTRACT,
+    Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection,
+    ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
 pub use init::{
-    discover_config, initialize, ConvertedIntent, InitDiagnostic, InitPlan, InitResult, InitState,
-    ParityReleaseUnit, ParityResult, SourceEvidence, INIT_PLAN_PATH,
+    discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,
+    CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate, ExtractionDiagnostic,
+    InitDiagnostic, InitPlan, InitResult, InitState, ParityReleaseUnit, ParityResult,
+    RawVersionEvidence, SourceEvidence, INIT_PLAN_PATH,
 };
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{
