@@ -4,7 +4,9 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{initialize, CandidateResolution, InitPlan, InitState};
+use intentional_core::{
+    initialize, Adapter, CandidateResolution, InitPlan, InitState, ProjectionMode,
+};
 use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
@@ -118,6 +120,12 @@ fn resolve_plan(repo: &TestRepo, resolution: impl Fn(&str) -> CandidateResolutio
     }
     fs::write(&path, plan.to_yaml().expect("resolved initialization plan"))
         .expect("write resolved plan");
+}
+
+fn devcontainer_manifest(id: &str, version: &str) -> String {
+    format!(
+        "{{\n  \"id\": \"{id}\",\n  \"version\": \"{version}\",\n  \"name\": \"Ignored display value\"\n}}\n"
+    )
 }
 
 #[test]
@@ -445,6 +453,241 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             .operations
             .is_empty());
     }
+}
+
+#[test]
+fn devcontainer_detectors_extract_only_identity_and_semver_projection_evidence() {
+    let repo = TestRepo::new();
+    repo.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-feature", "1.2.3-beta.1+build.5"),
+    );
+    repo.write(
+        "devcontainer-template.json",
+        &devcontainer_manifest("sample-template", "2.3.4"),
+    );
+    repo.write("install.sh", "exit 99\n");
+    repo.write("devcontainer.json", "not json\n");
+    repo.commit("add detector fixtures");
+
+    let first = initialize(&repo.root, false, false)
+        .expect("Dev Container candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    let second = initialize(&repo.root, false, false)
+        .expect("repeatable candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    assert_eq!(first, second);
+    assert_eq!(first.discovery_candidates.len(), 2);
+
+    for (detector, identity, version, path) in [
+        (
+            "devcontainer-feature",
+            "sample-feature",
+            "1.2.3-beta.1+build.5",
+            "devcontainer-feature.json",
+        ),
+        (
+            "devcontainer-template",
+            "sample-template",
+            "2.3.4",
+            "devcontainer-template.json",
+        ),
+    ] {
+        let candidate = first
+            .discovery_candidates
+            .iter()
+            .find(|candidate| candidate.detector == detector)
+            .expect("detector candidate");
+        assert_eq!(candidate.path, Path::new(path));
+        assert_eq!(candidate.native_identity.as_deref(), Some(identity));
+        assert_eq!(
+            candidate.raw_version.as_ref().map(|raw| raw.value.as_str()),
+            Some(version)
+        );
+        assert_eq!(candidate.evidence.len(), 1);
+        assert_eq!(
+            candidate.raw_version.as_ref().expect("version").evidence,
+            candidate.evidence
+        );
+        let projection = candidate.projection.as_ref().expect("projection");
+        assert_eq!(projection.adapter, Adapter::Json);
+        assert_eq!(projection.path, Path::new(path));
+        assert_eq!(projection.mode, ProjectionMode::Committed);
+        assert_eq!(projection.pointer.as_deref(), Some("/version"));
+        assert!(candidate.diagnostics.is_empty());
+    }
+}
+
+#[test]
+fn devcontainer_detectors_report_narrow_extraction_diagnostics() {
+    let repo = TestRepo::new();
+    repo.write("devcontainer-feature.json", "{ unreadable json\n");
+    repo.write(
+        "devcontainer-template.json",
+        "{\n  \"id\": 42,\n  \"version\": \"release-2\",\n  \"unexpected\": false\n}\n",
+    );
+    repo.commit("add extraction fixtures");
+
+    let plan = initialize(&repo.root, false, false)
+        .expect("diagnostic candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    let feature = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "devcontainer-feature")
+        .expect("feature candidate");
+    assert!(feature.native_identity.is_none());
+    assert!(feature.raw_version.is_none());
+    assert!(feature.projection.is_none());
+    assert!(feature.tag.is_none());
+    assert_eq!(
+        feature
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["devcontainer-json-unreadable"]
+    );
+
+    let template = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "devcontainer-template")
+        .expect("template candidate");
+    assert!(template.native_identity.is_none());
+    assert_eq!(
+        template.raw_version.as_ref().map(|raw| raw.value.as_str()),
+        Some("release-2")
+    );
+    assert!(template.projection.is_none());
+    assert_eq!(
+        template
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "devcontainer-id-unreadable",
+            "devcontainer-version-not-semver"
+        ]
+    );
+    assert!(template.diagnostics.iter().all(|diagnostic| {
+        diagnostic.evidence == template.evidence && !diagnostic.message.contains("overall artifact")
+    }));
+}
+
+#[test]
+fn devcontainer_candidates_support_every_resolution_flow() {
+    let independent = TestRepo::new();
+    independent.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-independent", "1.0.0"),
+    );
+    independent.commit("add independent fixture");
+    independent.cli().arg("init").assert().code(2);
+    resolve_plan(&independent, |_| CandidateResolution::Independent {
+        release_unit: "sample-independent".to_owned(),
+    });
+    independent.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&independent.root).expect("independent config");
+    let projection = &config.release_units["sample-independent"].projections[0];
+    assert_eq!(projection.adapter, Adapter::Json);
+    assert_eq!(projection.file, Path::new("devcontainer-feature.json"));
+    assert_eq!(projection.pointer.as_deref(), Some("/version"));
+
+    let same_plan = TestRepo::new();
+    same_plan.write("package.json", &npm_manifest("1.0.0"));
+    same_plan.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-feature", "1.0.0"),
+    );
+    same_plan.commit("add same-plan fixtures");
+    same_plan.cli().arg("init").assert().code(2);
+    let plan_path = same_plan.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(&plan_path).expect("same-plan initialization plan"),
+    )
+    .expect("valid same-plan initialization plan");
+    let creator = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "npm-package")
+        .expect("npm creator")
+        .id
+        .clone();
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(if candidate.detector == "npm-package" {
+            CandidateResolution::Independent {
+                release_unit: "sample-library".to_owned(),
+            }
+        } else {
+            CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: Some(creator.clone()),
+            }
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved same-plan plan"))
+        .expect("write same-plan plan");
+    same_plan.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&same_plan.root).expect("same-plan config");
+    assert_eq!(config.release_units["sample-library"].projections.len(), 2);
+
+    let configured = TestRepo::new();
+    configured.write("package.json", &npm_manifest("1.0.0"));
+    configured.write(
+        "devcontainer-template.json",
+        &devcontainer_manifest("sample-template", "1.0.0"),
+    );
+    configured.write(
+        ".intentional/config.yml",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n",
+    );
+    configured.commit("add configured projection fixture");
+    configured.cli().arg("init").assert().code(2);
+    resolve_plan(&configured, |_| CandidateResolution::Projection {
+        release_unit: "sample-library".to_owned(),
+        target_candidate: None,
+    });
+    configured.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&configured.root).expect("configured projection");
+    assert!(config.release_units["sample-library"]
+        .projections
+        .iter()
+        .any(|projection| {
+            projection.adapter == Adapter::Json
+                && projection.file == Path::new("devcontainer-template.json")
+                && projection.pointer.as_deref() == Some("/version")
+        }));
+
+    let excluded = TestRepo::new();
+    excluded.write("package.json", &npm_manifest("1.0.0"));
+    excluded.write(
+        "devcontainer-template.json",
+        &devcontainer_manifest("sample-template", "1.0.0"),
+    );
+    excluded.commit("add exclusion fixtures");
+    excluded.cli().arg("init").assert().code(2);
+    resolve_plan(&excluded, |identity| {
+        if identity == "sample-template" {
+            CandidateResolution::Excluded
+        } else {
+            CandidateResolution::Independent {
+                release_unit: identity.to_owned(),
+            }
+        }
+    });
+    excluded.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&excluded.root).expect("exclusion config");
+    assert_eq!(config.discovery.excluded_paths.len(), 1);
+    assert_eq!(
+        config.discovery.excluded_paths[0].detector,
+        "devcontainer-template"
+    );
+    assert!(!config.release_units.contains_key("sample-template"));
 }
 
 #[test]

@@ -176,6 +176,60 @@ fn resolve_discovery_candidates(plan: &mut InitPlan) {
 }
 
 #[test]
+fn changesets_resolution_materializes_a_devcontainer_projection() {
+    let repository = Repository::new();
+    repository.write("pnpm-workspace.yaml", "packages:\n  - components/*\n");
+    repository.write(
+        "components/library/package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "components/library/devcontainer-feature.json",
+        "{\n  \"id\": \"sample-feature\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        "{\n  \"changelog\": false,\n  \"commit\": false,\n  \"fixed\": [],\n  \"linked\": [],\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"updateInternalDependencies\": \"patch\",\n  \"ignore\": []\n}\n",
+    );
+    repository.write(
+        ".changeset/sample-change.md",
+        "---\n\"sample-library\": patch\n---\n\nCorrect a user-visible defect.\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "add projection fixture"],
+    );
+
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    assert_eq!(plan.discovery_candidates.len(), 2);
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(CandidateResolution::Projection {
+            release_unit: "sample-library".to_owned(),
+            target_candidate: None,
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolved plan");
+
+    repository.cli().arg("init").assert().success();
+    let ready: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
+            .expect("valid ready plan");
+    assert_eq!(ready.state, InitState::Ready);
+    assert!(ready.inferred_config.release_units["sample-library"]
+        .projections
+        .iter()
+        .any(|projection| {
+            projection.file == Path::new("devcontainer-feature.json")
+                && projection.pointer.as_deref() == Some("/version")
+        }));
+}
+
+#[test]
 fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     let repository = Repository::new();
     repository.write(

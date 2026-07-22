@@ -10,10 +10,11 @@ intent files determine what changes, annotated Git tags record what was
 released, and manifests are format-preserving projections of that state.
 
 The tool supports npm, Cargo, Pub, PEP 621 Python projects, MSBuild projects,
-Go modules, and arbitrary JSON, TOML, and YAML version fields. It writes release
-state in the working tree and creates annotated tags. The surrounding harness
-owns commits, pushes, publication, registry observation, and forge operations.
-Generated tag templates do not prefix versions with `v`.
+Go modules, Dev Container Features and Templates, and arbitrary JSON, TOML,
+and YAML version fields. It writes release state in the working tree and
+creates annotated tags. The surrounding harness owns commits, pushes,
+publication, registry observation, and forge operations. Generated tag
+templates do not prefix versions with `v`.
 
 ## Install
 
@@ -49,10 +50,11 @@ modes honor Git ignore rules and always skip version-control metadata,
 Intentional state, and ecosystem caches; ordinary names such as `build`,
 `dist`, `bin`, and `vendor` are scanned unless the repository ignores them.
 
-Every newly discovered npm, Cargo, Go, Python, MSBuild, or Dart manifest first
-appears in `.intentional/init-plan.yml` as an unresolved candidate. Choose
-`independent`, `projection`, or `excluded`, then rerun `intentional init` to
-write configuration only after the complete candidate graph validates. New
+Every newly discovered npm, Cargo, Go, Python, MSBuild, Dart, Dev Container
+Feature, or Dev Container Template manifest first appears in
+`.intentional/init-plan.yml` as an unresolved candidate. Choose `independent`,
+`projection`, or `excluded`, then rerun `intentional init` to write
+configuration only after the complete candidate graph validates. New
 configurations use the `compatibility` pre-1.0 bump mapping.
 
 ```yaml
@@ -125,6 +127,15 @@ path. File digests, native identity, and raw version text remain initialization
 evidence. Projection and tag suggestions appear only when extraction supplies
 the fields they require. Extraction diagnostics report unreadable or missing
 fields but do not claim that an artifact is publishable.
+
+The `devcontainer-feature.json` and `devcontainer-template.json` detectors are
+distinct. Each reads only the top-level `id` and `version`, suggests the `id`
+as native identity, and exposes a committed JSON projection at `/version` when
+the version is Semantic Versioning 2.0.0. Missing, unreadable, or unsupported
+identity/version evidence produces an extraction diagnostic. These detectors
+do not inspect companion files such as `install.sh` or `devcontainer.json`, nor
+do they inspect workflows, OCI registries, publication state, or overall
+artifact correctness.
 
 An initialization-plan candidate has this shape (shown as an excerpt):
 

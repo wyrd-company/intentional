@@ -39,6 +39,8 @@ pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/init-plan.ym
 const CHANGESETS_CONFIG: &str = ".changeset/config.json";
 const TRANSACTION_PATH: &str = ".intentional/.takeover-transaction";
 const TRANSACTION_STATE_PATH: &str = ".intentional/.takeover-state";
+const DEVCONTAINER_FEATURE_MANIFEST: &str = "devcontainer-feature.json";
+const DEVCONTAINER_TEMPLATE_MANIFEST: &str = "devcontainer-template.json";
 
 /// Process outcome for initialization.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1143,6 +1145,13 @@ fn apply_candidate_resolutions(
                 })?;
                 if candidate.projection.is_some() {
                     let projection = candidate_projection(candidate, &unit.path)?;
+                    if candidate.detector == "dart-package" {
+                        eprintln!(
+                            "DEBUG candidate={} projection={projection:?} existing={:?}",
+                            candidate.path.display(),
+                            unit.projections
+                        );
+                    }
                     if !unit.projections.iter().any(|existing| {
                         existing.file == projection.file && existing.pointer == projection.pointer
                     }) {
@@ -1228,17 +1237,21 @@ fn candidate_projection(candidate: &DiscoveryCandidate, unit_path: &Path) -> Res
             candidate.id
         ))
     })?;
-    let file = suggestion
-        .path
-        .strip_prefix(unit_path)
-        .map_err(|_| {
-            Error::Validation(format!(
-                "candidate projection {} is outside release-unit path {}",
-                suggestion.path.display(),
-                unit_path.display()
-            ))
-        })?
-        .to_owned();
+    let file = if unit_path == Path::new(".") {
+        suggestion.path.clone()
+    } else {
+        suggestion
+            .path
+            .strip_prefix(unit_path)
+            .map_err(|_| {
+                Error::Validation(format!(
+                    "candidate projection {} is outside release-unit path {}",
+                    suggestion.path.display(),
+                    unit_path.display()
+                ))
+            })?
+            .to_owned()
+    };
     Ok(Projection {
         adapter: suggestion.adapter,
         file,
@@ -1256,11 +1269,19 @@ fn apply_changesets_candidate_receipts(
         match &candidate.resolution {
             None => {}
             Some(CandidateResolution::Projection { release_unit, .. }) => {
-                if !config.release_units.contains_key(release_unit) {
-                    return Err(Error::Validation(format!(
+                let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
+                    Error::Validation(format!(
                         "Changesets discovery candidate {} projects onto absent release unit {release_unit}",
                         candidate.id
-                    )));
+                    ))
+                })?;
+                if is_devcontainer_detector(&candidate.detector) && candidate.projection.is_some() {
+                    let projection = candidate_projection(candidate, &unit.path)?;
+                    if !unit.projections.iter().any(|existing| {
+                        existing.file == projection.file && existing.pointer == projection.pointer
+                    }) {
+                        unit.projections.push(projection);
+                    }
                 }
                 config.discovery.managed_paths.push(ManagedPathReceipt {
                     detector: candidate.detector.clone(),
@@ -1751,6 +1772,11 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
         ..Discovery::default()
     };
     for path in manifest_paths {
+        if let Some(candidate) = devcontainer_candidate(root, &path)? {
+            discovery.evidence.insert(candidate.path.clone());
+            discovery.candidates.push(candidate);
+            continue;
+        }
         let Some(adapter) = adapter_for(&path) else {
             continue;
         };
@@ -1982,6 +2008,8 @@ fn add_manifests_in_directory(directory: &Path, paths: &mut BTreeSet<PathBuf>) -
         "pubspec.yaml",
         "pyproject.toml",
         "go.mod",
+        DEVCONTAINER_FEATURE_MANIFEST,
+        DEVCONTAINER_TEMPLATE_MANIFEST,
     ] {
         let path = directory.join(name);
         if path.is_file() {
@@ -2005,7 +2033,7 @@ fn all_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
         .into_iter()
         .filter_entry(|entry| !hard_excluded(root, entry.path()))
         .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_file() && adapter_for(entry.path()).is_some())
+        .filter(|entry| entry.file_type().is_file() && is_discoverable_manifest(entry.path()))
         .map(|entry| entry.into_path())
         .collect();
     remove_git_ignored(root, &mut paths)?;
@@ -2106,6 +2134,150 @@ fn detector_for(adapter: Adapter) -> &'static str {
         Adapter::Json | Adapter::Toml | Adapter::Yaml => {
             unreachable!("generic adapters are not discovered")
         }
+    }
+}
+
+fn devcontainer_detector_for(path: &Path) -> Option<&'static str> {
+    match path.file_name()?.to_str()? {
+        DEVCONTAINER_FEATURE_MANIFEST => Some("devcontainer-feature"),
+        DEVCONTAINER_TEMPLATE_MANIFEST => Some("devcontainer-template"),
+        _ => None,
+    }
+}
+
+fn is_devcontainer_detector(detector: &str) -> bool {
+    matches!(detector, "devcontainer-feature" | "devcontainer-template")
+}
+
+fn is_discoverable_manifest(path: &Path) -> bool {
+    adapter_for(path).is_some() || devcontainer_detector_for(path).is_some()
+}
+
+fn devcontainer_candidate(root: &Path, path: &Path) -> Result<Option<DiscoveryCandidate>> {
+    let Some(detector) = devcontainer_detector_for(path) else {
+        return Ok(None);
+    };
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|error| Error::Validation(format!("manifest is outside workspace: {error}")))?
+        .to_owned();
+    let bytes = std::fs::read(path).map_err(|error| Error::io(path, error))?;
+    let source = SourceEvidence {
+        path: relative.clone(),
+        digest: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        lines: Vec::new(),
+    };
+    let mut diagnostics = Vec::new();
+    let value = match std::str::from_utf8(&bytes) {
+        Ok(text) => serde_json::from_str::<JsonValue>(text).map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
+    let (native_identity, raw_version, projection, tag) = match value {
+        Ok(value) => {
+            let native_identity = non_empty_json_string(&value["id"]);
+            if native_identity.is_none() {
+                diagnostics.push(extraction_diagnostic(
+                    "identity-extraction",
+                    "devcontainer-id-unreadable",
+                    format!(
+                        "{} has no non-empty string id; the detector inspects only id for identity.",
+                        relative.display()
+                    ),
+                    &source,
+                ));
+            }
+
+            let version = non_empty_json_string(&value["version"]);
+            if version.is_none() {
+                diagnostics.push(extraction_diagnostic(
+                    "version-extraction",
+                    "devcontainer-version-unreadable",
+                    format!(
+                        "{} has no non-empty string version; the detector inspects only version for version evidence.",
+                        relative.display()
+                    ),
+                    &source,
+                ));
+            }
+            let valid_version = version.as_deref().is_some_and(|version| {
+                if let Err(error) = Version::parse(version) {
+                    diagnostics.push(extraction_diagnostic(
+                        "version-semver",
+                        "devcontainer-version-not-semver",
+                        format!(
+                            "{} version {version:?} is not Semantic Versioning 2.0.0: {error}.",
+                            relative.display()
+                        ),
+                        &source,
+                    ));
+                    false
+                } else {
+                    true
+                }
+            });
+            let raw_version = version.map(|value| RawVersionEvidence {
+                value,
+                evidence: vec![source.clone()],
+            });
+            let projection = valid_version.then(|| CandidateProjectionSuggestion {
+                adapter: Adapter::Json,
+                path: relative.clone(),
+                mode: ProjectionMode::Committed,
+                pointer: Some("/version".to_owned()),
+            });
+            let tag = native_identity.as_ref().map(|_| CandidateTagSuggestion {
+                id: "primary".to_owned(),
+                role: TagRole::Primary,
+                template: "{id}@{version}".to_owned(),
+            });
+            (native_identity, raw_version, projection, tag)
+        }
+        Err(error) => {
+            diagnostics.push(extraction_diagnostic(
+                "manifest-extraction",
+                "devcontainer-json-unreadable",
+                format!(
+                    "{} could not be read as JSON for id and version extraction: {error}.",
+                    relative.display()
+                ),
+                &source,
+            ));
+            (None, None, None, None)
+        }
+    };
+
+    Ok(Some(DiscoveryCandidate {
+        id: DiscoveryCandidate::stable_id(detector, &relative)?,
+        detector: detector.to_owned(),
+        path: relative,
+        evidence: vec![source],
+        native_identity,
+        raw_version,
+        projection,
+        tag,
+        diagnostics,
+        resolution: None,
+    }))
+}
+
+fn non_empty_json_string(value: &JsonValue) -> Option<String> {
+    value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn extraction_diagnostic(
+    id: &str,
+    code: &str,
+    message: String,
+    evidence: &SourceEvidence,
+) -> ExtractionDiagnostic {
+    ExtractionDiagnostic {
+        id: id.to_owned(),
+        code: code.to_owned(),
+        message,
+        evidence: vec![evidence.clone()],
     }
 }
 
