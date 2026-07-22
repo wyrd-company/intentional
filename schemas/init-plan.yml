@@ -25,12 +25,14 @@ properties:
   state:
     enum: [ needs-input, ready ]
   source-kind:
-    const: changesets
+    enum: [ workspace, intentional, changesets ]
   source-fingerprint:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
   inferred-config:
-    $ref: config.yml
+    oneOf:
+      - $ref: config.yml
+      - $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/empty-inferred-config"
   discovery-candidates:
     type: array
     items:
@@ -78,8 +80,30 @@ properties:
     type: array
     items: { type: string }
   post-commit-action:
-    const: intentional tag --baseline
+    enum: [ "", intentional tag --baseline ]
 $defs:
+  empty-inferred-config:
+    type: object
+    additionalProperties: false
+    required: [ contract, release-units ]
+    properties:
+      $schema:
+        const: https://intentional.foo/schemas/config.yml
+      contract:
+        const: contract-1
+      settings:
+        type: object
+        additionalProperties: false
+        properties:
+          internal-dependency-bump:
+            enum: [ major, minor, patch ]
+            default: patch
+          pre-1-0-bump-mapping:
+            enum: [ component, compatibility ]
+            default: compatibility
+      release-units:
+        type: object
+        maxProperties: 0
   detector-id:
     type: string
     pattern: "^[a-z0-9][a-z0-9._-]*$"

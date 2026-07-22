@@ -4,7 +4,7 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{initialize, InitPlan, InitState};
+use intentional_core::{initialize, CandidateResolution, InitPlan, InitState};
 use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
@@ -132,11 +132,47 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
             fs::write(path, edited).expect("remove Changesets integration");
         }
     }
+    resolve_discovery_candidates(plan);
     repository.write(
         ".intentional/init-plan.yml",
         &plan.to_yaml().expect("resolved init plan"),
     );
     repository
+}
+
+fn resolve_discovery_candidates(plan: &mut InitPlan) {
+    for candidate in &mut plan.discovery_candidates {
+        let disposition_excluded = candidate.native_identity.as_ref().is_some_and(|identity| {
+            plan.diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    diagnostic.code.as_str(),
+                    "ignored-release-unit-disposition" | "unmapped-release-unit-disposition"
+                ) && diagnostic.id.ends_with(&format!(":{identity}"))
+                    && diagnostic.resolution.as_deref() == Some("excluded")
+            })
+        });
+        if disposition_excluded {
+            candidate.resolution = Some(CandidateResolution::Excluded);
+            continue;
+        }
+        let release_unit = plan
+            .inferred_config
+            .release_units
+            .iter()
+            .find_map(|(id, unit)| {
+                unit.projections
+                    .iter()
+                    .any(|projection| unit.path.join(&projection.file) == candidate.path)
+                    .then(|| id.clone())
+            });
+        candidate.resolution = Some(match release_unit {
+            Some(release_unit) => CandidateResolution::Projection {
+                release_unit,
+                target_candidate: None,
+            },
+            None => CandidateResolution::Excluded,
+        });
+    }
 }
 
 #[test]
@@ -207,6 +243,7 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
             diagnostic.resolution = Some("removed".to_owned());
         }
     }
+    resolve_discovery_candidates(&mut plan);
     fs::write(&plan_path, plan.to_yaml().expect("render edited plan")).unwrap();
     repository.write(
         "package.json",
@@ -274,10 +311,9 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     );
     repository.write(".intentional/.takeover-state", "committed");
     let completed = initialize(&repository.root, false, false)
-        .expect_err("completed takeover remains initialized");
-    assert!(completed
-        .to_string()
-        .contains("configuration already exists"));
+        .expect("completed takeover remains repeatably initialized");
+    assert_eq!(completed.state, InitState::Success);
+    assert!(completed.operations.is_empty());
     assert!(repository.root.join(".intentional/config.yml").is_file());
     assert!(!repository.root.join(".changeset").exists());
     assert!(!repository
@@ -343,7 +379,7 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
         .args(["init", "--dry-run", "--json"])
         .output()
         .expect("workspace parity plan");
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(2));
     let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
     assert_eq!(plan.parity.status, "equivalent");
     assert!(plan
@@ -468,7 +504,7 @@ fn changesets_minor_internal_dependency_policy_is_preserved() {
         .args(["init", "--dry-run", "--json"])
         .output()
         .expect("minor dependency policy plan");
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(2));
     let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
     assert_eq!(plan.parity.status, "equivalent");
     let dependent = plan
@@ -630,7 +666,7 @@ fn release_profile_version_sources_remap_pending_intent_identity() {
         .args(["init", "--dry-run", "--json"])
         .output()
         .expect("identity-remapped plan");
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(2));
     let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
     assert_eq!(plan.parity.status, "equivalent");
     assert_eq!(
@@ -826,7 +862,13 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
             .arg("init")
             .output()
             .expect("reconcile edited evidence");
-        assert_eq!(first_reconciliation.status.code(), Some(2));
+        assert_eq!(
+            first_reconciliation.status.code(),
+            Some(2),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&first_reconciliation.stdout),
+            String::from_utf8_lossy(&first_reconciliation.stderr)
+        );
         let mut reconciled: InitPlan =
             serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap())
                 .expect("reconciled plan");

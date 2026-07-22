@@ -7,7 +7,8 @@
 
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
-    Config, Projection, ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
+    Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
+    WorkspaceTagConfig, CONFIG_PATH,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -25,6 +26,7 @@ use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use walkdir::{DirEntry, WalkDir};
 
 /// Transient initialization-plan location.
@@ -531,7 +533,15 @@ pub struct InitPlan {
 impl InitPlan {
     /// Validate candidate evidence and its projection resolution graph.
     pub fn validate(&self) -> Result<()> {
-        self.inferred_config.validate()?;
+        if self.inferred_config.release_units.is_empty() {
+            if self.state != InitState::NeedsInput || self.discovery_candidates.is_empty() {
+                return Err(Error::Validation(
+                    "an empty inferred config requires unresolved discovery candidates".to_owned(),
+                ));
+            }
+        } else {
+            self.inferred_config.validate()?;
+        }
         let mut candidates = BTreeMap::new();
         for candidate in &self.discovery_candidates {
             candidate.validate()?;
@@ -737,16 +747,16 @@ impl InitResult {
         }
         for (relative, contents) in &self.writes {
             let path = root.join(relative);
-            if path.exists() && relative == Path::new(CONFIG_PATH) {
-                return Err(Error::Validation(format!(
-                    "configuration already exists at {}",
-                    relative.display()
-                )));
-            }
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
             }
             std::fs::write(&path, contents).map_err(|error| Error::io(&path, error))?;
+        }
+        for relative in &self.deletes {
+            let path = root.join(relative);
+            if path.is_file() {
+                std::fs::remove_file(&path).map_err(|error| Error::io(&path, error))?;
+            }
         }
         if self.state == InitState::Success {
             std::fs::create_dir_all(root.join(crate::intent::INTENTS_PATH))
@@ -774,11 +784,6 @@ pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitRe
         .map_err(|error| Error::io(root, error))?;
     let root = root.as_path();
     recover_interrupted_takeover(root)?;
-    if root.join(CONFIG_PATH).exists() && !root.join(CHANGESETS_CONFIG).exists() {
-        return Err(Error::Validation(format!(
-            "configuration already exists at {CONFIG_PATH}"
-        )));
-    }
     if root.join(CHANGESETS_CONFIG).exists() {
         return changesets_plan(root, scan_all, take_over);
     }
@@ -787,22 +792,7 @@ pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitRe
             "--take-over requires an existing .changeset/config.json".to_owned(),
         ));
     }
-    let discovery = discover(root, scan_all, &BTreeSet::new())?;
-    let contents = discovery.config.to_yaml()?;
-    Ok(InitResult {
-        state: InitState::Success,
-        path: PathBuf::from(CONFIG_PATH),
-        operations: vec![
-            format!("write {CONFIG_PATH}"),
-            format!("create {}", crate::intent::INTENTS_PATH),
-        ],
-        contents: contents.clone(),
-        plan: None,
-        writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
-        deletes: Vec::new(),
-        takeover: false,
-        takeover_evidence: None,
-    })
+    ordinary_plan(root, scan_all)
 }
 
 /// Compatibility wrapper for callers performing ordinary initialization.
@@ -818,6 +808,7 @@ struct Discovery {
     workspace_packages: BTreeSet<String>,
     private_packages: BTreeSet<String>,
     npm_dependencies: Vec<NpmDependencyEdge>,
+    candidates: Vec<DiscoveryCandidate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -846,6 +837,391 @@ struct ChangesetsSourceSemantics<'a> {
     preflight_error: Option<String>,
 }
 
+fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
+    let previous = load_previous_plan(root)?;
+    let configured = if root.join(CONFIG_PATH).is_file() {
+        Config::load(root)?
+    } else {
+        Config::default()
+    };
+    let mut discovery = discover(root, scan_all, &BTreeSet::new())?;
+    reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
+    let mut candidates = unresolved_by_receipts(&configured, discovery.candidates);
+
+    if candidates.is_empty() {
+        if configured.release_units.is_empty() {
+            return Err(Error::Validation(
+                "no supported workspace manifests found".to_owned(),
+            ));
+        }
+        let contents = configured.to_yaml()?;
+        return Ok(InitResult {
+            state: InitState::Success,
+            path: PathBuf::from(CONFIG_PATH),
+            operations: Vec::new(),
+            contents,
+            plan: None,
+            writes: Vec::new(),
+            deletes: Vec::new(),
+            takeover: false,
+            takeover_evidence: None,
+        });
+    }
+
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    let all_resolved = candidates
+        .iter()
+        .all(|candidate| candidate.resolution.is_some());
+    if all_resolved {
+        let applied = apply_candidate_resolutions(root, configured, &candidates)?;
+        let contents = applied.to_yaml()?;
+        return Ok(InitResult {
+            state: InitState::Success,
+            path: PathBuf::from(CONFIG_PATH),
+            operations: vec![
+                format!("write {CONFIG_PATH}"),
+                format!("create {}", crate::intent::INTENTS_PATH),
+                format!("delete {INIT_PLAN_PATH}"),
+            ],
+            contents: contents.clone(),
+            plan: None,
+            writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
+            deletes: vec![PathBuf::from(INIT_PLAN_PATH)],
+            takeover: false,
+            takeover_evidence: None,
+        });
+    }
+
+    let evidence_paths = candidates
+        .iter()
+        .flat_map(|candidate| candidate.evidence.iter().map(|item| item.path.clone()))
+        .collect::<BTreeSet<_>>();
+    let plan = InitPlan {
+        schema: INIT_PLAN_SCHEMA.to_owned(),
+        state: InitState::NeedsInput,
+        source_kind: if root.join(CONFIG_PATH).is_file() {
+            "intentional".to_owned()
+        } else {
+            "workspace".to_owned()
+        },
+        source_fingerprint: fingerprint(root, &evidence_paths)?,
+        inferred_config: configured,
+        discovery_candidates: candidates,
+        diagnostics: Vec::new(),
+        converted_intents: Vec::new(),
+        parity: ParityResult {
+            status: "equivalent".to_owned(),
+            release_units: Vec::new(),
+        },
+        planned_operations: vec![
+            format!("write {CONFIG_PATH}"),
+            format!("create {}", crate::intent::INTENTS_PATH),
+            format!("delete {INIT_PLAN_PATH}"),
+        ],
+        post_commit_action: String::new(),
+    };
+    let contents = plan.to_yaml()?;
+    Ok(InitResult {
+        state: InitState::NeedsInput,
+        path: PathBuf::from(INIT_PLAN_PATH),
+        operations: vec![format!("write {INIT_PLAN_PATH}")],
+        contents: contents.clone(),
+        plan: Some(plan),
+        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        deletes: Vec::new(),
+        takeover: false,
+        takeover_evidence: None,
+    })
+}
+
+fn reconcile_candidate_resolutions(
+    candidates: &mut [DiscoveryCandidate],
+    previous: Option<&InitPlan>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let old = previous
+        .discovery_candidates
+        .iter()
+        .map(|candidate| (candidate.id.as_str(), candidate))
+        .collect::<BTreeMap<_, _>>();
+    for candidate in candidates {
+        if let Some(previous) = old.get(candidate.id.as_str()) {
+            if previous.evidence == candidate.evidence
+                && previous.native_identity == candidate.native_identity
+                && previous.projection == candidate.projection
+                && previous.tag == candidate.tag
+            {
+                candidate.resolution = previous.resolution.clone();
+            }
+        }
+    }
+}
+
+fn unresolved_by_receipts(
+    config: &Config,
+    candidates: Vec<DiscoveryCandidate>,
+) -> Vec<DiscoveryCandidate> {
+    let managed = config
+        .discovery
+        .managed_paths
+        .iter()
+        .map(|receipt| (&receipt.detector, &receipt.path))
+        .collect::<BTreeSet<_>>();
+    let excluded = config
+        .discovery
+        .excluded_paths
+        .iter()
+        .map(|receipt| ((&receipt.detector, &receipt.path), &receipt.evidence_digest))
+        .collect::<BTreeMap<_, _>>();
+    candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            if managed.contains(&(&candidate.detector, &candidate.path)) {
+                return None;
+            }
+            if let Some(expected) = excluded.get(&(&candidate.detector, &candidate.path)) {
+                let actual = candidate
+                    .evidence
+                    .iter()
+                    .find(|item| item.path == candidate.path)
+                    .map(|item| &item.digest);
+                if actual == Some(*expected) {
+                    return None;
+                }
+            }
+            Some(candidate)
+        })
+        .collect()
+}
+
+fn apply_candidate_resolutions(
+    root: &Path,
+    mut config: Config,
+    candidates: &[DiscoveryCandidate],
+) -> Result<Config> {
+    let validation_plan = InitPlan {
+        schema: INIT_PLAN_SCHEMA.to_owned(),
+        state: InitState::NeedsInput,
+        source_kind: "workspace".to_owned(),
+        source_fingerprint: format!("sha256:{}", "0".repeat(64)),
+        inferred_config: config.clone(),
+        discovery_candidates: candidates.to_vec(),
+        diagnostics: Vec::new(),
+        converted_intents: Vec::new(),
+        parity: ParityResult {
+            status: "equivalent".to_owned(),
+            release_units: Vec::new(),
+        },
+        planned_operations: Vec::new(),
+        post_commit_action: String::new(),
+    };
+    validation_plan.validate()?;
+
+    for candidate in candidates {
+        let CandidateResolution::Independent { release_unit } = candidate
+            .resolution
+            .as_ref()
+            .expect("all candidate resolutions checked")
+        else {
+            continue;
+        };
+        let projection =
+            candidate_projection(candidate, candidate.path.parent().unwrap_or(Path::new("")))?;
+        let path = candidate
+            .path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let tag = candidate.tag.as_ref().ok_or_else(|| Error::Validation(format!(
+            "discovery candidate {} cannot create an independent release unit without a tag suggestion",
+            candidate.id
+        )))?;
+        config.release_units.insert(
+            release_unit.clone(),
+            ReleaseUnitConfig {
+                path,
+                disposition: ReleaseUnitDisposition::Managed,
+                projections: candidate
+                    .projection
+                    .as_ref()
+                    .map(|_| vec![projection])
+                    .unwrap_or_default(),
+                tags: BTreeMap::from([(
+                    tag.id.clone(),
+                    TagConfig {
+                        role: tag.role,
+                        template: tag.template.clone(),
+                        require_phase: None,
+                        tag_after: Vec::new(),
+                    },
+                )]),
+                depends_on: Vec::new(),
+            },
+        );
+    }
+    for candidate in candidates {
+        match candidate
+            .resolution
+            .as_ref()
+            .expect("all candidate resolutions checked")
+        {
+            CandidateResolution::Independent { release_unit } => {
+                config.discovery.managed_paths.push(ManagedPathReceipt {
+                    detector: candidate.detector.clone(),
+                    path: candidate.path.clone(),
+                    release_unit: release_unit.clone(),
+                });
+            }
+            CandidateResolution::Projection { release_unit, .. } => {
+                let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
+                    Error::Validation(format!(
+                        "discovery candidate {} projects onto absent release unit {release_unit}",
+                        candidate.id
+                    ))
+                })?;
+                if candidate.projection.is_some() {
+                    let projection = candidate_projection(candidate, &unit.path)?;
+                    if !unit.projections.iter().any(|existing| {
+                        existing.file == projection.file && existing.pointer == projection.pointer
+                    }) {
+                        unit.projections.push(projection);
+                    }
+                }
+                config.discovery.managed_paths.push(ManagedPathReceipt {
+                    detector: candidate.detector.clone(),
+                    path: candidate.path.clone(),
+                    release_unit: release_unit.clone(),
+                });
+            }
+            CandidateResolution::Excluded => {
+                let digest = candidate
+                    .evidence
+                    .iter()
+                    .find(|item| item.path == candidate.path)
+                    .expect("candidate path evidence validated")
+                    .digest
+                    .clone();
+                config.discovery.excluded_paths.push(ExcludedPathReceipt {
+                    detector: candidate.detector.clone(),
+                    path: candidate.path.clone(),
+                    evidence_digest: digest,
+                });
+            }
+        }
+    }
+    config
+        .discovery
+        .managed_paths
+        .sort_by(|a, b| (&a.detector, &a.path).cmp(&(&b.detector, &b.path)));
+    config
+        .discovery
+        .excluded_paths
+        .sort_by(|a, b| (&a.detector, &a.path).cmp(&(&b.detector, &b.path)));
+    derive_npm_dependencies(root, &mut config)?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn candidate_projection(candidate: &DiscoveryCandidate, unit_path: &Path) -> Result<Projection> {
+    let suggestion = candidate.projection.as_ref().ok_or_else(|| {
+        Error::Validation(format!(
+            "discovery candidate {} has no projection suggestion",
+            candidate.id
+        ))
+    })?;
+    let file = suggestion
+        .path
+        .strip_prefix(unit_path)
+        .map_err(|_| {
+            Error::Validation(format!(
+                "candidate projection {} is outside release-unit path {}",
+                suggestion.path.display(),
+                unit_path.display()
+            ))
+        })?
+        .to_owned();
+    Ok(Projection {
+        adapter: suggestion.adapter,
+        file,
+        mode: suggestion.mode,
+        pointer: suggestion.pointer.clone(),
+    })
+}
+
+fn apply_changesets_candidate_receipts(
+    config: &mut Config,
+    candidates: &[DiscoveryCandidate],
+) -> Result<()> {
+    let mut removed_release_units = BTreeSet::new();
+    for candidate in candidates {
+        match &candidate.resolution {
+            None => {}
+            Some(CandidateResolution::Projection { release_unit, .. }) => {
+                if !config.release_units.contains_key(release_unit) {
+                    return Err(Error::Validation(format!(
+                        "Changesets discovery candidate {} projects onto absent release unit {release_unit}",
+                        candidate.id
+                    )));
+                }
+                config.discovery.managed_paths.push(ManagedPathReceipt {
+                    detector: candidate.detector.clone(),
+                    path: candidate.path.clone(),
+                    release_unit: release_unit.clone(),
+                });
+            }
+            Some(CandidateResolution::Excluded) => {
+                if let Some(native_identity) = &candidate.native_identity {
+                    if let Some(unit) = config.release_units.get_mut(native_identity) {
+                        unit.projections.retain(|projection| {
+                            unit.path.join(&projection.file) != candidate.path
+                        });
+                        if unit.projections.is_empty() {
+                            removed_release_units.insert(native_identity.clone());
+                        }
+                    }
+                }
+                let digest = candidate
+                    .evidence
+                    .iter()
+                    .find(|item| item.path == candidate.path)
+                    .expect("candidate path evidence validated")
+                    .digest
+                    .clone();
+                config.discovery.excluded_paths.push(ExcludedPathReceipt {
+                    detector: candidate.detector.clone(),
+                    path: candidate.path.clone(),
+                    evidence_digest: digest,
+                });
+            }
+            Some(CandidateResolution::Independent { release_unit }) => {
+                return Err(Error::Validation(format!(
+                    "Changesets already establishes release unit {release_unit}; candidate {} must project onto it or be excluded",
+                    candidate.id
+                )));
+            }
+        }
+    }
+    for release_unit in &removed_release_units {
+        config.release_units.remove(release_unit);
+    }
+    for unit in config.release_units.values_mut() {
+        unit.depends_on
+            .retain(|dependency| !removed_release_units.contains(dependency));
+    }
+    config
+        .discovery
+        .managed_paths
+        .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
+    config
+        .discovery
+        .excluded_paths
+        .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
+    Ok(())
+}
+
 fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
     let changesets_config_path = root.join(CHANGESETS_CONFIG);
@@ -869,6 +1245,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         }
     }
     let mut discovery = discover(root, scan_all, &referenced_names)?;
+    reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
+    apply_changesets_candidate_receipts(&mut discovery.config, &discovery.candidates)?;
     discovery.config.settings.pre_1_0_bump_mapping = Pre1BumpMapping::Component;
     discovery.config.settings.internal_dependency_bump = changesets["updateInternalDependencies"]
         .as_str()
@@ -1170,9 +1548,14 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         });
         diagnostics.sort_by(|left, right| left.id.cmp(&right.id));
     }
-    let unresolved = diagnostics.iter().any(|diagnostic| {
-        !diagnostic.choices.is_empty() && (diagnostic.resolution.is_none() || !diagnostic.verified)
-    });
+    let unresolved = discovery
+        .candidates
+        .iter()
+        .any(|candidate| candidate.resolution.is_none())
+        || diagnostics.iter().any(|diagnostic| {
+            !diagnostic.choices.is_empty()
+                && (diagnostic.resolution.is_none() || !diagnostic.verified)
+        });
     let state = if unresolved || parity.result.status != "equivalent" {
         InitState::NeedsInput
     } else {
@@ -1197,7 +1580,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         source_kind: "changesets".to_owned(),
         source_fingerprint,
         inferred_config: discovery.config,
-        discovery_candidates: Vec::new(),
+        discovery_candidates: discovery.candidates,
         diagnostics,
         converted_intents,
         parity: parity.result,
@@ -1251,12 +1634,12 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
 fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) -> Result<Discovery> {
     let workspace_paths = workspace_manifest_paths(root)?;
     let mut manifest_paths = if scan_all {
-        all_manifest_paths(root)
+        all_manifest_paths(root)?
     } else {
         workspace_paths.clone()
     };
     if !referenced_names.is_empty() {
-        for path in all_manifest_paths(root) {
+        for path in all_manifest_paths(root)? {
             let Some(adapter) = adapter_for(&path) else {
                 continue;
             };
@@ -1279,6 +1662,40 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             continue;
         }
         let (id, version) = manifest_identity(&path, adapter)?;
+        let relative_manifest = path
+            .strip_prefix(root)
+            .map_err(|error| Error::Validation(format!("manifest is outside workspace: {error}")))?
+            .to_owned();
+        let manifest_evidence = evidence(root, &relative_manifest, Vec::new())?;
+        let detector = detector_for(adapter).to_owned();
+        discovery.candidates.push(DiscoveryCandidate {
+            id: DiscoveryCandidate::stable_id(&detector, &relative_manifest)?,
+            detector,
+            path: relative_manifest.clone(),
+            evidence: vec![manifest_evidence.clone()],
+            native_identity: Some(id.clone()),
+            raw_version: version.as_ref().map(|value| RawVersionEvidence {
+                value: value.clone(),
+                evidence: vec![manifest_evidence],
+            }),
+            projection: Some(CandidateProjectionSuggestion {
+                adapter,
+                path: relative_manifest.clone(),
+                mode: if adapter == Adapter::Go {
+                    ProjectionMode::None
+                } else {
+                    ProjectionMode::Committed
+                },
+                pointer: None,
+            }),
+            tag: Some(CandidateTagSuggestion {
+                id: "primary".to_owned(),
+                role: TagRole::Primary,
+                template: "{id}@{version}".to_owned(),
+            }),
+            diagnostics: Vec::new(),
+            resolution: None,
+        });
         let workspace_package = workspace_paths.contains(&path);
         let private_package = adapter == Adapter::Npm && npm_manifest_is_private(&path)?;
         let directory = path.parent().expect("manifest has parent");
@@ -1333,9 +1750,9 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             );
         }
         if let Some(version) = version {
-            discovery
-                .versions
-                .insert(id.clone(), Version::parse(&version)?);
+            if let Ok(version) = Version::parse(&version) {
+                discovery.versions.insert(id.clone(), version);
+            }
         }
         if workspace_package {
             discovery.workspace_packages.insert(id.clone());
@@ -1347,12 +1764,10 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             .evidence
             .insert(path.strip_prefix(root).unwrap_or(&path).to_owned());
     }
-    if discovery.config.release_units.is_empty() {
-        return Err(Error::Validation(
-            "no supported workspace manifests found".to_owned(),
-        ));
-    }
     discovery.npm_dependencies = derive_npm_dependencies(root, &mut discovery.config)?;
+    discovery
+        .candidates
+        .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(discovery)
 }
 
@@ -1418,6 +1833,7 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     for directory in directories {
         add_manifests_in_directory(&directory, &mut paths)?;
     }
+    paths.retain(|path| !git_ignored(root, path));
     Ok(paths)
 }
 
@@ -1487,21 +1903,60 @@ fn add_manifests_in_directory(directory: &Path, paths: &mut BTreeSet<PathBuf>) -
     Ok(())
 }
 
-fn all_manifest_paths(root: &Path) -> BTreeSet<PathBuf> {
-    WalkDir::new(root)
+fn all_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
+    Ok(WalkDir::new(root)
         .into_iter()
         .filter_entry(should_visit)
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file() && adapter_for(entry.path()).is_some())
+        .filter(|entry| !git_ignored(root, entry.path()))
         .map(|entry| entry.into_path())
-        .collect()
+        .collect())
 }
 
 fn should_visit(entry: &DirEntry) -> bool {
-    !matches!(
-        entry.file_name().to_str(),
-        Some(".git" | ".intentional" | "node_modules" | "target")
-    )
+    !entry.file_type().is_dir()
+        || !matches!(
+            entry.file_name().to_str(),
+            Some(
+                ".git"
+                    | ".intentional"
+                    | "node_modules"
+                    | "target"
+                    | ".pnpm-store"
+                    | ".yarn"
+                    | ".npm"
+                    | ".cache"
+                    | ".venv"
+                    | "venv"
+                    | "__pycache__"
+                    | ".dart_tool"
+                    | ".pub-cache"
+            )
+        )
+}
+
+fn git_ignored(root: &Path, path: &Path) -> bool {
+    Command::new("git")
+        .args(["check-ignore", "-q", "--"])
+        .arg(path)
+        .current_dir(root)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn detector_for(adapter: Adapter) -> &'static str {
+    match adapter {
+        Adapter::Npm => "npm-package",
+        Adapter::Cargo => "cargo-package",
+        Adapter::Go => "go-module",
+        Adapter::Python => "python-project",
+        Adapter::Msbuild => "msbuild-project",
+        Adapter::Pub => "dart-package",
+        Adapter::Json | Adapter::Toml | Adapter::Yaml => {
+            unreachable!("generic adapters are not discovered")
+        }
+    }
 }
 
 fn adapter_for(path: &Path) -> Option<Adapter> {

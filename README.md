@@ -43,11 +43,16 @@ intentional init
 Initialization uses package-manager workspace membership and manifest-native
 package names. Repeated directory basenames do not collide because directories
 are not package identities. `--scan-all` explicitly includes supported
-manifests outside the declared workspace.
+manifests outside the declared workspace. Both modes honor Git ignore rules and
+always skip version-control metadata, Intentional state, and ecosystem caches;
+ordinary names such as `build`, `dist`, `bin`, and `vendor` are scanned unless
+the repository ignores them.
 
-An unambiguous repository receives `.intentional/config.yml` and an empty
-`.intentional/intents/` directory. New configurations use the
-`compatibility` pre-1.0 bump mapping.
+Every newly discovered npm, Cargo, Go, Python, MSBuild, or Dart manifest first
+appears in `.intentional/init-plan.yml` as an unresolved candidate. Choose
+`independent`, `projection`, or `excluded`, then rerun `intentional init` to
+write configuration only after the complete candidate graph validates. New
+configurations use the `compatibility` pre-1.0 bump mapping.
 
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
@@ -168,7 +173,9 @@ discovery:
 Managed receipts preserve the chosen release-unit relationship. Excluded
 receipts bind the exact detector/path identity to its evidence digest, so
 changed evidence requires a new resolution rather than silently inheriting an
-old exclusion. Paths are literal workspace-relative paths, not globs.
+old exclusion. Paths are literal workspace-relative paths, not globs. Init
+scans configured repositories too: matching receipts make reruns no-ops, while
+new or changed excluded paths reopen the same candidate workflow.
 
 ## Adopt a Changesets repository
 

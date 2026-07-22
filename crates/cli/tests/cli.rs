@@ -4,6 +4,7 @@
 // ---
 
 use assert_cmd::Command;
+use intentional_core::{initialize, CandidateResolution, InitPlan, InitState};
 use predicates::prelude::*;
 use serde_json::Value;
 use std::fs;
@@ -83,6 +84,42 @@ fn intent(bump: &str, message: &str) -> String {
     format!("---\nsample: {bump}\n---\n\n{message}\n")
 }
 
+fn initialize_independent(repo: &TestRepo) {
+    repo.cli().arg("init").assert().code(2);
+    let path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(CandidateResolution::Independent {
+            release_unit: candidate
+                .native_identity
+                .clone()
+                .expect("fixture candidate identity"),
+        });
+    }
+    fs::write(&path, plan.to_yaml().expect("resolved initialization plan"))
+        .expect("write resolved plan");
+    repo.cli().arg("init").assert().success();
+}
+
+fn resolve_plan(repo: &TestRepo, resolution: impl Fn(&str) -> CandidateResolution) {
+    let path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(resolution(
+            candidate
+                .native_identity
+                .as_deref()
+                .expect("fixture candidate identity"),
+        ));
+    }
+    fs::write(&path, plan.to_yaml().expect("resolved initialization plan"))
+        .expect("write resolved plan");
+}
+
 #[test]
 fn add_exposes_only_the_release_unit_selector() {
     Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
@@ -111,7 +148,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.write("package.json", &npm_manifest("0.0.0"));
     repo.commit("add fixture");
 
-    repo.cli().arg("init").assert().success();
+    initialize_independent(&repo);
     let generated = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
     repo.write(
         ".intentional/config.yml",
@@ -202,13 +239,177 @@ fn init_ignores_cargo_workspace_only_manifests() {
     );
     repo.commit("add fixture");
 
-    repo.cli().arg("init").assert().success();
+    initialize_independent(&repo);
     let config = intentional_core::Config::load(&repo.root).expect("generated config");
     assert_eq!(config.release_units.len(), 1);
     assert_eq!(
         config.release_units["sample-library"].path,
         PathBuf::from("crates/library")
     );
+}
+
+#[test]
+fn scan_all_routes_all_six_ecosystems_through_candidates() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        "components/rust/Cargo.toml",
+        "[package]\nname = \"sample-rust\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    );
+    repo.write(
+        "components/go/go.mod",
+        "module example.invalid/sample-go\n\ngo 1.22\n",
+    );
+    repo.write(
+        "components/python/pyproject.toml",
+        "[project]\nname = \"sample-python\"\nversion = \"1.0.dev1\"\n",
+    );
+    repo.write(
+        "components/dotnet/Sample.csproj",
+        "<Project><PropertyGroup><PackageId>Sample.DotNet</PackageId><Version>1.0.0</Version></PropertyGroup></Project>\n",
+    );
+    repo.write(
+        "components/dart/pubspec.yaml",
+        "name: sample_dart\nversion: 1.0.0\n",
+    );
+    repo.commit("add ecosystem fixtures");
+
+    let result = initialize(&repo.root, true, false).expect("candidate plan");
+    assert_eq!(result.state, InitState::NeedsInput);
+    let plan = result.plan.expect("initialization plan");
+    let detectors = plan
+        .discovery_candidates
+        .iter()
+        .map(|candidate| candidate.detector.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        detectors,
+        std::collections::BTreeSet::from([
+            "cargo-package",
+            "dart-package",
+            "go-module",
+            "msbuild-project",
+            "npm-package",
+            "python-project",
+        ])
+    );
+    assert!(plan
+        .discovery_candidates
+        .iter()
+        .all(|candidate| candidate.resolution.is_none()));
+    assert_eq!(
+        plan.discovery_candidates
+            .iter()
+            .find(|candidate| candidate.detector == "python-project")
+            .and_then(|candidate| candidate.raw_version.as_ref())
+            .map(|version| version.value.as_str()),
+        Some("1.0.dev1")
+    );
+    assert!(!repo.root.join(".intentional/config.yml").exists());
+}
+
+#[test]
+fn configured_repository_without_detectable_manifests_is_a_no_op() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.commit("add configured fixture");
+
+    let result = initialize(&repo.root, false, false).expect("repeatable configured init");
+    assert_eq!(result.state, InitState::Success);
+    assert!(result.operations.is_empty());
+    assert!(result.plan.is_none());
+}
+
+#[test]
+fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        "examples/pyproject.toml",
+        "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
+    );
+    repo.commit("add discovery fixtures");
+
+    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    resolve_plan(&repo, |identity| {
+        if identity == "sample-example" {
+            CandidateResolution::Excluded
+        } else {
+            CandidateResolution::Independent {
+                release_unit: identity.to_owned(),
+            }
+        }
+    });
+    repo.cli().args(["init", "--scan-all"]).assert().success();
+
+    let no_op = initialize(&repo.root, true, false).expect("repeatable no-op");
+    assert_eq!(no_op.state, InitState::Success);
+    assert!(no_op.operations.is_empty());
+    let config = intentional_core::Config::load(&repo.root).expect("reconciled config");
+    assert_eq!(config.discovery.managed_paths.len(), 1);
+    assert_eq!(config.discovery.excluded_paths.len(), 1);
+
+    repo.write(
+        "examples/pyproject.toml",
+        "[project]\nname = \"sample-example\"\nversion = \"1.0.1\"\n",
+    );
+    let changed = initialize(&repo.root, true, false).expect("changed exclusion plan");
+    assert_eq!(changed.state, InitState::NeedsInput);
+    let candidates = changed.plan.expect("changed plan").discovery_candidates;
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(
+        candidates[0].native_identity.as_deref(),
+        Some("sample-example")
+    );
+    assert!(candidates[0].resolution.is_none());
+}
+
+#[test]
+fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".gitignore", "ignored/\n");
+    for (directory, name) in [
+        ("ignored", "ignored-package"),
+        ("node_modules/dependency", "cached-node"),
+        ("target/generated", "cached-rust"),
+        (".venv/lib", "cached-python"),
+        ("build", "sample-build"),
+        ("dist", "sample-dist"),
+        ("bin", "sample-bin"),
+        ("vendor", "sample-vendor"),
+    ] {
+        repo.write(
+            &format!("{directory}/package.json"),
+            &format!("{{\n  \"name\": \"{name}\",\n  \"version\": \"1.0.0\"\n}}\n"),
+        );
+    }
+    repo.commit("add walking fixtures");
+
+    let plan = initialize(&repo.root, true, false)
+        .expect("scan-all plan")
+        .plan
+        .expect("candidate plan");
+    let names = plan
+        .discovery_candidates
+        .iter()
+        .filter_map(|candidate| candidate.native_identity.as_deref())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(names.is_superset(&std::collections::BTreeSet::from([
+        "sample-library",
+        "sample-build",
+        "sample-dist",
+        "sample-bin",
+        "sample-vendor",
+    ])));
+    for excluded in [
+        "ignored-package",
+        "cached-node",
+        "cached-rust",
+        "cached-python",
+    ] {
+        assert!(!names.contains(excluded), "unexpected candidate {excluded}");
+    }
 }
 
 #[test]
@@ -399,10 +600,10 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
     repo.cli()
         .args(["init", "--dry-run"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("write .intentional/config.yml"));
+        .code(2)
+        .stdout(predicate::str::contains("write .intentional/init-plan.yml"));
     assert!(!repo.root.join(".intentional").exists());
-    repo.cli().arg("init").assert().success();
+    initialize_independent(&repo);
     repo.cli()
         .args([
             "add",
