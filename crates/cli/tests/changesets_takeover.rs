@@ -851,6 +851,22 @@ fn ignored_projected_identity_blocks_source_parity_without_dropping_target() {
     assert!(plan.parity.release_units.is_empty());
     assert!(plan.inferred_config.release_units.contains_key("alpha"));
     assert!(!plan.inferred_config.release_units.contains_key("beta"));
+    let ignored_diagnostics = plan
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "ignored-release-unit-disposition")
+        .collect::<Vec<_>>();
+    assert_eq!(ignored_diagnostics.len(), 1);
+    assert_eq!(
+        ignored_diagnostics[0].id,
+        "ignored-release-unit-disposition:beta"
+    );
+    assert!(ignored_diagnostics[0]
+        .message
+        .contains("Changesets-ignored package beta"));
+    assert!(!ignored_diagnostics[0]
+        .message
+        .contains("Changesets-ignored package alpha"));
     let diagnostic = plan
         .diagnostics
         .iter()

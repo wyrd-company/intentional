@@ -1495,15 +1495,11 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         let Some(source_package) = ignored.as_str() else {
             continue;
         };
-        let package = identity_map
-            .get(source_package)
-            .map(String::as_str)
-            .unwrap_or(source_package);
         diagnostics.push(InitDiagnostic {
-            id: format!("ignored-release-unit-disposition:{package}"),
+            id: format!("ignored-release-unit-disposition:{source_package}"),
             code: "ignored-release-unit-disposition".to_owned(),
             message: format!(
-                "Choose whether Changesets-ignored package {package} is suspended, excluded, or managed. Selecting managed requires removing it from Changesets ignore before takeover."
+                "Choose whether Changesets-ignored package {source_package} is suspended, excluded, or managed. Selecting managed requires removing it from Changesets ignore before takeover."
             ),
             evidence: vec![config_evidence.clone()],
             choices: vec!["suspended".to_owned(), "excluded".to_owned(), "managed".to_owned()],
