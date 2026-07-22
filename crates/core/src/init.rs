@@ -820,6 +820,8 @@ pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitRe
         .canonicalize()
         .map_err(|error| Error::io(root, error))?;
     let root = root.as_path();
+    gix::discover(root)
+        .map_err(|_| Error::Validation("intentional init requires a Git repository".to_owned()))?;
     recover_interrupted_takeover(root)?;
     if root.join(CHANGESETS_CONFIG).exists() {
         return changesets_plan(root, scan_all, take_over);
@@ -1177,13 +1179,38 @@ fn apply_candidate_resolutions(
         .discovery
         .excluded_paths
         .sort_by(|a, b| (&a.detector, &a.path).cmp(&(&b.detector, &b.path)));
-    let configured_dependencies = config
+    let npm_release_units = config
         .release_units
         .iter()
-        .map(|(id, unit)| (id.clone(), unit.depends_on.clone()))
+        .filter(|(_, unit)| {
+            unit.projections
+                .iter()
+                .any(|projection| projection.adapter == Adapter::Npm)
+        })
+        .map(|(id, _)| id.clone())
+        .collect::<BTreeSet<_>>();
+    let configured_non_npm_dependencies = config
+        .release_units
+        .iter()
+        .filter(|(_, unit)| {
+            unit.projections
+                .iter()
+                .any(|projection| projection.adapter == Adapter::Npm)
+        })
+        .map(|(id, unit)| {
+            // npm-to-npm edges are manifest-owned. Only edges that an npm
+            // manifest cannot natively describe remain authored config.
+            let dependencies = unit
+                .depends_on
+                .iter()
+                .filter(|dependency| !npm_release_units.contains(*dependency))
+                .cloned()
+                .collect::<Vec<_>>();
+            (id.clone(), dependencies)
+        })
         .collect::<BTreeMap<_, _>>();
     derive_npm_dependencies(root, &mut config)?;
-    for (id, dependencies) in configured_dependencies {
+    for (id, dependencies) in configured_non_npm_dependencies {
         if let Some(unit) = config.release_units.get_mut(&id) {
             unit.depends_on.extend(dependencies);
             unit.depends_on.sort();

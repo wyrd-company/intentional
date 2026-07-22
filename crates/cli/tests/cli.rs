@@ -321,6 +321,30 @@ fn configured_repository_without_detectable_manifests_is_a_no_op() {
 }
 
 #[test]
+fn init_requires_a_git_repository_in_both_discovery_modes() {
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let root = temp.path().join("workspace");
+    fs::create_dir(&root).expect("workspace directory");
+    fs::write(root.join("package.json"), npm_manifest("1.0.0")).expect("fixture manifest");
+
+    for scan_all in [false, true] {
+        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
+        command.arg("-C").arg(&root).arg("init");
+        if scan_all {
+            command.arg("--scan-all");
+        }
+        command
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "intentional init requires a Git repository",
+            ))
+            .stderr(predicate::str::contains("git check-ignore").not())
+            .stderr(predicate::str::contains("GIT_DISCOVERY_ACROSS_FILESYSTEM").not());
+    }
+}
+
+#[test]
 fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
     for resolution in ["excluded", "independent", "projection"] {
         let repo = TestRepo::new();
@@ -490,6 +514,44 @@ fn candidate_resolution_preserves_configured_cross_ecosystem_dependencies() {
         config.release_units["sample-library"].depends_on,
         vec!["sample-rust"]
     );
+}
+
+#[test]
+fn candidate_resolution_removes_stale_manifest_owned_npm_dependencies() {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": { \"sample-peer\": \"^1.0.0\" }\n}\n",
+    );
+    repo.write(
+        "components/peer/package.json",
+        "{\n  \"name\": \"sample-peer\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repo.commit("add native dependency fixtures");
+
+    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    resolve_plan(&repo, |identity| CandidateResolution::Independent {
+        release_unit: identity.to_owned(),
+    });
+    repo.cli().args(["init", "--scan-all"]).assert().success();
+    let initial = intentional_core::Config::load(&repo.root).expect("initial config");
+    assert_eq!(
+        initial.release_units["sample-library"].depends_on,
+        vec!["sample-peer"]
+    );
+
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        "examples/pyproject.toml",
+        "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
+    );
+
+    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    resolve_plan(&repo, |_| CandidateResolution::Excluded);
+    repo.cli().args(["init", "--scan-all"]).assert().success();
+
+    let config = intentional_core::Config::load(&repo.root).expect("resolved config");
+    assert!(config.release_units["sample-library"].depends_on.is_empty());
 }
 
 #[test]
