@@ -364,15 +364,15 @@ fn write_canonical(value: &Value, output: &mut String) -> Result<()> {
 
 fn channel_version(
     repository: &VersionRepository,
-    package_id: &str,
+    release_unit_id: &str,
     template: &str,
     base: &Version,
     channel: &str,
     excluded_target: Option<gix::ObjectId>,
 ) -> Result<Version> {
     let versions = match excluded_target {
-        Some(target) => repository.all_versions_before(package_id, template, target)?,
-        None => repository.all_versions(package_id, template)?,
+        Some(target) => repository.all_versions_before(release_unit_id, template, target)?,
+        None => repository.all_versions(release_unit_id, template)?,
     };
     let max_iteration = versions
         .into_iter()
@@ -401,7 +401,7 @@ fn render_tag(template: &str, id: &str, version: &Version) -> String {
 }
 
 fn note_entries(
-    package_id: &str,
+    release_unit_id: &str,
     config: &Config,
     intents: &[Intent],
     effective: &BTreeMap<String, Bump>,
@@ -412,17 +412,17 @@ fn note_entries(
         .filter_map(|intent| {
             intent
                 .release_units
-                .get(package_id)
+                .get(release_unit_id)
                 .map(|bump| ChangelogEntry {
                     bump: *bump,
                     text: intent.message.clone(),
                 })
         })
         .collect::<Vec<_>>();
-    for dependency in &config.release_units[package_id].depends_on {
+    for dependency in &config.release_units[release_unit_id].depends_on {
         if effective[dependency] == Bump::None
             || !versions.contains_key(dependency)
-            || !shares_ecosystem(config, package_id, dependency)
+            || !shares_ecosystem(config, release_unit_id, dependency)
         {
             continue;
         }

@@ -59,14 +59,14 @@ workspace-tags:
   release:
     template: "{version}"
 release-units:
-  package-a:
-    path: packages/package-a
+  library:
+    path: packages/library
     projections:
       - adapter: npm
         file: package.json
         mode: committed
       - adapter: pub
-        file: pub/package_a/pubspec.yaml
+        file: pub/library/pubspec.yaml
         mode: committed
     tags:
       primary:
@@ -74,11 +74,11 @@ release-units:
         template: "{id}@{version}"
       pub:
         role: projection
-        template: "package_a@{version}"
+        template: "library-pub@{version}"
         require-phase: before-publication
-  package-b:
-    path: packages/package-b
-    depends-on: [package-a]
+  application:
+    path: packages/application
+    depends-on: [library]
     projections:
       - adapter: npm
         file: package.json
@@ -172,7 +172,7 @@ explicit versions:
 
 ```console
 intentional tag --baseline \
-  --version package-a=1.2.3 \
+  --version library=1.2.3 \
   --version workspace/release=1.2.3
 ```
 
@@ -192,9 +192,9 @@ At and after 1.0, both mappings use ordinary SemVer component increments.
 
 ```yaml
 fixed:
-  - [package-a, package-b]
+  - [library, application]
 linked:
-  - [package-c, package-d]
+  - [service, utility]
 ```
 
 When any fixed member receives a direct or dependency-propagated bump, every
@@ -211,8 +211,8 @@ fixed or linked group.
 
 ```console
 intentional add \
-  --release-unit package-a:minor \
-  --release-unit package-b:patch \
+  --release-unit library:minor \
+  --release-unit application:patch \
   --message "Add a useful capability."
 
 intentional status
@@ -302,7 +302,7 @@ the real invocation:
 ```console
 intentional init --dry-run
 intentional init --take-over --dry-run
-intentional add --release-unit package-a:patch --message "Correct a defect." --dry-run
+intentional add --release-unit library:patch --message "Correct a defect." --dry-run
 intentional apply --dry-run
 intentional stamp --prerelease alpha --dry-run
 intentional tag --dry-run

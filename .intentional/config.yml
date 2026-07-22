@@ -3,7 +3,7 @@ contract: contract-1
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility
-packages:
+release-units:
   intentional:
     path: .
     projections:

@@ -38,7 +38,7 @@ impl StampResult {
         let mut original = BTreeMap::<PathBuf, String>::new();
         let mut workspace_versions = BTreeMap::<PathBuf, String>::new();
 
-        for (id, package) in &config.release_units {
+        for (id, release_unit) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
             let current = repository.current_version(id, &primary.template)?;
             let mut version = bump_version(&current, bumps[id]);
@@ -46,12 +46,12 @@ impl StampResult {
                 let height = repository.height(id, &primary.template)?;
                 version.pre = Prerelease::new(&format!("{identifier}.{height}"))?;
             }
-            for projection in package
+            for projection in release_unit
                 .projections
                 .iter()
                 .filter(|projection| projection.mode == ProjectionMode::Injected)
             {
-                let relative = package.path.join(&projection.file);
+                let relative = release_unit.path.join(&projection.file);
                 let text = read(root, &writes, &mut original, &relative)?;
                 let edited = match projection.adapter {
                     Adapter::Npm => NpmAdapter.edit_version(&text, &version.to_string())?,

@@ -89,7 +89,7 @@ impl WorkspaceStatus {
         let resolved = resolve_versions(config, &declared, &current_versions)?;
         let mut release_units = Vec::with_capacity(config.release_units.len());
         let mut drift = Vec::new();
-        for (id, package) in &config.release_units {
+        for (id, release_unit) in &config.release_units {
             let versions = &resolved[id];
             let expected = versions.current.to_string();
             release_units.push(ReleaseUnitStatus {
@@ -98,11 +98,11 @@ impl WorkspaceStatus {
                 next: versions.next.clone(),
                 bump: versions.bump,
             });
-            for projection in &package.projections {
+            for projection in &release_unit.projections {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                     continue;
                 }
-                let relative = package.path.join(&projection.file);
+                let relative = release_unit.path.join(&projection.file);
                 let text = std::fs::read_to_string(root.join(&relative))
                     .map_err(|error| crate::Error::io(root.join(&relative), error))?;
                 let actual = read_projection_version(root, &relative, projection, &text)?;

@@ -46,9 +46,9 @@ pub fn aggregate_bumps<'a>(
 ) -> BTreeMap<String, Bump> {
     let mut aggregate: BTreeMap<String, Bump> = BTreeMap::new();
     for intent in intents {
-        for (package, bump) in intent {
+        for (release_unit, bump) in intent {
             aggregate
-                .entry(package.clone())
+                .entry(release_unit.clone())
                 .and_modify(|existing| *existing = (*existing).max(*bump))
                 .or_insert(*bump);
         }
@@ -72,8 +72,8 @@ pub fn effective_bumps(
 
     loop {
         let mut changed = false;
-        for (id, package) in &config.release_units {
-            for dependency in &package.depends_on {
+        for (id, release_unit) in &config.release_units {
+            for dependency in &release_unit.depends_on {
                 if effective[dependency] == Bump::None || !share_ecosystem(config, id, dependency) {
                     continue;
                 }
@@ -152,7 +152,7 @@ pub fn resolve_versions(
         }
     }
 
-    for (id, package) in &config.release_units {
+    for (id, release_unit) in &config.release_units {
         if grouped.contains_key(id) {
             continue;
         }
@@ -163,7 +163,7 @@ pub fn resolve_versions(
             id.clone(),
             ReleaseUnitVersion::new_with_mapping(current_version.clone(), effective[id], mapping),
         );
-        if package.disposition == ReleaseUnitDisposition::Suspended {
+        if release_unit.disposition == ReleaseUnitDisposition::Suspended {
             debug_assert_eq!(effective[id], Bump::None);
         }
     }
@@ -299,8 +299,8 @@ impl VersionRepository {
     }
 
     /// Find the latest final SemVer matching a release-unit tag template.
-    pub fn current_version(&self, package_id: &str, template: &str) -> Result<Version> {
-        let matches = self.matching_tags(package_id, template)?;
+    pub fn current_version(&self, release_unit_id: &str, template: &str) -> Result<Version> {
+        let matches = self.matching_tags(release_unit_id, template)?;
         let (version, _) = self.walk_to_tag(&matches, false)?;
         Ok(version.unwrap_or_else(|| Version::new(0, 0, 0)))
     }
@@ -308,31 +308,31 @@ impl VersionRepository {
     /// Find the latest final SemVer before tags created at `excluded_target`.
     pub fn current_version_before(
         &self,
-        package_id: &str,
+        release_unit_id: &str,
         template: &str,
         excluded_target: gix::ObjectId,
     ) -> Result<Version> {
-        let mut matches = self.matching_tags(package_id, template)?;
+        let mut matches = self.matching_tags(release_unit_id, template)?;
         matches.remove(&excluded_target);
         let (version, _) = self.walk_to_tag(&matches, false)?;
         Ok(version.unwrap_or_else(|| Version::new(0, 0, 0)))
     }
 
     /// Return whether at least one matching tag exists on the repository history.
-    pub fn has_matching_tag(&self, package_id: &str, template: &str) -> Result<bool> {
-        Ok(!self.matching_tags(package_id, template)?.is_empty())
+    pub fn has_matching_tag(&self, release_unit_id: &str, template: &str) -> Result<bool> {
+        Ok(!self.matching_tags(release_unit_id, template)?.is_empty())
     }
 
     /// Count commits on the first-parent chain since the latest matching tag.
-    pub fn height(&self, package_id: &str, template: &str) -> Result<u64> {
-        let matches = self.matching_tags(package_id, template)?;
+    pub fn height(&self, release_unit_id: &str, template: &str) -> Result<u64> {
+        let matches = self.matching_tags(release_unit_id, template)?;
         let (_, height) = self.walk_to_tag(&matches, true)?;
         Ok(height)
     }
 
     /// Return all matching versions, used to derive channel iterations.
-    pub fn all_versions(&self, package_id: &str, template: &str) -> Result<Vec<Version>> {
-        let tags = self.matching_tags(package_id, template)?;
+    pub fn all_versions(&self, release_unit_id: &str, template: &str) -> Result<Vec<Version>> {
+        let tags = self.matching_tags(release_unit_id, template)?;
         let mut versions: Vec<_> = tags.into_values().flatten().collect();
         versions.sort();
         versions.dedup();
@@ -342,11 +342,11 @@ impl VersionRepository {
     /// Return matching versions excluding tags created at one target commit.
     pub fn all_versions_before(
         &self,
-        package_id: &str,
+        release_unit_id: &str,
         template: &str,
         excluded_target: gix::ObjectId,
     ) -> Result<Vec<Version>> {
-        let mut tags = self.matching_tags(package_id, template)?;
+        let mut tags = self.matching_tags(release_unit_id, template)?;
         tags.remove(&excluded_target);
         let mut versions: Vec<_> = tags.into_values().flatten().collect();
         versions.sort();
@@ -356,14 +356,14 @@ impl VersionRepository {
 
     fn matching_tags(
         &self,
-        package_id: &str,
+        release_unit_id: &str,
         template: &str,
     ) -> Result<HashMap<gix::ObjectId, Vec<Version>>> {
         let version_marker = "{version}";
-        let rendered = template.replace("{id}", package_id);
+        let rendered = template.replace("{id}", release_unit_id);
         let (prefix, suffix) = rendered.split_once(version_marker).ok_or_else(|| {
             Error::Validation(format!(
-                "invalid tag template for release unit {package_id}"
+                "invalid tag template for release unit {release_unit_id}"
             ))
         })?;
 

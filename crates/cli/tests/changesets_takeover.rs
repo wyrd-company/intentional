@@ -114,7 +114,7 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
     }
     for diagnostic in &mut plan.diagnostics {
         diagnostic.resolution = match diagnostic.code.as_str() {
-            "ignored-package-disposition" | "unmapped-package-disposition" => {
+            "ignored-release-unit-disposition" | "unmapped-release-unit-disposition" => {
                 Some("excluded".to_owned())
             }
             "repository-integration" => Some("removed".to_owned()),
@@ -349,7 +349,7 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
     assert!(plan
         .diagnostics
         .iter()
-        .all(|diagnostic| diagnostic.code != "unmapped-package-disposition"));
+        .all(|diagnostic| diagnostic.code != "unmapped-release-unit-disposition"));
     let dependent = plan
         .parity
         .release_units
@@ -709,7 +709,7 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
         serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("initial plan");
     plan.diagnostics
         .iter_mut()
-        .find(|diagnostic| diagnostic.code == "ignored-package-disposition")
+        .find(|diagnostic| diagnostic.code == "ignored-release-unit-disposition")
         .expect("ignored disposition")
         .resolution = Some("suspended".to_owned());
     fs::write(&plan_path, plan.to_yaml().unwrap()).expect("resolved plan");

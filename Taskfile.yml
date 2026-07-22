@@ -15,6 +15,11 @@ tasks:
     cmds:
       - cargo test --workspace
 
+  self-check:
+    desc: Verify Intentional can load its own release configuration
+    cmds:
+      - cargo run --quiet -p intentional-cli -- status
+
   lint:
     desc: Run Clippy with warnings denied
     cmds:
@@ -32,4 +37,4 @@ tasks:
 
   ci:
     desc: Run all continuous-integration checks locally
-    deps: [fmt-check, lint, test]
+    deps: [ fmt-check, lint, self-check, test ]

@@ -176,18 +176,18 @@ impl Config {
     }
 
     /// Return the configured primary tag for a release unit.
-    pub fn primary_tag<'a>(&'a self, package_id: &str) -> Result<(&'a str, &'a TagConfig)> {
-        let package = self
+    pub fn primary_tag<'a>(&'a self, release_unit_id: &str) -> Result<(&'a str, &'a TagConfig)> {
+        let release_unit = self
             .release_units
-            .get(package_id)
-            .ok_or_else(|| Error::Validation(format!("unknown release unit {package_id}")))?;
-        package
+            .get(release_unit_id)
+            .ok_or_else(|| Error::Validation(format!("unknown release unit {release_unit_id}")))?;
+        release_unit
             .tags
             .iter()
             .find(|(_, tag)| tag.role == TagRole::Primary)
             .map(|(id, tag)| (id.as_str(), tag))
             .ok_or_else(|| {
-                Error::Validation(format!("release unit {package_id} has no primary tag"))
+                Error::Validation(format!("release unit {release_unit_id} has no primary tag"))
             })
     }
 
@@ -222,10 +222,10 @@ impl Config {
 
         let mut canonical_tags = BTreeSet::new();
         let mut resolved_templates = BTreeMap::new();
-        for (id, package) in &self.release_units {
+        for (id, release_unit) in &self.release_units {
             validate_id(id, "release unit")?;
-            validate_relative_path(&package.path, &format!("release unit {id} path"))?;
-            let primary_count = package
+            validate_relative_path(&release_unit.path, &format!("release unit {id} path"))?;
+            let primary_count = release_unit
                 .tags
                 .values()
                 .filter(|tag| tag.role == TagRole::Primary)
@@ -237,7 +237,7 @@ impl Config {
             }
 
             let mut projection_keys = BTreeSet::new();
-            for projection in &package.projections {
+            for projection in &release_unit.projections {
                 validate_relative_path(
                     &projection.file,
                     &format!("release unit {id} projection file"),
@@ -259,8 +259,8 @@ impl Config {
                 }
             }
 
-            validate_dependencies(id, package, &self.release_units)?;
-            for (tag_id, tag) in &package.tags {
+            validate_dependencies(id, release_unit, &self.release_units)?;
+            for (tag_id, tag) in &release_unit.tags {
                 validate_id(tag_id, "tag")?;
                 validate_tag_template(
                     &format!("release unit {id} tag {tag_id}"),
@@ -334,7 +334,7 @@ impl Config {
     fn validate_dependency_acyclic(&self) -> Result<()> {
         fn visit<'a>(
             id: &'a str,
-            packages: &'a BTreeMap<String, ReleaseUnitConfig>,
+            release_units: &'a BTreeMap<String, ReleaseUnitConfig>,
             visiting: &mut BTreeSet<&'a str>,
             visited: &mut BTreeSet<&'a str>,
         ) -> Result<()> {
@@ -346,8 +346,8 @@ impl Config {
                     "dependency cycle includes release unit {id}"
                 )));
             }
-            for dependency in &packages[id].depends_on {
-                visit(dependency, packages, visiting, visited)?;
+            for dependency in &release_units[id].depends_on {
+                visit(dependency, release_units, visiting, visited)?;
             }
             visiting.remove(id);
             visited.insert(id);
@@ -364,10 +364,10 @@ impl Config {
 
     fn validate_tag_graph(&self, known: &BTreeSet<String>) -> Result<()> {
         let mut edges = BTreeMap::<String, Vec<String>>::new();
-        for (package_id, package) in &self.release_units {
-            for (tag_id, tag) in &package.tags {
+        for (release_unit_id, release_unit) in &self.release_units {
+            for (tag_id, tag) in &release_unit.tags {
                 edges.insert(
-                    Self::release_unit_tag_id(package_id, tag_id),
+                    Self::release_unit_tag_id(release_unit_id, tag_id),
                     tag.tag_after.clone(),
                 );
             }
@@ -426,17 +426,17 @@ impl Config {
 
 fn validate_dependencies(
     id: &str,
-    package: &ReleaseUnitConfig,
-    packages: &BTreeMap<String, ReleaseUnitConfig>,
+    release_unit: &ReleaseUnitConfig,
+    release_units: &BTreeMap<String, ReleaseUnitConfig>,
 ) -> Result<()> {
     let mut dependencies = BTreeSet::new();
-    for dependency in &package.depends_on {
+    for dependency in &release_unit.depends_on {
         if dependency == id {
             return Err(Error::Validation(format!(
                 "release unit {id} cannot depend on itself"
             )));
         }
-        if !packages.contains_key(dependency) {
+        if !release_units.contains_key(dependency) {
             return Err(Error::Validation(format!(
                 "release unit {id} depends on unknown release unit {dependency}"
             )));

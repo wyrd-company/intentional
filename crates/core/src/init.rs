@@ -381,8 +381,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             continue;
         };
         diagnostics.push(InitDiagnostic {
-            id: format!("ignored-package-disposition:{package}"),
-            code: "ignored-package-disposition".to_owned(),
+            id: format!("ignored-release-unit-disposition:{package}"),
+            code: "ignored-release-unit-disposition".to_owned(),
             message: format!(
                 "Choose whether Changesets-ignored package {package} is suspended, excluded, or managed. Selecting managed requires removing it from Changesets ignore before takeover."
             ),
@@ -483,12 +483,12 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         let evidence = dev_dependents
             .iter()
             .filter_map(|id| {
-                let package = &discovery.config.release_units[id];
-                package
+                let release_unit = &discovery.config.release_units[id];
+                release_unit
                     .projections
                     .iter()
                     .find(|projection| projection.adapter == Adapter::Npm)
-                    .map(|projection| package.path.join(&projection.file))
+                    .map(|projection| release_unit.path.join(&projection.file))
             })
             .map(|path| evidence(root, &path, Vec::new()))
             .collect::<Result<Vec<_>>>()?;
@@ -504,27 +504,29 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
-    let mut unmapped_packages = BTreeSet::new();
-    for package in discovery.config.release_units.keys() {
-        if referenced_names.contains(package) || discovery.workspace_packages.contains(package) {
+    let mut unmapped_release_units = BTreeSet::new();
+    for release_unit in discovery.config.release_units.keys() {
+        if referenced_names.contains(release_unit)
+            || discovery.workspace_packages.contains(release_unit)
+        {
             continue;
         }
-        unmapped_packages.insert(package.clone());
-        let package_config = &discovery.config.release_units[package];
-        let manifest = package_config
+        unmapped_release_units.insert(release_unit.clone());
+        let release_unit_config = &discovery.config.release_units[release_unit];
+        let manifest = release_unit_config
             .projections
             .first()
-            .map(|projection| package_config.path.join(&projection.file))
+            .map(|projection| release_unit_config.path.join(&projection.file))
             .ok_or_else(|| {
                 Error::Validation(format!(
-                    "discovered package {package} has no manifest evidence"
+                    "discovered release unit {release_unit} has no manifest evidence"
                 ))
             })?;
         diagnostics.push(InitDiagnostic {
-            id: format!("unmapped-package-disposition:{package}"),
-            code: "unmapped-package-disposition".to_owned(),
+            id: format!("unmapped-release-unit-disposition:{release_unit}"),
+            code: "unmapped-release-unit-disposition".to_owned(),
             message: format!(
-                "Choose whether workspace package {package}, which is outside the Changesets release inventory, is excluded, suspended, or managed."
+                "Choose whether workspace package {release_unit}, which is outside the Changesets release inventory, is excluded, suspended, or managed."
             ),
             evidence: vec![evidence(root, &manifest, Vec::new())?],
             choices: vec!["excluded".to_owned(), "suspended".to_owned(), "managed".to_owned()],
@@ -578,7 +580,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .filter_map(JsonValue::as_str)
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let source_excluded = ignored.union(&unmapped_packages).cloned().collect();
+    let source_excluded = ignored.union(&unmapped_release_units).cloned().collect();
     exclude_release_units(&mut source_config, &source_excluded);
     apply_disposition_resolutions(&mut discovery.config, &diagnostics)?;
     discovery.config.validate()?;
@@ -598,14 +600,14 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     let suppress_private_versions =
         changesets_private_package_settings(&changesets["privatePackages"])
             .is_some_and(|(versions_private, _)| !versions_private);
-    let mut skipped_packages = ignored
+    let mut skipped_release_units = ignored
         .iter()
         .map(|id| identity_map.get(id).cloned().unwrap_or_else(|| id.clone()))
         .collect::<BTreeSet<_>>();
     if suppress_private_versions {
-        skipped_packages.extend(discovery.private_packages.iter().cloned());
+        skipped_release_units.extend(discovery.private_packages.iter().cloned());
     }
-    skipped_packages.extend(
+    skipped_release_units.extend(
         discovery
             .config
             .release_units
@@ -627,7 +629,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             ["onlyUpdatePeerDependentsWhenOutOfRange"]
             .as_bool()
             .unwrap_or(false),
-        preflight_error: mixed_skipped_changeset(&converted_intents, &skipped_packages),
+        preflight_error: mixed_skipped_changeset(&converted_intents, &skipped_release_units),
     };
     let parity = parity_result(
         &source_config,
@@ -1138,13 +1140,13 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut edges = Vec::new();
-    for (id, package) in &mut config.release_units {
-        let npm = package
+    for (id, release_unit) in &mut config.release_units {
+        let npm = release_unit
             .projections
             .iter()
             .find(|projection| projection.adapter == Adapter::Npm);
         let Some(npm) = npm else { continue };
-        let path = root.join(&package.path).join(&npm.file);
+        let path = root.join(&release_unit.path).join(&npm.file);
         let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
         let value: JsonValue = serde_json::from_str(&text)
             .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
@@ -1172,7 +1174,7 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
                 }
             }
         }
-        package.depends_on = dependencies.into_iter().collect();
+        release_unit.depends_on = dependencies.into_iter().collect();
     }
     edges.sort_by(|left, right| {
         (
@@ -1331,19 +1333,20 @@ fn merge_release_profile(
         if discovery.private_packages.remove(name) {
             discovery.private_packages.insert(source.to_owned());
         }
-        let source_package = discovery
-            .config
-            .release_units
-            .get_mut(source)
-            .ok_or_else(|| {
-                Error::Validation(format!(
-                    "release profile versionSource {source} for {name} was not discovered"
-                ))
-            })?;
+        let source_release_unit =
+            discovery
+                .config
+                .release_units
+                .get_mut(source)
+                .ok_or_else(|| {
+                    Error::Validation(format!(
+                        "release profile versionSource {source} for {name} was not discovered"
+                    ))
+                })?;
         for mut projection in projected.projections {
             let absolute = root.join(&projected.path).join(&projection.file);
             projection.file = absolute
-                .strip_prefix(root.join(&source_package.path))
+                .strip_prefix(root.join(&source_release_unit.path))
                 .map_err(|_| {
                     Error::Validation(format!(
                         "projection {} is outside release unit {source}",
@@ -1351,9 +1354,9 @@ fn merge_release_profile(
                     ))
                 })?
                 .to_owned();
-            source_package.projections.push(projection);
+            source_release_unit.projections.push(projection);
         }
-        source_package.tags.insert(
+        source_release_unit.tags.insert(
             name.to_owned(),
             TagConfig {
                 role: TagRole::Projection,
@@ -1366,14 +1369,14 @@ fn merge_release_profile(
         );
         discovery.versions.remove(name);
     }
-    for package in discovery.config.release_units.values_mut() {
-        for dependency in &mut package.depends_on {
+    for release_unit in discovery.config.release_units.values_mut() {
+        for dependency in &mut release_unit.depends_on {
             if let Some(source) = identity_map.get(dependency) {
                 *dependency = source.clone();
             }
         }
-        package.depends_on.sort();
-        package.depends_on.dedup();
+        release_unit.depends_on.sort();
+        release_unit.depends_on.dedup();
     }
     for edge in &mut discovery.npm_dependencies {
         if let Some(source) = identity_map.get(&edge.dependent) {
@@ -1408,21 +1411,21 @@ fn remap_converted_intents(
     config: &Config,
 ) -> Result<()> {
     for intent in intents {
-        let mut packages = BTreeMap::<String, Bump>::new();
+        let mut release_units = BTreeMap::<String, Bump>::new();
         for (id, bump) in std::mem::take(&mut intent.release_units) {
             let logical_id = identity_map.get(&id).cloned().unwrap_or(id);
             if !config.release_units.contains_key(&logical_id) {
                 return Err(Error::Validation(format!(
-                    "Changesets intent {} references package {logical_id}, which has no logical Intentional identity",
+                    "Changesets intent {} references release unit {logical_id}, which has no Intentional release-unit identity",
                     intent.id
                 )));
             }
-            packages
+            release_units
                 .entry(logical_id)
                 .and_modify(|existing| *existing = (*existing).max(bump))
                 .or_insert(bump);
         }
-        intent.release_units = packages;
+        intent.release_units = release_units;
     }
     Ok(())
 }
@@ -1536,23 +1539,23 @@ fn apply_disposition_resolutions(
 ) -> Result<()> {
     let mut excluded = BTreeSet::new();
     for diagnostic in diagnostics.iter().filter(|diagnostic| {
-        diagnostic.code == "ignored-package-disposition"
-            || diagnostic.code == "unmapped-package-disposition"
+        diagnostic.code == "ignored-release-unit-disposition"
+            || diagnostic.code == "unmapped-release-unit-disposition"
     }) {
-        let package = diagnostic
+        let release_unit = diagnostic
             .id
             .split_once(':')
-            .map(|(_, package)| package)
+            .map(|(_, release_unit)| release_unit)
             .expect("diagnostic id prefix");
         match diagnostic.resolution.as_deref() {
             Some("suspended") => {
-                if let Some(config) = config.release_units.get_mut(package) {
+                if let Some(config) = config.release_units.get_mut(release_unit) {
                     config.disposition = ReleaseUnitDisposition::Suspended;
                 }
             }
             Some("excluded") => {
-                config.release_units.remove(package);
-                excluded.insert(package.to_owned());
+                config.release_units.remove(release_unit);
+                excluded.insert(release_unit.to_owned());
             }
             Some("managed") | None => {}
             Some(value) => {
@@ -1574,8 +1577,8 @@ fn exclude_release_units(config: &mut Config, excluded: &BTreeSet<String>) {
     if excluded.is_empty() {
         return;
     }
-    for package in config.release_units.values_mut() {
-        package.depends_on.retain(|id| !excluded.contains(id));
+    for release_unit in config.release_units.values_mut() {
+        release_unit.depends_on.retain(|id| !excluded.contains(id));
     }
     for groups in [&mut config.fixed, &mut config.linked] {
         for group in groups.iter_mut() {
@@ -1663,18 +1666,18 @@ fn parity_result(
         .collect::<BTreeSet<_>>();
     let release_units = release_ids
         .into_iter()
-        .map(|package| ParityReleaseUnit {
-            current_version: current[&package].to_string(),
-            source: parity_release(source.get(&package)),
-            proposed: parity_release(proposed.get(&package)),
-            release_unit: package,
+        .map(|release_unit| ParityReleaseUnit {
+            current_version: current[&release_unit].to_string(),
+            source: parity_release(source.get(&release_unit)),
+            proposed: parity_release(proposed.get(&release_unit)),
+            release_unit,
         })
         .collect::<Vec<_>>();
     let equivalent = source_error.is_none()
         && proposed_error.is_none()
         && release_units
             .iter()
-            .all(|package| package.source == package.proposed);
+            .all(|release_unit| release_unit.source == release_unit.proposed);
     Ok(ParityComputation {
         result: ParityResult {
             status: if equivalent { "equivalent" } else { "blocked" }.to_owned(),
@@ -1687,20 +1690,20 @@ fn parity_result(
 
 fn mixed_skipped_changeset(
     intents: &[ConvertedIntent],
-    skipped_packages: &BTreeSet<String>,
+    skipped_release_units: &BTreeSet<String>,
 ) -> Option<String> {
     intents.iter().find_map(|intent| {
         let has_skipped = intent
             .release_units
             .keys()
-            .any(|id| skipped_packages.contains(id));
+            .any(|id| skipped_release_units.contains(id));
         let has_managed = intent
             .release_units
             .keys()
-            .any(|id| !skipped_packages.contains(id));
+            .any(|id| !skipped_release_units.contains(id));
         (has_skipped && has_managed).then(|| {
             format!(
-                "Changesets intent {} mixes skipped and managed packages; split or revise the source changeset before takeover",
+                "Changesets intent {} mixes skipped and managed release units; split or revise the source changeset before takeover",
                 intent.id
             )
         })

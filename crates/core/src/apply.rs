@@ -49,40 +49,40 @@ impl ApplyResult {
         let by_id: BTreeMap<_, _> = plan
             .release_units
             .iter()
-            .map(|package| (package.id.as_str(), package))
+            .map(|release_unit| (release_unit.id.as_str(), release_unit))
             .collect();
         let mut workspace_versions = BTreeMap::new();
         let mut notices = Vec::new();
 
-        for package in &plan.release_units {
-            let config_package = &config.release_units[&package.id];
-            for projection in &config_package.projections {
-                let go_major =
-                    projection.adapter == Adapter::Go && package.bump == crate::model::Bump::Major;
+        for release_unit in &plan.release_units {
+            let config_release_unit = &config.release_units[&release_unit.id];
+            for projection in &config_release_unit.projections {
+                let go_major = projection.adapter == Adapter::Go
+                    && release_unit.bump == crate::model::Bump::Major;
                 if projection.mode != ProjectionMode::Committed && !go_major {
                     continue;
                 }
                 edit_projection_version(
                     &mut tree,
                     root,
-                    config_package,
+                    config_release_unit,
                     projection,
-                    &package.new_version,
+                    &release_unit.new_version,
                     &mut workspace_versions,
                 )?;
                 if go_major {
                     notices.push(format!(
                         "rewrite Go module major path {}",
-                        config_package.path.join(&projection.file).display()
+                        config_release_unit.path.join(&projection.file).display()
                     ));
                 }
             }
-            let changelog = config_package.path.join("CHANGELOG.md");
+            let changelog = config_release_unit.path.join("CHANGELOG.md");
             let current = tree.read_optional(&changelog)?;
             let next = update_changelog(
                 current.as_deref(),
-                &package.release_notes,
-                &package.new_version,
+                &release_unit.release_notes,
+                &release_unit.new_version,
                 channel.is_none(),
             );
             tree.set(changelog, next);
@@ -218,12 +218,12 @@ impl<'a> WorkingTree<'a> {
 fn edit_projection_version(
     tree: &mut WorkingTree<'_>,
     root: &Path,
-    package: &ReleaseUnitConfig,
+    release_unit: &ReleaseUnitConfig,
     projection: &Projection,
     version: &str,
     workspace_versions: &mut BTreeMap<PathBuf, String>,
 ) -> Result<()> {
-    let relative = package.path.join(&projection.file);
+    let relative = release_unit.path.join(&projection.file);
     let text = tree.read(&relative)?;
     let edited = match projection.adapter {
         Adapter::Npm => NpmAdapter.edit_version(&text, version)?,
