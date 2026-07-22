@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+### Features
+
+- Embed the agent workflow skill in the CLI.
+
 ## 0.1.2
 
 ### Features
