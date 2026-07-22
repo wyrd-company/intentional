@@ -91,9 +91,9 @@ the `uses` reference and the installed binary to a released bare Semantic
 Versioning tag:
 
 ```yaml
-- uses: wyrd-company/intentional@0.1.1
+- uses: wyrd-company/intentional@0.1.2
   with:
-    intentional-version: 0.1.1
+    intentional-version: 0.1.2
     command: check
 ```
 
