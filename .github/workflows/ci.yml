@@ -47,3 +47,18 @@ jobs:
           cache: false
       - name: Test launcher, installer, and package allowlist
         run: npm test --prefix npm
+
+  release-automation:
+    name: Release automation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate script syntax and version agreement
+        shell: bash
+        run: |
+          bash -n scripts/release/*.sh
+          python3 scripts/release/verify-versions.py
+      - name: Exercise matching, conflicting, and retry paths
+        run: scripts/release/test-retry.sh

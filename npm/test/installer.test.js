@@ -90,6 +90,25 @@ test("download follows bounded HTTPS redirects and rejects HTTP errors", async (
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
+test("download aborts stalled HTTPS requests at the configured timeout", async () => {
+  const directory = temporaryDirectory();
+  const destination = path.join(directory, "stalled");
+  const get = () => {
+    const request = new EventEmitter();
+    request.setTimeout = (_timeout, callback) => queueMicrotask(callback);
+    request.destroy = (error) => request.emit("error", error);
+    return request;
+  };
+  await assert.rejects(
+    installer.download("https://example.invalid/stalled", destination, {
+      get,
+      timeout: 1,
+    }),
+    /timed out after 1ms/,
+  );
+  fs.rmSync(directory, { recursive: true, force: true });
+});
+
 test("checksum evidence must be unique and must match the archive", () => {
   const directory = temporaryDirectory();
   const archive = path.join(directory, "intentional-linux-x86_64.tar.gz");
@@ -168,6 +187,47 @@ test("archive inspection reports extraction-tool failures", () => {
         spawnSync: () => ({ status: 2, stderr: "corrupt archive", stdout: "" }),
       }),
     /tar failed: corrupt archive/,
+  );
+});
+
+test("Windows archive inspection selects the system bsdtar explicitly", () => {
+  const target = installer.selectTarget("win32", "x64");
+  let command;
+  const entries = installer.listArchive("fixture.zip", target, {
+    environment: { SystemRoot: "C:\\System" },
+    platform: "win32",
+    spawnSync: (executable) => {
+      command = executable;
+      return {
+        status: 0,
+        stderr: "",
+        stdout: "intentional-windows-x86_64/intentional.exe\n",
+      };
+    },
+  });
+  assert.equal(command, "C:\\System\\System32\\tar.exe");
+  assert.deepEqual(entries, ["intentional-windows-x86_64/intentional.exe"]);
+});
+
+test("archive extraction reports its executable-size safety limit", () => {
+  const target = installer.selectTarget("linux", "x64");
+  assert.throws(
+    () =>
+      installer.extractExecutable("fixture.tar.gz", target, "/unused", {
+        spawnSync: (_command, args) => {
+          if (args[0] === "-tzf") {
+            return {
+              status: 0,
+              stderr: "",
+              stdout: "intentional-linux-x86_64/intentional\n",
+            };
+          }
+          const error = new Error("output exceeded");
+          error.code = "ENOBUFS";
+          return { error, status: null, stderr: "", stdout: null };
+        },
+      }),
+    new RegExp(String(installer.MAX_EXECUTABLE_BYTES)),
   );
 });
 

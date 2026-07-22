@@ -6,6 +6,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
@@ -23,15 +24,15 @@ test("npm pack contains only the public launcher contract", () => {
     registry: "https://registry.npmjs.org",
   });
   const result = spawnSync(
-    "npm",
-    ["pack", "--dry-run", "--json", "--ignore-scripts", "--userconfig=/dev/null"],
-    { cwd: packageRoot, encoding: "utf8" },
+    process.platform === "win32" ? "npm.cmd" : "npm",
+    ["pack", "--dry-run", "--json", "--ignore-scripts", `--userconfig=${os.devNull}`],
+    { cwd: packageRoot, encoding: "utf8", shell: process.platform === "win32" },
   );
   assert.equal(result.status, 0, result.stderr);
   const [packed] = JSON.parse(result.stdout);
   assert.equal(packed.name, "@wyrd-company/intentional");
   assert.deepEqual(
     packed.files.map((file) => file.path).sort(),
-    ["README.md", "bin/intentional.js", "install.js", "package.json"],
+    ["LICENSE", "README.md", "bin/intentional.js", "install.js", "package.json"],
   );
 });

@@ -141,7 +141,7 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 90
 
   release:
     name: Publish GitHub Release assets
@@ -265,11 +265,18 @@ jobs:
     steps:
       - name: Checkout tagged source
         uses: actions/checkout@v4
-      - name: Download release archives
-        uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      - name: Download published release archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          mkdir dist
+          gh release download "$GITHUB_REF_NAME" \
+          --dir dist \
+          --pattern 'intentional-*' \
+          --pattern SHA256SUMS
+          cd dist
+          sha256sum --check SHA256SUMS
       - name: Checkout tap repository
         uses: actions/checkout@v4
         with:
@@ -367,6 +374,9 @@ jobs:
       - name: Install and exercise the released formula
         shell: bash
         run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          fi
           brew install wyrd-company/tools/intentional
           intentional --version | grep -F "$GITHUB_REF_NAME"
           intentional init --help | grep -F -- '--take-over'

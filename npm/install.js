@@ -16,6 +16,9 @@ const { spawnSync } = require("node:child_process");
 
 const REPOSITORY = "wyrd-company/intentional";
 const MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const MAX_ARCHIVE_METADATA_BYTES = 8 * 1024 * 1024;
+const MAX_EXECUTABLE_BYTES = 64 * 1024 * 1024;
 const TARGETS = Object.freeze({
   "linux/x64": {
     asset: "intentional-linux-x86_64.tar.gz",
@@ -61,7 +64,7 @@ function releaseUrls(version, target) {
   };
 }
 
-function requestResponse(url, get = https.get) {
+function requestResponse(url, get = https.get, timeout = DOWNLOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const request = get(
       url,
@@ -69,12 +72,18 @@ function requestResponse(url, get = https.get) {
       resolve,
     );
     request.once("error", reject);
+    if (typeof request.setTimeout === "function") {
+      request.setTimeout(timeout, () => {
+        request.destroy(new Error(`download timed out after ${timeout}ms`));
+      });
+    }
   });
 }
 
 async function download(url, destination, options = {}) {
   const get = options.get || https.get;
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
+  const timeout = options.timeout ?? DOWNLOAD_TIMEOUT_MS;
   let current = new URL(url);
 
   for (let redirects = 0; ; redirects += 1) {
@@ -82,7 +91,7 @@ async function download(url, destination, options = {}) {
       throw new Error(`refusing non-HTTPS download URL ${current}`);
     }
 
-    const response = await requestResponse(current, get);
+    const response = await requestResponse(current, get, timeout);
     const location = response.headers.location;
     if (response.statusCode >= 300 && response.statusCode < 400 && location) {
       response.resume();
@@ -136,11 +145,25 @@ function verifyChecksum(file, expected) {
 
 function runTar(args, options = {}) {
   const encoding = Object.hasOwn(options, "encoding") ? options.encoding : "utf8";
-  const result = (options.spawnSync || spawnSync)("tar", args, {
+  const platform = options.platform || process.platform;
+  const environment = options.environment || process.env;
+  const command =
+    platform === "win32"
+      ? path.win32.join(
+          environment.SystemRoot || environment.WINDIR || "C:\\Windows",
+          "System32",
+          "tar.exe",
+        )
+      : "tar";
+  const maxBuffer = options.maxBuffer || MAX_ARCHIVE_METADATA_BYTES;
+  const result = (options.spawnSync || spawnSync)(command, args, {
     encoding,
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer,
   });
   if (result.error) {
+    if (result.error.code === "ENOBUFS") {
+      throw new Error(`archive output exceeds the ${maxBuffer}-byte safety limit`);
+    }
     throw new Error(`failed to run tar: ${result.error.message}`);
   }
   if (result.status !== 0) {
@@ -193,7 +216,7 @@ function extractExecutable(archive, target, destination, options = {}) {
   const compressed = target.asset.endsWith(".tar.gz");
   const contents = runTar(
     [compressed ? "-xOzf" : "-xOf", archive, entry],
-    { ...options, encoding: null },
+    { ...options, encoding: null, maxBuffer: MAX_EXECUTABLE_BYTES },
   );
   if (!Buffer.isBuffer(contents) || contents.length === 0) {
     throw new Error(`archive member ${entry} is empty`);
@@ -250,6 +273,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DOWNLOAD_TIMEOUT_MS,
+  MAX_EXECUTABLE_BYTES,
   MAX_REDIRECTS,
   TARGETS,
   download,

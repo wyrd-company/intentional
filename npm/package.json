@@ -22,6 +22,7 @@
     "test": "node --test test/*.test.js"
   },
   "files": [
+    "LICENSE",
     "README.md",
     "bin/intentional.js",
     "install.js"
