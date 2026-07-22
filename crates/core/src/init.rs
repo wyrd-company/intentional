@@ -1290,11 +1290,19 @@ fn apply_changesets_candidate_resolutions(
                         .release_units
                         .get_mut(release_unit)
                         .expect("validated target release unit");
-                    if projection_owner.as_deref() != Some(release_unit)
-                        && !target.projections.iter().any(|existing| {
+                    if let Some(existing) = target.projections.iter().find(|existing| {
                         existing.file == projection.file && existing.pointer == projection.pointer
-                    })
-                    {
+                    }) {
+                        if existing.adapter != projection.adapter
+                            || existing.mode != projection.mode
+                        {
+                            return Err(Error::Validation(format!(
+                                "Changesets discovery candidate {} conflicts with existing projection {} on release unit {release_unit}: adapter or mode differs",
+                                candidate.id,
+                                projection.file.display()
+                            )));
+                        }
+                    } else {
                         target.projections.push(projection);
                     }
                 }
@@ -3717,6 +3725,54 @@ mod tests {
         assert!(yaml.contains("kind: excluded"));
         assert!(yaml.contains("raw-version:"));
         assert!(yaml.contains("diagnostics:"));
+    }
+
+    #[test]
+    fn changesets_projection_dedup_rejects_adapter_or_mode_conflicts() {
+        for (adapter, mode) in [
+            (Adapter::Cargo, ProjectionMode::Committed),
+            (Adapter::Npm, ProjectionMode::Injected),
+        ] {
+            let mut config = candidate_plan(Vec::new()).inferred_config;
+            let release_unit = config
+                .release_units
+                .get_mut("configured")
+                .expect("configured release unit");
+            release_unit.path = PathBuf::from("examples");
+            release_unit.projections = vec![Projection {
+                adapter: Adapter::Npm,
+                file: PathBuf::from("sample.json"),
+                mode: ProjectionMode::Committed,
+                pointer: None,
+            }];
+            let mut candidate = candidate(
+                "examples/sample.json",
+                Some(CandidateResolution::Projection {
+                    release_unit: "configured".to_owned(),
+                    target_candidate: None,
+                }),
+            );
+            let suggestion = candidate
+                .projection
+                .as_mut()
+                .expect("projection suggestion");
+            suggestion.adapter = adapter;
+            suggestion.mode = mode;
+            let mut discovery = Discovery {
+                config,
+                ..Discovery::default()
+            };
+
+            let error = apply_changesets_candidate_resolutions(
+                Path::new("."),
+                &mut discovery,
+                &[candidate],
+            )
+            .expect_err("same target with different semantics rejected");
+            assert!(error
+                .to_string()
+                .contains("conflicts with existing projection"));
+        }
     }
 
     #[test]
