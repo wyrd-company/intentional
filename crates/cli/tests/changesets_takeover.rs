@@ -93,7 +93,6 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
         Path::new("package.json"),
         Path::new("pnpm-workspace.yaml"),
         Path::new("Cargo.toml"),
-        Path::new("scripts/release-contract-profile.json"),
     ] {
         copy_file(source, &repository.root, path);
     }
@@ -118,7 +117,6 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
                 Some("excluded".to_owned())
             }
             "repository-integration" => Some("removed".to_owned()),
-            "repository-publication-sequencing" => Some("external".to_owned()),
             _ => diagnostic.recommended.clone(),
         };
         if diagnostic.code == "repository-integration" {
@@ -677,26 +675,18 @@ fn dev_dependency_cycles_produce_an_actionable_plan() {
     assert_eq!(diagnostic.recommended.as_deref(), Some("intentional"));
 }
 
-#[test]
-fn release_profile_version_sources_remap_pending_intent_identity() {
-    let repository = Repository::new();
+fn write_cross_projection_fixture(repository: &Repository) {
     repository.write(
         "package.json",
-        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages\", \"packages/*\"]\n}\n",
     );
     repository.write(
-        "packages/package-b/package.json",
-        "{\n  \"name\": \"package-b\",\n  \"version\": \"1.0.0\"\n}\n",
+        "packages/package.json",
+        "{\n  \"name\": \"alpha\",\n  \"version\": \"1.0.0\"\n}\n",
     );
     repository.write(
-        "scripts/release-contract-profile.json",
-        r#"{
-  "packages": [
-    { "name": "package-a" },
-    { "name": "package-b", "versionSource": "package-a" }
-  ]
-}
-"#,
+        "packages/beta/package.json",
+        "{\n  \"name\": \"beta\",\n  \"version\": \"1.0.0\"\n}\n",
     );
     repository.write(
         ".changeset/config.json",
@@ -712,14 +702,96 @@ fn release_profile_version_sources_remap_pending_intent_identity() {
     );
     repository.write(
         ".changeset/useful-change.md",
-        "---\n\"package-b\": minor\n---\n\nAdd a useful capability.\n",
+        "---\n\"beta\": minor\n---\n\nAdd a useful capability.\n",
+    );
+}
+
+#[test]
+fn arbitrary_release_profile_content_cannot_change_inferred_configuration() {
+    let repository = Repository::new();
+    write_cross_projection_fixture(&repository);
+
+    let baseline = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("baseline plan");
+    assert_eq!(baseline.status.code(), Some(2));
+    let baseline: InitPlan = serde_json::from_slice(&baseline.stdout).expect("baseline plan");
+
+    repository.write(
+        "scripts/release-contract-profile.json",
+        r#"{
+  "packages": [
+    {
+      "name": "beta",
+      "versionSource": "alpha",
+      "tagBeforePublish": true,
+      "publishAfter": ["alpha"],
+      "versionProjections": ["arbitrary"]
+    }
+  ],
+  "publicationOrder": ["beta", "alpha"]
+}
+"#,
     );
 
     let output = repository
         .cli()
         .args(["init", "--dry-run", "--json"])
         .output()
-        .expect("identity-remapped plan");
+        .expect("plan with external release metadata");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.inferred_config, baseline.inferred_config);
+    assert_eq!(plan.converted_intents, baseline.converted_intents);
+    assert_eq!(plan.parity.status, "equivalent");
+    assert_eq!(
+        plan.converted_intents[0]
+            .release_units
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["beta"]
+    );
+    assert!(plan.inferred_config.release_units.contains_key("alpha"));
+    assert!(plan.inferred_config.release_units.contains_key("beta"));
+    assert!(plan.inferred_config.workspace_tags.is_empty());
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "external-release-evidence")
+        .expect("external release evidence");
+    assert_eq!(
+        diagnostic.evidence[0].path,
+        Path::new("scripts/release-contract-profile.json")
+    );
+}
+
+#[test]
+fn explicit_candidate_resolution_supplies_cross_projection_identity() {
+    let repository = Repository::new();
+    write_cross_projection_fixture(&repository);
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("initial plan");
+    let candidate = plan
+        .discovery_candidates
+        .iter_mut()
+        .find(|candidate| candidate.native_identity.as_deref() == Some("beta"))
+        .expect("beta candidate");
+    candidate.resolution = Some(CandidateResolution::Projection {
+        release_unit: "alpha".to_owned(),
+        target_candidate: None,
+    });
+    fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolution");
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("candidate-resolved plan");
     assert_eq!(output.status.code(), Some(2));
     let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
     assert_eq!(plan.parity.status, "equivalent");
@@ -729,10 +801,12 @@ fn release_profile_version_sources_remap_pending_intent_identity() {
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
-        vec!["package-a"]
+        vec!["alpha"]
     );
-    assert!(plan.inferred_config.release_units.contains_key("package-a"));
-    assert!(!plan.inferred_config.release_units.contains_key("package-b"));
+    let release_unit = &plan.inferred_config.release_units["alpha"];
+    assert_eq!(release_unit.projections.len(), 2);
+    assert!(!plan.inferred_config.release_units.contains_key("beta"));
+    assert!(plan.inferred_config.workspace_tags.is_empty());
 }
 
 #[test]
@@ -980,7 +1054,8 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
         assert!(reconciled
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.invalidated_resolution));
+            .filter(|diagnostic| diagnostic.code == "repository-integration")
+            .all(|diagnostic| diagnostic.verified));
         for diagnostic in &mut reconciled.diagnostics {
             if diagnostic.resolution.is_none() {
                 diagnostic.resolution = diagnostic.recommended.clone();

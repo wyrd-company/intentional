@@ -235,6 +235,10 @@ parity comparison. Private-package version and tag settings are recorded
 explicitly because Intentional separates version management from publication
 privacy and annotates every managed release. Unsupported or repository-specific
 behavior remains an explicit diagnostic.
+Repository release metadata and release scripts are retained as external
+evidence; Intentional does not interpret their private schemas or infer package,
+tag, publication, or ordering semantics from them. Cross-projection identity is
+provided only through explicit discovery-candidate resolutions.
 Changesets' range-conditional peer-dependent option is one such explicit
 contract choice because Intentional applies configured `depends-on` edges
 uniformly; any pending-release difference remains a parity blocker.

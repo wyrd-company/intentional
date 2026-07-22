@@ -241,11 +241,11 @@ proposed-design:
     current release difference remains a parity blocker. Internal
     devDependencies participate in the source computation without becoming
     durable Intentional `depends-on` edges; that contract choice is explicit
-    and current divergence remains blocking. Release-profile
-    versionSource mappings rewrite manifest-native intent keys to the selected
-    release unit identity before comparison and conversion.
-    Unsupported settings and repository-specific release metadata remain
-    explicit diagnostics with source evidence rather than inferred behavior.
+    and current divergence remains blocking. Explicit discovery-candidate
+    projection resolutions map manifest-native intent keys to the selected
+    release-unit identity before comparison and conversion. Unsupported
+    settings and repository-specific release metadata remain explicit
+    diagnostics with source evidence rather than inferred behavior.
   release-unit-disposition: >-
     Managed release units belong to the inventory and participate in release
     computation. Suspended release units remain configured and visible to status

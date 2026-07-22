@@ -8,11 +8,11 @@
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
     Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    WorkspaceTagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
+    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
 };
 use crate::error::{Error, Result};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
 };
 use crate::plan::canonical_json;
 use crate::version::{
@@ -1254,40 +1254,87 @@ fn candidate_projection(candidate: &DiscoveryCandidate, unit_path: &Path) -> Res
     })
 }
 
-fn apply_changesets_candidate_receipts(
-    config: &mut Config,
+fn apply_changesets_candidate_resolutions(
+    root: &Path,
+    discovery: &mut Discovery,
     candidates: &[DiscoveryCandidate],
-) -> Result<()> {
+) -> Result<BTreeMap<String, String>> {
     let mut removed_release_units = BTreeSet::new();
+    let mut identity_map = BTreeMap::new();
     for candidate in candidates {
         match &candidate.resolution {
             None => {}
             Some(CandidateResolution::Projection { release_unit, .. }) => {
-                let projection_is_represented =
-                    candidate_projection_is_represented(config, candidate);
-                let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
-                    Error::Validation(format!(
+                let projection_owner = candidate_projection_owner(&discovery.config, candidate)
+                    .map(str::to_owned);
+                let Some(target) = discovery.config.release_units.get(release_unit) else {
+                    return Err(Error::Validation(format!(
                         "Changesets discovery candidate {} projects onto absent release unit {release_unit}",
                         candidate.id
-                    ))
-                })?;
-                if candidate.projection.is_some() && !projection_is_represented {
-                    let projection = candidate_projection(candidate, &unit.path)?;
-                    if !unit.projections.iter().any(|existing| {
+                    )));
+                };
+                let target_path = target.path.clone();
+                if candidate.projection.is_some() {
+                    if let Some(owner) = projection_owner.as_deref() {
+                        let native_owner = candidate.native_identity.as_deref() == Some(owner);
+                        if owner != release_unit && !native_owner {
+                            return Err(Error::Validation(format!(
+                                "Changesets discovery candidate {} projection is already owned by release unit {owner}, not {release_unit}",
+                                candidate.id
+                            )));
+                        }
+                    }
+                    let projection = candidate_projection(candidate, &target_path)?;
+                    let target = discovery
+                        .config
+                        .release_units
+                        .get_mut(release_unit)
+                        .expect("validated target release unit");
+                    if projection_owner.as_deref() != Some(release_unit)
+                        && !target.projections.iter().any(|existing| {
                         existing.file == projection.file && existing.pointer == projection.pointer
-                    }) {
-                        unit.projections.push(projection);
+                    })
+                    {
+                        target.projections.push(projection);
                     }
                 }
-                config.discovery.managed_paths.push(ManagedPathReceipt {
-                    detector: candidate.detector.clone(),
-                    path: candidate.path.clone(),
-                    release_unit: release_unit.clone(),
-                });
+                if let Some(native_identity) = &candidate.native_identity {
+                    if native_identity != release_unit {
+                        if let Some(existing) =
+                            identity_map.insert(native_identity.clone(), release_unit.clone())
+                        {
+                            if existing != *release_unit {
+                                return Err(Error::Validation(format!(
+                                    "Changesets discovery candidates map native identity {native_identity} to both {existing} and {release_unit}"
+                                )));
+                            }
+                        }
+                        if let Some(source) =
+                            discovery.config.release_units.get_mut(native_identity)
+                        {
+                            source.projections.retain(|projection| {
+                                root.join(&source.path).join(&projection.file)
+                                    != root.join(&candidate.path)
+                            });
+                            if source.projections.is_empty() {
+                                removed_release_units.insert(native_identity.clone());
+                            }
+                        }
+                    }
+                }
+                discovery
+                    .config
+                    .discovery
+                    .managed_paths
+                    .push(ManagedPathReceipt {
+                        detector: candidate.detector.clone(),
+                        path: candidate.path.clone(),
+                        release_unit: release_unit.clone(),
+                    });
             }
             Some(CandidateResolution::Excluded) => {
                 if let Some(native_identity) = &candidate.native_identity {
-                    if let Some(unit) = config.release_units.get_mut(native_identity) {
+                    if let Some(unit) = discovery.config.release_units.get_mut(native_identity) {
                         unit.projections.retain(|projection| {
                             unit.path.join(&projection.file) != candidate.path
                         });
@@ -1303,11 +1350,15 @@ fn apply_changesets_candidate_receipts(
                     .expect("candidate path evidence validated")
                     .digest
                     .clone();
-                config.discovery.excluded_paths.push(ExcludedPathReceipt {
-                    detector: candidate.detector.clone(),
-                    path: candidate.path.clone(),
-                    evidence_digest: digest,
-                });
+                discovery
+                    .config
+                    .discovery
+                    .excluded_paths
+                    .push(ExcludedPathReceipt {
+                        detector: candidate.detector.clone(),
+                        path: candidate.path.clone(),
+                        evidence_digest: digest,
+                    });
             }
             Some(CandidateResolution::Independent { release_unit }) => {
                 return Err(Error::Validation(format!(
@@ -1318,32 +1369,77 @@ fn apply_changesets_candidate_receipts(
         }
     }
     for release_unit in &removed_release_units {
-        config.release_units.remove(release_unit);
+        discovery.config.release_units.remove(release_unit);
     }
-    for unit in config.release_units.values_mut() {
+    for (source, target) in &identity_map {
+        if discovery.config.release_units.contains_key(source) {
+            return Err(Error::Validation(format!(
+                "Changesets discovery candidates leave native identity {source} split between release units {source} and {target}; resolve every projection for that identity consistently"
+            )));
+        }
+        if discovery.workspace_packages.remove(source) {
+            discovery.workspace_packages.insert(target.clone());
+        }
+        if discovery.private_packages.remove(source) {
+            discovery.private_packages.insert(target.clone());
+        }
+        discovery.versions.remove(source);
+    }
+    for unit in discovery.config.release_units.values_mut() {
+        for dependency in &mut unit.depends_on {
+            if let Some(target) = identity_map.get(dependency) {
+                *dependency = target.clone();
+            }
+        }
         unit.depends_on
             .retain(|dependency| !removed_release_units.contains(dependency));
+        unit.depends_on.sort();
+        unit.depends_on.dedup();
     }
-    config
+    for edge in &mut discovery.npm_dependencies {
+        if let Some(target) = identity_map.get(&edge.dependent) {
+            edge.dependent = target.clone();
+        }
+        if let Some(target) = identity_map.get(&edge.dependency) {
+            edge.dependency = target.clone();
+        }
+    }
+    discovery.npm_dependencies.retain(|edge| {
+        edge.dependent != edge.dependency
+            && discovery.config.release_units.contains_key(&edge.dependent)
+            && discovery
+                .config
+                .release_units
+                .contains_key(&edge.dependency)
+    });
+    discovery
+        .config
         .discovery
         .managed_paths
         .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
-    config
+    discovery
+        .config
         .discovery
         .excluded_paths
         .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
-    Ok(())
+    Ok(identity_map)
 }
 
-fn candidate_projection_is_represented(config: &Config, candidate: &DiscoveryCandidate) -> bool {
+fn candidate_projection_owner<'a>(
+    config: &'a Config,
+    candidate: &DiscoveryCandidate,
+) -> Option<&'a str> {
     let Some(suggestion) = &candidate.projection else {
-        return false;
+        return None;
     };
-    config.release_units.values().any(|unit| {
-        unit.projections.iter().any(|projection| {
-            projection_workspace_path(unit, projection) == suggestion.path
-                && projection.pointer == suggestion.pointer
-        })
+    config.release_units.iter().find_map(|(id, unit)| {
+        unit.projections
+            .iter()
+            .any(|projection| {
+                projection_workspace_path(unit, projection) == suggestion.path
+                    && projection.pointer == suggestion.pointer
+            })
+            .then_some(id.as_str())
     })
 }
 
@@ -1370,16 +1466,10 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     for key in ["ignore", "fixed", "linked"] {
         collect_json_strings(&changesets[key], &mut referenced_names);
     }
-    if let Some(profile) = load_release_profile(root)? {
-        for package in profile["packages"].as_array().into_iter().flatten() {
-            if let Some(name) = package["name"].as_str() {
-                referenced_names.insert(name.to_owned());
-            }
-        }
-    }
     let mut discovery = discover(root, scan_all, &referenced_names)?;
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
-    apply_changesets_candidate_receipts(&mut discovery.config, &discovery.candidates)?;
+    let candidates = discovery.candidates.clone();
+    let identity_map = apply_changesets_candidate_resolutions(root, &mut discovery, &candidates)?;
     discovery.config.settings.pre_1_0_bump_mapping = Pre1BumpMapping::Component;
     discovery.config.settings.internal_dependency_bump = changesets["updateInternalDependencies"]
         .as_str()
@@ -1387,15 +1477,20 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .unwrap_or(Bump::Patch);
     discovery.config.fixed = parse_groups(&changesets["fixed"])?;
     discovery.config.linked = parse_groups(&changesets["linked"])?;
-    let identity_map = merge_release_profile(root, &mut discovery)?;
+    remap_groups(&mut discovery.config.fixed, &identity_map);
+    remap_groups(&mut discovery.config.linked, &identity_map);
     remap_converted_intents(&mut converted_intents, &identity_map, &discovery.config)?;
 
     let mut diagnostics = Vec::new();
     let config_evidence = evidence(root, Path::new(CHANGESETS_CONFIG), Vec::new())?;
     for ignored in changesets["ignore"].as_array().into_iter().flatten() {
-        let Some(package) = ignored.as_str() else {
+        let Some(source_package) = ignored.as_str() else {
             continue;
         };
+        let package = identity_map
+            .get(source_package)
+            .map(String::as_str)
+            .unwrap_or(source_package);
         diagnostics.push(InitDiagnostic {
             id: format!("ignored-release-unit-disposition:{package}"),
             code: "ignored-release-unit-disposition".to_owned(),
@@ -1552,24 +1647,6 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
-    if let Some(profile_path) = existing_release_profile(root) {
-        let profile_evidence = evidence(root, &profile_path, Vec::new())?;
-        let text = std::fs::read_to_string(root.join(&profile_path))
-            .map_err(|error| Error::io(root.join(&profile_path), error))?;
-        if text.contains("publishAfter") || text.contains("publicationOrder") {
-            diagnostics.push(InitDiagnostic {
-                id: "repository-publication-sequencing".to_owned(),
-                code: "repository-publication-sequencing".to_owned(),
-                message: "Keep repository publication sequencing in the external release executor; Intentional imports only observable tag-after prerequisites.".to_owned(),
-                evidence: vec![profile_evidence],
-                choices: vec!["external".to_owned()],
-                recommended: Some("external".to_owned()),
-                resolution: None,
-                verified: false,
-                invalidated_resolution: false,
-            });
-        }
-    }
     let current_integrations = scan_changesets_integrations(root)?;
     for item in &current_integrations {
         diagnostics.push(InitDiagnostic {
@@ -1587,6 +1664,29 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             invalidated_resolution: false,
         });
     }
+    let integration_paths = current_integrations
+        .iter()
+        .map(|item| item.path.as_path())
+        .collect::<BTreeSet<_>>();
+    for item in scan_external_release_evidence(root)?
+        .into_iter()
+        .filter(|item| !integration_paths.contains(item.path.as_path()))
+    {
+        diagnostics.push(InitDiagnostic {
+            id: format!("external-release-evidence:{}", item.path.display()),
+            code: "external-release-evidence".to_owned(),
+            message: format!(
+                "Keep repository-specific release behavior from {} in the external release executor; Intentional records this file as evidence without interpreting its contents.",
+                item.path.display()
+            ),
+            evidence: vec![item],
+            choices: vec!["external".to_owned()],
+            recommended: Some("external".to_owned()),
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+        });
+    }
     reconcile_diagnostics(root, &mut diagnostics, previous.as_ref())?;
     let mut source_config = discovery.config.clone();
     let ignored = changesets["ignore"]
@@ -1596,7 +1696,11 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .filter_map(JsonValue::as_str)
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let source_excluded = ignored.union(&unmapped_release_units).cloned().collect();
+    let source_excluded = ignored
+        .iter()
+        .map(|id| identity_map.get(id).unwrap_or(id).clone())
+        .chain(unmapped_release_units.iter().cloned())
+        .collect();
     exclude_release_units(&mut source_config, &source_excluded);
     apply_disposition_resolutions(&mut discovery.config, &diagnostics)?;
     discovery.config.validate()?;
@@ -2583,121 +2687,17 @@ fn changesets_private_package_settings(value: &JsonValue) -> Option<(bool, bool)
     }
 }
 
-fn existing_release_profile(root: &Path) -> Option<PathBuf> {
-    let path = PathBuf::from("scripts/release-contract-profile.json");
-    root.join(&path).is_file().then_some(path)
-}
-
-fn load_release_profile(root: &Path) -> Result<Option<JsonValue>> {
-    let Some(path) = existing_release_profile(root) else {
-        return Ok(None);
-    };
-    let text = std::fs::read_to_string(root.join(&path))
-        .map_err(|error| Error::io(root.join(&path), error))?;
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))
-}
-
-fn merge_release_profile(
-    root: &Path,
-    discovery: &mut Discovery,
-) -> Result<BTreeMap<String, String>> {
-    let Some(profile) = load_release_profile(root)? else {
-        return Ok(BTreeMap::new());
-    };
-    let mut identity_map = BTreeMap::new();
-    let profile_path = existing_release_profile(root).expect("loaded profile path");
-    discovery.evidence.insert(profile_path);
-    let entries = profile["packages"].as_array().cloned().unwrap_or_default();
-    for entry in entries {
-        let Some(name) = entry["name"].as_str() else {
-            continue;
-        };
-        let source = entry["versionSource"].as_str().unwrap_or(name);
-        if source == name {
-            continue;
-        }
-        identity_map.insert(name.to_owned(), source.to_owned());
-        let Some(projected) = discovery.config.release_units.remove(name) else {
-            continue;
-        };
-        if discovery.workspace_packages.remove(name) {
-            discovery.workspace_packages.insert(source.to_owned());
-        }
-        if discovery.private_packages.remove(name) {
-            discovery.private_packages.insert(source.to_owned());
-        }
-        let source_release_unit =
-            discovery
-                .config
-                .release_units
-                .get_mut(source)
-                .ok_or_else(|| {
-                    Error::Validation(format!(
-                        "release profile versionSource {source} for {name} was not discovered"
-                    ))
-                })?;
-        for mut projection in projected.projections {
-            let absolute = root.join(&projected.path).join(&projection.file);
-            projection.file = absolute
-                .strip_prefix(root.join(&source_release_unit.path))
-                .map_err(|_| {
-                    Error::Validation(format!(
-                        "projection {} is outside release unit {source}",
-                        absolute.display()
-                    ))
-                })?
-                .to_owned();
-            source_release_unit.projections.push(projection);
-        }
-        source_release_unit.tags.insert(
-            name.to_owned(),
-            TagConfig {
-                role: TagRole::Projection,
-                template: format!("{name}@{{version}}"),
-                require_phase: entry["tagBeforePublish"]
-                    .as_bool()
-                    .and_then(|before| before.then_some(TagPhase::BeforePublication)),
-                tag_after: Vec::new(),
-            },
-        );
-        discovery.versions.remove(name);
-    }
-    for release_unit in discovery.config.release_units.values_mut() {
-        for dependency in &mut release_unit.depends_on {
-            if let Some(source) = identity_map.get(dependency) {
-                *dependency = source.clone();
+fn remap_groups(groups: &mut Vec<Vec<String>>, identity_map: &BTreeMap<String, String>) {
+    for group in groups.iter_mut() {
+        for release_unit in group.iter_mut() {
+            if let Some(target) = identity_map.get(release_unit) {
+                *release_unit = target.clone();
             }
         }
-        release_unit.depends_on.sort();
-        release_unit.depends_on.dedup();
+        group.sort();
+        group.dedup();
     }
-    for edge in &mut discovery.npm_dependencies {
-        if let Some(source) = identity_map.get(&edge.dependent) {
-            edge.dependent = source.clone();
-        }
-        if let Some(source) = identity_map.get(&edge.dependency) {
-            edge.dependency = source.clone();
-        }
-    }
-    discovery.npm_dependencies.retain(|edge| {
-        edge.dependent != edge.dependency
-            && discovery.config.release_units.contains_key(&edge.dependent)
-            && discovery
-                .config
-                .release_units
-                .contains_key(&edge.dependency)
-    });
-    discovery.config.workspace_tags.insert(
-        "release".to_owned(),
-        WorkspaceTagConfig {
-            template: "{version}".to_owned(),
-            require_phase: None,
-            tag_after: Vec::new(),
-        },
-    );
-    Ok(identity_map)
+    groups.retain(|group| group.len() > 1);
 }
 
 fn remap_converted_intents(
@@ -2759,6 +2759,29 @@ fn scan_changesets_integrations(root: &Path) -> Result<Vec<SourceEvidence>> {
             .collect::<Vec<_>>();
         if !lines.is_empty() {
             findings.push(evidence(root, relative, lines)?);
+        }
+    }
+    findings.sort();
+    Ok(findings)
+}
+
+fn scan_external_release_evidence(root: &Path) -> Result<Vec<SourceEvidence>> {
+    let mut findings = Vec::new();
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| !hard_excluded(root, entry.path()))
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        let is_release_file = relative.file_name().is_some_and(|name| {
+            name.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("release")
+        });
+        if (relative.starts_with("scripts") || relative.starts_with(".github")) && is_release_file {
+            findings.push(evidence(root, relative, Vec::new())?);
         }
     }
     findings.sort();
