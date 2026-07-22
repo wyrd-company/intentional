@@ -7,7 +7,7 @@
 set -euo pipefail
 
 rumdl check docs/*.md
-ryl check docs/docs.yml
+ryl check docs/docs.yml .github/workflows/publish-docs.yml Taskfile.yml
 ryl --markdown docs/*.md
 
 test "$(yq -r '.name' docs/docs.yml)" = "intentional"
