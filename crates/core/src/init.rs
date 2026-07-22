@@ -1265,8 +1265,8 @@ fn apply_changesets_candidate_resolutions(
         match &candidate.resolution {
             None => {}
             Some(CandidateResolution::Projection { release_unit, .. }) => {
-                let projection_owner = candidate_projection_owner(&discovery.config, candidate)
-                    .map(str::to_owned);
+                let projection_owner =
+                    candidate_projection_owner(&discovery.config, candidate).map(str::to_owned);
                 let Some(target) = discovery.config.release_units.get(release_unit) else {
                     return Err(Error::Validation(format!(
                         "Changesets discovery candidate {} projects onto absent release unit {release_unit}",
@@ -3892,7 +3892,7 @@ mod tests {
 
     #[test]
     fn changesets_materializes_any_unrepresented_candidate_projection_once() {
-        let mut config = candidate_plan(Vec::new()).inferred_config;
+        let config = candidate_plan(Vec::new()).inferred_config;
         let mut generic = candidate(
             "configured/metadata.json",
             Some(CandidateResolution::Projection {
@@ -3907,19 +3907,41 @@ mod tests {
             pointer: Some("/version".to_owned()),
         });
 
-        apply_changesets_candidate_receipts(&mut config, std::slice::from_ref(&generic))
-            .expect("generic projection materialized");
-        assert_eq!(config.release_units["configured"].projections.len(), 1);
+        let mut discovery = Discovery {
+            config,
+            ..Discovery::default()
+        };
+        apply_changesets_candidate_resolutions(
+            Path::new("."),
+            &mut discovery,
+            std::slice::from_ref(&generic),
+        )
+        .expect("generic projection materialized");
         assert_eq!(
-            config.release_units["configured"].projections[0]
+            discovery.config.release_units["configured"]
+                .projections
+                .len(),
+            1
+        );
+        assert_eq!(
+            discovery.config.release_units["configured"].projections[0]
                 .pointer
                 .as_deref(),
             Some("/version")
         );
 
-        apply_changesets_candidate_receipts(&mut config, std::slice::from_ref(&generic))
-            .expect("represented projection not duplicated");
-        assert_eq!(config.release_units["configured"].projections.len(), 1);
+        apply_changesets_candidate_resolutions(
+            Path::new("."),
+            &mut discovery,
+            std::slice::from_ref(&generic),
+        )
+        .expect("represented projection not duplicated");
+        assert_eq!(
+            discovery.config.release_units["configured"]
+                .projections
+                .len(),
+            1
+        );
     }
 
     #[test]
