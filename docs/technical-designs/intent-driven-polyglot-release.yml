@@ -207,9 +207,10 @@ proposed-design:
     New and configured repositories use the same candidate workflow. Managed
     receipts resolve their detector/path identity; excluded receipts resolve it
     only while the exact evidence digest still agrees. A scan with no new or
-    changed candidates performs no mutation. A complete set of new resolutions
-    is validated and materialized together, after which the transient plan is
-    removed.
+    changed candidates and no transient plan performs no mutation. When current
+    evidence makes every candidate resolved, reconciliation removes any obsolete
+    transient plan. A complete set of new resolutions is validated and
+    materialized together, after which the transient plan is removed.
 
     YAML choices are compact scalar values with one inline comment explaining
     each value, followed by recommended and resolution fields. Dry-run emits
