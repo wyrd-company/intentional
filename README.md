@@ -239,6 +239,11 @@ Repository release metadata and release scripts are retained as external
 evidence; Intentional does not interpret their private schemas or infer package,
 tag, publication, or ordering semantics from them. Cross-projection identity is
 provided only through explicit discovery-candidate resolutions.
+When a Changesets `ignore` entry names a native package that a candidate
+resolution projects onto another managed release unit, source parity is
+undefined at the package boundary. The target remains in both inventories and
+takeover stays blocked until the ignore entry is removed or the candidate
+resolution is revised.
 Changesets' range-conditional peer-dependent option is one such explicit
 contract choice because Intentional applies configured `depends-on` edges
 uniformly; any pending-release difference remains a parity blocker.

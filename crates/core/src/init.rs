@@ -1698,7 +1698,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .collect::<BTreeSet<_>>();
     let source_excluded = ignored
         .iter()
-        .map(|id| identity_map.get(id).unwrap_or(id).clone())
+        .cloned()
         .chain(unmapped_release_units.iter().cloned())
         .collect();
     exclude_release_units(&mut source_config, &source_excluded);
@@ -1720,10 +1720,25 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     let suppress_private_versions =
         changesets_private_package_settings(&changesets["privatePackages"])
             .is_some_and(|(versions_private, _)| !versions_private);
-    let mut skipped_release_units = ignored
+    let merged_ignored = ignored
         .iter()
-        .map(|id| identity_map.get(id).cloned().unwrap_or_else(|| id.clone()))
-        .collect::<BTreeSet<_>>();
+        .filter_map(|source| {
+            identity_map
+                .get(source)
+                .map(|target| (source.clone(), target.clone()))
+        })
+        .collect::<Vec<_>>();
+    let merged_ignore_error = (!merged_ignored.is_empty()).then(|| {
+        let conflicts = merged_ignored
+            .iter()
+            .map(|(source, target)| format!("{source} onto {target}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Changesets ignore names native package identities that candidate resolutions map onto managed release units ({conflicts}); source parity cannot apply a package-scoped ignore after identities are merged. Remove the ignore entries or revise the candidate resolutions before takeover"
+        )
+    });
+    let mut skipped_release_units = ignored.clone();
     if suppress_private_versions {
         skipped_release_units.extend(discovery.private_packages.iter().cloned());
     }
@@ -1749,7 +1764,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             ["onlyUpdatePeerDependentsWhenOutOfRange"]
             .as_bool()
             .unwrap_or(false),
-        preflight_error: mixed_skipped_changeset(&converted_intents, &skipped_release_units),
+        preflight_error: merged_ignore_error
+            .or_else(|| mixed_skipped_changeset(&converted_intents, &skipped_release_units)),
     };
     let parity = parity_result(
         &source_config,

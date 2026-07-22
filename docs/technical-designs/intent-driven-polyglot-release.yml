@@ -246,6 +246,11 @@ proposed-design:
     release-unit identity before comparison and conversion. Unsupported
     settings and repository-specific release metadata remain explicit
     diagnostics with source evidence rather than inferred behavior.
+    A Changesets ignore entry cannot be remapped from its native package
+    identity onto a merged managed release unit because that would erase the
+    package boundary that defines source authority. The merged target remains
+    in the source and proposed inventories, and parity reports a blocker until
+    the ignore entry is removed or the candidate resolution is revised.
   release-unit-disposition: >-
     Managed release units belong to the inventory and participate in release
     computation. Suspended release units remain configured and visible to status

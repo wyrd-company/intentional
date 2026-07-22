@@ -810,6 +810,59 @@ fn explicit_candidate_resolution_supplies_cross_projection_identity() {
 }
 
 #[test]
+fn ignored_projected_identity_blocks_source_parity_without_dropping_target() {
+    let repository = Repository::new();
+    write_cross_projection_fixture(&repository);
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": ["beta"]
+}
+"#,
+    );
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("initial plan");
+    let candidate = plan
+        .discovery_candidates
+        .iter_mut()
+        .find(|candidate| candidate.native_identity.as_deref() == Some("beta"))
+        .expect("beta candidate");
+    candidate.resolution = Some(CandidateResolution::Projection {
+        release_unit: "alpha".to_owned(),
+        target_candidate: None,
+    });
+    fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolution");
+
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("candidate-resolved ignored plan");
+    assert_eq!(output.status.code(), Some(2));
+    let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
+    assert_eq!(plan.parity.status, "blocked");
+    assert!(plan.parity.release_units.is_empty());
+    assert!(plan.inferred_config.release_units.contains_key("alpha"));
+    assert!(!plan.inferred_config.release_units.contains_key("beta"));
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "changesets-release-invalid")
+        .expect("source authority blocker");
+    assert!(diagnostic
+        .message
+        .contains("source parity cannot apply a package-scoped ignore"));
+    assert!(diagnostic.message.contains("beta onto alpha"));
+}
+
+#[test]
 fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
     let repository = Repository::new();
     repository.write(
