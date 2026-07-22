@@ -19,10 +19,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// One package in a canonical release plan.
+/// One release unit in a canonical release plan.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PlanPackage {
-    /// Logical package id.
+pub struct PlanReleaseUnit {
+    /// Release-unit id.
     pub id: String,
     /// Latest final tag-derived version.
     pub old_version: String,
@@ -32,7 +32,7 @@ pub struct PlanPackage {
     pub bump: Bump,
     /// Directly contributing intent ids.
     pub contributing_intent_ids: Vec<String>,
-    /// Canonical ids of package tags to create.
+    /// Canonical ids of release-unit tags to create.
     pub tag_ids: Vec<String>,
     /// Deterministically rendered changelog section.
     pub release_notes: String,
@@ -56,10 +56,10 @@ pub struct PlanTag {
     pub name: String,
     /// Version recorded by the tag.
     pub version: String,
-    /// Logical package id for package tags.
+    /// Release-unit id for release-unit tags.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub package: Option<String>,
-    /// Package tag role. Workspace tags have no package role.
+    pub release_unit: Option<String>,
+    /// Release-unit tag role. Workspace tags have no release-unit role.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<TagRole>,
     /// Required executor declaration.
@@ -82,9 +82,9 @@ pub struct ReleasePlan {
     /// Optional release channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// Changed packages ordered by id.
-    pub packages: Vec<PlanPackage>,
-    /// All package and workspace tags in canonical id order.
+    /// Changed release units ordered by id.
+    pub release_units: Vec<PlanReleaseUnit>,
+    /// All release-unit and workspace tags in canonical id order.
     pub tags: Vec<PlanTag>,
     /// Observable tag creation order derived only from `tag-after` edges.
     pub tag_order: Vec<String>,
@@ -96,7 +96,7 @@ struct PlanPayload<'a> {
     generator: &'a Generator,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
-    packages: &'a [PlanPackage],
+    release_units: &'a [PlanReleaseUnit],
     tags: &'a [PlanTag],
     tag_order: &'a [String],
 }
@@ -139,9 +139,9 @@ impl ReleasePlan {
             return Err(Error::Validation("channel must not be empty".to_owned()));
         }
         let repository = VersionRepository::discover(root)?;
-        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.packages));
+        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let mut current_versions = BTreeMap::new();
-        for id in config.packages.keys() {
+        for id in config.release_units.keys() {
             let (_, primary) = config.primary_tag(id)?;
             let current = match excluded_target {
                 Some(target) => repository.current_version_before(id, &primary.template, target)?,
@@ -174,12 +174,12 @@ impl ReleasePlan {
             versions.insert(id.clone(), (current, release));
         }
 
-        let mut packages = Vec::with_capacity(changed.len());
+        let mut release_units = Vec::with_capacity(changed.len());
         for id in &changed {
             let (current, release) = &versions[id];
             let intent_ids = intents
                 .iter()
-                .filter(|intent| intent.packages.contains_key(id))
+                .filter(|intent| intent.release_units.contains_key(id))
                 .map(|intent| intent.id.clone())
                 .collect::<Vec<_>>();
             let effective = resolved
@@ -188,16 +188,16 @@ impl ReleasePlan {
                 .collect();
             let entries = note_entries(id, config, intents, &effective, &versions);
             let release_notes = render_changelog_section(release, &entries);
-            packages.push(PlanPackage {
+            release_units.push(PlanReleaseUnit {
                 id: id.clone(),
                 old_version: current.to_string(),
                 new_version: release.to_string(),
                 bump: resolved[id].bump,
                 contributing_intent_ids: intent_ids,
-                tag_ids: config.packages[id]
+                tag_ids: config.release_units[id]
                     .tags
                     .keys()
-                    .map(|tag_id| Config::package_tag_id(id, tag_id))
+                    .map(|tag_id| Config::release_unit_tag_id(id, tag_id))
                     .collect(),
                 release_notes,
             });
@@ -205,24 +205,24 @@ impl ReleasePlan {
 
         let channel = channel.map(str::to_owned);
         let mut tags = Vec::new();
-        for package in &packages {
-            let config_package = &config.packages[&package.id];
-            let version = Version::parse(&package.new_version)?;
-            for (tag_id, tag) in &config_package.tags {
+        for release_unit in &release_units {
+            let config_release_unit = &config.release_units[&release_unit.id];
+            let version = Version::parse(&release_unit.new_version)?;
+            for (tag_id, tag) in &config_release_unit.tags {
                 tags.push(PlanTag {
-                    id: Config::package_tag_id(&package.id, tag_id),
-                    name: render_tag(&tag.template, &package.id, &version),
+                    id: Config::release_unit_tag_id(&release_unit.id, tag_id),
+                    name: render_tag(&tag.template, &release_unit.id, &version),
                     version: version.to_string(),
-                    package: Some(package.id.clone()),
+                    release_unit: Some(release_unit.id.clone()),
                     role: Some(tag.role),
                     require_phase: tag.require_phase,
                     tag_after: tag.tag_after.clone(),
                 });
             }
         }
-        let highest_bump = packages
+        let highest_bump = release_units
             .iter()
-            .map(|package| package.bump)
+            .map(|release_unit| release_unit.bump)
             .max()
             .unwrap_or(Bump::None);
         if highest_bump != Bump::None {
@@ -253,7 +253,7 @@ impl ReleasePlan {
                     id: Config::workspace_tag_id(tag_id),
                     name: render_tag(&tag.template, tag_id, &version),
                     version: version.to_string(),
-                    package: None,
+                    release_unit: None,
                     role: None,
                     require_phase: tag.require_phase,
                     tag_after: tag.tag_after.clone(),
@@ -270,7 +270,7 @@ impl ReleasePlan {
             contract: &config.contract,
             generator: &generator,
             channel: &channel,
-            packages: &packages,
+            release_units: &release_units,
             tags: &tags,
             tag_order: &tag_order,
         };
@@ -281,7 +281,7 @@ impl ReleasePlan {
             contract: config.contract.clone(),
             generator,
             channel,
-            packages,
+            release_units,
             tags,
             tag_order,
         })
@@ -298,7 +298,7 @@ impl ReleasePlan {
             contract: &self.contract,
             generator: &self.generator,
             channel: &self.channel,
-            packages: &self.packages,
+            release_units: &self.release_units,
             tags: &self.tags,
             tag_order: &self.tag_order,
         };
@@ -410,13 +410,16 @@ fn note_entries(
     let mut entries = intents
         .iter()
         .filter_map(|intent| {
-            intent.packages.get(package_id).map(|bump| ChangelogEntry {
-                bump: *bump,
-                text: intent.message.clone(),
-            })
+            intent
+                .release_units
+                .get(package_id)
+                .map(|bump| ChangelogEntry {
+                    bump: *bump,
+                    text: intent.message.clone(),
+                })
         })
         .collect::<Vec<_>>();
-    for dependency in &config.packages[package_id].depends_on {
+    for dependency in &config.release_units[package_id].depends_on {
         if effective[dependency] == Bump::None
             || !versions.contains_key(dependency)
             || !shares_ecosystem(config, package_id, dependency)
@@ -435,12 +438,12 @@ fn note_entries(
 }
 
 fn shares_ecosystem(config: &Config, left: &str, right: &str) -> bool {
-    config.packages[left]
+    config.release_units[left]
         .projections
         .iter()
         .any(|left_projection| {
             left_projection.adapter.ecosystem().is_some()
-                && config.packages[right]
+                && config.release_units[right]
                     .projections
                     .iter()
                     .any(|right_projection| {
@@ -531,13 +534,13 @@ mod tests {
 
     #[test]
     fn digest_is_stable_for_same_payload() {
-        let packages = vec![PlanPackage {
+        let release_units = vec![PlanReleaseUnit {
             id: "sample".to_owned(),
             old_version: "1.0.0".to_owned(),
             new_version: "1.1.0".to_owned(),
             bump: Bump::Minor,
             contributing_intent_ids: vec!["clear-river-1234".to_owned()],
-            tag_ids: vec!["package/sample/primary".to_owned()],
+            tag_ids: vec!["release-unit/sample/primary".to_owned()],
             release_notes: "## 1.1.0\n".to_owned(),
         }];
         let generator = Generator {
@@ -550,7 +553,7 @@ mod tests {
             contract: "contract-1",
             generator: &generator,
             channel: &None,
-            packages: &packages,
+            release_units: &release_units,
             tags: &tags,
             tag_order: &order,
         };

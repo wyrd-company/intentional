@@ -9,11 +9,11 @@ use crate::adapters::{
     CargoAdapter, FormatAdapter, GoAdapter, JsonFormat, MsbuildAdapter, NpmAdapter, PubAdapter,
     PythonAdapter, TomlFormat, YamlFormat,
 };
-use crate::config::{Config, PackageConfig, Projection};
+use crate::config::{Config, Projection, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
-use crate::plan::{PlanPackage, ReleasePlan};
+use crate::plan::{PlanReleaseUnit, ReleasePlan};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -47,15 +47,15 @@ impl ApplyResult {
         let plan = ReleasePlan::from_inputs(root, &config, &intents, channel)?;
         let mut tree = WorkingTree::new(root);
         let by_id: BTreeMap<_, _> = plan
-            .packages
+            .release_units
             .iter()
             .map(|package| (package.id.as_str(), package))
             .collect();
         let mut workspace_versions = BTreeMap::new();
         let mut notices = Vec::new();
 
-        for package in &plan.packages {
-            let config_package = &config.packages[&package.id];
+        for package in &plan.release_units {
+            let config_package = &config.release_units[&package.id];
             for projection in &config_package.projections {
                 let go_major =
                     projection.adapter == Adapter::Go && package.bump == crate::model::Bump::Major;
@@ -218,7 +218,7 @@ impl<'a> WorkingTree<'a> {
 fn edit_projection_version(
     tree: &mut WorkingTree<'_>,
     root: &Path,
-    package: &PackageConfig,
+    package: &ReleaseUnitConfig,
     projection: &Projection,
     version: &str,
     workspace_versions: &mut BTreeMap<PathBuf, String>,
@@ -274,9 +274,9 @@ fn rewrite_internal_dependencies(
     tree: &mut WorkingTree<'_>,
     root: &Path,
     config: &Config,
-    released: &BTreeMap<&str, &PlanPackage>,
+    released: &BTreeMap<&str, &PlanReleaseUnit>,
 ) -> Result<()> {
-    for (dependent_id, dependent) in &config.packages {
+    for (dependent_id, dependent) in &config.release_units {
         if !released.contains_key(dependent_id.as_str()) {
             continue;
         }
@@ -284,7 +284,7 @@ fn rewrite_internal_dependencies(
             let Some(dependency_release) = released.get(dependency_id.as_str()) else {
                 continue;
             };
-            let dependency = &config.packages[dependency_id];
+            let dependency = &config.release_units[dependency_id];
             for adapter in [
                 Adapter::Npm,
                 Adapter::Cargo,

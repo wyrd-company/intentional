@@ -6,15 +6,15 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
-    Config, PackageConfig, Projection, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
+    Config, Projection, ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
 };
 use crate::error::{Error, Result};
 use crate::model::{
-    Adapter, Bump, PackageDisposition, Pre1BumpMapping, ProjectionMode, TagPhase, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
 use crate::plan::canonical_json;
 use crate::version::{
-    bump_version_with_mapping, effective_bumps, resolve_versions, PackageVersion,
+    bump_version_with_mapping, effective_bumps, resolve_versions, ReleaseUnitVersion,
 };
 use glob::glob;
 use node_semver::{Range as NodeRange, Version as NodeVersion};
@@ -103,15 +103,15 @@ pub struct ParityRelease {
 /// Changesets and proposed release results used for takeover parity.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct ParityPackage {
-    /// Logical package id.
-    pub package: String,
+pub struct ParityReleaseUnit {
+    /// Release-unit id.
+    pub release_unit: String,
     /// Version in source projections.
     pub current_version: String,
-    /// Independently computed Changesets result, when the source releases this package.
+    /// Independently computed Changesets result, when the source releases this release unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ParityRelease>,
-    /// Proposed Intentional result, when the proposed contract releases this package.
+    /// Proposed Intentional result, when the proposed contract releases this release unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposed: Option<ParityRelease>,
 }
@@ -122,8 +122,8 @@ pub struct ParityPackage {
 pub struct ParityResult {
     /// `equivalent` when all logical releases agree; otherwise `blocked`.
     pub status: String,
-    /// Per-package release results.
-    pub packages: Vec<ParityPackage>,
+    /// Per-release-unit results.
+    pub release_units: Vec<ParityReleaseUnit>,
 }
 
 /// One pending Changesets file converted losslessly at takeover.
@@ -132,8 +132,8 @@ pub struct ParityResult {
 pub struct ConvertedIntent {
     /// Changeset filename stem retained as the Intentional intent id.
     pub id: String,
-    /// Logical package bumps.
-    pub packages: BTreeMap<String, Bump>,
+    /// Release-unit bumps.
+    pub release_units: BTreeMap<String, Bump>,
     /// Markdown body, excluding Changesets frontmatter delimiters.
     pub message: String,
     /// Original Changesets file.
@@ -146,7 +146,7 @@ impl ConvertedIntent {
     fn contents(&self) -> Result<String> {
         Ok(format!(
             "---\n{}---\n\n{}\n",
-            serde_yaml::to_string(&self.packages)?,
+            serde_yaml::to_string(&self.release_units)?,
             self.message.trim()
         ))
     }
@@ -351,7 +351,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     let mut converted_intents = load_changesets_intents(root)?;
     let mut referenced_names = converted_intents
         .iter()
-        .flat_map(|intent| intent.packages.keys().cloned())
+        .flat_map(|intent| intent.release_units.keys().cloned())
         .collect::<BTreeSet<_>>();
     for key in ["ignore", "fixed", "linked"] {
         collect_json_strings(&changesets[key], &mut referenced_names);
@@ -420,7 +420,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             diagnostics.push(InitDiagnostic {
                 id: "private-package-tagging".to_owned(),
                 code: "private-package-tagging".to_owned(),
-                message: "Changesets suppresses private-package tags; Intentional creates annotated records for every managed logical release, independently from publication privacy.".to_owned(),
+                message: "Changesets suppresses private-package tags; Intentional creates annotated records for every managed release unit, independently from publication privacy.".to_owned(),
                 evidence: vec![config_evidence.clone()],
                 choices: vec!["intentional".to_owned()],
                 recommended: Some("intentional".to_owned()),
@@ -434,7 +434,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         diagnostics.push(InitDiagnostic {
             id: "changesets-changelog".to_owned(),
             code: "changesets-changelog".to_owned(),
-            message: "Intentional renders its contract-defined logical-package changelogs instead of invoking the configured Changesets changelog generator.".to_owned(),
+            message: "Intentional renders its contract-defined release-unit changelogs instead of invoking the configured Changesets changelog generator.".to_owned(),
             evidence: vec![config_evidence.clone()],
             choices: vec!["intentional".to_owned()],
             recommended: Some("intentional".to_owned()),
@@ -483,7 +483,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         let evidence = dev_dependents
             .iter()
             .filter_map(|id| {
-                let package = &discovery.config.packages[id];
+                let package = &discovery.config.release_units[id];
                 package
                     .projections
                     .iter()
@@ -505,12 +505,12 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         });
     }
     let mut unmapped_packages = BTreeSet::new();
-    for package in discovery.config.packages.keys() {
+    for package in discovery.config.release_units.keys() {
         if referenced_names.contains(package) || discovery.workspace_packages.contains(package) {
             continue;
         }
         unmapped_packages.insert(package.clone());
-        let package_config = &discovery.config.packages[package];
+        let package_config = &discovery.config.release_units[package];
         let manifest = package_config
             .projections
             .first()
@@ -579,7 +579,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let source_excluded = ignored.union(&unmapped_packages).cloned().collect();
-    exclude_packages(&mut source_config, &source_excluded);
+    exclude_release_units(&mut source_config, &source_excluded);
     apply_disposition_resolutions(&mut discovery.config, &diagnostics)?;
     discovery.config.validate()?;
 
@@ -587,7 +587,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         converted_intents
             .iter()
             .fold(BTreeMap::new(), |mut aggregate, intent| {
-                for (id, bump) in &intent.packages {
+                for (id, bump) in &intent.release_units {
                     aggregate
                         .entry(id.clone())
                         .and_modify(|existing| *existing = (*existing).max(*bump))
@@ -608,7 +608,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     skipped_packages.extend(
         discovery
             .config
-            .packages
+            .release_units
             .keys()
             .filter(|id| !discovery.versions.contains_key(*id))
             .cloned(),
@@ -795,7 +795,7 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             },
             pointer: None,
         };
-        if let Some(existing) = discovery.config.packages.get_mut(&id) {
+        if let Some(existing) = discovery.config.release_units.get_mut(&id) {
             if existing.path != package_path {
                 return Err(Error::Validation(format!(
                     "manifest-native package name {id} is declared in both {} and {}",
@@ -805,11 +805,11 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             }
             existing.projections.push(projection);
         } else {
-            discovery.config.packages.insert(
+            discovery.config.release_units.insert(
                 id.clone(),
-                PackageConfig {
+                ReleaseUnitConfig {
                     path: package_path,
-                    disposition: PackageDisposition::Managed,
+                    disposition: ReleaseUnitDisposition::Managed,
                     projections: vec![projection],
                     tags: BTreeMap::from([(
                         "primary".to_owned(),
@@ -839,7 +839,7 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             .evidence
             .insert(path.strip_prefix(root).unwrap_or(&path).to_owned());
     }
-    if discovery.config.packages.is_empty() {
+    if discovery.config.release_units.is_empty() {
         return Err(Error::Validation(
             "no supported workspace manifests found".to_owned(),
         ));
@@ -1132,9 +1132,13 @@ fn xml_element(text: &str, name: &str) -> Option<String> {
 }
 
 fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDependencyEdge>> {
-    let ids = config.packages.keys().cloned().collect::<BTreeSet<_>>();
+    let ids = config
+        .release_units
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut edges = Vec::new();
-    for (id, package) in &mut config.packages {
+    for (id, package) in &mut config.release_units {
         let npm = package
             .projections
             .iter()
@@ -1222,7 +1226,7 @@ fn load_changesets_intents(root: &Path) -> Result<Vec<ConvertedIntent>> {
                 target: PathBuf::from(crate::intent::INTENTS_PATH).join(format!("{id}.md")),
                 source: path.strip_prefix(root).unwrap_or(&path).to_owned(),
                 id,
-                packages,
+                release_units: packages,
                 message: message.trim().to_owned(),
             })
         })
@@ -1318,7 +1322,7 @@ fn merge_release_profile(
             continue;
         }
         identity_map.insert(name.to_owned(), source.to_owned());
-        let Some(projected) = discovery.config.packages.remove(name) else {
+        let Some(projected) = discovery.config.release_units.remove(name) else {
             continue;
         };
         if discovery.workspace_packages.remove(name) {
@@ -1327,18 +1331,22 @@ fn merge_release_profile(
         if discovery.private_packages.remove(name) {
             discovery.private_packages.insert(source.to_owned());
         }
-        let source_package = discovery.config.packages.get_mut(source).ok_or_else(|| {
-            Error::Validation(format!(
-                "release profile versionSource {source} for {name} was not discovered"
-            ))
-        })?;
+        let source_package = discovery
+            .config
+            .release_units
+            .get_mut(source)
+            .ok_or_else(|| {
+                Error::Validation(format!(
+                    "release profile versionSource {source} for {name} was not discovered"
+                ))
+            })?;
         for mut projection in projected.projections {
             let absolute = root.join(&projected.path).join(&projection.file);
             projection.file = absolute
                 .strip_prefix(root.join(&source_package.path))
                 .map_err(|_| {
                     Error::Validation(format!(
-                        "projection {} is outside logical package {source}",
+                        "projection {} is outside release unit {source}",
                         absolute.display()
                     ))
                 })?
@@ -1358,7 +1366,7 @@ fn merge_release_profile(
         );
         discovery.versions.remove(name);
     }
-    for package in discovery.config.packages.values_mut() {
+    for package in discovery.config.release_units.values_mut() {
         for dependency in &mut package.depends_on {
             if let Some(source) = identity_map.get(dependency) {
                 *dependency = source.clone();
@@ -1377,8 +1385,11 @@ fn merge_release_profile(
     }
     discovery.npm_dependencies.retain(|edge| {
         edge.dependent != edge.dependency
-            && discovery.config.packages.contains_key(&edge.dependent)
-            && discovery.config.packages.contains_key(&edge.dependency)
+            && discovery.config.release_units.contains_key(&edge.dependent)
+            && discovery
+                .config
+                .release_units
+                .contains_key(&edge.dependency)
     });
     discovery.config.workspace_tags.insert(
         "release".to_owned(),
@@ -1398,9 +1409,9 @@ fn remap_converted_intents(
 ) -> Result<()> {
     for intent in intents {
         let mut packages = BTreeMap::<String, Bump>::new();
-        for (id, bump) in std::mem::take(&mut intent.packages) {
+        for (id, bump) in std::mem::take(&mut intent.release_units) {
             let logical_id = identity_map.get(&id).cloned().unwrap_or(id);
-            if !config.packages.contains_key(&logical_id) {
+            if !config.release_units.contains_key(&logical_id) {
                 return Err(Error::Validation(format!(
                     "Changesets intent {} references package {logical_id}, which has no logical Intentional identity",
                     intent.id
@@ -1411,7 +1422,7 @@ fn remap_converted_intents(
                 .and_modify(|existing| *existing = (*existing).max(bump))
                 .or_insert(bump);
         }
-        intent.packages = packages;
+        intent.release_units = packages;
     }
     Ok(())
 }
@@ -1535,12 +1546,12 @@ fn apply_disposition_resolutions(
             .expect("diagnostic id prefix");
         match diagnostic.resolution.as_deref() {
             Some("suspended") => {
-                if let Some(config) = config.packages.get_mut(package) {
-                    config.disposition = PackageDisposition::Suspended;
+                if let Some(config) = config.release_units.get_mut(package) {
+                    config.disposition = ReleaseUnitDisposition::Suspended;
                 }
             }
             Some("excluded") => {
-                config.packages.remove(package);
+                config.release_units.remove(package);
                 excluded.insert(package.to_owned());
             }
             Some("managed") | None => {}
@@ -1552,18 +1563,18 @@ fn apply_disposition_resolutions(
             }
         }
     }
-    exclude_packages(config, &excluded);
+    exclude_release_units(config, &excluded);
     Ok(())
 }
 
-fn exclude_packages(config: &mut Config, excluded: &BTreeSet<String>) {
+fn exclude_release_units(config: &mut Config, excluded: &BTreeSet<String>) {
     for id in excluded {
-        config.packages.remove(id);
+        config.release_units.remove(id);
     }
     if excluded.is_empty() {
         return;
     }
-    for package in config.packages.values_mut() {
+    for package in config.release_units.values_mut() {
         package.depends_on.retain(|id| !excluded.contains(id));
     }
     for groups in [&mut config.fixed, &mut config.linked] {
@@ -1585,21 +1596,21 @@ fn parity_result(
     let mut proposed_config = proposed_config.clone();
     let effective = effective_bumps(&proposed_config, declared);
     let non_releasing_without_versions = proposed_config
-        .packages
+        .release_units
         .keys()
         .filter(|id| !current.contains_key(*id) && effective[*id] == Bump::None)
         .cloned()
         .collect::<BTreeSet<_>>();
-    exclude_packages(&mut source_config, &non_releasing_without_versions);
-    exclude_packages(&mut proposed_config, &non_releasing_without_versions);
+    exclude_release_units(&mut source_config, &non_releasing_without_versions);
+    exclude_release_units(&mut proposed_config, &non_releasing_without_versions);
     let excluded_pending = declared
         .keys()
-        .filter(|id| !proposed_config.packages.contains_key(*id))
+        .filter(|id| !proposed_config.release_units.contains_key(*id))
         .cloned()
         .collect::<Vec<_>>();
     let proposed_preflight_error = (!excluded_pending.is_empty()).then(|| {
         format!(
-            "converted intents reference packages excluded from the proposed inventory: {}",
+            "converted intents reference release units excluded from the proposed inventory: {}",
             excluded_pending.join(", ")
         )
     });
@@ -1607,16 +1618,16 @@ fn parity_result(
         return Ok(ParityComputation {
             result: ParityResult {
                 status: "blocked".to_owned(),
-                packages: Vec::new(),
+                release_units: Vec::new(),
             },
             source_error: source_semantics.preflight_error.clone(),
             proposed_error: proposed_preflight_error,
         });
     }
     let missing = source_config
-        .packages
+        .release_units
         .keys()
-        .chain(proposed_config.packages.keys())
+        .chain(proposed_config.release_units.keys())
         .filter(|id| !current.contains_key(*id))
         .cloned()
         .collect::<BTreeSet<_>>();
@@ -1624,11 +1635,11 @@ fn parity_result(
         return Ok(ParityComputation {
             result: ParityResult {
                 status: "blocked".to_owned(),
-                packages: Vec::new(),
+                release_units: Vec::new(),
             },
             source_error: None,
             proposed_error: Some(format!(
-                "missing current versions for release packages: {}",
+                "missing current versions for release units: {}",
                 missing.into_iter().collect::<Vec<_>>().join(", ")
             )),
         });
@@ -1650,24 +1661,24 @@ fn parity_result(
         .filter(|(_, versions)| versions.bump != Bump::None)
         .map(|(id, _)| id.clone())
         .collect::<BTreeSet<_>>();
-    let packages = release_ids
+    let release_units = release_ids
         .into_iter()
-        .map(|package| ParityPackage {
+        .map(|package| ParityReleaseUnit {
             current_version: current[&package].to_string(),
             source: parity_release(source.get(&package)),
             proposed: parity_release(proposed.get(&package)),
-            package,
+            release_unit: package,
         })
         .collect::<Vec<_>>();
     let equivalent = source_error.is_none()
         && proposed_error.is_none()
-        && packages
+        && release_units
             .iter()
             .all(|package| package.source == package.proposed);
     Ok(ParityComputation {
         result: ParityResult {
             status: if equivalent { "equivalent" } else { "blocked" }.to_owned(),
-            packages,
+            release_units,
         },
         source_error,
         proposed_error,
@@ -1680,11 +1691,11 @@ fn mixed_skipped_changeset(
 ) -> Option<String> {
     intents.iter().find_map(|intent| {
         let has_skipped = intent
-            .packages
+            .release_units
             .keys()
             .any(|id| skipped_packages.contains(id));
         let has_managed = intent
-            .packages
+            .release_units
             .keys()
             .any(|id| !skipped_packages.contains(id));
         (has_skipped && has_managed).then(|| {
@@ -1702,7 +1713,7 @@ struct ParityComputation {
     proposed_error: Option<String>,
 }
 
-fn parity_release(version: Option<&PackageVersion>) -> Option<ParityRelease> {
+fn parity_release(version: Option<&ReleaseUnitVersion>) -> Option<ParityRelease> {
     version
         .filter(|version| version.bump != Bump::None)
         .map(|version| ParityRelease {
@@ -1721,9 +1732,9 @@ fn resolve_changesets_source(
     declared: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
     semantics: &ChangesetsSourceSemantics<'_>,
-) -> Result<BTreeMap<String, PackageVersion>> {
+) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
     let mut effective = config
-        .packages
+        .release_units
         .keys()
         .map(|id| {
             let suppressed =
@@ -1741,8 +1752,8 @@ fn resolve_changesets_source(
     loop {
         let before = effective.clone();
         for edge in semantics.npm_dependencies {
-            if !config.packages.contains_key(&edge.dependent)
-                || !config.packages.contains_key(&edge.dependency)
+            if !config.release_units.contains_key(&edge.dependent)
+                || !config.release_units.contains_key(&edge.dependency)
                 || (semantics.suppress_private_versions
                     && semantics.private_packages.contains(&edge.dependent))
             {
@@ -1806,15 +1817,15 @@ fn resolve_changesets_source(
     }
 
     let mut resolved = config
-        .packages
+        .release_units
         .keys()
         .map(|id| {
             let current_version = current.get(id).ok_or_else(|| {
-                Error::Validation(format!("missing current version for package {id}"))
+                Error::Validation(format!("missing current version for release unit {id}"))
             })?;
             Ok((
                 id.clone(),
-                PackageVersion::new_with_mapping(
+                ReleaseUnitVersion::new_with_mapping(
                     current_version.clone(),
                     effective[id],
                     Pre1BumpMapping::Component,
@@ -1848,7 +1859,7 @@ fn resolve_changesets_source(
                     && (fixed || effective[id] != Bump::None);
                 resolved.insert(
                     id.clone(),
-                    PackageVersion {
+                    ReleaseUnitVersion {
                         current: current[id].clone(),
                         next: if releases {
                             next.clone()
@@ -2179,7 +2190,7 @@ fn finish_transaction_cleanup(root: &Path) -> Result<()> {
 fn annotate_choice_lines(yaml: &str) -> String {
     let comments = BTreeMap::from([
         ("suspended", "configured, but releases are blocked"),
-        ("excluded", "outside Intentional's package inventory"),
+        ("excluded", "outside Intentional's release-unit inventory"),
         ("managed", "configured and eligible for release"),
         (
             "removed",
@@ -2239,6 +2250,6 @@ mod tests {
         let yaml = "choices:\n- suspended\n- excluded\nresolution: null\n";
         let rendered = annotate_choice_lines(yaml);
         assert!(rendered.contains("- suspended # configured, but releases are blocked"));
-        assert!(rendered.contains("- excluded # outside Intentional's package inventory"));
+        assert!(rendered.contains("- excluded # outside Intentional's release-unit inventory"));
     }
 }

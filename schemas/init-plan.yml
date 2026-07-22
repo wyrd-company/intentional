@@ -39,10 +39,10 @@ properties:
     items:
       type: object
       additionalProperties: false
-      required: [ id, packages, message, source, target ]
+      required: [ id, release-units, message, source, target ]
       properties:
         id: { type: string }
-        packages:
+        release-units:
           type: object
           additionalProperties:
             enum: [ major, minor, patch ]
@@ -52,18 +52,18 @@ properties:
   parity:
     type: object
     additionalProperties: false
-    required: [ status, packages ]
+    required: [ status, release-units ]
     properties:
       status:
         enum: [ equivalent, blocked ]
-      packages:
+      release-units:
         type: array
         items:
           type: object
           additionalProperties: false
-          required: [ package, current-version ]
+          required: [ release-unit, current-version ]
           properties:
-            package: { type: string }
+            release-unit: { type: string }
             current-version: { type: string }
             source:
               $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"

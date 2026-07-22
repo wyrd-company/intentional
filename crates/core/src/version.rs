@@ -7,14 +7,14 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::model::{Bump, PackageDisposition, Pre1BumpMapping};
+use crate::model::{Bump, Pre1BumpMapping, ReleaseUnitDisposition};
 use semver::Version;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-/// Current and next version of a logical package.
+/// Current and next version of a release unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageVersion {
+pub struct ReleaseUnitVersion {
     /// Latest final version tag on the first-parent history.
     pub current: Version,
     /// Current version after the aggregate intent bump.
@@ -23,13 +23,13 @@ pub struct PackageVersion {
     pub bump: Bump,
 }
 
-impl PackageVersion {
-    /// Compute package versions from a current tag and aggregate bump.
+impl ReleaseUnitVersion {
+    /// Compute release-unit versions from a current tag and aggregate bump.
     pub fn new(current: Version, bump: Bump) -> Self {
         Self::new_with_mapping(current, bump, Pre1BumpMapping::Compatibility)
     }
 
-    /// Compute package versions with an explicit pre-1.0 interpretation.
+    /// Compute release-unit versions with an explicit pre-1.0 interpretation.
     pub fn new_with_mapping(current: Version, bump: Bump, mapping: Pre1BumpMapping) -> Self {
         let next = bump_version_with_mapping(&current, bump, mapping);
         Self {
@@ -40,7 +40,7 @@ impl PackageVersion {
     }
 }
 
-/// Aggregate intent bumps by taking the maximum significance for each package.
+/// Aggregate intent bumps by taking the maximum significance for each release unit.
 pub fn aggregate_bumps<'a>(
     intents: impl IntoIterator<Item = &'a BTreeMap<String, Bump>>,
 ) -> BTreeMap<String, Bump> {
@@ -63,16 +63,16 @@ pub fn effective_bumps(
 ) -> BTreeMap<String, Bump> {
     let mut effective = declared
         .iter()
-        .filter(|(id, _)| config.packages.contains_key(*id))
+        .filter(|(id, _)| config.release_units.contains_key(*id))
         .map(|(id, bump)| (id.clone(), *bump))
         .collect::<BTreeMap<_, _>>();
-    for id in config.packages.keys() {
+    for id in config.release_units.keys() {
         effective.entry(id.clone()).or_default();
     }
 
     loop {
         let mut changed = false;
-        for (id, package) in &config.packages {
+        for (id, package) in &config.release_units {
             for dependency in &package.depends_on {
                 if effective[dependency] == Bump::None || !share_ecosystem(config, id, dependency) {
                     continue;
@@ -126,12 +126,14 @@ pub fn resolve_versions(
     config: &Config,
     declared: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
-) -> Result<BTreeMap<String, PackageVersion>> {
+) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
     let effective = effective_bumps(config, declared);
     for (id, bump) in &effective {
-        if *bump != Bump::None && config.packages[id].disposition == PackageDisposition::Suspended {
+        if *bump != Bump::None
+            && config.release_units[id].disposition == ReleaseUnitDisposition::Suspended
+        {
             return Err(Error::Validation(format!(
-                "release requires suspended package {id}"
+                "release requires suspended release unit {id}"
             )));
         }
     }
@@ -150,18 +152,18 @@ pub fn resolve_versions(
         }
     }
 
-    for (id, package) in &config.packages {
+    for (id, package) in &config.release_units {
         if grouped.contains_key(id) {
             continue;
         }
         let current_version = current.get(id).ok_or_else(|| {
-            Error::Validation(format!("missing current version for package {id}"))
+            Error::Validation(format!("missing current version for release unit {id}"))
         })?;
         resolved.insert(
             id.clone(),
-            PackageVersion::new_with_mapping(current_version.clone(), effective[id], mapping),
+            ReleaseUnitVersion::new_with_mapping(current_version.clone(), effective[id], mapping),
         );
-        if package.disposition == PackageDisposition::Suspended {
+        if package.disposition == ReleaseUnitDisposition::Suspended {
             debug_assert_eq!(effective[id], Bump::None);
         }
     }
@@ -181,13 +183,13 @@ fn resolve_group(
     effective: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
     mapping: Pre1BumpMapping,
-    resolved: &mut BTreeMap<String, PackageVersion>,
+    resolved: &mut BTreeMap<String, ReleaseUnitVersion>,
 ) -> Result<()> {
     let highest_current = group
         .iter()
         .map(|id| {
             current.get(id).ok_or_else(|| {
-                Error::Validation(format!("missing current version for package {id}"))
+                Error::Validation(format!("missing current version for release unit {id}"))
             })
         })
         .collect::<Result<Vec<_>>>()?
@@ -206,7 +208,7 @@ fn resolve_group(
         let releases = highest_bump != Bump::None && (fixed || effective[id] != Bump::None);
         resolved.insert(
             id.clone(),
-            PackageVersion {
+            ReleaseUnitVersion {
                 current: member_current.clone(),
                 next: if releases {
                     shared_next.clone()
@@ -221,12 +223,12 @@ fn resolve_group(
 }
 
 fn share_ecosystem(config: &Config, left: &str, right: &str) -> bool {
-    config.packages[left]
+    config.release_units[left]
         .projections
         .iter()
         .any(|left_projection| {
             left_projection.adapter.ecosystem().is_some()
-                && config.packages[right]
+                && config.release_units[right]
                     .projections
                     .iter()
                     .any(|right_projection| {
@@ -283,7 +285,7 @@ pub fn bump_version_with_mapping(
     next
 }
 
-/// Read package versions and heights from a Git repository using tagver traversal semantics.
+/// Read release-unit versions and heights from Git using tagver traversal semantics.
 pub struct VersionRepository {
     repository: tagver::Repository,
 }
@@ -296,7 +298,7 @@ impl VersionRepository {
         Ok(Self { repository })
     }
 
-    /// Find the latest final SemVer matching a package tag template.
+    /// Find the latest final SemVer matching a release-unit tag template.
     pub fn current_version(&self, package_id: &str, template: &str) -> Result<Version> {
         let matches = self.matching_tags(package_id, template)?;
         let (version, _) = self.walk_to_tag(&matches, false)?;
@@ -360,7 +362,9 @@ impl VersionRepository {
         let version_marker = "{version}";
         let rendered = template.replace("{id}", package_id);
         let (prefix, suffix) = rendered.split_once(version_marker).ok_or_else(|| {
-            Error::Validation(format!("invalid tag template for package {package_id}"))
+            Error::Validation(format!(
+                "invalid tag template for release unit {package_id}"
+            ))
         })?;
 
         let repository = self.repository.inner();
@@ -483,7 +487,7 @@ mod tests {
         let config = Config::from_yaml(
             r#"
 contract: contract-1
-packages:
+release-units:
   library:
     path: library
     projections:
@@ -521,7 +525,7 @@ settings:
   pre-1-0-bump-mapping: {mapping}
   internal-dependency-bump: patch
 {group}
-packages:
+release-units:
   package-a:
     path: package-a
     projections: [{{ adapter: npm, file: package.json, mode: committed }}]
@@ -618,7 +622,7 @@ packages:
         assert!(resolve_versions(&fixed, &declared, &mixed_current())
             .expect_err("fixed member blocks")
             .to_string()
-            .contains("suspended package package-b"));
+            .contains("suspended release unit package-b"));
         resolve_versions(&linked, &declared, &mixed_current())
             .expect("unaffected linked suspended member does not block");
     }

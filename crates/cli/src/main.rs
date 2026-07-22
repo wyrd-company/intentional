@@ -32,11 +32,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Scan supported manifests and create the package inventory.
+    /// Scan supported manifests and create the release-unit inventory.
     Init(InitArgs),
     /// Author a pending change intent.
     Add(AddArgs),
-    /// Show pending intents and computed package versions.
+    /// Show pending intents and computed release-unit versions.
     Status,
     /// Emit canonical digest-bound release-plan JSON.
     Plan(ChannelArgs),
@@ -78,9 +78,9 @@ struct InitArgs {
 
 #[derive(Debug, Args)]
 struct AddArgs {
-    /// Package bump as `id:major|minor|patch`; repeat for multiple packages.
-    #[arg(long = "package")]
-    packages: Vec<String>,
+    /// Release-unit bump as `id:major|minor|patch`; repeat for multiple release units.
+    #[arg(long = "release-unit")]
+    release_units: Vec<String>,
 
     /// Changelog prose.
     #[arg(long)]
@@ -119,7 +119,7 @@ struct TagArgs {
     #[arg(long)]
     baseline: bool,
 
-    /// Explicit baseline as `package=X.Y.Z` or `workspace/tag=X.Y.Z`; repeat as needed.
+    /// Explicit baseline as `release-unit=X.Y.Z` or `workspace/tag=X.Y.Z`; repeat as needed.
     #[arg(long = "version")]
     versions: Vec<String>,
 
@@ -266,28 +266,32 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
 fn add(root: &std::path::Path, args: AddArgs) -> Result<()> {
     let config = Config::load(root)
         .with_context(|| format!("load {CONFIG_PATH} before adding an intent"))?;
-    let package_values = if args.packages.is_empty() {
-        let ids = config.packages.keys().cloned().collect::<Vec<_>>();
-        println!("Packages: {}", ids.join(", "));
-        vec![prompt("Package (id): ")? + ":" + &prompt("Bump (major|minor|patch): ")?]
+    let release_unit_values = if args.release_units.is_empty() {
+        let ids = config.release_units.keys().cloned().collect::<Vec<_>>();
+        println!("Release units: {}", ids.join(", "));
+        vec![prompt("Release unit (id): ")? + ":" + &prompt("Bump (major|minor|patch): ")?]
     } else {
-        args.packages
+        args.release_units
     };
-    let mut packages = BTreeMap::new();
-    for value in package_values {
+    let mut release_units = BTreeMap::new();
+    for value in release_unit_values {
         let (id, bump) = value
             .split_once(':')
-            .with_context(|| format!("package bump must be id:bump; got {value}"))?;
+            .with_context(|| format!("release-unit bump must be id:bump; got {value}"))?;
         let bump = bump.parse::<Bump>().map_err(anyhow::Error::msg)?;
-        if packages.insert(id.to_owned(), bump).is_some() {
-            bail!("package {id} was specified more than once");
+        if release_units.insert(id.to_owned(), bump).is_some() {
+            bail!("release unit {id} was specified more than once");
         }
     }
     let message = match args.message {
         Some(message) => message,
         None => prompt("Changelog message: ")?,
     };
-    let write = IntentDraft { packages, message }.plan(root, &config)?;
+    let write = IntentDraft {
+        release_units,
+        message,
+    }
+    .plan(root, &config)?;
     println!("write {}", write.path.display());
     write.apply(root, args.dry_run)?;
     Ok(())
@@ -309,10 +313,10 @@ fn status(root: &std::path::Path) -> Result<()> {
     for issue in &status.tag_record_issues {
         println!("Tag record: {issue}");
     }
-    for package in status.packages {
+    for release_unit in status.release_units {
         println!(
             "{}: {} -> {} ({})",
-            package.id, package.current, package.next, package.bump
+            release_unit.id, release_unit.current, release_unit.next, release_unit.bump
         );
     }
     if status.drift.is_empty() {
@@ -322,7 +326,7 @@ fn status(root: &std::path::Path) -> Result<()> {
         for drift in status.drift {
             println!(
                 "  {} {}: manifest {} != tag {}",
-                drift.package,
+                drift.release_unit,
                 drift.file.display(),
                 drift.actual,
                 drift.expected

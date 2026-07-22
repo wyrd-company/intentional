@@ -73,22 +73,22 @@ pub enum Pre1BumpMapping {
     Compatibility,
 }
 
-/// Whether a discovered logical package participates in releases.
+/// Whether a discovered release unit participates in releases.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum PackageDisposition {
-    /// The package is configured and eligible for release.
+pub enum ReleaseUnitDisposition {
+    /// The release unit is configured and eligible for release.
     #[default]
     Managed,
-    /// The package remains configured, but any release requiring it is blocked.
+    /// The release unit remains configured, but any release requiring it is blocked.
     Suspended,
 }
 
-/// Version-authority role of a logical-package tag.
+/// Version-authority role of a release-unit tag.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TagRole {
-    /// The single tag stream used to discover the package's current version.
+    /// The single tag stream used to discover the release unit's current version.
     Primary,
     /// An additional release record carrying the same logical version.
     Projection,

@@ -69,8 +69,8 @@ impl TagResult {
         let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-        let mut versions_by_package = BTreeMap::new();
-        for (id, package) in &config.packages {
+        let mut versions_by_release_unit = BTreeMap::new();
+        for (id, package) in &config.release_units {
             let changelog_path = root.join(&package.path).join("CHANGELOG.md");
             let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
                 continue;
@@ -90,22 +90,24 @@ impl TagResult {
             if version < current {
                 continue;
             }
-            versions_by_package.insert(id.clone(), version);
+            versions_by_release_unit.insert(id.clone(), version);
         }
-        if versions_by_package.is_empty() {
+        if versions_by_release_unit.is_empty() {
             return Err(Error::Validation(
                 "no applied release is available to tag".to_owned(),
             ));
         }
 
-        let package_versions = versions_by_package
+        let release_unit_versions = versions_by_release_unit
             .iter()
             .map(|(id, version)| (id.clone(), version.to_string()))
             .collect::<BTreeMap<_, _>>();
-        verify_version_projections(root, &config, &package_versions)?;
+        verify_version_projections(root, &config, &release_unit_versions)?;
         let plan = match plan_path {
-            Some(path) => supplied_release_plan(root, &config, &package_versions, channel, path)?,
-            None => recovered_release_plan(root, &config, &package_versions, channel)?,
+            Some(path) => {
+                supplied_release_plan(root, &config, &release_unit_versions, channel, path)?
+            }
+            None => recovered_release_plan(root, &config, &release_unit_versions, channel)?,
         };
         let versions = plan_versions(&plan)?;
         match existing_tag_set_digest(&git, &config, &versions, false)? {
@@ -127,7 +129,7 @@ impl TagResult {
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions = BTreeMap::new();
         let mut incomplete = false;
-        for (id, package) in &config.packages {
+        for (id, package) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
             if repository.has_matching_tag(id, &primary.template)? {
                 let version = repository.current_version(id, &primary.template)?;
@@ -161,7 +163,7 @@ impl TagResult {
             let version = match (evidence.first(), explicit.get(id)) {
                 (None, None) => {
                     return Err(Error::Validation(format!(
-                        "tag-only package {id} requires --version {id}=X.Y.Z"
+                        "tag-only release unit {id} requires --version {id}=X.Y.Z"
                     )))
                 }
                 (None, Some(version)) => version.clone(),
@@ -230,11 +232,11 @@ impl TagResult {
         let digest = release_digest.unwrap_or(&baseline_digest);
         let mut candidates = BTreeMap::<String, TagCandidate>::new();
         for (package_id, version) in versions {
-            let Some(package) = config.packages.get(package_id) else {
+            let Some(package) = config.release_units.get(package_id) else {
                 continue;
             };
             for (tag_id, tag) in &package.tags {
-                let canonical = Config::package_tag_id(package_id, tag_id);
+                let canonical = Config::release_unit_tag_id(package_id, tag_id);
                 candidates.insert(
                     canonical,
                     TagCandidate {
@@ -428,7 +430,7 @@ fn verify_version_projections(
     config: &Config,
     versions: &BTreeMap<String, String>,
 ) -> Result<()> {
-    for (id, package) in &config.packages {
+    for (id, package) in &config.release_units {
         let Some(expected) = versions.get(id) else {
             continue;
         };
@@ -442,7 +444,7 @@ fn verify_version_projections(
             let actual = read_projection_version(root, &relative, projection, &text)?;
             if &actual != expected {
                 return Err(Error::Validation(format!(
-                    "package {id} projection {} is {actual}, applied release is {expected}",
+                    "release unit {id} projection {} is {actual}, applied release is {expected}",
                     relative.display()
                 )));
             }
@@ -462,12 +464,12 @@ fn existing_tag_set_digest(
         .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
         .detach();
     let mut digest = None;
-    for (package_id, package) in &config.packages {
+    for (package_id, package) in &config.release_units {
         let Some(version) = versions.get(package_id) else {
             continue;
         };
         for (tag_id, tag) in &package.tags {
-            let id = Config::package_tag_id(package_id, tag_id);
+            let id = Config::release_unit_tag_id(package_id, tag_id);
             collect_existing_digest(
                 repository,
                 &render_tag(&tag.template, package_id, version),
@@ -508,13 +510,13 @@ fn existing_head_release_digest(
         .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
         .detach();
     let mut canonical_ids = config
-        .packages
+        .release_units
         .iter()
         .flat_map(|(package_id, package)| {
             package
                 .tags
                 .keys()
-                .map(|tag_id| Config::package_tag_id(package_id, tag_id))
+                .map(|tag_id| Config::release_unit_tag_id(package_id, tag_id))
         })
         .collect::<BTreeSet<_>>();
     canonical_ids.extend(
@@ -591,7 +593,7 @@ fn supplied_release_plan(
             "release plan channel does not match tag invocation".to_owned(),
         ));
     }
-    verify_plan_package_versions(versions, &plan)?;
+    verify_plan_release_unit_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
@@ -718,7 +720,7 @@ fn recovered_release_plan(
             "existing release records disagree with the recovered release plan".to_owned(),
         ));
     }
-    verify_plan_package_versions(versions, &plan)?;
+    verify_plan_release_unit_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
     Ok(plan)
 }
@@ -726,7 +728,7 @@ fn recovered_release_plan(
 fn plan_versions(plan: &ReleasePlan) -> Result<BTreeMap<String, String>> {
     let mut planned_versions = BTreeMap::new();
     for tag in &plan.tags {
-        let key = tag.package.as_ref().unwrap_or(&tag.id);
+        let key = tag.release_unit.as_ref().unwrap_or(&tag.id);
         if let Some(existing) = planned_versions.insert(key.clone(), tag.version.clone()) {
             if existing != tag.version {
                 return Err(Error::Validation(format!(
@@ -738,26 +740,26 @@ fn plan_versions(plan: &ReleasePlan) -> Result<BTreeMap<String, String>> {
     Ok(planned_versions)
 }
 
-fn verify_plan_package_versions(
+fn verify_plan_release_unit_versions(
     versions: &BTreeMap<String, String>,
     plan: &ReleasePlan,
 ) -> Result<()> {
     let planned_versions = plan_versions(plan)?;
-    let planned_packages = planned_versions
+    let planned_release_units = planned_versions
         .into_iter()
         .filter(|(id, _)| !id.starts_with("workspace/"))
         .collect::<BTreeMap<_, _>>();
-    if &planned_packages != versions {
+    if &planned_release_units != versions {
         return Err(Error::Validation(format!(
-            "applied release does not match recovered release plan: expected {planned_packages:?}, found {versions:?}"
+            "applied release does not match recovered release plan: expected {planned_release_units:?}, found {versions:?}"
         )));
     }
     Ok(())
 }
 
 fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan) -> Result<()> {
-    for planned in &plan.packages {
-        let package = &config.packages[&planned.id];
+    for planned in &plan.release_units {
+        let package = &config.release_units[&planned.id];
         let changelog_path = root.join(&package.path).join("CHANGELOG.md");
         let changelog = std::fs::read_to_string(&changelog_path)
             .map_err(|error| Error::io(&changelog_path, error))?;
@@ -845,7 +847,7 @@ fn release_tag_targets(
 ) -> Result<BTreeSet<gix::ObjectId>> {
     let versions = VersionRepository::discover(root)?;
     let mut tags = Vec::new();
-    for id in config.packages.keys() {
+    for id in config.release_units.keys() {
         let (_, primary) = config.primary_tag(id)?;
         if versions.has_matching_tag(id, &primary.template)? {
             let version = versions.current_version(id, &primary.template)?;
@@ -915,13 +917,13 @@ fn deleted_intents_between(
     Ok(deleted)
 }
 
-/// Validate annotated package tag sets without rewriting recoverable omissions.
+/// Validate annotated release-unit tag sets without rewriting recoverable omissions.
 pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     let versions = VersionRepository::discover(root)?;
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let mut issues = Vec::new();
-    for (package_id, package) in &config.packages {
+    for (package_id, package) in &config.release_units {
         let (primary_id, primary) = config.primary_tag(package_id)?;
         if !versions.has_matching_tag(package_id, &primary.template)? {
             continue;
@@ -933,13 +935,16 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
             continue;
         };
         for (field, expected) in [
-            ("tag-id", Config::package_tag_id(package_id, primary_id)),
+            (
+                "tag-id",
+                Config::release_unit_tag_id(package_id, primary_id),
+            ),
             ("version", version.to_string()),
             ("contract", config.contract.clone()),
         ] {
             if primary_record.fields.get(field) != Some(&expected) {
                 issues.push(format!(
-                    "package {package_id} primary tag {primary_name} has unexpected {field}"
+                    "release unit {package_id} primary tag {primary_name} has unexpected {field}"
                 ));
             }
         }
@@ -947,26 +952,26 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
             let name = render_tag(&tag.template, package_id, &version.to_string());
             let Some(record) = read_tag_record(&repository, &name)? else {
                 issues.push(format!(
-                    "package {package_id} is missing annotated projection tag {name} for {version}"
+                    "release unit {package_id} is missing annotated projection tag {name} for {version}"
                 ));
                 continue;
             };
-            let expected_tag_id = Config::package_tag_id(package_id, tag_id);
+            let expected_tag_id = Config::release_unit_tag_id(package_id, tag_id);
             if record.fields.get("tag-id") != Some(&expected_tag_id) {
                 issues.push(format!(
-                    "package {package_id} tag {name} has unexpected tag-id"
+                    "release unit {package_id} tag {name} has unexpected tag-id"
                 ));
             }
             for field in ["contract", "generator", "plan-digest", "version"] {
                 if record.fields.get(field) != primary_record.fields.get(field) {
                     issues.push(format!(
-                        "package {package_id} tag {name} disagrees with primary tag {primary_name} on {field}"
+                        "release unit {package_id} tag {name} disagrees with primary tag {primary_name} on {field}"
                     ));
                 }
             }
             if record.target != primary_record.target {
                 issues.push(format!(
-                    "package {package_id} tag {name} targets a different commit than {primary_name}"
+                    "release unit {package_id} tag {name} targets a different commit than {primary_name}"
                 ));
             }
         }
@@ -1137,7 +1142,7 @@ mod tests {
         let message = tag_message(
             "contract-1",
             "sha256:abc",
-            "package/sample/primary",
+            "release-unit/sample/primary",
             "1.2.0",
             false,
         );

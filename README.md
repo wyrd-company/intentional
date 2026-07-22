@@ -58,7 +58,7 @@ settings:
 workspace-tags:
   release:
     template: "{version}"
-packages:
+release-units:
   package-a:
     path: packages/package-a
     projections:
@@ -89,11 +89,11 @@ packages:
         template: "{id}@{version}"
 ```
 
-Every logical package has exactly one primary tag and any number of projection
+Every release unit has exactly one primary tag and any number of projection
 tags. All tags for one logical release carry the same version, target commit,
 interpretation contract, and plan digest. Named workspace tags provide
 repository-level records and continuous-delivery triggers without becoming a
-package's version authority.
+release unit's version authority.
 
 Projection modes are:
 
@@ -102,7 +102,7 @@ Projection modes are:
 - `none`: no manifest version is written; Go uses this mode.
 
 Generic `json`, `toml`, and `yaml` projections also require a `pointer`, such
-as `/metadata/version`. A package with no version-bearing projection is
+as `/metadata/version`. A release unit with no version-bearing projection is
 tag-only.
 
 ## Adopt a Changesets repository
@@ -111,8 +111,8 @@ When `.changeset/config.json` exists, ordinary `intentional init` preserves
 Changesets authority and writes `.intentional/init-plan.yml`. The plan contains
 source fingerprints, inferred configuration, stable diagnostics, exact source
 evidence, finite choices, recommendations, editable `resolution` fields,
-planned operations, pending-intent conversions, and a package-by-package parity
-comparison.
+planned operations, pending-intent conversions, and a parity comparison for
+each release unit.
 
 ```console
 intentional init
@@ -134,7 +134,7 @@ Reruns preserve resolutions while their evidence remains valid, report stale
 resolutions, and verify repository-integration edits from actual file state.
 
 Changesets `ignore` entries become explicit `suspended`, `excluded`, or
-`managed` choices. `suspended` preserves package identity while blocking any
+`managed` choices. `suspended` preserves release-unit identity while blocking any
 release that requires it, so it is the default recommendation unless repository
 evidence supports another disposition.
 
@@ -167,7 +167,7 @@ intentional tag --baseline
 ```
 
 Baseline inference succeeds only when every version-bearing projection of a
-logical package agrees. Tag-only packages and new workspace tag streams require
+release unit agrees. Tag-only release units and new workspace tag streams require
 explicit versions:
 
 ```console
@@ -204,23 +204,23 @@ and highest requested bump. A suspended fixed member blocks the shared release.
 Linked groups release only affected members. Releasing members use the highest
 current version across the whole group and the highest bump among affected
 members; unaffected members retain their current versions. A suspended linked
-member blocks only when it would release. A package belongs to at most one
+member blocks only when it would release. A release unit belongs to at most one
 fixed or linked group.
 
 ## Author and inspect intents
 
 ```console
 intentional add \
-  --package package-a:minor \
-  --package package-b:patch \
+  --release-unit package-a:minor \
+  --release-unit package-b:patch \
   --message "Add a useful capability."
 
 intentional status
 intentional check
 ```
 
-Without flags, `add` prompts for a package, bump, and changelog message. Intent
-frontmatter maps logical package ids to bumps, and the Markdown body supplies
+Without flags, `add` prompts for a release unit, bump, and changelog message. Intent
+frontmatter maps release-unit ids to bumps, and the Markdown body supplies
 release notes.
 
 `status` lists pending intents, tag-derived current versions, computed next
@@ -241,10 +241,10 @@ intentional tag --plan release-plan.json
 ```
 
 `plan` writes compact canonical JSON sealed by SHA-256. The sealed payload
-contains the interpretation contract, generator identity, packages, old and new
-versions, contributing intent ids, rendered release notes, package and workspace
-tags, phase declarations, `tag-after` prerequisites, and tag order. It contains
-no publication graph.
+contains the interpretation contract, generator identity, release units, old
+and new versions, contributing intent ids, rendered release notes, release-unit
+and workspace tags, phase declarations, `tag-after` prerequisites, and tag
+order. It contains no publication graph.
 
 `apply` updates committed projections, internal dependency ranges, and
 changelogs, then consumes final-release intents. It changes only the working
@@ -302,7 +302,7 @@ the real invocation:
 ```console
 intentional init --dry-run
 intentional init --take-over --dry-run
-intentional add --package package-a:patch --message "Correct a defect." --dry-run
+intentional add --release-unit package-a:patch --message "Correct a defect." --dry-run
 intentional apply --dry-run
 intentional stamp --prerelease alpha --dry-run
 intentional tag --dry-run
@@ -313,7 +313,7 @@ intentional tag --baseline --dry-run
 
 The plumbing action downloads a released Linux binary and runs one command.
 Pin it to a plain SemVer tag. The action exposes canonical `plan` JSON and a
-changed-package boolean. It accepts `status`, `plan`, `stamp`, `apply`, and
+changed-release-unit boolean. It accepts `status`, `plan`, `stamp`, `apply`, and
 `tag`; `channel` applies to release commands, `prerelease` applies to `stamp`,
 and `dry-run` applies to mutating commands.
 

@@ -28,8 +28,8 @@ const NOUNS: &[&str] = &[
 pub struct Intent {
     /// Stable identifier derived from the filename stem.
     pub id: String,
-    /// Package bump claims.
-    pub packages: BTreeMap<String, Bump>,
+    /// Release-unit bump claims.
+    pub release_units: BTreeMap<String, Bump>,
     /// Markdown changelog prose.
     pub message: String,
     /// Source file.
@@ -39,8 +39,8 @@ pub struct Intent {
 /// Inputs used to author an intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntentDraft {
-    /// Package bump claims.
-    pub packages: BTreeMap<String, Bump>,
+    /// Release-unit bump claims.
+    pub release_units: BTreeMap<String, Bump>,
     /// Markdown changelog prose.
     pub message: String,
 }
@@ -83,8 +83,8 @@ impl Intent {
     /// Parse and validate one intent from supplied contents.
     pub fn parse(path: &Path, text: &str, config: &Config) -> Result<Self> {
         let (frontmatter, message) = split_frontmatter(text)?;
-        let packages: BTreeMap<String, Bump> = serde_yaml::from_str(frontmatter)?;
-        validate_draft(&packages, message, config)?;
+        let release_units: BTreeMap<String, Bump> = serde_yaml::from_str(frontmatter)?;
+        validate_draft(&release_units, message, config)?;
         let id = path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -94,7 +94,7 @@ impl Intent {
             .to_owned();
         Ok(Self {
             id,
-            packages,
+            release_units,
             message: message.trim().to_owned(),
             path: path.to_owned(),
         })
@@ -104,7 +104,7 @@ impl Intent {
 impl IntentDraft {
     /// Validate and render a new intent with a generated memorable slug.
     pub fn plan(self, root: &Path, config: &Config) -> Result<IntentWrite> {
-        validate_draft(&self.packages, &self.message, config)?;
+        validate_draft(&self.release_units, &self.message, config)?;
         let mut rng = rand::thread_rng();
         let adjective = ADJECTIVES
             .choose(&mut rng)
@@ -120,7 +120,7 @@ impl IntentDraft {
                 relative.display()
             )));
         }
-        let yaml = serde_yaml::to_string(&self.packages)?;
+        let yaml = serde_yaml::to_string(&self.release_units)?;
         let contents = format!("---\n{yaml}---\n\n{}\n", self.message.trim());
         Ok(IntentWrite {
             path: relative,
@@ -142,10 +142,14 @@ impl IntentWrite {
     }
 }
 
-fn validate_draft(packages: &BTreeMap<String, Bump>, message: &str, config: &Config) -> Result<()> {
-    if packages.is_empty() {
+fn validate_draft(
+    release_units: &BTreeMap<String, Bump>,
+    message: &str,
+    config: &Config,
+) -> Result<()> {
+    if release_units.is_empty() {
         return Err(Error::Validation(
-            "intent must reference at least one package".to_owned(),
+            "intent must reference at least one release unit".to_owned(),
         ));
     }
     if message.trim().is_empty() {
@@ -153,15 +157,15 @@ fn validate_draft(packages: &BTreeMap<String, Bump>, message: &str, config: &Con
             "intent changelog message must not be empty".to_owned(),
         ));
     }
-    for (package, bump) in packages {
-        if !config.packages.contains_key(package) {
+    for (release_unit, bump) in release_units {
+        if !config.release_units.contains_key(release_unit) {
             return Err(Error::Validation(format!(
-                "intent references unknown package {package}"
+                "intent references unknown release unit {release_unit}"
             )));
         }
         if *bump == Bump::None {
             return Err(Error::Validation(format!(
-                "intent package {package} must declare major, minor, or patch"
+                "intent release unit {release_unit} must declare major, minor, or patch"
             )));
         }
     }
@@ -186,7 +190,7 @@ mod tests {
         Config::from_yaml(
             r#"
 contract: contract-1
-packages:
+release-units:
   library:
     path: .
     projections:
@@ -201,7 +205,7 @@ packages:
     #[test]
     fn plans_direct_frontmatter_mapping() {
         let draft = IntentDraft {
-            packages: BTreeMap::from([("library".to_owned(), Bump::Minor)]),
+            release_units: BTreeMap::from([("library".to_owned(), Bump::Minor)]),
             message: "Add a useful capability.".to_owned(),
         };
         let write = draft.plan(Path::new("."), &config()).expect("planned");
@@ -211,14 +215,14 @@ packages:
     }
 
     #[test]
-    fn rejects_unknown_package() {
+    fn rejects_unknown_release_unit() {
         let draft = IntentDraft {
-            packages: BTreeMap::from([("missing".to_owned(), Bump::Patch)]),
+            release_units: BTreeMap::from([("missing".to_owned(), Bump::Patch)]),
             message: "Correct a defect.".to_owned(),
         };
         let error = draft
             .plan(Path::new("."), &config())
-            .expect_err("unknown package rejected");
-        assert!(error.to_string().contains("unknown package missing"));
+            .expect_err("unknown release unit rejected");
+        assert!(error.to_string().contains("unknown release unit missing"));
     }
 }

@@ -98,7 +98,7 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
         copy_file(source, &repository.root, path);
     }
     copy_tree(source, &repository.root, Path::new(".changeset"));
-    for package in plan.inferred_config.packages.values() {
+    for package in plan.inferred_config.release_units.values() {
         for projection in &package.projections {
             copy_file(
                 source,
@@ -201,7 +201,7 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("init plan");
     assert_eq!(plan.state, InitState::NeedsInput);
     assert_eq!(plan.parity.status, "equivalent");
-    assert_eq!(plan.parity.packages.len(), 2);
+    assert_eq!(plan.parity.release_units.len(), 2);
     for diagnostic in &mut plan.diagnostics {
         if diagnostic.code == "repository-integration" {
             diagnostic.resolution = Some("removed".to_owned());
@@ -352,9 +352,9 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
         .all(|diagnostic| diagnostic.code != "unmapped-package-disposition"));
     let dependent = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-b")
+        .find(|package| package.release_unit == "package-b")
         .expect("dependency-propagated package");
     assert_eq!(dependent.source, dependent.proposed);
     assert_eq!(dependent.source.as_ref().unwrap().next_version, "1.0.1");
@@ -406,9 +406,9 @@ fn changesets_dependency_ranges_and_peer_edges_are_independently_compared() {
     assert_eq!(plan.parity.status, "blocked");
     let peer = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-b")
+        .find(|package| package.release_unit == "package-b")
         .expect("peer dependent");
     assert_eq!(
         peer.source.as_ref().unwrap().requested_bump,
@@ -420,9 +420,9 @@ fn changesets_dependency_ranges_and_peer_edges_are_independently_compared() {
     );
     let in_range = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-c")
+        .find(|package| package.release_unit == "package-c")
         .expect("in-range dependent");
     assert!(in_range.source.is_none());
     assert_eq!(
@@ -473,9 +473,9 @@ fn changesets_minor_internal_dependency_policy_is_preserved() {
     assert_eq!(plan.parity.status, "equivalent");
     let dependent = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-b")
+        .find(|package| package.release_unit == "package-b")
         .expect("dependency-propagated package");
     assert_eq!(dependent.source, dependent.proposed);
     assert_eq!(dependent.source.as_ref().unwrap().next_version, "1.1.0");
@@ -532,9 +532,9 @@ fn conditional_peer_dependency_policy_is_an_actionable_takeover_choice() {
     assert_eq!(diagnostic.recommended.as_deref(), Some("intentional"));
     let dependent = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-b")
+        .find(|package| package.release_unit == "package-b")
         .expect("peer dependent divergence");
     assert!(dependent.source.is_none());
     assert_eq!(
@@ -635,14 +635,14 @@ fn release_profile_version_sources_remap_pending_intent_identity() {
     assert_eq!(plan.parity.status, "equivalent");
     assert_eq!(
         plan.converted_intents[0]
-            .packages
+            .release_units
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
         vec!["package-a"]
     );
-    assert!(plan.inferred_config.packages.contains_key("package-a"));
-    assert!(!plan.inferred_config.packages.contains_key("package-b"));
+    assert!(plan.inferred_config.release_units.contains_key("package-a"));
+    assert!(!plan.inferred_config.release_units.contains_key("package-b"));
 }
 
 #[test]
@@ -684,9 +684,9 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
     assert_eq!(plan.parity.status, "blocked");
     let package = plan
         .parity
-        .packages
+        .release_units
         .iter()
-        .find(|package| package.package == "package-a")
+        .find(|package| package.release_unit == "package-a")
         .expect("private package parity");
     assert!(package.source.is_none());
     assert_eq!(package.proposed.as_ref().unwrap().next_version, "0.2.0");
@@ -718,7 +718,9 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
         serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("rerun plan");
     assert!(rerun.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "proposed-release-invalid"
-            && diagnostic.message.contains("suspended package package-a")
+            && diagnostic
+                .message
+                .contains("suspended release unit package-a")
     }));
 }
 
@@ -789,14 +791,14 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
         assert_eq!(plan["state"], "needs-input");
         if fixture.ends_with("design-system") {
             assert_eq!(plan["parity"]["status"], "blocked");
-            assert!(plan["parity"]["packages"]
+            assert!(plan["parity"]["release-units"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|package| package["source"].is_null() && !package["proposed"].is_null()));
         } else {
             assert_eq!(plan["parity"]["status"], "equivalent");
-            assert!(plan["parity"]["packages"]
+            assert!(plan["parity"]["release-units"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -856,7 +858,7 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
         assert_eq!(ready.converted_intents, converted);
         assert!(ready
             .parity
-            .packages
+            .release_units
             .iter()
             .all(|package| package.source == package.proposed));
     }
@@ -868,7 +870,7 @@ fn baseline_requires_agreeing_projection_evidence_and_explicit_tag_only_versions
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-packages:
+release-units:
   package-a:
     path: .
     projections:
@@ -910,7 +912,7 @@ packages:
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "tag-only package package-b requires --version package-b=X.Y.Z",
+            "tag-only release unit package-b requires --version package-b=X.Y.Z",
         ));
     repository
         .cli()
@@ -929,7 +931,7 @@ fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-packages:
+release-units:
   package-a:
     path: .
     projections:
@@ -943,7 +945,7 @@ packages:
         role: projection
         template: 'mirror@{version}'
         require-phase: after-publication
-        tag-after: [package/package-a/primary]
+        tag-after: [release-unit/package-a/primary]
 "#,
     );
     repository.write(
@@ -1014,7 +1016,7 @@ fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-packages:
+release-units:
   package-a:
     path: packages/package-a
     projections:

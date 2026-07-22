@@ -75,12 +75,34 @@ fn npm_manifest(version: &str) -> String {
 
 fn config(mode: &str) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\npackages:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
     )
 }
 
 fn intent(bump: &str, message: &str) -> String {
     format!("---\nsample: {bump}\n---\n\n{message}\n")
+}
+
+#[test]
+fn add_exposes_only_the_release_unit_selector() {
+    Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--release-unit"))
+        .stdout(predicate::str::contains("--package").not());
+
+    Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+        .args([
+            "add",
+            "--package",
+            "alpha:patch",
+            "--message",
+            "Describe a change.",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument '--package'"));
 }
 
 #[test]
@@ -94,14 +116,14 @@ fn init_add_status_plan_apply_tag_round_trip() {
     repo.write(
         ".intentional/config.yml",
         &generated.replace(
-            "packages:",
-            "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
     repo.cli()
         .args([
             "add",
-            "--package",
+            "--release-unit",
             "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",
@@ -121,8 +143,8 @@ fn init_add_status_plan_apply_tag_round_trip() {
     let output = repo.cli().arg("plan").output().expect("plan command");
     assert!(output.status.success());
     let plan: Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
-    assert_eq!(plan["packages"][0]["old_version"], "0.0.0");
-    assert_eq!(plan["packages"][0]["new_version"], "0.0.1");
+    assert_eq!(plan["release_units"][0]["old_version"], "0.0.0");
+    assert_eq!(plan["release_units"][0]["new_version"], "0.0.1");
     assert!(plan["tag_order"]
         .as_array()
         .unwrap()
@@ -182,9 +204,9 @@ fn init_ignores_cargo_workspace_only_manifests() {
 
     repo.cli().arg("init").assert().success();
     let config = intentional_core::Config::load(&repo.root).expect("generated config");
-    assert_eq!(config.packages.len(), 1);
+    assert_eq!(config.release_units.len(), 1);
     assert_eq!(
-        config.packages["sample-library"].path,
+        config.release_units["sample-library"].path,
         PathBuf::from("crates/library")
     );
 }
@@ -254,7 +276,7 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
     )
     .unwrap();
     assert_eq!(first["channel"], "beta");
-    assert_eq!(first["packages"][0]["new_version"], "1.1.0-beta.1");
+    assert_eq!(first["release_units"][0]["new_version"], "1.1.0-beta.1");
 
     repo.cli()
         .args(["apply", "--channel", "beta"])
@@ -287,7 +309,7 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
             .stdout,
     )
     .unwrap();
-    assert_eq!(second["packages"][0]["new_version"], "1.1.0-beta.2");
+    assert_eq!(second["release_units"][0]["new_version"], "1.1.0-beta.2");
 
     repo.cli().arg("apply").assert().success();
     let changelog = fs::read_to_string(repo.root.join("CHANGELOG.md")).unwrap();
@@ -332,8 +354,8 @@ fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
                 "pre-1-0-bump-mapping: compatibility",
             )
             .replace(
-                "packages:",
-                "workspace-tags:\n  release:\n    template: '{version}'\npackages:",
+                "release-units:",
+                "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
             ),
     );
     repo.write(".intentional/intents/.keep", "");
@@ -355,7 +377,7 @@ fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
             .stdout,
     )
     .expect("plan JSON");
-    assert_eq!(plan["packages"][0]["new_version"], "0.2.0");
+    assert_eq!(plan["release_units"][0]["new_version"], "0.2.0");
     assert!(plan["tags"]
         .as_array()
         .unwrap()
@@ -384,7 +406,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
     repo.cli()
         .args([
             "add",
-            "--package",
+            "--release-unit",
             "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",
@@ -400,7 +422,7 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
     repo.cli()
         .args([
             "add",
-            "--package",
+            "--release-unit",
             "sample-library:patch",
             "--message",
             "Correct a user-visible defect.",

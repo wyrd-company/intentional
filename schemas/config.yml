@@ -7,7 +7,7 @@ $id: https://intentional.foo/schemas/config.yml
 title: Intentional workspace configuration
 type: object
 additionalProperties: false
-required: [ contract, packages ]
+required: [ contract, release-units ]
 properties:
   $schema:
     type: string
@@ -32,11 +32,11 @@ properties:
     type: object
     additionalProperties:
       $ref: "#/$defs/workspace-tag"
-  packages:
+  release-units:
     type: object
     minProperties: 1
     additionalProperties:
-      $ref: "#/$defs/package"
+      $ref: "#/$defs/release-unit"
 $defs:
   bump:
     enum: [ major, minor, patch ]
@@ -50,7 +50,7 @@ $defs:
         type: string
   phase:
     enum: [ before-publication, after-publication ]
-  package:
+  release-unit:
     type: object
     additionalProperties: false
     required: [ path, tags ]
@@ -74,7 +74,7 @@ $defs:
         type: object
         minProperties: 1
         additionalProperties:
-          $ref: "#/$defs/package-tag"
+          $ref: "#/$defs/release-unit-tag"
   projection:
     type: object
     additionalProperties: false
@@ -90,7 +90,7 @@ $defs:
       pointer:
         type: string
         minLength: 1
-  package-tag:
+  release-unit-tag:
     type: object
     additionalProperties: false
     required: [ role, template ]

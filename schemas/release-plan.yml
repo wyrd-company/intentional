@@ -7,7 +7,7 @@ $id: https://intentional.foo/schemas/release-plan.yml
 title: Intentional release plan
 type: object
 additionalProperties: false
-required: [ digest, contract, generator, packages, tags, tag_order ]
+required: [ digest, contract, generator, release_units, tags, tag_order ]
 properties:
   digest:
     type: string
@@ -22,7 +22,7 @@ properties:
       tool: { const: intentional }
       version: { type: string }
   channel: { type: string }
-  packages:
+  release_units:
     type: array
     items:
       type: object
@@ -57,7 +57,7 @@ properties:
         id: { type: string }
         name: { type: string }
         version: { type: string }
-        package: { type: string }
+        release_unit: { type: string }
         role: { enum: [ primary, projection ] }
         require_phase: { enum: [ before-publication, after-publication ] }
         tag_after:

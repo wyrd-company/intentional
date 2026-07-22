@@ -31,14 +31,14 @@ impl StampResult {
     pub fn build(root: &Path, prerelease: Option<&str>) -> Result<Self> {
         let config = Config::load(root)?;
         let intents = Intent::load_all(root, &config)?;
-        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.packages));
+        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let bumps = effective_bumps(&config, &declared);
         let repository = VersionRepository::discover(root)?;
         let mut writes = BTreeMap::<PathBuf, String>::new();
         let mut original = BTreeMap::<PathBuf, String>::new();
         let mut workspace_versions = BTreeMap::<PathBuf, String>::new();
 
-        for (id, package) in &config.packages {
+        for (id, package) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
             let current = repository.current_version(id, &primary.template)?;
             let mut version = bump_version(&current, bumps[id]);

@@ -23,10 +23,10 @@ pub const MISSING_BASELINE_CODE: &str = "missing-baseline";
 /// Stable recovery action emitted with missing-baseline diagnostics.
 pub const MISSING_BASELINE_NEXT_ACTION: &str = "intentional tag --baseline";
 
-/// Version status for one logical package.
+/// Version status for one release unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageStatus {
-    /// Logical package id.
+pub struct ReleaseUnitStatus {
+    /// Release-unit id.
     pub id: String,
     /// Tag-derived current version.
     pub current: Version,
@@ -41,11 +41,11 @@ pub struct PackageStatus {
 pub struct WorkspaceStatus {
     /// Pending intent ids.
     pub intents: Vec<String>,
-    /// Package versions in id order.
-    pub packages: Vec<PackageStatus>,
+    /// Release-unit versions in id order.
+    pub release_units: Vec<ReleaseUnitStatus>,
     /// Manifest versions that differ from tag-derived current versions.
     pub drift: Vec<Drift>,
-    /// Packages whose primary baseline tag has not been established.
+    /// Release units whose primary baseline tag has not been established.
     pub missing_baselines: Vec<String>,
     /// Recoverable missing or inconsistent annotated release records.
     pub tag_record_issues: Vec<String>,
@@ -54,8 +54,8 @@ pub struct WorkspaceStatus {
 /// One manifest drift finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drift {
-    /// Logical package id.
-    pub package: String,
+    /// Release-unit id.
+    pub release_unit: String,
     /// Workspace-relative manifest path.
     pub file: std::path::PathBuf,
     /// Tag-derived version.
@@ -75,10 +75,10 @@ impl WorkspaceStatus {
     /// Compute status from already-loaded inputs.
     pub fn compute(root: &Path, config: &Config, intents: &[Intent]) -> Result<Self> {
         let repository = VersionRepository::discover(root)?;
-        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.packages));
+        let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let mut current_versions = std::collections::BTreeMap::new();
         let mut missing_baselines = Vec::new();
-        for id in config.packages.keys() {
+        for id in config.release_units.keys() {
             let (_, primary) = config.primary_tag(id)?;
             let current = repository.current_version(id, &primary.template)?;
             if !repository.has_matching_tag(id, &primary.template)? {
@@ -87,12 +87,12 @@ impl WorkspaceStatus {
             current_versions.insert(id.clone(), current);
         }
         let resolved = resolve_versions(config, &declared, &current_versions)?;
-        let mut packages = Vec::with_capacity(config.packages.len());
+        let mut release_units = Vec::with_capacity(config.release_units.len());
         let mut drift = Vec::new();
-        for (id, package) in &config.packages {
+        for (id, package) in &config.release_units {
             let versions = &resolved[id];
             let expected = versions.current.to_string();
-            packages.push(PackageStatus {
+            release_units.push(ReleaseUnitStatus {
                 id: id.clone(),
                 current: versions.current.clone(),
                 next: versions.next.clone(),
@@ -108,7 +108,7 @@ impl WorkspaceStatus {
                 let actual = read_projection_version(root, &relative, projection, &text)?;
                 if actual != expected {
                     drift.push(Drift {
-                        package: id.clone(),
+                        release_unit: id.clone(),
                         file: relative,
                         expected: expected.clone(),
                         actual,
@@ -118,7 +118,7 @@ impl WorkspaceStatus {
         }
         Ok(Self {
             intents: intents.iter().map(|intent| intent.id.clone()).collect(),
-            packages,
+            release_units,
             drift,
             missing_baselines,
             tag_record_issues: crate::tag::tag_record_issues(root, config)?,

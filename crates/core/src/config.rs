@@ -7,7 +7,7 @@
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Adapter, Bump, PackageDisposition, Pre1BumpMapping, ProjectionMode, TagPhase, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,8 +43,8 @@ pub struct Config {
     /// Repository-level release tag streams.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub workspace_tags: BTreeMap<String, WorkspaceTagConfig>,
-    /// Logical package inventory keyed by stable package id.
-    pub packages: BTreeMap<String, PackageConfig>,
+    /// Release-unit inventory keyed by stable release-unit id.
+    pub release_units: BTreeMap<String, ReleaseUnitConfig>,
 }
 
 impl Default for Config {
@@ -56,7 +56,7 @@ impl Default for Config {
             fixed: Vec::new(),
             linked: Vec::new(),
             workspace_tags: BTreeMap::new(),
-            packages: BTreeMap::new(),
+            release_units: BTreeMap::new(),
         }
     }
 }
@@ -86,30 +86,30 @@ const fn default_dependency_bump() -> Bump {
     Bump::Patch
 }
 
-/// One logical package, potentially projected into several ecosystems.
+/// One independently versioned release unit.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct PackageConfig {
-    /// Package directory relative to the workspace root.
+pub struct ReleaseUnitConfig {
+    /// Release-unit directory relative to the workspace root.
     pub path: PathBuf,
-    /// Whether releases may include this package.
+    /// Whether releases may include this release unit.
     #[serde(default, skip_serializing_if = "is_managed")]
-    pub disposition: PackageDisposition,
+    pub disposition: ReleaseUnitDisposition,
     /// Version-bearing ecosystem and format projections. Empty means tag-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projections: Vec<Projection>,
-    /// Named package tag streams. Exactly one is primary.
+    /// Named release-unit tag streams. Exactly one is primary.
     pub tags: BTreeMap<String, TagConfig>,
     /// Authored internal dependency edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
 }
 
-fn is_managed(disposition: &PackageDisposition) -> bool {
-    *disposition == PackageDisposition::Managed
+fn is_managed(disposition: &ReleaseUnitDisposition) -> bool {
+    *disposition == ReleaseUnitDisposition::Managed
 }
 
-/// One named logical-package tag.
+/// One named release-unit tag.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct TagConfig {
@@ -145,7 +145,7 @@ pub struct WorkspaceTagConfig {
 pub struct Projection {
     /// Adapter specialization.
     pub adapter: Adapter,
-    /// File relative to the logical package path.
+    /// File relative to the release-unit path.
     pub file: PathBuf,
     /// Projection materialization mode.
     pub mode: ProjectionMode,
@@ -175,23 +175,25 @@ impl Config {
         Ok(serde_yaml::to_string(self)?)
     }
 
-    /// Return the configured primary tag for a package.
+    /// Return the configured primary tag for a release unit.
     pub fn primary_tag<'a>(&'a self, package_id: &str) -> Result<(&'a str, &'a TagConfig)> {
         let package = self
-            .packages
+            .release_units
             .get(package_id)
-            .ok_or_else(|| Error::Validation(format!("unknown package {package_id}")))?;
+            .ok_or_else(|| Error::Validation(format!("unknown release unit {package_id}")))?;
         package
             .tags
             .iter()
             .find(|(_, tag)| tag.role == TagRole::Primary)
             .map(|(id, tag)| (id.as_str(), tag))
-            .ok_or_else(|| Error::Validation(format!("package {package_id} has no primary tag")))
+            .ok_or_else(|| {
+                Error::Validation(format!("release unit {package_id} has no primary tag"))
+            })
     }
 
-    /// Canonical id for a named package tag.
-    pub fn package_tag_id(package_id: &str, tag_id: &str) -> String {
-        format!("package/{package_id}/{tag_id}")
+    /// Canonical id for a named release-unit tag.
+    pub fn release_unit_tag_id(release_unit_id: &str, tag_id: &str) -> String {
+        format!("release-unit/{release_unit_id}/{tag_id}")
     }
 
     /// Canonical id for a named workspace tag.
@@ -199,7 +201,7 @@ impl Config {
         format!("workspace/{tag_id}")
     }
 
-    /// Validate package ids, projections, release groups, tags, and dependency graphs.
+    /// Validate release-unit ids, projections, release groups, tags, and dependency graphs.
     pub fn validate(&self) -> Result<()> {
         if self.contract != CURRENT_CONTRACT {
             return Err(Error::Validation(format!(
@@ -207,9 +209,9 @@ impl Config {
                 self.contract
             )));
         }
-        if self.packages.is_empty() {
+        if self.release_units.is_empty() {
             return Err(Error::Validation(
-                "config must declare at least one package".to_owned(),
+                "config must declare at least one release unit".to_owned(),
             ));
         }
         if self.settings.internal_dependency_bump == Bump::None {
@@ -220,9 +222,9 @@ impl Config {
 
         let mut canonical_tags = BTreeSet::new();
         let mut resolved_templates = BTreeMap::new();
-        for (id, package) in &self.packages {
-            validate_id(id, "package")?;
-            validate_relative_path(&package.path, &format!("package {id} path"))?;
+        for (id, package) in &self.release_units {
+            validate_id(id, "release unit")?;
+            validate_relative_path(&package.path, &format!("release unit {id} path"))?;
             let primary_count = package
                 .tags
                 .values()
@@ -230,42 +232,49 @@ impl Config {
                 .count();
             if primary_count != 1 {
                 return Err(Error::Validation(format!(
-                    "package {id} must declare exactly one primary tag"
+                    "release unit {id} must declare exactly one primary tag"
                 )));
             }
 
             let mut projection_keys = BTreeSet::new();
             for projection in &package.projections {
-                validate_relative_path(&projection.file, &format!("package {id} projection file"))?;
+                validate_relative_path(
+                    &projection.file,
+                    &format!("release unit {id} projection file"),
+                )?;
                 if projection.adapter.requires_pointer()
                     && projection.pointer.as_deref().is_none_or(str::is_empty)
                 {
                     return Err(Error::Validation(format!(
-                        "package {id} generic {:?} projection requires a pointer",
+                        "release unit {id} generic {:?} projection requires a pointer",
                         projection.adapter
                     )));
                 }
                 let key = (&projection.file, projection.pointer.as_deref());
                 if !projection_keys.insert(key) {
                     return Err(Error::Validation(format!(
-                        "package {id} repeats projection {}",
+                        "release unit {id} repeats projection {}",
                         projection.file.display()
                     )));
                 }
             }
 
-            validate_dependencies(id, package, &self.packages)?;
+            validate_dependencies(id, package, &self.release_units)?;
             for (tag_id, tag) in &package.tags {
                 validate_id(tag_id, "tag")?;
-                validate_tag_template(&format!("package {id} tag {tag_id}"), &tag.template, true)?;
-                let canonical = Self::package_tag_id(id, tag_id);
+                validate_tag_template(
+                    &format!("release unit {id} tag {tag_id}"),
+                    &tag.template,
+                    true,
+                )?;
+                let canonical = Self::release_unit_tag_id(id, tag_id);
                 canonical_tags.insert(canonical);
                 let rendered = tag.template.replace("{id}", id);
                 if let Some(other) =
-                    resolved_templates.insert(rendered, format!("package {id} tag {tag_id}"))
+                    resolved_templates.insert(rendered, format!("release unit {id} tag {tag_id}"))
                 {
                     return Err(Error::Validation(format!(
-                        "package {id} tag {tag_id} template collides with {other}"
+                        "release unit {id} tag {tag_id} template collides with {other}"
                     )));
                 }
             }
@@ -295,25 +304,25 @@ impl Config {
             for (index, group) in groups.iter().enumerate() {
                 if group.len() < 2 {
                     return Err(Error::Validation(format!(
-                        "{kind} group {index} must contain at least two packages"
+                        "{kind} group {index} must contain at least two release units"
                     )));
                 }
                 let mut members = BTreeSet::new();
                 for member in group {
-                    if !self.packages.contains_key(member) {
+                    if !self.release_units.contains_key(member) {
                         return Err(Error::Validation(format!(
-                            "{kind} group {index} references unknown package {member}"
+                            "{kind} group {index} references unknown release unit {member}"
                         )));
                     }
                     if !members.insert(member) {
                         return Err(Error::Validation(format!(
-                            "{kind} group {index} repeats package {member}"
+                            "{kind} group {index} repeats release unit {member}"
                         )));
                     }
                     if let Some(previous) = assigned.insert(member, format!("{kind} group {index}"))
                     {
                         return Err(Error::Validation(format!(
-                            "package {member} belongs to both {previous} and {kind} group {index}"
+                            "release unit {member} belongs to both {previous} and {kind} group {index}"
                         )));
                     }
                 }
@@ -325,7 +334,7 @@ impl Config {
     fn validate_dependency_acyclic(&self) -> Result<()> {
         fn visit<'a>(
             id: &'a str,
-            packages: &'a BTreeMap<String, PackageConfig>,
+            packages: &'a BTreeMap<String, ReleaseUnitConfig>,
             visiting: &mut BTreeSet<&'a str>,
             visited: &mut BTreeSet<&'a str>,
         ) -> Result<()> {
@@ -334,7 +343,7 @@ impl Config {
             }
             if !visiting.insert(id) {
                 return Err(Error::Validation(format!(
-                    "dependency cycle includes package {id}"
+                    "dependency cycle includes release unit {id}"
                 )));
             }
             for dependency in &packages[id].depends_on {
@@ -347,18 +356,18 @@ impl Config {
 
         let mut visiting = BTreeSet::new();
         let mut visited = BTreeSet::new();
-        for id in self.packages.keys() {
-            visit(id, &self.packages, &mut visiting, &mut visited)?;
+        for id in self.release_units.keys() {
+            visit(id, &self.release_units, &mut visiting, &mut visited)?;
         }
         Ok(())
     }
 
     fn validate_tag_graph(&self, known: &BTreeSet<String>) -> Result<()> {
         let mut edges = BTreeMap::<String, Vec<String>>::new();
-        for (package_id, package) in &self.packages {
+        for (package_id, package) in &self.release_units {
             for (tag_id, tag) in &package.tags {
                 edges.insert(
-                    Self::package_tag_id(package_id, tag_id),
+                    Self::release_unit_tag_id(package_id, tag_id),
                     tag.tag_after.clone(),
                 );
             }
@@ -417,24 +426,24 @@ impl Config {
 
 fn validate_dependencies(
     id: &str,
-    package: &PackageConfig,
-    packages: &BTreeMap<String, PackageConfig>,
+    package: &ReleaseUnitConfig,
+    packages: &BTreeMap<String, ReleaseUnitConfig>,
 ) -> Result<()> {
     let mut dependencies = BTreeSet::new();
     for dependency in &package.depends_on {
         if dependency == id {
             return Err(Error::Validation(format!(
-                "package {id} cannot depend on itself"
+                "release unit {id} cannot depend on itself"
             )));
         }
         if !packages.contains_key(dependency) {
             return Err(Error::Validation(format!(
-                "package {id} depends on unknown package {dependency}"
+                "release unit {id} depends on unknown release unit {dependency}"
             )));
         }
         if !dependencies.insert(dependency) {
             return Err(Error::Validation(format!(
-                "package {id} repeats dependency {dependency}"
+                "release unit {id} repeats dependency {dependency}"
             )));
         }
     }
@@ -500,7 +509,7 @@ settings:
 workspace-tags:
   release:
     template: '{version}'
-packages:
+release-units:
   library:
     path: packages/library
     projections:
@@ -533,20 +542,27 @@ packages:
     #[test]
     fn validates_fixed_and_linked_membership() {
         let invalid = VALID.replace(
-            "packages:\n",
-            "fixed: [[library, application]]\nlinked: [[library, application]]\npackages:\n",
+            "release-units:\n",
+            "fixed: [[library, application]]\nlinked: [[library, application]]\nrelease-units:\n",
         );
         let error = Config::from_yaml(&invalid).expect_err("overlap rejected");
         assert!(error.to_string().contains("belongs to both"));
     }
 
     #[test]
-    fn permits_tag_only_packages() {
+    fn permits_tag_only_release_units() {
         let valid = VALID.replace(
             "    projections:\n      - { adapter: npm, file: package.json, mode: committed }\n    tags:",
             "    tags:",
         );
-        Config::from_yaml(&valid).expect("tag-only package accepted");
+        Config::from_yaml(&valid).expect("tag-only release unit accepted");
+    }
+
+    #[test]
+    fn rejects_obsolete_packages_key() {
+        let obsolete = VALID.replace("release-units:", "packages:");
+        let error = Config::from_yaml(&obsolete).expect_err("obsolete public key rejected");
+        assert!(error.to_string().contains("unknown field `packages`"));
     }
 
     #[test]
@@ -580,7 +596,7 @@ packages:
             .to_string()
             .contains("unknown tag"));
         let cyclic = VALID
-            .replace("template: '{version}'", "template: '{version}'\n    tag-after: [package/library/primary]")
+            .replace("template: '{version}'", "template: '{version}'\n    tag-after: [release-unit/library/primary]")
             .replace(
                 "primary: { role: primary, template: '{id}@{version}' }",
                 "primary: { role: primary, template: '{id}@{version}', tag-after: [workspace/release] }",

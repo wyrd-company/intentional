@@ -63,7 +63,7 @@ outputs:
     description: "Canonical JSON emitted when command is plan"
     value: ${{ steps.run.outputs.plan }}
   changed:
-    description: "Whether a plan contains at least one changed package"
+    description: "Whether a plan contains at least one changed release unit"
     value: ${{ steps.run.outputs.changed }}
 
 runs:
@@ -242,7 +242,7 @@ runs:
         import os
 
         plan = json.loads(os.environ["PLAN_OUTPUT"])
-        print("true" if plan.get("packages") else "false")
+        print("true" if plan.get("release_units") else "false")
         PY
           )"
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"

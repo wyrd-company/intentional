@@ -36,7 +36,7 @@ design-challenges:
     it to be stored in git. The design must reconcile both without forking the
     mental model per repository.
   cross-ecosystem-identity: >-
-    One logical package may ship to multiple ecosystems at one version (an npm
+    One release unit may ship to multiple ecosystems at one version (an npm
     and a pub build of the same runtime). Ecosystem package names cannot serve
     as identity without recreating the ignore-list problem.
   choreography-diversity: >-
@@ -71,7 +71,7 @@ proposed-design:
   high-level-overview: >-
     Intents answer what the next version should be; tags answer what was
     released; manifests are projections, never sources. Accumulated intent
-    files determine the next bump per logical package. The tool always tags on
+    files determine the next bump per release unit. The tool always tags on
     release; tags are the canonical release record in every mode. Manifests
     receive the version by per-projection policy — committed, injected at
     build time, or none (Go's degenerate case). Between releases the two
@@ -81,17 +81,17 @@ proposed-design:
     that CD executes; it never speaks a registry protocol, and it never
     commits, pushes, or opens pull requests.
   core-model: >-
-    A workspace declares an inventory of logical packages in
-    .intentional/config.yml. Each package has a path, one or more projections,
-    named tags, and optional explicit depends-on edges. Exactly one package tag
+    A workspace declares an inventory of release units under `release-units` in
+    .intentional/config.yml. Each release unit has a path, one or more projections,
+    named tags, and optional explicit depends-on edges. Exactly one release-unit tag
     is primary and supplies current-version authority; any projection tags
     record that same logical release in additional tag namespaces. Named
     workspace tags represent repository-level release records and CD triggers
-    without becoming package version authority. Tag templates never add a v
+    without becoming release-unit version authority. Tag templates never add a v
     prefix. The next version is the primary tag version plus the accumulated
     intent bump interpreted by the workspace contract. No version field exists
     in config, so hand-edited manifest versions are observable drift rather
-    than competing authority. Monorepo support includes per-package intents,
+    than competing authority. Monorepo support includes per-release-unit intents,
     internal-dependency bumping with generated changelog entries, fixed and
     linked release groups, and changed/unchanged partitioning. Within one
     ecosystem the dependency graph is derived from manifests to assist and
@@ -99,11 +99,11 @@ proposed-design:
     cross-ecosystem edges are invisible to manifests.
   intent-files: >-
     Intents live in .intentional/intents/ as markdown files with a YAML
-    frontmatter block mapping logical package ids to bump levels; the markdown
+    frontmatter block mapping release unit ids to bump levels; the markdown
     body is the changelog prose. Filenames are generated memorable slugs so
     parallel branches do not conflict. Intents reference logical ids, never
-    ecosystem names. A logical package with npm and pub projections is one
-    package with one version — cross-ecosystem linked versioning falls out of
+    ecosystem names. A release unit with npm and pub projections is one
+    release unit with one version — cross-ecosystem linked versioning falls out of
     identity rather than being a feature.
   projections-and-adapters: >-
     Ecosystem adapters (npm, cargo, pub, msbuild, python, go) know where the
@@ -130,7 +130,7 @@ proposed-design:
     while minor and patch advance to 0.x.(y+1). New workspaces use
     compatibility mapping; Changesets adoption recommends component mapping.
   release-groups: >-
-    Fixed and linked groups contain logical package ids. When any managed
+    Fixed and linked groups contain release unit ids. When any managed
     member of a fixed group receives a direct or dependency-derived bump, all
     managed members release. The group takes the highest current member
     version, selects the highest requested bump, applies the configured
@@ -141,20 +141,20 @@ proposed-design:
     current version across the full group and the highest requested bump among
     the releasing members; unaffected members retain their versions. A
     suspended linked member blocks only when it would release. Excluded
-    packages cannot appear in either group, and a package belongs to at most
+    release units cannot appear in either group, and a release unit belongs to at most
     one release group. Dependency propagation and group constraints are
     evaluated to a fixed point before the release plan is sealed.
   tag-contract: >-
     Every tag is an annotated release record carrying the interpretation
     contract, generator name and version, and release-plan digest. A logical
-    package has exactly one primary tag and any number of projection tags. All
-    tags for one logical release target the same commit and agree on package
+    release unit has exactly one primary tag and any number of projection tags. All
+    tags for one logical release target the same commit and agree on release-unit
     version, contract, and plan digest. A projection tag can trigger external
     automation but does not become lesser evidence or an alternate version
     source. Named workspace tags carry the same record for a workspace release
     and can use a plain {version} template. Each workspace tag has its own
     version stream: its latest matching tag supplies the current version and
-    the highest bump among participating packages supplies its next bump. A
+    the highest bump among participating release units supplies its next bump. A
     workspace tag without an existing stream requires an explicit baseline
     version. A tag can declare require-phase as before-publication or
     after-publication; creating it requires an equal --phase value. The phase
@@ -170,7 +170,7 @@ proposed-design:
   initialization-discovery: >-
     Init derives its default inventory boundary from package-manager workspace
     membership and derives package identities from manifest-native names.
-    Directory basenames are evidence only and never package ids, so repeated
+    Directory basenames are evidence only and never release-unit ids, so repeated
     basenames in different subtrees do not collide. --scan-all explicitly
     broadens discovery beyond workspace membership. Discovery records every
     manifest and workspace file used as evidence, recognizes existing
@@ -186,7 +186,7 @@ proposed-design:
     resolution choices, recommendations, and editable resolution fields. Its
     computed state is `needs-input` or `ready`; editing the state cannot bypass
     validation. Stable diagnostic codes identify conditions, while diagnostic
-    ids combine the code with the affected package, tag, or repository
+    ids combine the code with the affected release unit, tag, or repository
     location so agents can reconcile reruns.
 
     YAML choices are compact scalar values with one inline comment explaining
@@ -204,10 +204,10 @@ proposed-design:
     version behavior into the initialization plan. Changesets bump names use
     component pre-1.0 mapping. Each pending Changesets file becomes one
     Intentional intent: its markdown body is preserved and its manifest-native
-    package names are mapped to logical package ids. The importer independently
+    package names are mapped to release unit ids. The importer independently
     computes the source Changesets release result and the proposed Intentional
     release result, including dependency propagation and group constraints,
-    then records package membership, requested bumps, and next-version parity.
+    then records release-unit membership, requested bumps, and next-version parity.
     Source dependency propagation preserves npm dependency kinds, npm and
     workspace ranges, Changesets' out-of-range default, peer-major behavior,
     and its supported experimental dependent-update switches.
@@ -218,18 +218,18 @@ proposed-design:
     durable Intentional `depends-on` edges; that contract choice is explicit
     and current divergence remains blocking. Release-profile
     versionSource mappings rewrite manifest-native intent keys to the selected
-    logical package identity before comparison and conversion.
+    release unit identity before comparison and conversion.
     Unsupported settings and repository-specific release metadata remain
     explicit diagnostics with source evidence rather than inferred behavior.
-  package-disposition: >-
-    Managed packages belong to the inventory and participate in release
-    computation. Suspended packages remain configured and visible to status
+  release-unit-disposition: >-
+    Managed release units belong to the inventory and participate in release
+    computation. Suspended release units remain configured and visible to status
     and check, but any release that requires them is blocked. Excluded
     discovery candidates do not enter the inventory. Every Changesets ignore
     entry produces a suspended, excluded, or managed resolution; suspended is
     recommended because it preserves the identity and blocks release until the
     repository owner resolves its contract. Package privacy is separate from
-    package disposition and does not imply exclusion or suspension.
+    release-unit disposition and does not imply exclusion or suspension.
   repository-integration-resolutions: >-
     Changesets references outside .changeset are repository integrations, not
     state owned by Intentional. The initialization plan reports each reference
@@ -256,8 +256,8 @@ proposed-design:
     independently rediscover the missing-baseline condition and emit the same
     stable diagnostic and command until the tags exist. Baseline creation runs
     against the externally created takeover commit. It infers a logical
-    package version only when every version-bearing projection agrees and
-    reports per-file evidence when they differ. A tag-only package requires an
+    release-unit version only when every version-bearing projection agrees and
+    reports per-file evidence when they differ. A tag-only release unit requires an
     explicit baseline version. Baseline tags use the configured primary,
     projection, and workspace templates, are annotated with the contract and
     plan digest, target the takeover commit, and do not require a phase.
@@ -265,13 +265,13 @@ proposed-design:
     init discovers the inventory, writes complete configuration for an
     unambiguous new workspace, and otherwise produces or reconciles the single
     initialization plan. --scan-all broadens discovery and --take-over performs
-    a validated authority handoff. add authors an intent through flags or an
-    interactive prompt. status reports pending intents, computed next
+    a validated authority handoff. add authors an intent through repeatable
+    --release-unit selectors or an interactive prompt. status reports pending intents, computed next
     versions, drift, suspended release blockers, and missing baselines. plan
     emits the canonical release plan without mutation. apply writes projections
     and changelogs and consumes intents in the working tree. stamp writes
     computed versions into injected projections and touches nothing else. tag
-    creates configured package and workspace tags, accepts --phase for tags
+    creates configured release-unit and workspace tags, accepts --phase for tags
     with a required phase, and accepts --baseline to establish initial release
     authority. Tag is the only git-writing command. check is the CI gate for
     config, schema, intent validity, tag-record consistency, baseline presence,
@@ -279,17 +279,17 @@ proposed-design:
     exact operation set. Commit, push, and forge choreography belong to the
     harness.
   release-plan: >-
-    Plan emits canonical JSON listing packages, old and new versions,
+    Plan emits canonical JSON listing release units, old and new versions,
     contributing intent ids, primary, projection, and workspace tags, tag-after
     prerequisites, required phase declarations, and rendered release notes per
-    package. The interpretation contract and generator record are part of the
+    release unit. The interpretation contract and generator record are part of the
     canonical payload sealed by its digest. CD consumes the plan as release
     input and owns all publication and forge operations. The plan's only
     ordering edges are tag-after prerequisites.
   changelog-model: >-
-    apply writes each affected package's CHANGELOG.md from the consumed intent
-    bodies; a multi-package intent's body lands in each affected package's
-    changelog, and a multi-projection package has exactly one changelog.
+    apply writes each affected release unit's CHANGELOG.md from the consumed intent
+    bodies; a multi-release-unit intent's body lands in each affected release unit's
+    changelog, and a multi-projection release unit has exactly one changelog.
     Sections group by bump level (breaking, features, fixes); an optional kind
     frontmatter field can refine grouping later without schema breakage.
     Internal dependency bumps generate their own entries. Channel releases
@@ -300,7 +300,7 @@ proposed-design:
   api-approval-gate: >-
     Future scope, first increment after the core ships. The tool orchestrates
     an approval-test loop over public API surfaces but never scans a language
-    itself: per-package config names a command that emits a deterministic,
+    itself: per-release-unit config names a command that emits a deterministic,
     line-oriented surface (cargo public-api, api-extractor, PublicApiGenerator,
     griffe, apidiff, dart_apitool). A golden surface file is checked into git;
     api check regenerates, diffs, and on failure leaves the received file
@@ -309,7 +309,7 @@ proposed-design:
     change implies patch; the mapping is version-aware pre-1.0. check fails
     when a declared bump is below the floor; declaring above the floor is
     always allowed because behavioral breaks are invisible to surfaces. The
-    gate is opt-in per package, and add can prefill the suggested bump from
+    gate is opt-in per release unit, and add can prefill the suggested bump from
     the current diff.
   interpretation-contract: >-
     Interpretation semantics — bump aggregation, the pre-1.0 mapping,
@@ -355,6 +355,6 @@ proposed-design:
   out-of-scope: >-
     Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
     committing, pushing, or opening pull requests permanently; language
-    parsing and API surface scanning permanently (delegated to per-package
+    parsing and API surface scanning permanently (delegated to per-release-unit
     commands); forge API calls for changelog enrichment; artifact digests and
     evidence binding in the first version.
