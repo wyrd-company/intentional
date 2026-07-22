@@ -49,7 +49,7 @@ intentional add \
   --message "Add a user-visible capability."
 ```
 
-Run with no flags to be prompted for the package, bump, and message instead.
+Run with no flags to be prompted for the release unit, bump, and message instead.
 Either way, `add` writes a memorable-slug Markdown file under
 `.intentional/intents/`, for example:
 
