@@ -129,9 +129,10 @@ jobs:
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}-${{ github.run_attempt }}
+          name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
           if-no-files-found: error
+          overwrite: true
           retention-days: 90
 
   release:
@@ -149,7 +150,7 @@ jobs:
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
-          pattern: "*-${{ github.run_attempt }}"
+          pattern: "intentional-*"
           path: dist
           merge-multiple: true
 
