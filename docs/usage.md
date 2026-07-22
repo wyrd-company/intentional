@@ -15,6 +15,19 @@ Every command accepts `-C` / `--directory` to point at a workspace other than
 the current directory, and every mutating command accepts `--dry-run` to print
 its operations without touching the filesystem or Git.
 
+## Load the agent workflow
+
+`skill` prints the complete agent-facing workflow guide embedded in the
+installed Intentional version:
+
+```bash
+intentional skill
+```
+
+The output is a valid `SKILL.md` and can be installed directly into an agent's
+skill directory. Keeping the guide in the binary makes its command and safety
+guidance travel with the CLI version it describes.
+
 ## Bootstrap the workspace
 
 `init` requires a Git repository. It uses package-manager workspace membership

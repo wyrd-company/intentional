@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+const SKILL_DOCUMENT: &str = include_str!("../skills/intentional/SKILL.md");
+
 #[derive(Debug, Parser)]
 #[command(
     name = "intentional",
@@ -48,6 +50,8 @@ enum Command {
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,
+    /// Print the agent-facing Intentional workflow skill.
+    Skill,
 }
 
 #[derive(Debug, Args)]
@@ -168,8 +172,14 @@ fn run() -> Result<u8> {
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
         Command::Tag(args) => tag(&cli.directory, args),
         Command::Check => check(&cli.directory),
+        Command::Skill => skill(),
     }?;
     Ok(0)
+}
+
+fn skill() -> Result<()> {
+    print!("{SKILL_DOCUMENT}");
+    Ok(())
 }
 
 fn check(root: &std::path::Path) -> Result<()> {

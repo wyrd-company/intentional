@@ -52,6 +52,18 @@ The minimum supported Rust version is 1.85. The library crate is
 `intentional-core`; the binary package is `intentional-cli` and installs the
 `intentional` executable.
 
+## Agent workflow
+
+Print the complete agent-facing Intentional skill from the installed binary:
+
+```console
+intentional skill
+```
+
+The output is a valid `SKILL.md`, suitable for redirecting into an agent's skill
+directory. Because the document is compiled into the executable, its workflow
+and safety guidance stays aligned with that Intentional version.
+
 ## Initialize a repository
 
 ```console

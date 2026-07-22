@@ -151,6 +151,21 @@ fn add_exposes_only_the_release_unit_selector() {
 }
 
 #[test]
+fn skill_prints_the_embedded_agent_workflow_verbatim() {
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+        .arg("skill")
+        .output()
+        .expect("skill command");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 skill output"),
+        include_str!("../skills/intentional/SKILL.md")
+    );
+}
+
+#[test]
 fn init_add_status_plan_apply_tag_round_trip() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("0.0.0"));

@@ -1,0 +1,8 @@
+# ---
+# relationships:
+#   describes: intentional
+# ---
+interface:
+  display_name: "Intentional"
+  short_description: "Guide safe intent-driven release workflows"
+  default_prompt: "Use $intentional to initialize or run this repository release workflow safely."
