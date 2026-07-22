@@ -155,6 +155,35 @@ formula_two="$temporary/intentional-two.rb"
 cmp "$formula_one" "$formula_two"
 rg -q "version \"$version\"" "$formula_one"
 
+archive_fixture="$temporary/intentional"
+printf 'native executable' > "$archive_fixture"
+for format in tar.gz zip; do
+  archive_one="$temporary/archive-one.$format"
+  archive_two="$temporary/archive-two.$format"
+  python3 "$root/scripts/release/package-archive.py" \
+    --artifact intentional-sample \
+    --binary "$archive_fixture" \
+    --format "$format" \
+    --output "$archive_one"
+  python3 "$root/scripts/release/package-archive.py" \
+    --artifact intentional-sample \
+    --binary "$archive_fixture" \
+    --format "$format" \
+    --output "$archive_two"
+  cmp "$archive_one" "$archive_two"
+done
+expected_archive_entries="$temporary/expected-archive-entries"
+cat > "$expected_archive_entries" <<'EOF'
+intentional-sample/
+intentional-sample/LICENSE
+intentional-sample/README.md
+intentional-sample/intentional
+EOF
+tar -tzf "$temporary/archive-one.tar.gz" | sort | cmp - "$expected_archive_entries"
+unzip -Z1 "$temporary/archive-one.zip" | sort | cmp - "$expected_archive_entries"
+test "$(tar -tvzf "$temporary/archive-one.tar.gz" intentional-sample/intentional | cut -c1-10)" = "-rwxr-xr-x"
+test "$(zipinfo -l "$temporary/archive-one.zip" intentional-sample/intentional | awk '{print $1}')" = "-rwxr-xr-x"
+
 release_notes="$temporary/release-notes.md"
 "$root/scripts/release/extract-release-notes.sh" \
   "$version" "$root/CHANGELOG.md" "$release_notes"

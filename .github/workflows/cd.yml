@@ -86,10 +86,12 @@ jobs:
 
       - name: Install cross
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: taiki-e/install-action@cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross@0.2.5
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.82.0
 
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
@@ -115,30 +117,19 @@ jobs:
         if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --workspace --locked --target "${{ matrix.target }}"
 
-      - name: Package Unix archive
-        if: runner.os != 'Windows'
+      - name: Assemble deterministic release archive
         shell: bash
         run: |
-          artifact="${{ matrix.artifact_name }}"
-          mkdir -p "dist/$artifact"
-          cp "${{ matrix.bin_path }}" "dist/$artifact/"
-          cp LICENSE README.md "dist/$artifact/"
-          tar -C dist -czf "$artifact.tar.gz" "$artifact"
-
-      - name: Package Windows archive
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $artifact = "${{ matrix.artifact_name }}"
-          New-Item -ItemType Directory -Force -Path "dist/$artifact" | Out-Null
-          Copy-Item -Path "${{ matrix.bin_path }}" -Destination "dist/$artifact/"
-          Copy-Item -Path "LICENSE","README.md" -Destination "dist/$artifact/"
-          Compress-Archive -Path "dist/$artifact" -DestinationPath "$artifact.zip"
+          python3 scripts/release/package-archive.py \
+          --artifact "${{ matrix.artifact_name }}" \
+          --binary "${{ matrix.bin_path }}" \
+          --format "${{ matrix.archive_ext }}" \
+          --output "${{ matrix.artifact_name }}.${{ matrix.archive_ext }}"
 
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}-${{ github.run_attempt }}
           path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
           if-no-files-found: error
           retention-days: 90
@@ -158,6 +149,7 @@ jobs:
       - name: Download release archives
         uses: actions/download-artifact@v4
         with:
+          pattern: "*-${{ github.run_attempt }}"
           path: dist
           merge-multiple: true
 
@@ -200,7 +192,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.82.0
       - name: Publish or verify matching crates
         shell: bash
         run: |
