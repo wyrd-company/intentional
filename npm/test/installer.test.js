@@ -135,6 +135,21 @@ test("archive boundaries reject traversal, absolute, foreign, and duplicate exec
     () => installer.validateArchiveEntries([...valid, valid[1]], target),
     /exactly one/,
   );
+  assert.throws(
+    () => installer.validateArchiveEntries(valid.filter((entry) => entry !== valid[1]), target),
+    /exactly one/,
+  );
+});
+
+test("archive inspection reports extraction-tool failures", () => {
+  const target = installer.selectTarget("linux", "x64");
+  assert.throws(
+    () =>
+      installer.listArchive("broken.tar.gz", target, {
+        spawnSync: () => ({ status: 2, stderr: "corrupt archive", stdout: "" }),
+      }),
+    /tar failed: corrupt archive/,
+  );
 });
 
 test("extractExecutable places only the expected executable with executable permissions", () => {
