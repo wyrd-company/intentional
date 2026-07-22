@@ -70,7 +70,7 @@ intentional check
 ```
 
 `status` lists pending intents, tag-derived current versions, projected next
-versions, manifest drift, suspended release blockers, and missing baselines.
+versions, manifest drift, tag-record issues, and missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 

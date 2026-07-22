@@ -95,6 +95,7 @@ ecosystem package name.
 | `projections` | No | Files in which a version may be materialized. |
 | `tags` | Yes | Exactly one primary tag and optional projection tags. |
 | `depends-on` | No | Internal release-unit dependencies. |
+| `disposition` | No | `managed` by default; `suspended` keeps identity while blocking a required release. |
 
 Each projection has an adapter, relative file path, and mode. Generic `json`,
 `toml`, and `yaml` projections also require a pointer to the version field.

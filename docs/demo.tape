@@ -30,7 +30,7 @@ Type 'export GIT_COMMITTER_NAME="Demo User" GIT_COMMITTER_EMAIL="demo@example.in
 Type 'rm -rf /tmp/intentional-vhs-demo && mkdir -p /tmp/intentional-vhs-demo/.intentional/intents && cd /tmp/intentional-vhs-demo' Enter
 Type 'git init -q' Enter
 Type 'printf "%s\n" "{\"name\":\"sample-application\",\"version\":\"1.2.3\"}" > package.json' Enter
-Type 'printf "%s\n" "\$schema: https://intentional.foo/schemas/config.yml" "contract: contract-1" "settings:" "  internal-dependency-bump: patch" "  pre-1-0-bump-mapping: compatibility" "release-units:" "  sample-application:" "    path: ." "    projections:" "      - adapter: npm" "        file: package.json" "        mode: committed" "    tags:" "      primary:" "        role: primary" "        template: \"{version}\"" > .intentional/config.yml' Enter
+Type 'printf "%s\n" "\$schema: https://intentional.foo/schemas/config.yml" "contract: contract-1" "settings:" "  internal-dependency-bump: patch" "  pre-1-0-bump-mapping: compatibility" "release-units:" "  sample-app:" "    path: ." "    projections:" "      - adapter: npm" "        file: package.json" "        mode: committed" "    tags:" "      primary:" "        role: primary" "        template: \"{version}\"" > .intentional/config.yml' Enter
 Type 'git add . && git commit -q -m "Initialize sample application"' Enter
 Type 'intentional tag --baseline >/dev/null' Enter
 Type 'clear' Enter
@@ -40,7 +40,7 @@ Sleep 500ms
 Type 'intentional status' Enter
 Sleep 3s
 
-Type 'intentional add --release-unit sample-application:minor --message "Add configurable display options."' Enter
+Type 'intentional add --release-unit sample-app:minor --message "Add options."' Enter
 Sleep 3s
 
 Type 'intentional status' Enter
