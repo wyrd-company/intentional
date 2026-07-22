@@ -37,4 +37,15 @@ tasks:
 
   ci:
     desc: Run all continuous-integration checks locally
-    deps: [ fmt-check, lint, self-check, test ]
+    deps: [ docs:check, fmt-check, lint, self-check, test ]
+
+  docs:demo:
+    desc: Regenerate and optimize the public documentation demo
+    cmds:
+      - vhs docs/demo.tape
+      - gifsicle --batch --optimize=3 --colors 256 docs/assets/demo.gif
+
+  docs:check:
+    desc: Validate public documentation and its generated demo
+    cmds:
+      - bash scripts/check-docs.sh
