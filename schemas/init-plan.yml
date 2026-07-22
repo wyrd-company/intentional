@@ -157,7 +157,7 @@ $defs:
             enum: [ primary, projection ]
           template:
             type: string
-            pattern: "\\{version\\}"
+            pattern: '^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
       diagnostics:
         type: array
         items:

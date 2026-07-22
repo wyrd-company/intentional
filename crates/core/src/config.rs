@@ -619,7 +619,11 @@ pub(crate) fn validate_exact_discovery_path(path: &Path, description: &str) -> R
     Ok(())
 }
 
-fn validate_tag_template(description: &str, template: &str, allow_id: bool) -> Result<()> {
+pub(crate) fn validate_tag_template(
+    description: &str,
+    template: &str,
+    allow_id: bool,
+) -> Result<()> {
     if template.matches("{version}").count() != 1
         || template.matches("{id}").count() > usize::from(allow_id)
     {

@@ -6,8 +6,8 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
-    validate_detector_id, validate_exact_discovery_path, validate_sha256, Config, Projection,
-    ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
+    validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
+    Config, Projection, ReleaseUnitConfig, TagConfig, WorkspaceTagConfig, CONFIG_PATH,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -277,15 +277,11 @@ impl DiscoveryCandidate {
                     self.id, tag.id
                 )));
             }
-            if tag.template.matches("{version}").count() != 1
-                || tag.template.matches("{id}").count() > 1
-                || tag.template.contains("v{version}")
-            {
-                return Err(Error::Validation(format!(
-                    "discovery candidate {} tag template must contain exactly one {{version}}, at most one {{id}}, and no v prefix",
-                    self.id
-                )));
-            }
+            validate_tag_template(
+                &format!("discovery candidate {} tag", self.id),
+                &tag.template,
+                true,
+            )?;
         }
         let mut diagnostic_ids = BTreeSet::new();
         for diagnostic in &self.diagnostics {
@@ -519,7 +515,6 @@ pub struct InitPlan {
     /// Complete confidently inferred canonical configuration.
     pub inferred_config: Config,
     /// Artifact-neutral candidates awaiting or carrying explicit resolutions.
-    #[serde(default)]
     pub discovery_candidates: Vec<DiscoveryCandidate>,
     /// Finite choices, warnings, and verified repository integration outcomes.
     pub diagnostics: Vec<InitDiagnostic>,
@@ -2867,6 +2862,24 @@ mod tests {
         let ordered = result.into_candidates().expect("detector result valid");
         assert!(ordered[0].path < ordered[1].path);
 
+        let mut tampered = first.clone();
+        tampered.id = format!("candidate:{}", "0".repeat(64));
+        assert!(candidate_plan(vec![tampered])
+            .validate()
+            .expect_err("tampered candidate id rejected")
+            .to_string()
+            .contains("does not match detector"));
+
+        let foreign = DetectorResult {
+            detector: "other-detector".to_owned(),
+            candidates: vec![first.clone()],
+        };
+        assert!(foreign
+            .validate()
+            .expect_err("foreign detector candidate rejected")
+            .to_string()
+            .contains("returned candidate owned by"));
+
         let yaml = candidate_plan(vec![first, second])
             .to_yaml()
             .expect("candidate plan serializes");
@@ -2874,6 +2887,33 @@ mod tests {
         assert!(yaml.contains("kind: excluded"));
         assert!(yaml.contains("raw-version:"));
         assert!(yaml.contains("diagnostics:"));
+    }
+
+    #[test]
+    fn rejects_plan_without_required_discovery_candidates() {
+        let yaml = candidate_plan(Vec::new())
+            .to_yaml()
+            .expect("complete plan serializes");
+        assert!(yaml.contains("discovery-candidates: []"));
+        let incomplete = yaml.replace("discovery-candidates: []\n", "");
+        let error = serde_yaml::from_str::<InitPlan>(&incomplete)
+            .expect_err("missing discovery candidate collection rejected");
+        assert!(error
+            .to_string()
+            .contains("missing field `discovery-candidates`"));
+    }
+
+    #[test]
+    fn candidate_tag_templates_use_the_shared_contract() {
+        for template in ["v{version}", "{version}-{version}", "{id}-{id}@{version}"] {
+            let mut invalid = candidate("examples/template.json", None);
+            invalid.tag.as_mut().expect("tag suggestion").template = template.to_owned();
+            assert!(candidate_plan(vec![invalid])
+                .validate()
+                .expect_err("invalid candidate tag template rejected")
+                .to_string()
+                .contains("tag template"));
+        }
     }
 
     #[test]
@@ -2901,6 +2941,14 @@ mod tests {
         assert_eq!(
             kinds,
             BTreeSet::from(["excluded", "independent", "projection"])
+        );
+        assert_eq!(
+            schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
+                ["pattern"]
+                .as_str(),
+            Some(
+                r"^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$"
+            )
         );
     }
 
