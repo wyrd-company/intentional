@@ -32,7 +32,7 @@ function run(argv = process.argv.slice(2), options = {}) {
     return null;
   }
 
-  const child = spawnProcess(binary, argv, { stdio: "inherit" });
+  const child = spawnProcess(binary, argv, { argv0: "intentional", stdio: "inherit" });
   const handlers = new Map();
   const cleanup = () => {
     for (const [signal, handler] of handlers) {

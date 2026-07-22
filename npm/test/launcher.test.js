@@ -49,7 +49,7 @@ test("launcher forwards arguments and inherited standard streams", () => {
   assert.deepEqual(invocation, [
     "/package/bin/intentional-native",
     ["status", "--json"],
-    { stdio: "inherit" },
+    { argv0: "intentional", stdio: "inherit" },
   ]);
   child.emit("exit", 23, null);
   assert.equal(processObject.exitCode, 23);
