@@ -83,6 +83,9 @@ $defs:
   detector-id:
     type: string
     pattern: "^[a-z0-9][a-z0-9._-]*$"
+  release-unit-id:
+    type: string
+    pattern: "^[A-Za-z0-9@/_.-]+$"
   exact-path:
     type: string
     minLength: 1
@@ -168,13 +171,15 @@ $defs:
         required: [ kind, release-unit ]
         properties:
           kind: { const: independent }
-          release-unit: { type: string, minLength: 1 }
+          release-unit:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
       - type: object
         additionalProperties: false
         required: [ kind, release-unit ]
         properties:
           kind: { const: projection }
-          release-unit: { type: string, minLength: 1 }
+          release-unit:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
           target-candidate:
             type: string
             pattern: "^candidate:[0-9a-f]{64}$"
@@ -215,6 +220,7 @@ $defs:
         pattern: "^sha256:[0-9a-f]{64}$"
       lines:
         type: array
+        uniqueItems: true
         items:
           type: integer
           minimum: 1

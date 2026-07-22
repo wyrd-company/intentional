@@ -549,6 +549,10 @@ fn validate_id(id: &str, kind: &str) -> Result<()> {
 
 pub(crate) fn validate_detector_id(id: &str) -> Result<()> {
     if id.is_empty()
+        || !id
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
         || !id.chars().all(|character| {
             character.is_ascii_lowercase()
                 || character.is_ascii_digit()
@@ -698,6 +702,12 @@ release-units:
         let glob = receipts.replace("examples/package.json", "examples/*.json");
         assert!(Config::from_yaml(&glob)
             .expect_err("glob exclusion rejected")
+            .to_string()
+            .contains("one exact workspace-relative path"));
+
+        let non_canonical = receipts.replace("examples/package.json", "./examples/package.json");
+        assert!(Config::from_yaml(&non_canonical)
+            .expect_err("non-canonical exact path rejected")
             .to_string()
             .contains("one exact workspace-relative path"));
 

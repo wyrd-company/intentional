@@ -107,12 +107,12 @@ tag-only.
 
 ### Discovery candidates and receipts
 
-Every detector emits the same artifact-neutral candidate shape. Candidate ids
-are stable hashes of the detector id and exact workspace-relative path. File
-digests, native identity, and raw version text remain initialization evidence;
-projection and tag suggestions appear only when extraction supplies the fields
-they require. Extraction diagnostics report unreadable or missing fields but do
-not claim that an artifact is publishable.
+The shared detector contract uses one artifact-neutral candidate shape.
+Candidate ids are stable hashes of the detector id and exact workspace-relative
+path. File digests, native identity, and raw version text remain initialization
+evidence. Projection and tag suggestions appear only when extraction supplies
+the fields they require. Extraction diagnostics report unreadable or missing
+fields but do not claim that an artifact is publishable.
 
 An initialization-plan candidate has this shape (shown as an excerpt):
 

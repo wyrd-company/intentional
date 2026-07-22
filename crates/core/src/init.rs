@@ -265,6 +265,11 @@ impl DiscoveryCandidate {
                 || !tag
                     .id
                     .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_alphanumeric())
+                || !tag
+                    .id
+                    .chars()
                     .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
             {
                 return Err(Error::Validation(format!(
@@ -684,21 +689,12 @@ fn validate_projection_target(
             Ok(())
         }
         Some(CandidateResolution::Projection {
-            release_unit: target_release_unit,
-            target_candidate,
-        }) => {
-            if target_release_unit != release_unit {
-                return Err(Error::Validation(format!(
-                    "discovery candidate {} resolves to {release_unit} but target {} resolves to {target_release_unit}",
-                    source.id, target.id
-                )));
-            }
-            if let Some(next) = target_candidate {
-                validate_projection_target(source, release_unit, next, candidates)
-            } else {
-                Ok(())
-            }
-        }
+            release_unit: _,
+            target_candidate: _,
+        }) => Err(Error::Validation(format!(
+            "discovery candidate {} projects onto target {} that is not an independent creator",
+            source.id, target.id
+        ))),
         Some(CandidateResolution::Excluded) | None => Err(Error::Validation(format!(
             "discovery candidate {} projects onto target {} without an independent or configured resolution",
             source.id, target.id
@@ -2858,6 +2854,11 @@ mod tests {
             DiscoveryCandidate::stable_id("other-detector", Path::new("examples/first.json"))
                 .expect("different detector")
         );
+        assert!(DiscoveryCandidate::stable_id(
+            "-invalid-detector",
+            Path::new("examples/first.json")
+        )
+        .is_err());
 
         let result = DetectorResult {
             detector: "sample-detector".to_owned(),
@@ -3000,5 +3001,31 @@ mod tests {
             .expect_err("mismatched target rejected")
             .to_string()
             .contains("target"));
+
+        let independent = candidate(
+            "examples/independent.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "planned".to_owned(),
+            }),
+        );
+        let intermediate = candidate(
+            "examples/intermediate.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "planned".to_owned(),
+                target_candidate: Some(independent.id.clone()),
+            }),
+        );
+        let chained = candidate(
+            "examples/chained.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "planned".to_owned(),
+                target_candidate: Some(intermediate.id.clone()),
+            }),
+        );
+        assert!(candidate_plan(vec![independent, intermediate, chained])
+            .validate()
+            .expect_err("projection chain rejected")
+            .to_string()
+            .contains("not an independent creator"));
     }
 }
