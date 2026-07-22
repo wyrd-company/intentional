@@ -8,7 +8,7 @@
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
     Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    WorkspaceTagConfig, CONFIG_PATH,
+    WorkspaceTagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -25,8 +25,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use walkdir::WalkDir;
 
 /// Transient initialization-plan location.
@@ -539,6 +540,7 @@ impl InitPlan {
                     "an empty inferred config requires unresolved discovery candidates".to_owned(),
                 ));
             }
+            validate_empty_inferred_config(&self.inferred_config)?;
         } else {
             self.inferred_config.validate()?;
         }
@@ -628,6 +630,41 @@ impl InitPlan {
         self.validate()?;
         canonical_json(self)
     }
+}
+
+fn validate_empty_inferred_config(config: &Config) -> Result<()> {
+    if config
+        .schema
+        .as_deref()
+        .is_some_and(|schema| schema != CONFIG_SCHEMA)
+    {
+        return Err(Error::Validation(format!(
+            "empty inferred config schema must be {CONFIG_SCHEMA}"
+        )));
+    }
+    if config.contract != CURRENT_CONTRACT {
+        return Err(Error::Validation(format!(
+            "unsupported interpretation contract {:?}; expected {CURRENT_CONTRACT}",
+            config.contract
+        )));
+    }
+    if config.settings.internal_dependency_bump == Bump::None {
+        return Err(Error::Validation(
+            "internal-dependency-bump must be major, minor, or patch".to_owned(),
+        ));
+    }
+    if !config.fixed.is_empty()
+        || !config.linked.is_empty()
+        || !config.workspace_tags.is_empty()
+        || !config.discovery.managed_paths.is_empty()
+        || !config.discovery.excluded_paths.is_empty()
+    {
+        return Err(Error::Validation(
+            "empty inferred config may only contain schema, contract, settings, and release-units"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_resolution_release_unit(id: &str) -> Result<()> {
@@ -839,6 +876,7 @@ struct ChangesetsSourceSemantics<'a> {
 
 fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
+    let had_previous_plan = previous.is_some();
     let configured = if root.join(CONFIG_PATH).is_file() {
         Config::load(root)?
     } else {
@@ -855,14 +893,22 @@ fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
             ));
         }
         let contents = configured.to_yaml()?;
+        let (operations, deletes) = if had_previous_plan {
+            (
+                vec![format!("delete {INIT_PLAN_PATH}")],
+                vec![PathBuf::from(INIT_PLAN_PATH)],
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         return Ok(InitResult {
             state: InitState::Success,
             path: PathBuf::from(CONFIG_PATH),
-            operations: Vec::new(),
+            operations,
             contents,
             plan: None,
             writes: Vec::new(),
-            deletes: Vec::new(),
+            deletes,
             takeover: false,
             takeover_evidence: None,
         });
@@ -1019,6 +1065,17 @@ fn apply_candidate_resolutions(
     };
     validation_plan.validate()?;
 
+    let resolved_paths = candidates
+        .iter()
+        .map(|candidate| (candidate.detector.clone(), candidate.path.clone()))
+        .collect::<BTreeSet<_>>();
+    config.discovery.managed_paths.retain(|receipt| {
+        !resolved_paths.contains(&(receipt.detector.clone(), receipt.path.clone()))
+    });
+    config.discovery.excluded_paths.retain(|receipt| {
+        !resolved_paths.contains(&(receipt.detector.clone(), receipt.path.clone()))
+    });
+
     for candidate in candidates {
         let CandidateResolution::Independent { release_unit } = candidate
             .resolution
@@ -1120,7 +1177,19 @@ fn apply_candidate_resolutions(
         .discovery
         .excluded_paths
         .sort_by(|a, b| (&a.detector, &a.path).cmp(&(&b.detector, &b.path)));
+    let configured_dependencies = config
+        .release_units
+        .iter()
+        .map(|(id, unit)| (id.clone(), unit.depends_on.clone()))
+        .collect::<BTreeMap<_, _>>();
     derive_npm_dependencies(root, &mut config)?;
+    for (id, dependencies) in configured_dependencies {
+        if let Some(unit) = config.release_units.get_mut(&id) {
+            unit.depends_on.extend(dependencies);
+            unit.depends_on.sort();
+            unit.depends_on.dedup();
+        }
+    }
     config.validate()?;
     Ok(config)
 }
@@ -1833,7 +1902,8 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     for directory in directories {
         add_manifests_in_directory(&directory, &mut paths)?;
     }
-    paths.retain(|path| !hard_excluded(root, path) && !git_ignored(root, path));
+    paths.retain(|path| !hard_excluded(root, path));
+    remove_git_ignored(root, &mut paths)?;
     Ok(paths)
 }
 
@@ -1904,24 +1974,15 @@ fn add_manifests_in_directory(directory: &Path, paths: &mut BTreeSet<PathBuf>) -
 }
 
 fn all_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
-    Ok(WalkDir::new(root)
+    let mut paths = WalkDir::new(root)
         .into_iter()
-        .filter_entry(|entry| {
-            if hard_excluded(root, entry.path()) {
-                return false;
-            }
-            if entry.depth() == 0 {
-                return true;
-            }
-            if entry.file_type().is_dir() || adapter_for(entry.path()).is_some() {
-                return !git_ignored(root, entry.path());
-            }
-            true
-        })
+        .filter_entry(|entry| !hard_excluded(root, entry.path()))
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file() && adapter_for(entry.path()).is_some())
         .map(|entry| entry.into_path())
-        .collect())
+        .collect();
+    remove_git_ignored(root, &mut paths)?;
+    Ok(paths)
 }
 
 fn hard_excluded(root: &Path, path: &Path) -> bool {
@@ -1958,13 +2019,53 @@ fn hard_excluded(root: &Path, path: &Path) -> bool {
         })
 }
 
-fn git_ignored(root: &Path, path: &Path) -> bool {
-    Command::new("git")
-        .args(["check-ignore", "-q", "--"])
-        .arg(path)
+fn remove_git_ignored(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let relative_paths = paths
+        .iter()
+        .map(|path| path.strip_prefix(root).unwrap_or(path).to_owned())
+        .collect::<Vec<_>>();
+    let mut input = Vec::new();
+    for path in &relative_paths {
+        input.extend_from_slice(path.to_string_lossy().as_bytes());
+        input.push(0);
+    }
+    let mut child = Command::new("git")
+        .args(["check-ignore", "--stdin", "-z"])
         .current_dir(root)
-        .status()
-        .is_ok_and(|status| status.success())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| Error::io(root, error))?;
+    let mut stdin = child.stdin.take().expect("piped git check-ignore stdin");
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child
+        .wait_with_output()
+        .map_err(|error| Error::io(root, error))?;
+    writer
+        .join()
+        .map_err(|_| Error::Validation("git check-ignore input writer panicked".to_owned()))?
+        .map_err(|error| Error::io(root, error))?;
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return Err(Error::Validation(format!(
+            "git check-ignore failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let ignored = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+        .collect::<BTreeSet<_>>();
+    paths.retain(|path| {
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        !ignored.contains(relative)
+    });
+    Ok(())
 }
 
 fn detector_for(adapter: Adapter) -> &'static str {
@@ -3378,6 +3479,35 @@ mod tests {
         assert!(error
             .to_string()
             .contains("missing field `discovery-candidates`"));
+    }
+
+    #[test]
+    fn empty_inferred_config_obeys_its_published_schema_shape() {
+        let mut plan = candidate_plan(vec![candidate("examples/sample.json", None)]);
+        plan.inferred_config = Config::default();
+        plan.validate().expect("schema-compatible empty config");
+
+        plan.inferred_config
+            .discovery
+            .excluded_paths
+            .push(ExcludedPathReceipt {
+                detector: "sample-detector".to_owned(),
+                path: PathBuf::from("examples/sample.json"),
+                evidence_digest: DIGEST.to_owned(),
+            });
+        assert!(plan
+            .validate()
+            .expect_err("discovery is forbidden on an empty inferred config")
+            .to_string()
+            .contains("may only contain schema, contract, settings, and release-units"));
+
+        plan.inferred_config.discovery.excluded_paths.clear();
+        plan.inferred_config.schema = Some("https://example.invalid/config.yml".to_owned());
+        assert!(plan
+            .validate()
+            .expect_err("foreign schema is forbidden on an empty inferred config")
+            .to_string()
+            .contains("schema must be"));
     }
 
     #[test]

@@ -322,6 +322,109 @@ fn configured_repository_without_detectable_manifests_is_a_no_op() {
 
 #[test]
 fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
+    for resolution in ["excluded", "independent", "projection"] {
+        let repo = TestRepo::new();
+        repo.write("pnpm-workspace.yaml", "packages:\n  - components/*\n");
+        repo.write("components/library/package.json", &npm_manifest("1.0.0"));
+        repo.write(
+            "components/library/pyproject.toml",
+            "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
+        );
+        repo.commit("add discovery fixtures");
+
+        repo.cli().args(["init", "--scan-all"]).assert().code(2);
+        resolve_plan(&repo, |identity| {
+            if identity == "sample-example" {
+                CandidateResolution::Excluded
+            } else {
+                CandidateResolution::Independent {
+                    release_unit: identity.to_owned(),
+                }
+            }
+        });
+        repo.cli().args(["init", "--scan-all"]).assert().success();
+
+        let no_op = initialize(&repo.root, true, false).expect("repeatable no-op");
+        assert_eq!(no_op.state, InitState::Success);
+        assert!(no_op.operations.is_empty());
+        let config = intentional_core::Config::load(&repo.root).expect("reconciled config");
+        assert_eq!(config.discovery.managed_paths.len(), 1);
+        assert_eq!(config.discovery.excluded_paths.len(), 1);
+
+        repo.write(
+            "components/library/pyproject.toml",
+            "[project]\nname = \"sample-example\"\nversion = \"1.0.1\"\n",
+        );
+        repo.cli().args(["init", "--scan-all"]).assert().code(2);
+        let changed: InitPlan = serde_yaml::from_str(
+            &fs::read_to_string(repo.root.join(".intentional/init-plan.yml"))
+                .expect("changed exclusion plan"),
+        )
+        .expect("valid changed exclusion plan");
+        assert_eq!(changed.discovery_candidates.len(), 1);
+        assert_eq!(
+            changed.discovery_candidates[0].native_identity.as_deref(),
+            Some("sample-example")
+        );
+        assert!(changed.discovery_candidates[0].resolution.is_none());
+
+        resolve_plan(&repo, |_| match resolution {
+            "excluded" => CandidateResolution::Excluded,
+            "independent" => CandidateResolution::Independent {
+                release_unit: "sample-example".to_owned(),
+            },
+            "projection" => CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: None,
+            },
+            _ => unreachable!(),
+        });
+        repo.cli().args(["init", "--scan-all"]).assert().success();
+
+        let config = intentional_core::Config::load(&repo.root).expect("re-resolved config");
+        let matching_receipts = config
+            .discovery
+            .managed_paths
+            .iter()
+            .filter(|receipt| receipt.path == Path::new("components/library/pyproject.toml"))
+            .count()
+            + config
+                .discovery
+                .excluded_paths
+                .iter()
+                .filter(|receipt| receipt.path == Path::new("components/library/pyproject.toml"))
+                .count();
+        assert_eq!(matching_receipts, 1, "resolution {resolution}");
+        match resolution {
+            "excluded" => {
+                assert_eq!(config.discovery.managed_paths.len(), 1);
+                assert_eq!(config.discovery.excluded_paths.len(), 1);
+            }
+            "independent" => {
+                assert_eq!(config.discovery.managed_paths.len(), 2);
+                assert!(config.discovery.excluded_paths.is_empty());
+                assert!(config.release_units.contains_key("sample-example"));
+            }
+            "projection" => {
+                assert_eq!(config.discovery.managed_paths.len(), 2);
+                assert!(config.discovery.excluded_paths.is_empty());
+                assert!(config.release_units["sample-library"]
+                    .projections
+                    .iter()
+                    .any(|projection| projection.file == Path::new("pyproject.toml")));
+            }
+            _ => unreachable!(),
+        }
+        assert!(!repo.root.join(".intentional/init-plan.yml").exists());
+        assert!(initialize(&repo.root, true, false)
+            .expect("repeatable resolved init")
+            .operations
+            .is_empty());
+    }
+}
+
+#[test]
+fn repeatable_init_consumes_a_stale_plan_after_the_candidate_closes() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write(
@@ -329,7 +432,6 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
         "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
     );
     repo.commit("add discovery fixtures");
-
     repo.cli().args(["init", "--scan-all"]).assert().code(2);
     resolve_plan(&repo, |identity| {
         if identity == "sample-example" {
@@ -342,26 +444,52 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
     });
     repo.cli().args(["init", "--scan-all"]).assert().success();
 
-    let no_op = initialize(&repo.root, true, false).expect("repeatable no-op");
-    assert_eq!(no_op.state, InitState::Success);
-    assert!(no_op.operations.is_empty());
-    let config = intentional_core::Config::load(&repo.root).expect("reconciled config");
-    assert_eq!(config.discovery.managed_paths.len(), 1);
-    assert_eq!(config.discovery.excluded_paths.len(), 1);
-
     repo.write(
         "examples/pyproject.toml",
         "[project]\nname = \"sample-example\"\nversion = \"1.0.1\"\n",
     );
-    let changed = initialize(&repo.root, true, false).expect("changed exclusion plan");
-    assert_eq!(changed.state, InitState::NeedsInput);
-    let candidates = changed.plan.expect("changed plan").discovery_candidates;
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(
-        candidates[0].native_identity.as_deref(),
-        Some("sample-example")
+    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    assert!(repo.root.join(".intentional/init-plan.yml").exists());
+
+    repo.write(
+        "examples/pyproject.toml",
+        "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
     );
-    assert!(candidates[0].resolution.is_none());
+    repo.cli().args(["init", "--scan-all"]).assert().success();
+    assert!(!repo.root.join(".intentional/init-plan.yml").exists());
+    assert!(initialize(&repo.root, true, false)
+        .expect("no plan no-op")
+        .operations
+        .is_empty());
+}
+
+#[test]
+fn candidate_resolution_preserves_configured_cross_ecosystem_dependencies() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        "components/rust/Cargo.toml",
+        "[package]\nname = \"sample-rust\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    );
+    repo.write(
+        "examples/pyproject.toml",
+        "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
+    );
+    repo.write(
+        ".intentional/config.yml",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n    - detector: cargo-package\n      path: components/rust/Cargo.toml\n      release-unit: sample-rust\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-library@{version}'\n    depends-on: [ sample-rust ]\n  sample-rust:\n    path: components/rust\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-rust@{version}'\n",
+    );
+    repo.commit("add configured dependency fixture");
+
+    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    resolve_plan(&repo, |_| CandidateResolution::Excluded);
+    repo.cli().args(["init", "--scan-all"]).assert().success();
+
+    let config = intentional_core::Config::load(&repo.root).expect("resolved config");
+    assert_eq!(
+        config.release_units["sample-library"].depends_on,
+        vec!["sample-rust"]
+    );
 }
 
 #[test]
