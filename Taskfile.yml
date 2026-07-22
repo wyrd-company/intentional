@@ -41,6 +41,7 @@ tasks:
 
   docs:demo:
     desc: Regenerate and optimize the public documentation demo
+    deps: [ build ]
     cmds:
       - vhs docs/demo.tape
       - gifsicle --batch --optimize=3 --colors 256 docs/assets/demo.gif
