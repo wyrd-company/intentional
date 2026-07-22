@@ -83,6 +83,8 @@ jobs:
           exit 1
           fi
           python3 scripts/release/verify-versions.py --expected "$TAG"
+          scripts/release/extract-release-notes.sh \
+          "$TAG" CHANGELOG.md /dev/null
 
       - name: Install cross
         if: matrix.target == 'aarch64-unknown-linux-gnu'

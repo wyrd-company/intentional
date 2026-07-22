@@ -133,7 +133,7 @@ PATH="$temporary/bin:$PATH" \
   MOCK_VERSION="$version" \
   "$root/scripts/release/ensure-crate.sh" "$crate" "$version" \
   >/dev/null
-if rg '^publish .*--locked$' "$cargo_log"; then
+if grep '^publish .*--locked$' "$cargo_log"; then
   echo "crate retry check attempted a second publication." >&2
   exit 1
 fi
@@ -153,7 +153,7 @@ formula_two="$temporary/intentional-two.rb"
 "$root/scripts/release/render-homebrew-formula.sh" "$version" "$artifacts" "$formula_one"
 "$root/scripts/release/render-homebrew-formula.sh" "$version" "$artifacts" "$formula_two"
 cmp "$formula_one" "$formula_two"
-rg -q "version \"$version\"" "$formula_one"
+grep -q "version \"$version\"" "$formula_one"
 
 archive_fixture="$temporary/intentional"
 printf 'native executable' > "$archive_fixture"
