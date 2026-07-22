@@ -1051,10 +1051,14 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
         let mut reconciled: InitPlan =
             serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap())
                 .expect("reconciled plan");
-        assert!(reconciled
+        let reconciled_integrations = reconciled
             .diagnostics
             .iter()
             .filter(|diagnostic| diagnostic.code == "repository-integration")
+            .collect::<Vec<_>>();
+        assert!(!reconciled_integrations.is_empty());
+        assert!(reconciled_integrations
+            .iter()
             .all(|diagnostic| diagnostic.verified));
         for diagnostic in &mut reconciled.diagnostics {
             if diagnostic.resolution.is_none() {
