@@ -761,6 +761,57 @@ fn private_package_suppression_and_suspension_are_actionable_parity_blockers() {
 }
 
 #[test]
+fn factual_diagnostic_verification_survives_init_rerun() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"version\": \"0.1.0\",\n  \"private\": true\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": [],
+  "privatePackages": { "version": true, "tag": false }
+}
+"#,
+    );
+
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    for run in ["initial", "rerun"] {
+        repository.cli().arg("init").assert().code(2);
+        let plan: InitPlan = serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap())
+            .unwrap_or_else(|error| panic!("{run} plan: {error}"));
+        assert_eq!(plan.state, InitState::NeedsInput, "{run} readiness");
+
+        let factual = plan
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "private-package-versioning")
+            .unwrap_or_else(|| panic!("{run} factual diagnostic"));
+        assert!(factual.choices.is_empty(), "{run} factual choices");
+        assert!(factual.resolution.is_none(), "{run} factual resolution");
+        assert!(factual.verified, "{run} factual verification");
+
+        let unresolved = plan
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "private-package-tagging")
+            .unwrap_or_else(|| panic!("{run} choice-bearing diagnostic"));
+        assert!(!unresolved.choices.is_empty(), "{run} unresolved choices");
+        assert!(
+            unresolved.resolution.is_none(),
+            "{run} unresolved resolution"
+        );
+        assert!(!unresolved.verified, "{run} unresolved verification");
+    }
+}
+
+#[test]
 fn releasing_versionless_package_has_a_stable_parity_diagnostic() {
     let repository = Repository::new();
     repository.write(

@@ -2600,8 +2600,10 @@ fn reconcile_diagnostics(
         };
         if old.evidence == diagnostic.evidence {
             diagnostic.resolution = old.resolution.clone();
-            diagnostic.verified =
-                diagnostic.code != "repository-integration" && diagnostic.resolution.is_some();
+            if !diagnostic.choices.is_empty() {
+                diagnostic.verified =
+                    diagnostic.code != "repository-integration" && diagnostic.resolution.is_some();
+            }
         } else if old.resolution.is_some() {
             diagnostic.invalidated_resolution = true;
         }
