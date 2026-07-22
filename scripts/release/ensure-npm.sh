@@ -65,7 +65,7 @@ case "$status" in
     ;;
 esac
 
-npm publish "$package_root" --access public
+npm publish "$package_root" --access public --provenance
 
 for _attempt in {1..18}; do
   sleep 10

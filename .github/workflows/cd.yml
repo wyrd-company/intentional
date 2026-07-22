@@ -17,8 +17,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  credential-preflight:
+    name: Verify publication credentials are configured
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      FORMULAE_PUBLISH_KEY: ${{ secrets.FORMULAE_PUBLISH_KEY }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Require every first-publication credential
+        shell: bash
+        run: |
+          for VARIABLE in CARGO_REGISTRY_TOKEN FORMULAE_PUBLISH_KEY NPM_TOKEN; do
+          if [[ -z "${!VARIABLE}" ]]; then
+          echo "::error::$VARIABLE is not configured for the release workflow."
+          exit 1
+          fi
+          done
+          echo "Required release credentials are configured."
+
   build:
     name: Build (${{ matrix.os }})
+    needs: credential-preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
