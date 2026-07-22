@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use walkdir::{DirEntry, WalkDir};
+use walkdir::WalkDir;
 
 /// Transient initialization-plan location.
 pub const INIT_PLAN_PATH: &str = ".intentional/init-plan.yml";
@@ -1833,7 +1833,7 @@ fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     for directory in directories {
         add_manifests_in_directory(&directory, &mut paths)?;
     }
-    paths.retain(|path| !git_ignored(root, path));
+    paths.retain(|path| !hard_excluded(root, path) && !git_ignored(root, path));
     Ok(paths)
 }
 
@@ -1906,19 +1906,35 @@ fn add_manifests_in_directory(directory: &Path, paths: &mut BTreeSet<PathBuf>) -
 fn all_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     Ok(WalkDir::new(root)
         .into_iter()
-        .filter_entry(should_visit)
+        .filter_entry(|entry| {
+            if hard_excluded(root, entry.path()) {
+                return false;
+            }
+            if entry.depth() == 0 {
+                return true;
+            }
+            if entry.file_type().is_dir() || adapter_for(entry.path()).is_some() {
+                return !git_ignored(root, entry.path());
+            }
+            true
+        })
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file() && adapter_for(entry.path()).is_some())
-        .filter(|entry| !git_ignored(root, entry.path()))
         .map(|entry| entry.into_path())
         .collect())
 }
 
-fn should_visit(entry: &DirEntry) -> bool {
-    !entry.file_type().is_dir()
-        || !matches!(
-            entry.file_name().to_str(),
-            Some(
+fn hard_excluded(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .any(|component| {
+            matches!(
+                component,
                 ".git"
                     | ".intentional"
                     | "node_modules"
@@ -1930,10 +1946,16 @@ fn should_visit(entry: &DirEntry) -> bool {
                     | ".venv"
                     | "venv"
                     | "__pycache__"
+                    | ".tox"
+                    | ".nox"
+                    | ".pytest_cache"
+                    | ".mypy_cache"
+                    | ".ruff_cache"
                     | ".dart_tool"
                     | ".pub-cache"
+                    | "obj"
             )
-        )
+        })
 }
 
 fn git_ignored(root: &Path, path: &Path) -> bool {
@@ -2395,7 +2417,7 @@ fn scan_changesets_integrations(root: &Path) -> Result<Vec<SourceEvidence>> {
     let mut findings = Vec::new();
     for entry in WalkDir::new(root)
         .into_iter()
-        .filter_entry(should_visit)
+        .filter_entry(|entry| !hard_excluded(root, entry.path()))
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
     {

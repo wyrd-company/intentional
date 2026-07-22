@@ -367,13 +367,21 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
 #[test]
 fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
     let repo = TestRepo::new();
-    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\",\n  \"workspaces\": [\"packages/*\", \"node_modules/dependency\"]\n}\n",
+    );
     repo.write(".gitignore", "ignored/\n");
+    repo.write(
+        "packages/visible/package.json",
+        "{\n  \"name\": \"sample-visible\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
     for (directory, name) in [
         ("ignored", "ignored-package"),
         ("node_modules/dependency", "cached-node"),
         ("target/generated", "cached-rust"),
         (".venv/lib", "cached-python"),
+        ("obj/generated", "cached-dotnet"),
         ("build", "sample-build"),
         ("dist", "sample-dist"),
         ("bin", "sample-bin"),
@@ -385,6 +393,17 @@ fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         );
     }
     repo.commit("add walking fixtures");
+
+    let workspace_names = initialize(&repo.root, false, false)
+        .expect("workspace plan")
+        .plan
+        .expect("candidate plan")
+        .discovery_candidates
+        .into_iter()
+        .filter_map(|candidate| candidate.native_identity)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(workspace_names.contains("sample-visible"));
+    assert!(!workspace_names.contains("cached-node"));
 
     let plan = initialize(&repo.root, true, false)
         .expect("scan-all plan")
@@ -407,6 +426,7 @@ fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         "cached-node",
         "cached-rust",
         "cached-python",
+        "cached-dotnet",
     ] {
         assert!(!names.contains(excluded), "unexpected candidate {excluded}");
     }
