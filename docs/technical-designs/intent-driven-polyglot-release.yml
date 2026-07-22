@@ -93,10 +93,12 @@ proposed-design:
     in config, so hand-edited manifest versions are observable drift rather
     than competing authority. Monorepo support includes per-release-unit intents,
     internal-dependency bumping with generated changelog entries, fixed and
-    linked release groups, and changed/unchanged partitioning. Within one
-    ecosystem the dependency graph is derived from manifests to assist and
-    verify; the authored config remains authoritative because
-    cross-ecosystem edges are invisible to manifests.
+    linked release groups, and changed/unchanged partitioning. During init
+    reconciliation, current non-development npm manifest dependencies are
+    authoritative for edges between release units with npm projections. Edges
+    to release units without npm projections remain authored configuration
+    because npm manifests cannot represent those cross-ecosystem or non-native
+    ordering relationships.
   intent-files: >-
     Intents live in .intentional/intents/ as markdown files with a YAML
     frontmatter block mapping release unit ids to bump levels; the markdown
@@ -289,9 +291,9 @@ proposed-design:
     projection, and workspace templates, are annotated with the contract and
     plan digest, target the takeover commit, and do not require a phase.
   command-surface: >-
-    init discovers candidates and produces or reconciles the single
-    initialization plan before writing complete configuration. --scan-all
-    broadens discovery and --take-over performs
+    init requires a Git repository, discovers candidates, and produces or
+    reconciles the single initialization plan before writing complete
+    configuration. --scan-all broadens discovery and --take-over performs
     a validated authority handoff. add authors an intent through repeatable
     --release-unit selectors or an interactive prompt. status reports pending intents, computed next
     versions, drift, suspended release blockers, and missing baselines. plan

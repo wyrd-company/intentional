@@ -40,13 +40,14 @@ The minimum supported Rust version is 1.82. The library crate is
 intentional init
 ```
 
-Initialization uses package-manager workspace membership and manifest-native
-package names. Repeated directory basenames do not collide because directories
-are not package identities. `--scan-all` explicitly includes supported
-manifests outside the declared workspace. Both modes honor Git ignore rules and
-always skip version-control metadata, Intentional state, and ecosystem caches;
-ordinary names such as `build`, `dist`, `bin`, and `vendor` are scanned unless
-the repository ignores them.
+Initialization requires a Git repository, whose tags provide release authority
+and whose ignore rules bound discovery. It uses package-manager workspace
+membership and manifest-native package names. Repeated directory basenames do
+not collide because directories are not package identities. `--scan-all`
+explicitly includes supported manifests outside the declared workspace. Both
+modes honor Git ignore rules and always skip version-control metadata,
+Intentional state, and ecosystem caches; ordinary names such as `build`,
+`dist`, `bin`, and `vendor` are scanned unless the repository ignores them.
 
 Every newly discovered npm, Cargo, Go, Python, MSBuild, or Dart manifest first
 appears in `.intentional/init-plan.yml` as an unresolved candidate. Choose
@@ -99,6 +100,12 @@ tags. All tags for one logical release carry the same version, target commit,
 interpretation contract, and plan digest. Named workspace tags provide
 repository-level records and continuous-delivery triggers without becoming a
 release unit's version authority.
+
+When init reconciles an existing configuration, current non-development npm
+manifest dependencies own edges between npm release units. Removing such a
+manifest dependency removes its `depends-on` edge. Configured edges to release
+units without an npm projection remain authoritative because an npm manifest
+cannot represent those cross-ecosystem or non-native ordering relationships.
 
 Projection modes are:
 
