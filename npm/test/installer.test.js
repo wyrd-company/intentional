@@ -141,6 +141,25 @@ test("archive boundaries reject traversal, absolute, foreign, and duplicate exec
   );
 });
 
+test("Windows archives use the same directory-prefixed release contract", () => {
+  const target = installer.selectTarget("win32", "x64");
+  assert.equal(
+    installer.validateArchiveEntries(
+      [
+        "intentional-windows-x86_64/",
+        "intentional-windows-x86_64/intentional.exe",
+        "intentional-windows-x86_64/LICENSE",
+      ],
+      target,
+    ),
+    "intentional-windows-x86_64/intentional.exe",
+  );
+  assert.throws(
+    () => installer.validateArchiveEntries(["intentional.exe", "LICENSE"], target),
+    /unsafe path/,
+  );
+});
+
 test("archive inspection reports extraction-tool failures", () => {
   const target = installer.selectTarget("linux", "x64");
   assert.throws(

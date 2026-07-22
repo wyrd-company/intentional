@@ -8,7 +8,13 @@ set -euo pipefail
 
 crate="${1:?crate name is required}"
 version="${2:?version is required}"
-registry_url="https://crates.io/api/v1/crates/${crate}/${version}"
+case "${#crate}" in
+  1) index_path="1/$crate" ;;
+  2) index_path="2/$crate" ;;
+  3) index_path="3/${crate:0:1}/$crate" ;;
+  *) index_path="${crate:0:2}/${crate:2:2}/$crate" ;;
+esac
+registry_url="https://index.crates.io/$index_path"
 
 cargo publish -p "$crate" --locked --dry-run
 cargo package -p "$crate" --locked
@@ -28,16 +34,25 @@ lookup() {
     "$registry_url"
 }
 
+published_checksum() {
+  jq -r --arg version "$version" \
+    'select(.vers == $version) | .cksum' \
+    "$registry_response" | tail -n 1
+}
+
 status="$(lookup)"
 case "$status" in
   200)
-    published_checksum="$(jq -r '.version.checksum // empty' "$registry_response")"
-    if [[ "$published_checksum" != "$local_checksum" ]]; then
+    observed_checksum="$(published_checksum)"
+    if [[ -z "$observed_checksum" ]]; then
+      status=404
+    elif [[ "$observed_checksum" != "$local_checksum" ]]; then
       echo "$crate $version already exists with different package bytes." >&2
       exit 1
+    else
+      echo "$crate $version already matches the crates.io sparse index; skipping publication."
+      exit 0
     fi
-    echo "$crate $version already matches crates.io; skipping publication."
-    exit 0
     ;;
   404) ;;
   *)
@@ -52,12 +67,15 @@ for _attempt in {1..18}; do
   sleep 10
   status="$(lookup)"
   if [[ "$status" == "200" ]]; then
-    published_checksum="$(jq -r '.version.checksum // empty' "$registry_response")"
-    if [[ "$published_checksum" != "$local_checksum" ]]; then
+    observed_checksum="$(published_checksum)"
+    if [[ -z "$observed_checksum" ]]; then
+      continue
+    fi
+    if [[ "$observed_checksum" != "$local_checksum" ]]; then
       echo "$crate $version appeared with different package bytes." >&2
       exit 1
     fi
-    echo "$crate $version is available on crates.io with matching bytes."
+    echo "$crate $version is available in the crates.io sparse index with matching bytes."
     exit 0
   fi
   if [[ "$status" != "404" ]]; then

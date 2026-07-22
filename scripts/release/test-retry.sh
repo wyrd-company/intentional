@@ -117,7 +117,11 @@ crate="sample-crate"
 crate_bytes="sample crate bytes"
 crate_checksum="$(printf '%s' "$crate_bytes" | sha256sum | cut -d' ' -f1)"
 crate_response="$temporary/crate.json"
-jq -n --arg checksum "$crate_checksum" '{version: {checksum: $checksum}}' > "$crate_response"
+jq -cn \
+  --arg version "$version" \
+  --arg checksum "$crate_checksum" \
+  '{vers: $version, cksum: $checksum}' \
+  > "$crate_response"
 cargo_log="$temporary/cargo.log"
 
 cd "$temporary"
@@ -150,6 +154,17 @@ formula_two="$temporary/intentional-two.rb"
 "$root/scripts/release/render-homebrew-formula.sh" "$version" "$artifacts" "$formula_two"
 cmp "$formula_one" "$formula_two"
 rg -q "version \"$version\"" "$formula_one"
+
+release_notes="$temporary/release-notes.md"
+"$root/scripts/release/extract-release-notes.sh" \
+  "$version" "$root/CHANGELOG.md" "$release_notes"
+test "$(head -n 1 "$release_notes")" = "## $version"
+if "$root/scripts/release/extract-release-notes.sh" \
+  "9.9.9" "$root/CHANGELOG.md" "$temporary/missing-notes.md" \
+  >/dev/null 2>&1; then
+  echo "release-note check accepted a missing version section." >&2
+  exit 1
+fi
 
 release_repository="$temporary/release-repository"
 remote_assets="$temporary/remote-assets"

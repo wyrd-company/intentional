@@ -133,7 +133,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist/$artifact" | Out-Null
           Copy-Item -Path "${{ matrix.bin_path }}" -Destination "dist/$artifact/"
           Copy-Item -Path "LICENSE","README.md" -Destination "dist/$artifact/"
-          Compress-Archive -Path "dist/$artifact/*" -DestinationPath "$artifact.zip"
+          Compress-Archive -Path "dist/$artifact" -DestinationPath "$artifact.zip"
 
       - name: Upload release archive
         uses: actions/upload-artifact@v4
@@ -176,14 +176,9 @@ jobs:
       - name: Extract leading changelog section
         shell: bash
         run: |
-          awk '
-          /^## / {
-          if (found) exit
-          found = 1
-          }
-          found { print }
-          ' CHANGELOG.md > release-notes.md
-          test -s release-notes.md
+          TAG="${GITHUB_REF##*/}"
+          scripts/release/extract-release-notes.sh \
+          "$TAG" CHANGELOG.md release-notes.md
 
       - name: Create or verify GitHub Release
         env:
