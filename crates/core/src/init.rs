@@ -1088,8 +1088,13 @@ fn apply_candidate_resolutions(
         else {
             continue;
         };
-        let projection =
-            candidate_projection(candidate, candidate.path.parent().unwrap_or(Path::new("")))?;
+        let projection = candidate
+            .projection
+            .as_ref()
+            .map(|_| {
+                candidate_projection(candidate, candidate.path.parent().unwrap_or(Path::new("")))
+            })
+            .transpose()?;
         let path = candidate
             .path
             .parent()
@@ -1105,11 +1110,7 @@ fn apply_candidate_resolutions(
             ReleaseUnitConfig {
                 path,
                 disposition: ReleaseUnitDisposition::Managed,
-                projections: candidate
-                    .projection
-                    .as_ref()
-                    .map(|_| vec![projection])
-                    .unwrap_or_default(),
+                projections: projection.into_iter().collect(),
                 tags: BTreeMap::from([(
                     tag.id.clone(),
                     TagConfig {
@@ -1145,13 +1146,6 @@ fn apply_candidate_resolutions(
                 })?;
                 if candidate.projection.is_some() {
                     let projection = candidate_projection(candidate, &unit.path)?;
-                    if candidate.detector == "dart-package" {
-                        eprintln!(
-                            "DEBUG candidate={} projection={projection:?} existing={:?}",
-                            candidate.path.display(),
-                            unit.projections
-                        );
-                    }
                     if !unit.projections.iter().any(|existing| {
                         existing.file == projection.file && existing.pointer == projection.pointer
                     }) {
@@ -1269,13 +1263,15 @@ fn apply_changesets_candidate_receipts(
         match &candidate.resolution {
             None => {}
             Some(CandidateResolution::Projection { release_unit, .. }) => {
+                let projection_is_represented =
+                    candidate_projection_is_represented(config, candidate);
                 let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
                     Error::Validation(format!(
                         "Changesets discovery candidate {} projects onto absent release unit {release_unit}",
                         candidate.id
                     ))
                 })?;
-                if is_devcontainer_detector(&candidate.detector) && candidate.projection.is_some() {
+                if candidate.projection.is_some() && !projection_is_represented {
                     let projection = candidate_projection(candidate, &unit.path)?;
                     if !unit.projections.iter().any(|existing| {
                         existing.file == projection.file && existing.pointer == projection.pointer
@@ -1337,6 +1333,26 @@ fn apply_changesets_candidate_receipts(
         .excluded_paths
         .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
     Ok(())
+}
+
+fn candidate_projection_is_represented(config: &Config, candidate: &DiscoveryCandidate) -> bool {
+    let Some(suggestion) = &candidate.projection else {
+        return false;
+    };
+    config.release_units.values().any(|unit| {
+        unit.projections.iter().any(|projection| {
+            projection_workspace_path(unit, projection) == suggestion.path
+                && projection.pointer == suggestion.pointer
+        })
+    })
+}
+
+fn projection_workspace_path(unit: &ReleaseUnitConfig, projection: &Projection) -> PathBuf {
+    if unit.path == Path::new(".") {
+        projection.file.clone()
+    } else {
+        unit.path.join(&projection.file)
+    }
 }
 
 fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
@@ -2143,10 +2159,6 @@ fn devcontainer_detector_for(path: &Path) -> Option<&'static str> {
         DEVCONTAINER_TEMPLATE_MANIFEST => Some("devcontainer-template"),
         _ => None,
     }
-}
-
-fn is_devcontainer_detector(detector: &str) -> bool {
-    matches!(detector, "devcontainer-feature" | "devcontainer-template")
 }
 
 fn is_discoverable_manifest(path: &Path) -> bool {
@@ -3785,6 +3797,38 @@ mod tests {
         candidate_plan(vec![configured, independent, projection])
             .validate()
             .expect("both projection target kinds accepted");
+    }
+
+    #[test]
+    fn changesets_materializes_any_unrepresented_candidate_projection_once() {
+        let mut config = candidate_plan(Vec::new()).inferred_config;
+        let mut generic = candidate(
+            "configured/metadata.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        generic.projection = Some(CandidateProjectionSuggestion {
+            adapter: Adapter::Json,
+            path: generic.path.clone(),
+            mode: ProjectionMode::Committed,
+            pointer: Some("/version".to_owned()),
+        });
+
+        apply_changesets_candidate_receipts(&mut config, std::slice::from_ref(&generic))
+            .expect("generic projection materialized");
+        assert_eq!(config.release_units["configured"].projections.len(), 1);
+        assert_eq!(
+            config.release_units["configured"].projections[0]
+                .pointer
+                .as_deref(),
+            Some("/version")
+        );
+
+        apply_changesets_candidate_receipts(&mut config, std::slice::from_ref(&generic))
+            .expect("represented projection not duplicated");
+        assert_eq!(config.release_units["configured"].projections.len(), 1);
     }
 
     #[test]

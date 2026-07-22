@@ -580,6 +580,87 @@ fn devcontainer_detectors_report_narrow_extraction_diagnostics() {
 }
 
 #[test]
+fn non_semver_devcontainer_candidate_can_be_a_tag_only_independent_unit() {
+    let repo = TestRepo::new();
+    repo.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-feature", "release-2"),
+    );
+    repo.commit("add tag-only fixture");
+
+    repo.cli().arg("init").assert().code(2);
+    let plan_path = repo.root.join(".intentional/init-plan.yml");
+    let plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(&plan_path).expect("tag-only initialization plan"),
+    )
+    .expect("valid tag-only initialization plan");
+    let candidate = &plan.discovery_candidates[0];
+    assert_eq!(candidate.native_identity.as_deref(), Some("sample-feature"));
+    assert_eq!(
+        candidate.raw_version.as_ref().map(|raw| raw.value.as_str()),
+        Some("release-2")
+    );
+    assert!(candidate.projection.is_none());
+    assert!(candidate.tag.is_some());
+    assert!(candidate
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "devcontainer-version-not-semver"));
+
+    resolve_plan(&repo, |_| CandidateResolution::Independent {
+        release_unit: "sample-feature".to_owned(),
+    });
+    repo.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&repo.root).expect("tag-only config");
+    assert!(config.release_units["sample-feature"]
+        .projections
+        .is_empty());
+    assert_eq!(config.release_units["sample-feature"].tags.len(), 1);
+    assert_eq!(config.discovery.managed_paths.len(), 1);
+}
+
+#[test]
+fn successful_candidate_projection_init_has_no_debug_stderr() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write("pubspec.yaml", "name: sample_companion\nversion: 1.0.0\n");
+    repo.commit("add output fixtures");
+
+    repo.cli().arg("init").assert().code(2);
+    let plan_path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("output initialization plan"))
+            .expect("valid output initialization plan");
+    let creator = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "npm-package")
+        .expect("npm creator")
+        .id
+        .clone();
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(if candidate.detector == "npm-package" {
+            CandidateResolution::Independent {
+                release_unit: "sample-library".to_owned(),
+            }
+        } else {
+            CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: Some(creator.clone()),
+            }
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved output plan"))
+        .expect("write output plan");
+
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+}
+
+#[test]
 fn devcontainer_candidates_support_every_resolution_flow() {
     let independent = TestRepo::new();
     independent.write(
