@@ -3772,6 +3772,57 @@ mod tests {
     }
 
     #[test]
+    fn changesets_projection_rejects_an_unrelated_existing_owner() {
+        let config = Config::from_yaml(
+            r#"contract: contract-1
+release-units:
+  alpha:
+    path: examples
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  gamma:
+    path: examples
+    projections:
+      - adapter: json
+        file: shared.json
+        mode: committed
+        pointer: /version
+    tags:
+      primary: { role: primary, template: 'gamma@{version}' }
+"#,
+        )
+        .expect("unrelated-owner config");
+        let mut candidate = candidate(
+            "examples/shared.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "alpha".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        candidate.projection = Some(CandidateProjectionSuggestion {
+            adapter: Adapter::Json,
+            path: candidate.path.clone(),
+            mode: ProjectionMode::Committed,
+            pointer: Some("/version".to_owned()),
+        });
+        let candidate_id = candidate.id.clone();
+        let mut discovery = Discovery {
+            config,
+            ..Discovery::default()
+        };
+
+        let error =
+            apply_changesets_candidate_resolutions(Path::new("."), &mut discovery, &[candidate])
+                .expect_err("unrelated projection ownership rejected");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "validation failed: Changesets discovery candidate {candidate_id} projection is already owned by release unit gamma, not alpha"
+            )
+        );
+    }
+
+    #[test]
     fn rejects_plan_without_required_discovery_candidates() {
         let yaml = candidate_plan(Vec::new())
             .to_yaml()
