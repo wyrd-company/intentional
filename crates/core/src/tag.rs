@@ -128,25 +128,13 @@ impl TagResult {
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions = BTreeMap::new();
-        let mut incomplete = false;
         for (id, release_unit) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
             if repository.has_matching_tag(id, &primary.template)? {
                 let version = repository.current_version(id, &primary.template)?;
-                let complete = release_unit.tags.values().all(|tag| {
-                    let name = render_tag(&tag.template, id, &version.to_string());
-                    git.try_find_reference(format!("refs/tags/{name}").as_str())
-                        .ok()
-                        .flatten()
-                        .is_some()
-                });
-                if !complete {
-                    incomplete = true;
-                    versions.insert(id.clone(), version.to_string());
-                }
+                versions.insert(id.clone(), version.to_string());
                 continue;
             }
-            incomplete = true;
             let mut evidence = Vec::new();
             for projection in &release_unit.projections {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
@@ -192,20 +180,16 @@ impl TagResult {
         for (id, tag) in &config.workspace_tags {
             let canonical = Config::workspace_tag_id(id);
             if repository.has_matching_tag(id, &tag.template)? {
+                let version = repository.current_version(id, &tag.template)?;
+                versions.insert(canonical, version.to_string());
                 continue;
             }
-            incomplete = true;
             let version = explicit.get(&canonical).ok_or_else(|| {
                 Error::Validation(format!(
                     "workspace tag {id} requires --version {canonical}=X.Y.Z"
                 ))
             })?;
             versions.insert(canonical, version.to_string());
-        }
-        if !incomplete {
-            return Err(Error::Validation(
-                "all configured baseline tags already exist".to_owned(),
-            ));
         }
         let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
         Self::from_versions(root, &config, &versions, None, true, digest.as_deref())

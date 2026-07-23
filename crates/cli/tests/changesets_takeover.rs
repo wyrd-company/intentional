@@ -1704,6 +1704,7 @@ release-units:
       - { adapter: json, file: metadata.json, pointer: /version, mode: committed }
     tags:
       primary: { role: primary, template: 'package-a@{version}' }
+      witness: { role: projection, template: 'witness@{version}' }
   package-b:
     path: package-b
     tags:
@@ -1747,6 +1748,37 @@ release-units:
         .success();
     assert_eq!(
         git(&repository.root, &["cat-file", "-t", "package-b@2.0.0"]),
+        "tag"
+    );
+    repository
+        .cli()
+        .args(["tag", "--baseline", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    repository
+        .cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    git(&repository.root, &["tag", "-d", "witness@1.0.0"]);
+    repository
+        .cli()
+        .args(["tag", "--baseline", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "create annotated tag witness@1.0.0",
+        ))
+        .stdout(predicate::str::contains("package-a@1.0.0").not());
+    repository
+        .cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .success();
+    assert_eq!(
+        git(&repository.root, &["cat-file", "-t", "witness@1.0.0"]),
         "tag"
     );
 }
