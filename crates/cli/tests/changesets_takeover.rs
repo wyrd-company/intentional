@@ -4,9 +4,8 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{initialize, CandidateResolution, InitPlan, InitState};
+use intentional_core::{initialize, Adapter, CandidateResolution, InitPlan, InitState};
 use predicates::prelude::*;
-use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -87,6 +86,36 @@ fn copy_tree(source_root: &Path, target_root: &Path, relative: &Path) {
     }
 }
 
+fn replace_path_references(root: &Path, relative: &Path, source_path: &str, target_path: &str) {
+    let directory = root.join(relative);
+    if !directory.is_dir() {
+        return;
+    }
+    for entry in fs::read_dir(&directory).expect("fixture directory") {
+        let entry = entry.expect("fixture entry");
+        let child = relative.join(entry.file_name());
+        if child.starts_with(".git")
+            || child.starts_with(".changeset")
+            || child.starts_with(".intentional")
+            || child == Path::new(source_path)
+        {
+            continue;
+        }
+        if entry.file_type().expect("fixture type").is_dir() {
+            replace_path_references(root, &child, source_path, target_path);
+            continue;
+        }
+        let path = root.join(&child);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.contains(source_path) {
+            fs::write(path, text.replace(source_path, target_path))
+                .expect("replace proxy path reference");
+        }
+    }
+}
+
 fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
     let repository = Repository::new();
     for path in [
@@ -104,6 +133,11 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
                 &repository.root,
                 &package.path.join(&projection.file),
             );
+        }
+    }
+    for candidate in &plan.discovery_candidates {
+        for evidence in &candidate.evidence {
+            copy_file(source, &repository.root, &evidence.path);
         }
     }
     for diagnostic in &plan.diagnostics {
@@ -213,7 +247,18 @@ fn changesets_resolution_materializes_a_devcontainer_projection() {
     }
     fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolved plan");
 
-    repository.cli().arg("init").assert().success();
+    let resolved = repository
+        .cli()
+        .arg("init")
+        .output()
+        .expect("resolved init");
+    assert!(
+        resolved.status.success(),
+        "stdout: {}\nstderr: {}\nplan:\n{}",
+        String::from_utf8_lossy(&resolved.stdout),
+        String::from_utf8_lossy(&resolved.stderr),
+        fs::read_to_string(&plan_path).expect("unresolved plan")
+    );
     let ready: InitPlan =
         serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
             .expect("valid ready plan");
@@ -225,6 +270,305 @@ fn changesets_resolution_materializes_a_devcontainer_projection() {
             projection.file == Path::new("devcontainer-feature.json")
                 && projection.pointer.as_deref() == Some("/version")
         }));
+}
+
+#[test]
+fn repository_complete_discovery_resolves_duplicate_native_identities_before_takeover() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "components/dart/pubspec.yaml",
+        "name: sample_dart\nversion: 1.0.0\n",
+    );
+    repository.write(
+        "fixtures/dart-copy/pubspec.yaml",
+        "name: sample_dart\nversion: 2.0.0\n",
+    );
+    repository.write(
+        "fixtures/alpha/pubspec.yaml",
+        "name: sample_fixture\nversion: 1.0.0\n",
+    );
+    repository.write(
+        "fixtures/beta/pubspec.yaml",
+        "name: sample_fixture\nversion: 1.0.0\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        "{\n  \"changelog\": false,\n  \"commit\": false,\n  \"fixed\": [],\n  \"linked\": [],\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"updateInternalDependencies\": \"patch\",\n  \"ignore\": []\n}\n",
+    );
+    repository.write(
+        ".changeset/sample-change.md",
+        "---\n\"sample-library\": patch\n---\n\nCorrect a user-visible defect.\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "add generic fixtures"],
+    );
+
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    assert!(plan
+        .discovery_candidates
+        .iter()
+        .any(|candidate| candidate.path == Path::new("components/dart/pubspec.yaml")));
+    assert_eq!(
+        plan.discovery_candidates
+            .iter()
+            .filter(|candidate| candidate.native_identity.as_deref() == Some("sample_fixture"))
+            .count(),
+        2
+    );
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(match candidate.path.to_string_lossy().as_ref() {
+            "fixtures/alpha/pubspec.yaml"
+            | "fixtures/beta/pubspec.yaml"
+            | "fixtures/dart-copy/pubspec.yaml" => CandidateResolution::Excluded,
+            _ => CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: None,
+            },
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolved plan");
+
+    let resolved = repository
+        .cli()
+        .arg("init")
+        .output()
+        .expect("resolved init");
+    assert!(
+        resolved.status.success(),
+        "stdout: {}\nstderr: {}\nplan:\n{}",
+        String::from_utf8_lossy(&resolved.stdout),
+        String::from_utf8_lossy(&resolved.stderr),
+        fs::read_to_string(&plan_path).expect("unresolved plan")
+    );
+    let ready: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
+            .expect("valid ready plan");
+    assert_eq!(ready.state, InitState::Ready);
+    assert_eq!(ready.parity.status, "equivalent");
+    assert_eq!(
+        ready.inferred_config.release_units["sample-library"]
+            .projections
+            .len(),
+        2
+    );
+    assert_eq!(ready.inferred_config.discovery.excluded_paths.len(), 3);
+
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .success();
+    assert!(!repository.root.join(".changeset").exists());
+    let completed = initialize(&repository.root, false).expect("repeatable initialization");
+    assert_eq!(completed.state, InitState::Success);
+    assert!(completed.operations.is_empty());
+}
+
+#[test]
+fn structurally_unused_private_npm_identity_is_an_explicit_removal_choice() {
+    let repository = Repository::new();
+    repository.write(
+        "components/feature/package.json",
+        "{\n  \"name\": \"sample-placeholder\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"description\": \"Words do not affect structural evidence.\"\n}\n",
+    );
+    repository.write(
+        "components/feature/devcontainer-feature.json",
+        "{\n  \"id\": \"sample-feature\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        "{\n  \"changelog\": false,\n  \"commit\": false,\n  \"fixed\": [],\n  \"linked\": [],\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"updateInternalDependencies\": \"patch\",\n  \"privatePackages\": { \"version\": true, \"tag\": true },\n  \"ignore\": []\n}\n",
+    );
+    repository.write(
+        ".changeset/sample-change.md",
+        "---\n\"sample-placeholder\": patch\n---\n\nCorrect a user-visible defect.\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "add generic fixtures"],
+    );
+
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(CandidateResolution::Projection {
+            release_unit: "sample-feature".to_owned(),
+            target_candidate: None,
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved candidates"))
+        .expect("write candidate resolutions");
+
+    repository.cli().arg("init").assert().code(2);
+    let mut assessed: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("assessed plan"))
+            .expect("valid assessed plan");
+    let diagnostic = assessed
+        .diagnostics
+        .iter_mut()
+        .find(|diagnostic| diagnostic.code == "release-tool-proxy-disposition")
+        .expect("proxy assessment");
+    assert_eq!(diagnostic.recommended.as_deref(), Some("remove"));
+    assert!(!diagnostic.supporting_evidence.is_empty());
+    assert!(diagnostic.contradictory_evidence.is_empty());
+    assert!(diagnostic.uncertainty.is_some());
+    diagnostic.resolution = Some("remove".to_owned());
+    fs::write(&plan_path, assessed.to_yaml().expect("authorized removal"))
+        .expect("write proxy resolution");
+
+    repository.cli().arg("init").assert().success();
+    let ready: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
+            .expect("valid ready plan");
+    assert!(ready
+        .planned_operations
+        .iter()
+        .any(|operation| { operation == "delete components/feature/package.json" }));
+    assert_eq!(
+        ready.inferred_config.release_units["sample-feature"]
+            .projections
+            .len(),
+        1
+    );
+
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .success();
+    assert!(!repository
+        .root
+        .join("components/feature/package.json")
+        .exists());
+    assert!(repository
+        .root
+        .join("components/feature/devcontainer-feature.json")
+        .exists());
+}
+
+#[test]
+fn genuine_npm_projection_and_conflicting_proxy_evidence_do_not_recommend_removal() {
+    let repository = Repository::new();
+    repository.write("pnpm-workspace.yaml", "packages:\n  - components/*\n");
+    repository.write(
+        "components/library/package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\",\n  \"exports\": { \".\": \"./index.js\" },\n  \"scripts\": { \"test\": \"node --test\" }\n}\n",
+    );
+    repository.write(
+        "components/library/pubspec.yaml",
+        "name: sample_dart\nversion: 1.0.0\n",
+    );
+    repository.write(
+        "components/feature/package.json",
+        "{\n  \"name\": \"sample-placeholder\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n",
+    );
+    repository.write(
+        "components/feature/devcontainer-feature.json",
+        "{\n  \"id\": \"sample-feature\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repository.write(
+        "scripts/use-feature.mjs",
+        "export const manifest = \"components/feature/package.json\";\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        "{\n  \"changelog\": false,\n  \"commit\": false,\n  \"fixed\": [],\n  \"linked\": [],\n  \"access\": \"public\",\n  \"baseBranch\": \"main\",\n  \"updateInternalDependencies\": \"patch\",\n  \"privatePackages\": { \"version\": true, \"tag\": true },\n  \"ignore\": []\n}\n",
+    );
+    repository.write(
+        ".changeset/sample-change.md",
+        "---\n\"sample-library\": patch\n\"sample-placeholder\": patch\n---\n\nCorrect two user-visible defects.\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(
+        &repository.root,
+        &["commit", "-q", "-m", "add generic fixtures"],
+    );
+
+    repository.cli().arg("init").assert().code(2);
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("initialization plan"))
+            .expect("valid initialization plan");
+    for candidate in &mut plan.discovery_candidates {
+        let release_unit = if candidate.path.starts_with("components/feature") {
+            "sample-feature"
+        } else {
+            "sample-library"
+        };
+        candidate.resolution = Some(CandidateResolution::Projection {
+            release_unit: release_unit.to_owned(),
+            target_candidate: None,
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved candidates"))
+        .expect("write candidate resolutions");
+
+    repository.cli().arg("init").assert().code(2);
+    let mut assessed: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("assessed plan"))
+            .expect("valid assessed plan");
+    assert!(!assessed.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "release-tool-proxy-disposition"
+            && diagnostic
+                .message
+                .contains("components/library/package.json")
+    }));
+    assert_eq!(
+        assessed.inferred_config.release_units["sample-library"]
+            .projections
+            .len(),
+        2
+    );
+    let conflicting = assessed
+        .diagnostics
+        .iter_mut()
+        .find(|diagnostic| {
+            diagnostic.code == "release-tool-proxy-disposition"
+                && diagnostic
+                    .message
+                    .contains("components/feature/package.json")
+        })
+        .expect("conflicting proxy assessment");
+    assert!(conflicting.recommended.is_none());
+    assert!(conflicting.resolution.is_none());
+    assert!(!conflicting.contradictory_evidence.is_empty());
+    conflicting.resolution = Some("remove".to_owned());
+    fs::write(&plan_path, assessed.to_yaml().expect("requested removal"))
+        .expect("write removal resolution");
+
+    repository.cli().arg("init").assert().code(2);
+    let blocked: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("blocked plan"))
+            .expect("valid blocked plan");
+    let blocked_removal = blocked
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "release-tool-proxy-disposition")
+        .expect("blocked proxy assessment");
+    assert_eq!(blocked_removal.resolution.as_deref(), Some("remove"));
+    assert!(!blocked_removal.verified);
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "takeover requires a ready initialization plan",
+        ));
 }
 
 #[test]
@@ -293,6 +637,8 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     for diagnostic in &mut plan.diagnostics {
         if diagnostic.code == "repository-integration" {
             diagnostic.resolution = Some("removed".to_owned());
+        } else if diagnostic.code == "unmapped-release-unit-disposition" {
+            diagnostic.resolution = Some("excluded".to_owned());
         }
     }
     resolve_discovery_candidates(&mut plan);
@@ -302,6 +648,25 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
     );
 
+    repository.cli().arg("init").assert().code(2);
+    let mut refreshed: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("refreshed plan"))
+            .expect("valid refreshed plan");
+    for candidate in &mut refreshed.discovery_candidates {
+        if candidate.path == Path::new("package.json") {
+            candidate.resolution = Some(CandidateResolution::Excluded);
+        }
+    }
+    for diagnostic in &mut refreshed.diagnostics {
+        if diagnostic.code == "unmapped-release-unit-disposition" {
+            diagnostic.resolution = Some("excluded".to_owned());
+        }
+    }
+    fs::write(
+        &plan_path,
+        refreshed.to_yaml().expect("refreshed resolutions"),
+    )
+    .expect("write refreshed plan");
     repository.cli().arg("init").assert().success();
     let ready: InitPlan =
         serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap()).expect("ready plan");
@@ -312,7 +677,7 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         .filter(|diagnostic| diagnostic.code == "repository-integration")
         .all(|diagnostic| diagnostic.verified));
 
-    let takeover = initialize(&repository.root, false, true).expect("planned takeover");
+    let takeover = initialize(&repository.root, true).expect("planned takeover");
     let intent_path = repository.root.join(".changeset/useful-change.md");
     let original_intent = fs::read_to_string(&intent_path).unwrap();
     fs::write(
@@ -362,7 +727,7 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
         "- .intentional/config.yml\n- .changeset/config.json\n",
     );
     repository.write(".intentional/.takeover-state", "committed");
-    let completed = initialize(&repository.root, false, false)
+    let completed = initialize(&repository.root, false)
         .expect("completed takeover remains repeatably initialized");
     assert_eq!(completed.state, InitState::Success);
     assert!(completed.operations.is_empty());
@@ -434,10 +799,14 @@ fn workspace_inventory_participates_in_changesets_dependency_propagation() {
     assert_eq!(output.status.code(), Some(2));
     let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured plan");
     assert_eq!(plan.parity.status, "equivalent");
+    assert!(plan.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "unmapped-release-unit-disposition"
+            && diagnostic.id.ends_with(":fixture-root")
+    }));
     assert!(plan
-        .diagnostics
+        .discovery_candidates
         .iter()
-        .all(|diagnostic| diagnostic.code != "unmapped-release-unit-disposition"));
+        .any(|candidate| candidate.path == Path::new("package.json")));
     let dependent = plan
         .parity
         .release_units
@@ -1049,7 +1418,7 @@ fn releasing_versionless_package_has_a_stable_parity_diagnostic() {
 }
 
 #[test]
-fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
+fn real_migration_fixtures_emit_repository_complete_plans_without_collisions() {
     for fixture in [
         Path::new("/workspaces/shared/the-wyrding-way/design-system"),
         Path::new("/workspaces/shared/the-wyrding-way/catalog"),
@@ -1069,94 +1438,203 @@ fn real_migration_fixtures_produce_parity_plans_without_directory_collisions() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let mut typed_plan: InitPlan =
-            serde_json::from_slice(&output.stdout).expect("structured init plan");
-        let plan: Value = serde_json::from_slice(&output.stdout).expect("structured init plan");
-        assert_eq!(plan["state"], "needs-input");
-        if fixture.ends_with("design-system") {
-            assert_eq!(plan["parity"]["status"], "blocked");
-            assert!(plan["parity"]["release-units"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|package| package["source"].is_null() && !package["proposed"].is_null()));
-        } else {
-            assert_eq!(plan["parity"]["status"], "equivalent");
-            assert!(plan["parity"]["release-units"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|package| package["source"] == package["proposed"]));
-        }
-        assert!(!plan["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("directory"))));
-        assert!(plan["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["code"] == "repository-integration"));
-        assert!(!plan["converted-intents"].as_array().unwrap().is_empty());
-
-        let converted = typed_plan.converted_intents.clone();
-        let repository = resolved_fixture_copy(fixture, &mut typed_plan);
-        let plan_path = repository.root.join(".intentional/init-plan.yml");
-        let first_reconciliation = repository
-            .cli()
-            .arg("init")
-            .output()
-            .expect("reconcile edited evidence");
-        assert_eq!(
-            first_reconciliation.status.code(),
-            Some(2),
-            "stdout: {}\nstderr: {}",
-            String::from_utf8_lossy(&first_reconciliation.stdout),
-            String::from_utf8_lossy(&first_reconciliation.stderr)
-        );
-        let mut reconciled: InitPlan =
-            serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap())
-                .expect("reconciled plan");
-        let reconciled_integrations = reconciled
+        let plan: InitPlan = serde_json::from_slice(&output.stdout).expect("structured init plan");
+        assert_eq!(plan.state, InitState::NeedsInput);
+        assert!(!plan.converted_intents.is_empty());
+        assert!(!plan
             .diagnostics
             .iter()
-            .filter(|diagnostic| diagnostic.code == "repository-integration")
-            .collect::<Vec<_>>();
-        assert!(!reconciled_integrations.is_empty());
-        assert!(reconciled_integrations
-            .iter()
-            .all(|diagnostic| diagnostic.verified));
-        for diagnostic in &mut reconciled.diagnostics {
-            if diagnostic.resolution.is_none() {
-                diagnostic.resolution = diagnostic.recommended.clone();
-            }
+            .any(|diagnostic| diagnostic.message.contains("directory")));
+        if fixture.ends_with("design-system") {
+            assert!(plan.discovery_candidates.iter().any(|candidate| {
+                candidate.path
+                    == Path::new("packages/runtime/pub/the_wyrding_way_runtime/pubspec.yaml")
+            }));
+            assert_eq!(
+                plan.discovery_candidates
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.native_identity.as_deref() == Some("wyrd_flutter")
+                    })
+                    .count(),
+                2
+            );
+        } else {
+            assert_eq!(plan.parity.status, "equivalent");
         }
-        fs::write(&plan_path, reconciled.to_yaml().unwrap()).expect("resolve stale evidence");
-        let resolved_output = repository
-            .cli()
-            .arg("init")
-            .output()
-            .expect("resolved init");
-        assert!(
-            resolved_output.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&resolved_output.stdout),
-            fs::read_to_string(&plan_path).unwrap()
-        );
-        let ready: InitPlan = serde_yaml::from_str(&fs::read_to_string(&plan_path).unwrap())
-            .expect("ready fixture plan");
-        assert_eq!(ready.state, InitState::Ready);
-        assert_eq!(ready.parity.status, "equivalent");
-        assert_eq!(ready.converted_intents, converted);
-        assert!(ready
-            .parity
-            .release_units
-            .iter()
-            .all(|package| package.source == package.proposed));
     }
+}
+
+#[test]
+fn design_system_topology_rehearsal_resolves_and_removes_only_the_authorized_proxy() {
+    let fixture = Path::new("/workspaces/shared/the-wyrding-way/design-system");
+    if !fixture.is_dir() {
+        return;
+    }
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+        .arg("-C")
+        .arg(fixture)
+        .args(["init", "--dry-run", "--json"])
+        .output()
+        .expect("fixture init");
+    assert_eq!(output.status.code(), Some(2));
+    let mut source_plan: InitPlan =
+        serde_json::from_slice(&output.stdout).expect("structured source plan");
+    let converted = source_plan.converted_intents.clone();
+    let repository = resolved_fixture_copy(fixture, &mut source_plan);
+    replace_path_references(
+        &repository.root,
+        Path::new(""),
+        "src/flutter/package.json",
+        "src/flutter/devcontainer-feature.json",
+    );
+
+    let plan_path = repository.root.join(".intentional/init-plan.yml");
+    let first = repository
+        .cli()
+        .arg("init")
+        .output()
+        .expect("reconcile disposable copy");
+    assert!(
+        matches!(first.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let mut reconciled: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("reconciled plan"))
+            .expect("valid reconciled plan");
+    resolve_discovery_candidates(&mut reconciled);
+    for candidate in &mut reconciled.discovery_candidates {
+        candidate.resolution = Some(match candidate.path.to_string_lossy().as_ref() {
+            "packages/runtime/package.json"
+            | "packages/runtime/pub/the_wyrding_way_runtime/pubspec.yaml" => {
+                CandidateResolution::Projection {
+                    release_unit: "@the-wyrding-way/runtime".to_owned(),
+                    target_candidate: None,
+                }
+            }
+            "src/flutter/package.json" | "src/flutter/devcontainer-feature.json" => {
+                CandidateResolution::Projection {
+                    release_unit: "flutter".to_owned(),
+                    target_candidate: None,
+                }
+            }
+            "fixtures/flutter/pubspec.yaml"
+            | "fixtures/catalog-repo/ui/catalog/packages/flutter/pubspec.yaml" => {
+                CandidateResolution::Excluded
+            }
+            _ => candidate
+                .resolution
+                .clone()
+                .expect("generic fixture resolution"),
+        });
+    }
+    for diagnostic in &mut reconciled.diagnostics {
+        if diagnostic.resolution.is_none() {
+            diagnostic.resolution = diagnostic.recommended.clone();
+        }
+    }
+    fs::write(&plan_path, reconciled.to_yaml().expect("resolved topology"))
+        .expect("write topology resolutions");
+
+    let assessed_run = repository
+        .cli()
+        .arg("init")
+        .output()
+        .expect("assess proxy disposition");
+    assert!(
+        matches!(assessed_run.status.code(), Some(0 | 2)),
+        "{}",
+        String::from_utf8_lossy(&assessed_run.stderr)
+    );
+    let mut assessed: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("assessed plan"))
+            .expect("valid assessed plan");
+    let proxy = assessed
+        .diagnostics
+        .iter_mut()
+        .find(|diagnostic| {
+            diagnostic.code == "release-tool-proxy-disposition"
+                && diagnostic.message.contains("src/flutter/package.json")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "feature proxy choice missing:\n{}",
+                fs::read_to_string(&plan_path).expect("assessment plan")
+            )
+        });
+    assert!(!proxy.supporting_evidence.is_empty());
+    assert!(proxy.contradictory_evidence.is_empty());
+    assert_eq!(proxy.recommended.as_deref(), Some("remove"));
+    proxy.resolution = Some("remove".to_owned());
+    for diagnostic in &mut assessed.diagnostics {
+        if diagnostic.resolution.is_none() {
+            diagnostic.resolution = diagnostic.recommended.clone();
+        }
+    }
+    fs::write(&plan_path, assessed.to_yaml().expect("authorized topology"))
+        .expect("write proxy authorization");
+
+    let resolved = repository
+        .cli()
+        .arg("init")
+        .output()
+        .expect("resolved init");
+    assert!(
+        resolved.status.success(),
+        "stdout: {}\nstderr: {}\nplan:\n{}",
+        String::from_utf8_lossy(&resolved.stdout),
+        String::from_utf8_lossy(&resolved.stderr),
+        fs::read_to_string(&plan_path).expect("unresolved plan")
+    );
+    let ready: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
+            .expect("valid ready plan");
+    assert_eq!(ready.state, InitState::Ready);
+    assert_eq!(ready.parity.status, "equivalent");
+    assert_eq!(ready.converted_intents, converted);
+    assert!(ready
+        .parity
+        .release_units
+        .iter()
+        .all(|release| release.source == release.proposed));
+    let runtime = &ready.inferred_config.release_units["@the-wyrding-way/runtime"];
+    assert!(runtime
+        .projections
+        .iter()
+        .any(|projection| projection.adapter == Adapter::Npm));
+    assert!(runtime
+        .projections
+        .iter()
+        .any(|projection| projection.adapter == Adapter::Pub));
+    let feature = &ready.inferred_config.release_units["flutter"];
+    assert_eq!(feature.projections.len(), 1);
+    assert_eq!(
+        feature.projections[0].file,
+        Path::new("devcontainer-feature.json")
+    );
+    assert!(ready
+        .planned_operations
+        .iter()
+        .any(|operation| operation == "delete src/flutter/package.json"));
+
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .success();
+    assert!(!repository.root.join("src/flutter/package.json").exists());
+    assert!(repository
+        .root
+        .join("src/flutter/devcontainer-feature.json")
+        .exists());
+    assert!(repository
+        .root
+        .join("packages/runtime/pub/the_wyrding_way_runtime/pubspec.yaml")
+        .exists());
+    let repeated = initialize(&repository.root, false).expect("repeatable init");
+    assert_eq!(repeated.state, InitState::Success);
+    assert!(repeated.operations.is_empty());
 }
 
 #[test]

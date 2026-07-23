@@ -268,3 +268,14 @@ $defs:
         type: [ string, "null" ]
       verified: { type: boolean }
       invalidated-resolution: { type: boolean }
+      supporting-evidence:
+        type: array
+        items:
+          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+      contradictory-evidence:
+        type: array
+        items:
+          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+      uncertainty:
+        type: string
+        minLength: 1

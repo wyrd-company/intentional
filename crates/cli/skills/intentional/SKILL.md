@@ -75,9 +75,10 @@ Run initialization from a Git worktree:
 intentional init
 ```
 
-By default, discovery follows package-manager workspace membership and Git
-ignore rules. Use `--scan-all` only when supported manifests outside those
-workspace boundaries are intentionally part of the inventory.
+Discovery recursively follows Git ignore rules and hard cache exclusions.
+Package-manager workspace membership is evidence for inference,
+recommendations, dependency analysis, and parity; it is not an inclusion
+boundary.
 
 The first run may write `.intentional/init-plan.yml` and exit with code `2`.
 That means explicit input is required; it is not an operational failure. Read
@@ -93,11 +94,20 @@ Intentional writes `.intentional/config.yml` only when the complete candidate
 graph validates. Review and commit the resulting configuration before creating
 baseline tags.
 
+Candidates remain distinct by detector and exact path even when their native
+identities match. Resolve each path explicitly; do not collapse duplicates
+before the plan applies every resolution.
+
 ## Adopt a Changesets repository
 
 When `.changeset/config.json` exists, ordinary `intentional init` preserves
 Changesets authority and produces an adoption plan. Resolve its candidate,
 ignored-package, contract, parity, and repository-integration requirements.
+Probable release-tool proxies appear as explicit `retain` or `remove` choices
+with supporting evidence, contradictory evidence, and uncertainty. Treat a
+removal recommendation as best effort, never proof. Authorize `remove` only
+when the mapped artifact owns the release identity and repository references
+have been migrated; takeover rechecks those references before deletion.
 Then use the explicit handoff:
 
 ```bash

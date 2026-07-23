@@ -272,7 +272,7 @@ fn init_ignores_cargo_workspace_only_manifests() {
 }
 
 #[test]
-fn scan_all_routes_all_six_ecosystems_through_candidates() {
+fn init_routes_all_six_ecosystems_through_candidates() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write(
@@ -297,7 +297,7 @@ fn scan_all_routes_all_six_ecosystems_through_candidates() {
     );
     repo.commit("add ecosystem fixtures");
 
-    let result = initialize(&repo.root, true, false).expect("candidate plan");
+    let result = initialize(&repo.root, false).expect("candidate plan");
     assert_eq!(result.state, InitState::NeedsInput);
     let plan = result.plan.expect("initialization plan");
     let detectors = plan
@@ -337,34 +337,31 @@ fn configured_repository_without_detectable_manifests_is_a_no_op() {
     repo.write(".intentional/config.yml", &config("committed"));
     repo.commit("add configured fixture");
 
-    let result = initialize(&repo.root, false, false).expect("repeatable configured init");
+    let result = initialize(&repo.root, false).expect("repeatable configured init");
     assert_eq!(result.state, InitState::Success);
     assert!(result.operations.is_empty());
     assert!(result.plan.is_none());
 }
 
 #[test]
-fn init_requires_a_git_repository_in_both_discovery_modes() {
+fn init_requires_a_git_repository() {
     let temp = tempfile::tempdir().expect("temporary directory");
     let root = temp.path().join("workspace");
     fs::create_dir(&root).expect("workspace directory");
     fs::write(root.join("package.json"), npm_manifest("1.0.0")).expect("fixture manifest");
 
-    for scan_all in [false, true] {
-        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
-        command.arg("-C").arg(&root).arg("init");
-        if scan_all {
-            command.arg("--scan-all");
-        }
-        command
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains(
-                "intentional init requires a Git repository",
-            ))
-            .stderr(predicate::str::contains("git check-ignore").not())
-            .stderr(predicate::str::contains("GIT_DISCOVERY_ACROSS_FILESYSTEM").not());
-    }
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
+    command
+        .arg("-C")
+        .arg(&root)
+        .arg("init")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "intentional init requires a Git repository",
+        ))
+        .stderr(predicate::str::contains("git check-ignore").not())
+        .stderr(predicate::str::contains("GIT_DISCOVERY_ACROSS_FILESYSTEM").not());
 }
 
 #[test]
@@ -379,7 +376,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
         );
         repo.commit("add discovery fixtures");
 
-        repo.cli().args(["init", "--scan-all"]).assert().code(2);
+        repo.cli().arg("init").assert().code(2);
         resolve_plan(&repo, |identity| {
             if identity == "sample-example" {
                 CandidateResolution::Excluded
@@ -389,9 +386,9 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
                 }
             }
         });
-        repo.cli().args(["init", "--scan-all"]).assert().success();
+        repo.cli().arg("init").assert().success();
 
-        let no_op = initialize(&repo.root, true, false).expect("repeatable no-op");
+        let no_op = initialize(&repo.root, false).expect("repeatable no-op");
         assert_eq!(no_op.state, InitState::Success);
         assert!(no_op.operations.is_empty());
         let config = intentional_core::Config::load(&repo.root).expect("reconciled config");
@@ -402,7 +399,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             "components/library/pyproject.toml",
             "[project]\nname = \"sample-example\"\nversion = \"1.0.1\"\n",
         );
-        repo.cli().args(["init", "--scan-all"]).assert().code(2);
+        repo.cli().arg("init").assert().code(2);
         let changed: InitPlan = serde_yaml::from_str(
             &fs::read_to_string(repo.root.join(".intentional/init-plan.yml"))
                 .expect("changed exclusion plan"),
@@ -426,7 +423,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             },
             _ => unreachable!(),
         });
-        repo.cli().args(["init", "--scan-all"]).assert().success();
+        repo.cli().arg("init").assert().success();
 
         let config = intentional_core::Config::load(&repo.root).expect("re-resolved config");
         let matching_receipts = config
@@ -463,7 +460,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             _ => unreachable!(),
         }
         assert!(!repo.root.join(".intentional/init-plan.yml").exists());
-        assert!(initialize(&repo.root, true, false)
+        assert!(initialize(&repo.root, false)
             .expect("repeatable resolved init")
             .operations
             .is_empty());
@@ -485,11 +482,11 @@ fn devcontainer_detectors_extract_only_identity_and_semver_projection_evidence()
     repo.write("devcontainer.json", "not json\n");
     repo.commit("add detector fixtures");
 
-    let first = initialize(&repo.root, false, false)
+    let first = initialize(&repo.root, false)
         .expect("Dev Container candidate plan")
         .plan
         .expect("unresolved candidates");
-    let second = initialize(&repo.root, false, false)
+    let second = initialize(&repo.root, false)
         .expect("repeatable candidate plan")
         .plan
         .expect("unresolved candidates");
@@ -545,7 +542,7 @@ fn devcontainer_detectors_report_narrow_extraction_diagnostics() {
     );
     repo.commit("add extraction fixtures");
 
-    let plan = initialize(&repo.root, false, false)
+    let plan = initialize(&repo.root, false)
         .expect("diagnostic candidate plan")
         .plan
         .expect("unresolved candidates");
@@ -795,7 +792,7 @@ fn repeatable_init_consumes_a_stale_plan_after_the_candidate_closes() {
         "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
     );
     repo.commit("add discovery fixtures");
-    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |identity| {
         if identity == "sample-example" {
             CandidateResolution::Excluded
@@ -805,22 +802,22 @@ fn repeatable_init_consumes_a_stale_plan_after_the_candidate_closes() {
             }
         }
     });
-    repo.cli().args(["init", "--scan-all"]).assert().success();
+    repo.cli().arg("init").assert().success();
 
     repo.write(
         "examples/pyproject.toml",
         "[project]\nname = \"sample-example\"\nversion = \"1.0.1\"\n",
     );
-    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    repo.cli().arg("init").assert().code(2);
     assert!(repo.root.join(".intentional/init-plan.yml").exists());
 
     repo.write(
         "examples/pyproject.toml",
         "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
     );
-    repo.cli().args(["init", "--scan-all"]).assert().success();
+    repo.cli().arg("init").assert().success();
     assert!(!repo.root.join(".intentional/init-plan.yml").exists());
-    assert!(initialize(&repo.root, true, false)
+    assert!(initialize(&repo.root, false)
         .expect("no plan no-op")
         .operations
         .is_empty());
@@ -844,9 +841,9 @@ fn candidate_resolution_preserves_configured_cross_ecosystem_dependencies() {
     );
     repo.commit("add configured dependency fixture");
 
-    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |_| CandidateResolution::Excluded);
-    repo.cli().args(["init", "--scan-all"]).assert().success();
+    repo.cli().arg("init").assert().success();
 
     let config = intentional_core::Config::load(&repo.root).expect("resolved config");
     assert_eq!(
@@ -868,11 +865,11 @@ fn candidate_resolution_removes_stale_manifest_owned_npm_dependencies() {
     );
     repo.commit("add native dependency fixtures");
 
-    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |identity| CandidateResolution::Independent {
         release_unit: identity.to_owned(),
     });
-    repo.cli().args(["init", "--scan-all"]).assert().success();
+    repo.cli().arg("init").assert().success();
     let initial = intentional_core::Config::load(&repo.root).expect("initial config");
     assert_eq!(
         initial.release_units["sample-library"].depends_on,
@@ -885,16 +882,16 @@ fn candidate_resolution_removes_stale_manifest_owned_npm_dependencies() {
         "[project]\nname = \"sample-example\"\nversion = \"1.0.0\"\n",
     );
 
-    repo.cli().args(["init", "--scan-all"]).assert().code(2);
+    repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |_| CandidateResolution::Excluded);
-    repo.cli().args(["init", "--scan-all"]).assert().success();
+    repo.cli().arg("init").assert().success();
 
     let config = intentional_core::Config::load(&repo.root).expect("resolved config");
     assert!(config.release_units["sample-library"].depends_on.is_empty());
 }
 
 #[test]
-fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
+fn discovery_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
     let repo = TestRepo::new();
     repo.write(
         "package.json",
@@ -923,19 +920,8 @@ fn scan_all_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
     }
     repo.commit("add walking fixtures");
 
-    let workspace_names = initialize(&repo.root, false, false)
-        .expect("workspace plan")
-        .plan
-        .expect("candidate plan")
-        .discovery_candidates
-        .into_iter()
-        .filter_map(|candidate| candidate.native_identity)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(workspace_names.contains("sample-visible"));
-    assert!(!workspace_names.contains("cached-node"));
-
-    let plan = initialize(&repo.root, true, false)
-        .expect("scan-all plan")
+    let plan = initialize(&repo.root, false)
+        .expect("repository-wide plan")
         .plan
         .expect("candidate plan");
     let names = plan

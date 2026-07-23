@@ -63,10 +63,6 @@ struct DryRun {
 
 #[derive(Debug, Args)]
 struct InitArgs {
-    /// Recursively scan supported manifests outside package-manager workspace membership.
-    #[arg(long)]
-    scan_all: bool,
-
     /// Perform the explicit authority handoff from a ready Changesets plan.
     #[arg(long)]
     take_over: bool,
@@ -253,7 +249,7 @@ fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
 }
 
 fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
-    let result = initialize(root, args.scan_all, args.take_over)?;
+    let result = initialize(root, args.take_over)?;
     if args.json {
         println!("{}", result.to_json()?);
     } else {

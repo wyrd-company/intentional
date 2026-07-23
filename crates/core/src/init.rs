@@ -440,6 +440,15 @@ pub struct InitDiagnostic {
     /// Whether a prior resolution was discarded because its evidence became stale.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invalidated_resolution: bool,
+    /// Evidence supporting a best-effort recommendation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supporting_evidence: Vec<SourceEvidence>,
+    /// Evidence that weakens or contradicts a best-effort recommendation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contradictory_evidence: Vec<SourceEvidence>,
+    /// Explicit uncertainty boundary for a best-effort recommendation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertainty: Option<String>,
 }
 
 /// One side of a Changesets takeover parity comparison.
@@ -761,8 +770,15 @@ pub struct InitResult {
     pub plan: Option<InitPlan>,
     writes: Vec<(PathBuf, String)>,
     deletes: Vec<PathBuf>,
+    proxy_removals: Vec<ProxyRemoval>,
     takeover: bool,
     takeover_evidence: Option<(String, BTreeSet<PathBuf>)>,
+}
+
+#[derive(Debug, Clone)]
+struct ProxyRemoval {
+    path: PathBuf,
+    native_identity: String,
 }
 
 impl InitResult {
@@ -776,6 +792,7 @@ impl InitResult {
                 .takeover_evidence
                 .as_ref()
                 .expect("takeover carries evidence");
+            verify_proxy_removal_preconditions(root, &self.proxy_removals)?;
             verify_takeover_preconditions(
                 root,
                 &self.writes,
@@ -817,7 +834,7 @@ impl InitResult {
 }
 
 /// Discover or reconcile initialization, optionally executing explicit takeover.
-pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
+pub fn initialize(root: &Path, take_over: bool) -> Result<InitResult> {
     let root = root
         .canonicalize()
         .map_err(|error| Error::io(root, error))?;
@@ -826,19 +843,19 @@ pub fn initialize(root: &Path, scan_all: bool, take_over: bool) -> Result<InitRe
         .map_err(|_| Error::Validation("intentional init requires a Git repository".to_owned()))?;
     recover_interrupted_takeover(root)?;
     if root.join(CHANGESETS_CONFIG).exists() {
-        return changesets_plan(root, scan_all, take_over);
+        return changesets_plan(root, take_over);
     }
     if take_over {
         return Err(Error::Validation(
             "--take-over requires an existing .changeset/config.json".to_owned(),
         ));
     }
-    ordinary_plan(root, scan_all)
+    ordinary_plan(root)
 }
 
 /// Compatibility wrapper for callers performing ordinary initialization.
 pub fn discover_config(root: &Path) -> Result<InitResult> {
-    initialize(root, false, false)
+    initialize(root, false)
 }
 
 #[derive(Default)]
@@ -868,6 +885,16 @@ struct NpmDependencyEdge {
     range: String,
 }
 
+struct ManifestObservation {
+    candidate_path: PathBuf,
+    native_identity: String,
+    private_package: bool,
+    projection: CandidateProjectionSuggestion,
+    raw_version: Option<String>,
+    tag: CandidateTagSuggestion,
+    workspace_package: bool,
+}
+
 struct ChangesetsSourceSemantics<'a> {
     private_packages: &'a BTreeSet<String>,
     suppress_private_versions: bool,
@@ -878,7 +905,7 @@ struct ChangesetsSourceSemantics<'a> {
     preflight_error: Option<String>,
 }
 
-fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
+fn ordinary_plan(root: &Path) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
     let had_previous_plan = previous.is_some();
     let configured = if root.join(CONFIG_PATH).is_file() {
@@ -886,7 +913,7 @@ fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
     } else {
         Config::default()
     };
-    let mut discovery = discover(root, scan_all, &BTreeSet::new())?;
+    let mut discovery = discover(root)?;
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
     let mut candidates = unresolved_by_receipts(&configured, discovery.candidates);
 
@@ -913,6 +940,7 @@ fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
             plan: None,
             writes: Vec::new(),
             deletes,
+            proxy_removals: Vec::new(),
             takeover: false,
             takeover_evidence: None,
         });
@@ -937,6 +965,7 @@ fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
             plan: None,
             writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
             deletes: vec![PathBuf::from(INIT_PLAN_PATH)],
+            proxy_removals: Vec::new(),
             takeover: false,
             takeover_evidence: None,
         });
@@ -979,6 +1008,7 @@ fn ordinary_plan(root: &Path, scan_all: bool) -> Result<InitResult> {
         plan: Some(plan),
         writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
         deletes: Vec::new(),
+        proxy_removals: Vec::new(),
         takeover: false,
         takeover_evidence: None,
     })
@@ -1343,8 +1373,14 @@ fn apply_changesets_candidate_resolutions(
             Some(CandidateResolution::Excluded) => {
                 if let Some(native_identity) = &candidate.native_identity {
                     if let Some(unit) = discovery.config.release_units.get_mut(native_identity) {
+                        let unit_path = unit.path.clone();
                         unit.projections.retain(|projection| {
-                            unit.path.join(&projection.file) != candidate.path
+                            let path = if unit_path == Path::new(".") {
+                                projection.file.clone()
+                            } else {
+                                unit_path.join(&projection.file)
+                            };
+                            path != candidate.path
                         });
                         if unit.projections.is_empty() {
                             removed_release_units.insert(native_identity.clone());
@@ -1430,7 +1466,62 @@ fn apply_changesets_candidate_resolutions(
         .discovery
         .excluded_paths
         .sort_by(|left, right| (&left.detector, &left.path).cmp(&(&right.detector, &right.path)));
+    recompute_resolved_versions(discovery, candidates)?;
     Ok(identity_map)
+}
+
+fn recompute_resolved_versions(
+    discovery: &mut Discovery,
+    candidates: &[DiscoveryCandidate],
+) -> Result<()> {
+    let mut versions = BTreeMap::<String, BTreeSet<Version>>::new();
+    let mut unresolved = BTreeSet::new();
+    for candidate in candidates {
+        let Some(raw_version) = candidate.raw_version.as_ref() else {
+            continue;
+        };
+        let Some(native_identity) = candidate.native_identity.as_ref() else {
+            continue;
+        };
+        let release_unit = match candidate.resolution.as_ref() {
+            Some(CandidateResolution::Projection { release_unit, .. })
+            | Some(CandidateResolution::Independent { release_unit }) => release_unit,
+            Some(CandidateResolution::Excluded) => continue,
+            None => {
+                unresolved.insert(native_identity.clone());
+                native_identity
+            }
+        };
+        if !discovery.config.release_units.contains_key(release_unit) {
+            continue;
+        }
+        if let Ok(version) = Version::parse(&raw_version.value) {
+            versions
+                .entry(release_unit.clone())
+                .or_default()
+                .insert(version);
+        }
+    }
+
+    discovery.versions.clear();
+    for (release_unit, observed) in versions {
+        if observed.len() == 1 {
+            discovery.versions.insert(
+                release_unit,
+                observed.into_iter().next().expect("one observed version"),
+            );
+        } else if !unresolved.contains(&release_unit) {
+            return Err(Error::Validation(format!(
+                "resolved discovery candidates for release unit {release_unit} disagree on current version: {}",
+                observed
+                    .into_iter()
+                    .map(|version| version.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn candidate_projection_owner<'a>(
@@ -1459,7 +1550,7 @@ fn projection_workspace_path(unit: &ReleaseUnitConfig, projection: &Projection) 
     }
 }
 
-fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitResult> {
+fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
     let changesets_config_path = root.join(CHANGESETS_CONFIG);
     let changesets_text = std::fs::read_to_string(&changesets_config_path)
@@ -1474,7 +1565,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
     for key in ["ignore", "fixed", "linked"] {
         collect_json_strings(&changesets[key], &mut referenced_names);
     }
-    let mut discovery = discover(root, scan_all, &referenced_names)?;
+    let mut discovery = discover(root)?;
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
     let candidates = discovery.candidates.clone();
     let identity_map = apply_changesets_candidate_resolutions(root, &mut discovery, &candidates)?;
@@ -1507,6 +1598,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     if let Some((versions_private, tags_private)) =
@@ -1530,6 +1624,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: versions_private,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
         if !tags_private {
             diagnostics.push(InitDiagnostic {
@@ -1542,6 +1639,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
                 resolution: None,
                 verified: false,
                 invalidated_resolution: false,
+                supporting_evidence: Vec::new(),
+                contradictory_evidence: Vec::new(),
+                uncertainty: None,
             });
         }
     }
@@ -1556,6 +1656,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     if changesets["commit"] != JsonValue::Bool(false) && !changesets["commit"].is_null() {
@@ -1569,6 +1672,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     if changesets["___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH"]
@@ -1586,6 +1692,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     let dev_dependents = discovery
@@ -1617,12 +1726,21 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
+    diagnostics.extend(release_tool_proxy_diagnostics(
+        root,
+        &discovery.candidates,
+        &referenced_names,
+    )?);
     let mut unmapped_release_units = BTreeSet::new();
     for release_unit in discovery.config.release_units.keys() {
         if referenced_names.contains(release_unit)
             || discovery.workspace_packages.contains(release_unit)
+            || identity_map.values().any(|target| target == release_unit)
         {
             continue;
         }
@@ -1649,6 +1767,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     let current_integrations = scan_changesets_integrations(root)?;
@@ -1666,6 +1787,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     let integration_paths = current_integrations
@@ -1689,9 +1813,17 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
-    reconcile_diagnostics(root, &mut diagnostics, previous.as_ref())?;
+    reconcile_diagnostics(
+        root,
+        &mut diagnostics,
+        previous.as_ref(),
+        &discovery.candidates,
+    )?;
     let mut source_config = discovery.config.clone();
     let ignored = changesets["ignore"]
         .as_array()
@@ -1707,6 +1839,11 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         .collect();
     exclude_release_units(&mut source_config, &source_excluded);
     apply_disposition_resolutions(&mut discovery.config, &diagnostics)?;
+    let proxy_removals = apply_proxy_manifest_resolutions(
+        &mut discovery.config,
+        &diagnostics,
+        &discovery.candidates,
+    )?;
     discovery.config.validate()?;
 
     let declared: BTreeMap<String, Bump> =
@@ -1789,6 +1926,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
     }
     if let Some(message) = &parity.proposed_error {
@@ -1802,6 +1942,9 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             resolution: None,
             verified: false,
             invalidated_resolution: false,
+            supporting_evidence: Vec::new(),
+            contradictory_evidence: Vec::new(),
+            uncertainty: None,
         });
         diagnostics.sort_by(|left, right| left.id.cmp(&right.id));
     }
@@ -1830,7 +1973,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         }
     }
     let source_fingerprint = fingerprint(root, &evidence_paths)?;
-    let planned_operations = takeover_operations(root, &converted_intents);
+    let planned_operations = takeover_operations(root, &converted_intents, &proxy_removals);
     let mut plan = InitPlan {
         schema: INIT_PLAN_SCHEMA.to_owned(),
         state,
@@ -1859,7 +2002,8 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         for intent in &plan.converted_intents {
             writes.push((intent.target.clone(), intent.contents()?));
         }
-        let deletes = takeover_deletes(root);
+        let deletes = takeover_deletes(root, &proxy_removals);
+        verify_proxy_removal_preconditions(root, &proxy_removals)?;
         verify_takeover_preconditions(root, &writes, &plan.source_fingerprint, &evidence_paths)?;
         let takeover_evidence = Some((plan.source_fingerprint.clone(), evidence_paths));
         return Ok(InitResult {
@@ -1870,6 +2014,7 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
             plan: Some(plan),
             writes,
             deletes,
+            proxy_removals,
             takeover: true,
             takeover_evidence,
         });
@@ -1883,37 +2028,41 @@ fn changesets_plan(root: &Path, scan_all: bool, take_over: bool) -> Result<InitR
         plan: Some(plan),
         writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
         deletes: Vec::new(),
+        proxy_removals,
         takeover: false,
         takeover_evidence: None,
     })
 }
 
-fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) -> Result<Discovery> {
+fn discover(root: &Path) -> Result<Discovery> {
     let workspace_paths = workspace_manifest_paths(root)?;
-    let mut manifest_paths = if scan_all {
-        all_manifest_paths(root)?
-    } else {
-        workspace_paths.clone()
-    };
-    if !referenced_names.is_empty() {
-        for path in all_manifest_paths(root)? {
-            let Some(adapter) = adapter_for(&path) else {
-                continue;
-            };
-            if let Ok((name, _)) = manifest_identity(&path, adapter) {
-                if referenced_names.contains(&name) {
-                    manifest_paths.insert(path);
-                }
-            }
-        }
-    }
+    let manifest_paths = all_manifest_paths(root)?;
     let mut discovery = Discovery {
         config: Config::default(),
         ..Discovery::default()
     };
+    let mut observations = Vec::new();
     for path in manifest_paths {
         if let Some(candidate) = devcontainer_candidate(root, &path)? {
             discovery.evidence.insert(candidate.path.clone());
+            if let (Some(native_identity), Some(projection), Some(tag)) = (
+                candidate.native_identity.clone(),
+                candidate.projection.clone(),
+                candidate.tag.clone(),
+            ) {
+                observations.push(ManifestObservation {
+                    candidate_path: candidate.path.clone(),
+                    native_identity,
+                    private_package: false,
+                    projection,
+                    raw_version: candidate
+                        .raw_version
+                        .as_ref()
+                        .map(|version| version.value.clone()),
+                    tag,
+                    workspace_package: workspace_paths.contains(&path),
+                });
+            }
             discovery.candidates.push(candidate);
             continue;
         }
@@ -1930,7 +2079,7 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             .to_owned();
         let manifest_evidence = evidence(root, &relative_manifest, Vec::new())?;
         let detector = detector_for(adapter).to_owned();
-        discovery.candidates.push(DiscoveryCandidate {
+        let candidate = DiscoveryCandidate {
             id: DiscoveryCandidate::stable_id(&detector, &relative_manifest)?,
             detector,
             path: relative_manifest.clone(),
@@ -1957,80 +2106,129 @@ fn discover(root: &Path, scan_all: bool, referenced_names: &BTreeSet<String>) ->
             }),
             diagnostics: Vec::new(),
             resolution: None,
+        };
+        observations.push(ManifestObservation {
+            candidate_path: relative_manifest.clone(),
+            native_identity: id,
+            private_package: adapter == Adapter::Npm && npm_manifest_is_private(&path)?,
+            projection: candidate
+                .projection
+                .clone()
+                .expect("project manifest has projection"),
+            raw_version: version,
+            tag: candidate.tag.clone().expect("project manifest has tag"),
+            workspace_package: workspace_paths.contains(&path),
         });
-        let workspace_package = workspace_paths.contains(&path);
-        let private_package = adapter == Adapter::Npm && npm_manifest_is_private(&path)?;
-        let directory = path.parent().expect("manifest has parent");
-        let relative_directory = directory.strip_prefix(root).map_err(|error| {
-            Error::Validation(format!("manifest is outside workspace: {error}"))
-        })?;
-        let package_path = if relative_directory.as_os_str().is_empty() {
-            PathBuf::from(".")
-        } else {
-            relative_directory.to_owned()
-        };
-        let projection = Projection {
-            adapter,
-            file: path
-                .file_name()
-                .map(PathBuf::from)
-                .expect("manifest has filename"),
-            mode: if adapter == Adapter::Go {
-                ProjectionMode::None
-            } else {
-                ProjectionMode::Committed
-            },
-            pointer: None,
-        };
-        if let Some(existing) = discovery.config.release_units.get_mut(&id) {
-            if existing.path != package_path {
-                return Err(Error::Validation(format!(
-                    "manifest-native package name {id} is declared in both {} and {}",
-                    existing.path.display(),
-                    package_path.display()
-                )));
-            }
-            existing.projections.push(projection);
-        } else {
-            discovery.config.release_units.insert(
-                id.clone(),
-                ReleaseUnitConfig {
-                    path: package_path,
-                    disposition: ReleaseUnitDisposition::Managed,
-                    projections: vec![projection],
-                    tags: BTreeMap::from([(
-                        "primary".to_owned(),
-                        TagConfig {
-                            role: TagRole::Primary,
-                            template: "{id}@{version}".to_owned(),
-                            require_phase: None,
-                            tag_after: Vec::new(),
-                        },
-                    )]),
-                    depends_on: Vec::new(),
-                },
-            );
-        }
-        if let Some(version) = version {
-            if let Ok(version) = Version::parse(&version) {
-                discovery.versions.insert(id.clone(), version);
-            }
-        }
-        if workspace_package {
-            discovery.workspace_packages.insert(id.clone());
-        }
-        if private_package {
-            discovery.private_packages.insert(id);
-        }
+        discovery.candidates.push(candidate);
         discovery
             .evidence
             .insert(path.strip_prefix(root).unwrap_or(&path).to_owned());
     }
+    materialize_discovery_inventory(&mut discovery, observations)?;
     discovery.npm_dependencies = derive_npm_dependencies(root, &mut discovery.config)?;
     discovery
         .candidates
         .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(discovery)
+}
+
+fn materialize_discovery_inventory(
+    discovery: &mut Discovery,
+    observations: Vec<ManifestObservation>,
+) -> Result<()> {
+    let mut by_identity = BTreeMap::<String, Vec<ManifestObservation>>::new();
+    for observation in observations {
+        by_identity
+            .entry(observation.native_identity.clone())
+            .or_default()
+            .push(observation);
+    }
+    for (identity, mut observations) in by_identity {
+        observations.sort_by(|left, right| left.candidate_path.cmp(&right.candidate_path));
+        let directories = observations
+            .iter()
+            .map(|observation| {
+                observation
+                    .candidate_path
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from("."))
+            })
+            .collect::<BTreeSet<_>>();
+        let path = if directories.len() == 1 {
+            directories.into_iter().next().expect("one directory")
+        } else {
+            PathBuf::from(".")
+        };
+        let projections = observations
+            .iter()
+            .map(|observation| {
+                let file = if path == Path::new(".") {
+                    observation.projection.path.clone()
+                } else {
+                    observation
+                        .projection
+                        .path
+                        .strip_prefix(&path)
+                        .expect("candidate path is below its manifest directory")
+                        .to_owned()
+                };
+                Projection {
+                    adapter: observation.projection.adapter,
+                    file,
+                    mode: observation.projection.mode,
+                    pointer: observation.projection.pointer.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let tag = observations
+            .first()
+            .map(|observation| &observation.tag)
+            .expect("identity group is not empty");
+        discovery.config.release_units.insert(
+            identity.clone(),
+            ReleaseUnitConfig {
+                path,
+                disposition: ReleaseUnitDisposition::Managed,
+                projections,
+                tags: BTreeMap::from([(
+                    tag.id.clone(),
+                    TagConfig {
+                        role: tag.role,
+                        template: tag.template.clone(),
+                        require_phase: None,
+                        tag_after: Vec::new(),
+                    },
+                )]),
+                depends_on: Vec::new(),
+            },
+        );
+        let versions = observations
+            .iter()
+            .filter_map(|observation| observation.raw_version.as_deref())
+            .filter_map(|version| Version::parse(version).ok())
+            .collect::<BTreeSet<_>>();
+        if versions.len() == 1 {
+            discovery.versions.insert(
+                identity.clone(),
+                versions.into_iter().next().expect("one version"),
+            );
+        }
+        if observations
+            .iter()
+            .any(|observation| observation.workspace_package)
+        {
+            discovery.workspace_packages.insert(identity.clone());
+        }
+        if observations
+            .iter()
+            .any(|observation| observation.private_package)
+        {
+            discovery.private_packages.insert(identity);
+        }
+    }
+    Ok(())
 }
 
 fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
@@ -2808,10 +3006,354 @@ fn scan_external_release_evidence(root: &Path) -> Result<Vec<SourceEvidence>> {
     Ok(findings)
 }
 
+fn release_tool_proxy_diagnostics(
+    root: &Path,
+    candidates: &[DiscoveryCandidate],
+    referenced_names: &BTreeSet<String>,
+) -> Result<Vec<InitDiagnostic>> {
+    let workspace_paths = workspace_manifest_paths(root)?;
+    let mut diagnostics = Vec::new();
+    for candidate in candidates {
+        let Some(native_identity) = candidate.native_identity.as_deref() else {
+            continue;
+        };
+        let Some(projection) = candidate.projection.as_ref() else {
+            continue;
+        };
+        if projection.adapter != Adapter::Npm {
+            continue;
+        }
+        let workspace_member = workspace_paths.contains(&root.join(&candidate.path));
+        if !referenced_names.contains(native_identity) && !workspace_member {
+            continue;
+        }
+        let Some(CandidateResolution::Projection { release_unit, .. }) =
+            candidate.resolution.as_ref()
+        else {
+            continue;
+        };
+        if release_unit == native_identity {
+            continue;
+        }
+        let target_candidates = candidates
+            .iter()
+            .filter(|target| target.id != candidate.id)
+            .filter(|target| {
+                target.projection.as_ref().is_some_and(|projection| {
+                    projection.adapter != Adapter::Npm
+                        && matches!(
+                            target.resolution.as_ref(),
+                            Some(CandidateResolution::Projection {
+                                release_unit: target_release_unit,
+                                ..
+                            }) if target_release_unit == release_unit
+                        )
+                })
+            })
+            .collect::<Vec<_>>();
+        if target_candidates.is_empty() {
+            continue;
+        }
+
+        let mut source_references = changesets_identity_evidence(root, native_identity)?;
+        if source_references.is_empty() && workspace_member {
+            source_references.push(evidence(root, Path::new(CHANGESETS_CONFIG), Vec::new())?);
+            source_references.extend(workspace_declaration_evidence(root)?);
+            source_references.sort();
+            source_references.dedup();
+        }
+        if source_references.is_empty() {
+            continue;
+        }
+        let (private, responsibilities) = npm_manifest_responsibilities(root, &candidate.path)?;
+        let mut supporting_evidence = candidate.evidence.clone();
+        supporting_evidence.extend(source_references);
+        for target in &target_candidates {
+            supporting_evidence.extend(target.evidence.clone());
+        }
+        supporting_evidence.sort();
+        supporting_evidence.dedup();
+
+        let mut contradictory_evidence = Vec::new();
+        if !private || !responsibilities.is_empty() {
+            contradictory_evidence.extend(candidate.evidence.clone());
+        }
+        contradictory_evidence.extend(non_displaced_manifest_references(
+            root,
+            &candidate.path,
+            native_identity,
+        )?);
+        contradictory_evidence.sort();
+        contradictory_evidence.dedup();
+
+        let recommended =
+            (private && responsibilities.is_empty() && contradictory_evidence.is_empty())
+                .then(|| "remove".to_owned());
+        let mut evidence = supporting_evidence.clone();
+        evidence.extend(contradictory_evidence.clone());
+        evidence.sort();
+        evidence.dedup();
+        let responsibility_message = if responsibilities.is_empty() {
+            "no independent npm responsibility keys were observed".to_owned()
+        } else {
+            format!(
+                "npm responsibility keys were observed: {}",
+                responsibilities.join(", ")
+            )
+        };
+        diagnostics.push(InitDiagnostic {
+            id: format!("release-tool-proxy-disposition:{}", candidate.id),
+            code: "release-tool-proxy-disposition".to_owned(),
+            message: format!(
+                "Choose whether {} remains an npm projection of {release_unit} or is removed during takeover. Its exact source-tool identity maps to a non-npm projection, and {responsibility_message}.",
+                candidate.path.display()
+            ),
+            evidence,
+            choices: vec!["retain".to_owned(), "remove".to_owned()],
+            recommended,
+            resolution: None,
+            verified: false,
+            invalidated_resolution: false,
+            supporting_evidence,
+            contradictory_evidence,
+            uncertainty: Some(
+                "This is a best-effort structural assessment, not proof that the manifest is disposable. Descriptions, comments, prose, and semantic keyword matches are not evidence."
+                    .to_owned(),
+            ),
+        });
+    }
+    diagnostics.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(diagnostics)
+}
+
+fn npm_manifest_responsibilities(root: &Path, relative: &Path) -> Result<(bool, Vec<String>)> {
+    let path = root.join(relative);
+    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    let value: JsonValue = serde_json::from_str(&text)
+        .map_err(|error| Error::Validation(format!("invalid package.json: {error}")))?;
+    let object = value.as_object().ok_or_else(|| {
+        Error::Validation(format!("{} must contain a JSON object", relative.display()))
+    })?;
+    let private = object
+        .get("private")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    let responsibility_keys = [
+        "bin",
+        "browser",
+        "bundledDependencies",
+        "cpu",
+        "dependencies",
+        "devDependencies",
+        "engines",
+        "exports",
+        "files",
+        "main",
+        "module",
+        "optionalDependencies",
+        "os",
+        "peerDependencies",
+        "publishConfig",
+        "repository",
+        "scripts",
+        "types",
+        "typings",
+        "workspaces",
+    ];
+    let responsibilities = responsibility_keys
+        .into_iter()
+        .filter(|key| object.get(*key).is_some_and(json_value_has_content))
+        .map(str::to_owned)
+        .collect();
+    Ok((private, responsibilities))
+}
+
+fn json_value_has_content(value: &JsonValue) -> bool {
+    match value {
+        JsonValue::Null => false,
+        JsonValue::Bool(value) => *value,
+        JsonValue::Number(_) => true,
+        JsonValue::String(value) => !value.is_empty(),
+        JsonValue::Array(values) => !values.is_empty(),
+        JsonValue::Object(values) => !values.is_empty(),
+    }
+}
+
+fn changesets_identity_evidence(root: &Path, identity: &str) -> Result<Vec<SourceEvidence>> {
+    let mut findings = Vec::new();
+    let config_path = PathBuf::from(CHANGESETS_CONFIG);
+    let config_text = std::fs::read_to_string(root.join(&config_path))
+        .map_err(|error| Error::io(root.join(&config_path), error))?;
+    let config: JsonValue = serde_json::from_str(&config_text)
+        .map_err(|error| Error::Validation(format!("invalid Changesets config: {error}")))?;
+    if json_contains_exact_string(&config, identity) {
+        findings.push(evidence(root, &config_path, Vec::new())?);
+    }
+    for entry in WalkDir::new(root.join(".changeset"))
+        .min_depth(1)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("md"))
+    {
+        let text = std::fs::read_to_string(entry.path())
+            .map_err(|error| Error::io(entry.path(), error))?;
+        let Some(frontmatter) = text
+            .strip_prefix("---\n")
+            .and_then(|text| text.split_once("\n---"))
+            .map(|(frontmatter, _)| frontmatter)
+        else {
+            continue;
+        };
+        let values: BTreeMap<String, Bump> = serde_yaml::from_str(frontmatter)?;
+        if values.contains_key(identity) {
+            let relative = entry
+                .path()
+                .strip_prefix(root)
+                .unwrap_or(entry.path())
+                .to_owned();
+            findings.push(evidence(root, &relative, Vec::new())?);
+        }
+    }
+    findings.sort();
+    findings.dedup();
+    Ok(findings)
+}
+
+fn json_contains_exact_string(value: &JsonValue, expected: &str) -> bool {
+    match value {
+        JsonValue::String(value) => value == expected,
+        JsonValue::Array(values) => values
+            .iter()
+            .any(|value| json_contains_exact_string(value, expected)),
+        JsonValue::Object(values) => values
+            .iter()
+            .any(|(key, value)| key == expected || json_contains_exact_string(value, expected)),
+        JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) => false,
+    }
+}
+
+fn workspace_declaration_evidence(root: &Path) -> Result<Vec<SourceEvidence>> {
+    ["pnpm-workspace.yaml", "package.json", "Cargo.toml"]
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|path| root.join(path).is_file())
+        .map(|path| evidence(root, &path, Vec::new()))
+        .collect()
+}
+
+fn non_displaced_manifest_references(
+    root: &Path,
+    candidate_path: &Path,
+    native_identity: &str,
+) -> Result<Vec<SourceEvidence>> {
+    let path_text = candidate_path.to_string_lossy().replace('\\', "/");
+    let mut findings = Vec::new();
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| !hard_excluded(root, entry.path()))
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap_or(path);
+        if relative == candidate_path
+            || relative.starts_with(".changeset")
+            || relative.starts_with(".intentional")
+            || is_prose_path(relative)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let lines = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| structural_line_references_path(line, &path_text))
+            .map(|(index, _)| index + 1)
+            .collect::<Vec<_>>();
+        let has_dependency_reference = relative.file_name().and_then(|name| name.to_str())
+            == Some("package.json")
+            && serde_json::from_str::<JsonValue>(&text).is_ok_and(|value| {
+                [
+                    "dependencies",
+                    "devDependencies",
+                    "optionalDependencies",
+                    "peerDependencies",
+                ]
+                .iter()
+                .any(|key| {
+                    value[*key]
+                        .as_object()
+                        .is_some_and(|dependencies| dependencies.contains_key(native_identity))
+                })
+            });
+        if !lines.is_empty() || has_dependency_reference {
+            findings.push(evidence(root, relative, lines)?);
+        }
+    }
+    findings.sort();
+    findings.dedup();
+    Ok(findings)
+}
+
+fn structural_line_references_path(line: &str, path: &str) -> bool {
+    let normalized = line.replace('\\', "/");
+    let Some(reference_offset) = normalized.find(path) else {
+        return false;
+    };
+    let trimmed = normalized.trim_start();
+    if trimmed.starts_with("//")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("<!--")
+        || trimmed.starts_with('*')
+    {
+        return false;
+    }
+    let before_reference = &normalized[..reference_offset];
+    if before_reference.contains("//")
+        || before_reference.contains("<!--")
+        || before_reference.find('#').is_some_and(|offset| {
+            offset == 0 || before_reference.as_bytes()[offset - 1].is_ascii_whitespace()
+        })
+    {
+        return false;
+    }
+    let Some((field, _)) = trimmed.split_once(':') else {
+        return true;
+    };
+    let field = field
+        .trim()
+        .trim_matches(|character| matches!(character, '"' | '\''))
+        .to_ascii_lowercase();
+    !matches!(
+        field.as_str(),
+        "$comment"
+            | "comment"
+            | "comments"
+            | "description"
+            | "message"
+            | "note"
+            | "notes"
+            | "summary"
+            | "title"
+    )
+}
+
+fn is_prose_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("md" | "mdx" | "rst" | "txt")
+    )
+}
+
 fn reconcile_diagnostics(
     root: &Path,
     current: &mut Vec<InitDiagnostic>,
     previous: Option<&InitPlan>,
+    candidates: &[DiscoveryCandidate],
 ) -> Result<()> {
     let Some(previous) = previous else {
         return Ok(());
@@ -2828,8 +3370,26 @@ fn reconcile_diagnostics(
         if old.evidence == diagnostic.evidence {
             diagnostic.resolution = old.resolution.clone();
             if !diagnostic.choices.is_empty() {
-                diagnostic.verified =
-                    diagnostic.code != "repository-integration" && diagnostic.resolution.is_some();
+                diagnostic.verified = match diagnostic.code.as_str() {
+                    "repository-integration" => false,
+                    "release-tool-proxy-disposition" => {
+                        let candidate = candidates.iter().find(|candidate| {
+                            diagnostic.id
+                                == format!("release-tool-proxy-disposition:{}", candidate.id)
+                        });
+                        match (diagnostic.resolution.as_deref(), candidate) {
+                            (Some("retain"), Some(_)) => true,
+                            (Some("remove"), Some(candidate)) => non_displaced_manifest_references(
+                                root,
+                                &candidate.path,
+                                candidate.native_identity.as_deref().unwrap_or_default(),
+                            )?
+                            .is_empty(),
+                            _ => false,
+                        }
+                    }
+                    _ => diagnostic.resolution.is_some(),
+                };
             }
         } else if old.resolution.is_some() {
             diagnostic.invalidated_resolution = true;
@@ -2867,6 +3427,9 @@ fn reconcile_diagnostics(
             resolution: old.resolution.clone(),
             verified: true,
             invalidated_resolution: false,
+            supporting_evidence: old.supporting_evidence.clone(),
+            contradictory_evidence: old.contradictory_evidence.clone(),
+            uncertainty: old.uncertainty.clone(),
         });
     }
     current.sort_by(|left, right| left.id.cmp(&right.id));
@@ -2908,6 +3471,76 @@ fn apply_disposition_resolutions(
     }
     exclude_release_units(config, &excluded);
     Ok(())
+}
+
+fn apply_proxy_manifest_resolutions(
+    config: &mut Config,
+    diagnostics: &[InitDiagnostic],
+    candidates: &[DiscoveryCandidate],
+) -> Result<Vec<ProxyRemoval>> {
+    let mut removals = Vec::new();
+    for diagnostic in diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "release-tool-proxy-disposition")
+    {
+        let candidate = candidates
+            .iter()
+            .find(|candidate| {
+                diagnostic.id == format!("release-tool-proxy-disposition:{}", candidate.id)
+            })
+            .ok_or_else(|| {
+                Error::Validation(format!(
+                    "{} does not identify a current discovery candidate",
+                    diagnostic.id
+                ))
+            })?;
+        match diagnostic.resolution.as_deref() {
+            None | Some("retain") => {}
+            Some("remove") => {
+                let Some(CandidateResolution::Projection { release_unit, .. }) =
+                    candidate.resolution.as_ref()
+                else {
+                    return Err(Error::Validation(format!(
+                        "{} can remove only a candidate resolved as a projection",
+                        diagnostic.id
+                    )));
+                };
+                let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
+                    Error::Validation(format!(
+                        "{} targets absent release unit {release_unit}",
+                        diagnostic.id
+                    ))
+                })?;
+                let unit_path = unit.path.clone();
+                unit.projections.retain(|projection| {
+                    let path = if unit_path == Path::new(".") {
+                        projection.file.clone()
+                    } else {
+                        unit_path.join(&projection.file)
+                    };
+                    path != candidate.path
+                });
+                config.discovery.managed_paths.retain(|receipt| {
+                    receipt.detector != candidate.detector || receipt.path != candidate.path
+                });
+                removals.push(ProxyRemoval {
+                    path: candidate.path.clone(),
+                    native_identity: candidate
+                        .native_identity
+                        .clone()
+                        .expect("proxy diagnostic requires native identity"),
+                });
+            }
+            Some(value) => {
+                return Err(Error::Validation(format!(
+                    "invalid resolution {value} for {}",
+                    diagnostic.id
+                )));
+            }
+        }
+    }
+    removals.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(removals)
 }
 
 fn exclude_release_units(config: &mut Config, excluded: &BTreeSet<String>) {
@@ -3348,7 +3981,11 @@ fn verify_takeover_preconditions(
     Ok(())
 }
 
-fn takeover_operations(root: &Path, intents: &[ConvertedIntent]) -> Vec<String> {
+fn takeover_operations(
+    root: &Path,
+    intents: &[ConvertedIntent],
+    proxy_removals: &[ProxyRemoval],
+) -> Vec<String> {
     let mut operations = vec![format!("write {CONFIG_PATH}")];
     operations.extend(intents.iter().map(|intent| {
         format!(
@@ -3358,7 +3995,7 @@ fn takeover_operations(root: &Path, intents: &[ConvertedIntent]) -> Vec<String> 
         )
     }));
     operations.extend(
-        takeover_deletes(root)
+        takeover_deletes(root, proxy_removals)
             .iter()
             .map(|path| format!("delete {}", path.display())),
     );
@@ -3366,7 +4003,7 @@ fn takeover_operations(root: &Path, intents: &[ConvertedIntent]) -> Vec<String> 
     operations
 }
 
-fn takeover_deletes(root: &Path) -> Vec<PathBuf> {
+fn takeover_deletes(root: &Path, proxy_removals: &[ProxyRemoval]) -> Vec<PathBuf> {
     let mut paths = WalkDir::new(root.join(".changeset"))
         .into_iter()
         .filter_map(std::result::Result::ok)
@@ -3380,8 +4017,29 @@ fn takeover_deletes(root: &Path) -> Vec<PathBuf> {
         })
         .collect::<Vec<_>>();
     paths.push(PathBuf::from(INIT_PLAN_PATH));
+    paths.extend(proxy_removals.iter().map(|removal| removal.path.clone()));
     paths.sort();
+    paths.dedup();
     paths
+}
+
+fn verify_proxy_removal_preconditions(root: &Path, removals: &[ProxyRemoval]) -> Result<()> {
+    for removal in removals {
+        let references =
+            non_displaced_manifest_references(root, &removal.path, &removal.native_identity)?;
+        if !references.is_empty() {
+            return Err(Error::Validation(format!(
+                "cannot remove probable release-tool proxy {} while non-source-tool repository references remain in {}",
+                removal.path.display(),
+                references
+                    .iter()
+                    .map(|item| item.path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn apply_takeover_transaction(
@@ -3661,6 +4319,31 @@ mod tests {
         let rendered = annotate_choice_lines(yaml);
         assert!(rendered.contains("- suspended # configured, but releases are blocked"));
         assert!(rendered.contains("- excluded # outside Intentional's release-unit inventory"));
+    }
+
+    #[test]
+    fn proxy_reference_detection_ignores_prose_and_comments() {
+        let path = "examples/sample.json";
+        assert!(!structural_line_references_path(
+            r#""description": "See examples/sample.json""#,
+            path
+        ));
+        assert!(!structural_line_references_path(
+            "note: examples/sample.json",
+            path
+        ));
+        assert!(!structural_line_references_path(
+            "// load examples/sample.json",
+            path
+        ));
+        assert!(!structural_line_references_path(
+            "const enabled = true; // load examples/sample.json",
+            path
+        ));
+        assert!(structural_line_references_path(
+            r#"const manifest = "examples/sample.json";"#,
+            path
+        ));
     }
 
     #[test]

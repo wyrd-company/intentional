@@ -33,10 +33,6 @@ inputs:
   baseline-versions:
     description: "Optional newline-delimited id=X.Y.Z baseline values"
     required: false
-  scan-all:
-    description: "Include supported manifests outside package-manager workspace membership during init"
-    required: false
-    default: "false"
   take-over:
     description: "Perform a validated Changesets authority handoff during init"
     required: false
@@ -148,7 +144,6 @@ runs:
         INPUT_RELEASE_PLAN: ${{ inputs.release-plan }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_BASELINE_VERSIONS: ${{ inputs.baseline-versions }}
-        INPUT_SCAN_ALL: ${{ inputs.scan-all }}
         INPUT_TAKE_OVER: ${{ inputs.take-over }}
         INPUT_JSON: ${{ inputs.json }}
         INPUT_DRY_RUN: ${{ inputs.dry-run }}
@@ -164,7 +159,7 @@ runs:
             ;;
         esac
 
-        for value in "$INPUT_DRY_RUN" "$INPUT_BASELINE" "$INPUT_SCAN_ALL" "$INPUT_TAKE_OVER" "$INPUT_JSON"; do
+        for value in "$INPUT_DRY_RUN" "$INPUT_BASELINE" "$INPUT_TAKE_OVER" "$INPUT_JSON"; do
           case "$value" in
             true|false) ;;
             *)
@@ -226,11 +221,6 @@ runs:
           while IFS= read -r value; do
             [[ -n "$value" ]] && ARGS+=(--version "$value")
           done <<< "$INPUT_BASELINE_VERSIONS"
-        fi
-
-        if [[ "$INPUT_SCAN_ALL" == "true" ]]; then
-          [[ "$INPUT_COMMAND" == "init" ]] || { echo "::error::scan-all is only valid for init."; exit 1; }
-          ARGS+=(--scan-all)
         fi
 
         if [[ "$INPUT_TAKE_OVER" == "true" ]]; then

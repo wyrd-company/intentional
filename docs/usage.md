@@ -30,9 +30,10 @@ guidance travel with the CLI version it describes.
 
 ## Bootstrap the workspace
 
-`init` requires a Git repository. It uses package-manager workspace membership
-and manifest-native names by default; `--scan-all` explicitly includes
-supported manifests outside that boundary. Git ignore rules bound both modes.
+`init` requires a Git repository. It recursively discovers supported manifests
+within the repository's Git-ignore and hard-cache boundary. Package-manager
+workspace membership informs recommendations, dependency analysis, and
+Changesets parity but never limits discovery.
 
 ```bash
 intentional init
@@ -49,6 +50,17 @@ Rerun `intentional init` after setting the explicit resolutions. Intentional
 writes `.intentional/config.yml` only after the complete candidate graph
 validates. This prevents discovery guesses from silently becoming release
 authority.
+
+Candidates retain detector/path identity even when multiple manifests declare
+the same native name. Explicit resolutions determine ownership before final
+configuration validation.
+
+During Changesets adoption, a manifest mapped onto another artifact can expose
+an explicit `retain` or `remove` integration choice. Probable-proxy diagnostics
+separate supporting and contradictory structural evidence and state their
+uncertainty. Prose and semantic keyword matching are not evidence. A removal is
+performed only during explicit takeover, after the resolution authorizes it and
+a fresh repository-use check finds no non-Changesets references.
 
 ## Declare an intent
 

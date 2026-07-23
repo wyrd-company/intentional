@@ -71,11 +71,10 @@ intentional init
 ```
 
 Initialization requires a Git repository, whose tags provide release authority
-and whose ignore rules bound discovery. It uses package-manager workspace
-membership and manifest-native package names. Repeated directory basenames do
-not collide because directories are not package identities. `--scan-all`
-explicitly includes supported manifests outside the declared workspace. Both
-modes honor Git ignore rules and always skip version-control metadata,
+and whose ignore rules bound discovery. It recursively discovers every
+supported manifest in that boundary. Package-manager workspace membership is
+evidence for recommendations, dependency analysis, and Changesets parity, not
+an inclusion boundary. Discovery always skips version-control metadata,
 Intentional state, and ecosystem caches; ordinary names such as `build`,
 `dist`, `bin`, and `vendor` are scanned unless the repository ignores them.
 
@@ -85,6 +84,10 @@ Feature, or Dev Container Template manifest first appears in
 `projection`, or `excluded`, then rerun `intentional init` to write
 configuration only after the complete candidate graph validates. New
 configurations use the `compatibility` pre-1.0 bump mapping.
+Candidates are identified by detector and exact path, so manifests with one
+native identity at different paths remain independently resolvable. Native
+identity conflicts are rejected only after all explicit resolutions have been
+applied.
 
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
@@ -252,6 +255,17 @@ Initialization exits with:
 Reruns preserve resolutions while their evidence remains valid, report stale
 resolutions, and verify repository-integration edits from actual file state.
 
+When an npm manifest is explicitly projected onto a non-npm release unit,
+initialization may present a `retain` or `remove` integration choice. A
+best-effort removal recommendation uses only manifest structure, workspace and
+dependency graphs, exact source-tool identity references, and repository use.
+The diagnostic separates supporting evidence from contradictory evidence and
+states its uncertainty. Descriptions, comments, prose, semantic keywords,
+private status, minimal shape, path proximity, and matching versions never
+establish removability by themselves. The selected resolution is authoritative;
+takeover deletes the manifest only after an explicit `remove` resolution and a
+fresh check that no non-source-tool repository references remain.
+
 Changesets `ignore` entries become explicit `suspended`, `excluded`, or
 `managed` choices. `suspended` preserves release-unit identity while blocking any
 release that requires it, so it is the default recommendation unless repository
@@ -283,7 +297,8 @@ contract is also explicit, and current divergence remains blocking.
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes
 canonical Intentional state, moves pending intents, removes recognized
-`.changeset/` state, and consumes the one transient initialization plan.
+`.changeset/` state, applies explicitly authorized proxy-manifest removals, and
+consumes the one transient initialization plan.
 References in workflows, package scripts and dependencies, lockfiles, release
 scripts, and tests are reported with exact locations; Intentional verifies the
 edits but does not rewrite those files.
