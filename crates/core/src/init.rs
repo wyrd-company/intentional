@@ -2166,7 +2166,7 @@ fn materialize_discovery_inventory(
         };
         let projections = observations
             .iter()
-            .map(|observation| {
+            .map(|observation| -> Result<Projection> {
                 let file = if path == Path::new(".") {
                     observation.projection.path.clone()
                 } else {
@@ -2174,17 +2174,23 @@ fn materialize_discovery_inventory(
                         .projection
                         .path
                         .strip_prefix(&path)
-                        .expect("candidate path is below its manifest directory")
+                        .map_err(|_| {
+                            Error::Validation(format!(
+                                "candidate projection {} is outside native identity directory {}",
+                                observation.projection.path.display(),
+                                path.display()
+                            ))
+                        })?
                         .to_owned()
                 };
-                Projection {
+                Ok(Projection {
                     adapter: observation.projection.adapter,
                     file,
                     mode: observation.projection.mode,
                     pointer: observation.projection.pointer.clone(),
-                }
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let tag = observations
             .first()
             .map(|observation| &observation.tag)
@@ -3240,6 +3246,7 @@ fn changesets_identity_evidence(root: &Path, identity: &str) -> Result<Vec<Sourc
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("md"))
+        .filter(|entry| entry.file_name() != "README.md")
     {
         let text = std::fs::read_to_string(entry.path())
             .map_err(|error| Error::io(entry.path(), error))?;
@@ -3294,14 +3301,16 @@ fn non_displaced_manifest_references(
 ) -> Result<Vec<SourceEvidence>> {
     let path_text = candidate_path.to_string_lossy().replace('\\', "/");
     let mut findings = Vec::new();
-    for entry in WalkDir::new(root)
+    let mut paths = WalkDir::new(root)
         .into_iter()
         .filter_entry(|entry| !hard_excluded(root, entry.path()))
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_file())
-    {
-        let path = entry.path();
-        let relative = path.strip_prefix(root).unwrap_or(path);
+        .map(|entry| entry.into_path())
+        .collect::<BTreeSet<_>>();
+    remove_git_ignored(root, &mut paths)?;
+    for path in paths {
+        let relative = path.strip_prefix(root).unwrap_or(&path);
         if relative == candidate_path
             || relative.starts_with(".changeset")
             || relative.starts_with(".intentional")
@@ -3309,7 +3318,7 @@ fn non_displaced_manifest_references(
         {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
         let lines = text
@@ -3353,18 +3362,13 @@ fn structural_line_references_path(line: &str, path: &str) -> bool {
         || trimmed.starts_with('#')
         || trimmed.starts_with("/*")
         || trimmed.starts_with("<!--")
-        || trimmed.starts_with('*')
+        || trimmed == "*"
+        || trimmed.starts_with("* ")
     {
         return false;
     }
     let before_reference = &normalized[..reference_offset];
-    if before_reference.contains("//")
-        || before_reference.contains("/*")
-        || before_reference.contains("<!--")
-        || before_reference.find('#').is_some_and(|offset| {
-            offset == 0 || before_reference.as_bytes()[offset - 1].is_ascii_whitespace()
-        })
-    {
+    if comment_starts_before_reference(before_reference) {
         return false;
     }
     let Some((field, _)) = trimmed.split_once(':') else {
@@ -3386,6 +3390,56 @@ fn structural_line_references_path(line: &str, path: &str) -> bool {
             | "summary"
             | "title"
     )
+}
+
+fn comment_starts_before_reference(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(expected) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == expected {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        let previous_is_boundary =
+            index == 0 || bytes[index.saturating_sub(1)].is_ascii_whitespace();
+        if byte == b'#' && previous_is_boundary {
+            return true;
+        }
+        if bytes[index..].starts_with(b"<!--") {
+            return true;
+        }
+        if bytes[index..].starts_with(b"/*")
+            && bytes
+                .get(index + 2)
+                .is_none_or(|next| next.is_ascii_whitespace())
+        {
+            return true;
+        }
+        if bytes[index..].starts_with(b"//")
+            && bytes
+                .get(index + 2)
+                .is_none_or(|next| next.is_ascii_whitespace())
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn is_prose_path(path: &Path) -> bool {
@@ -4391,6 +4445,14 @@ mod tests {
             path
         ));
         assert!(structural_line_references_path(
+            "run: curl https://registry.invalid && use examples/sample.json",
+            path
+        ));
+        assert!(structural_line_references_path(
+            r##"run: "curl https://registry.invalid/#fragment && use examples/sample.json""##,
+            path
+        ));
+        assert!(structural_line_references_path(
             r#"const manifest = "examples/sample.json";"#,
             path
         ));
@@ -4578,6 +4640,36 @@ release-units:
                 .to_string()
                 .contains("conflicts with existing projection"));
         }
+    }
+
+    #[test]
+    fn resolved_candidates_reject_genuine_version_conflicts() {
+        let mut first = candidate(
+            "examples/first.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        first.raw_version.as_mut().expect("first version").value = "1.0.0".to_owned();
+        let mut second = candidate(
+            "examples/second.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        second.raw_version.as_mut().expect("second version").value = "2.0.0".to_owned();
+        let mut discovery = Discovery {
+            config: candidate_plan(Vec::new()).inferred_config,
+            ..Discovery::default()
+        };
+
+        let error = recompute_resolved_versions(&mut discovery, &[first, second])
+            .expect_err("resolved version conflict");
+        assert!(error
+            .to_string()
+            .contains("disagree on current version: 1.0.0, 2.0.0"));
     }
 
     #[test]

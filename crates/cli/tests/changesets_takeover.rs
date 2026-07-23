@@ -6,6 +6,7 @@
 use assert_cmd::Command;
 use intentional_core::{initialize, Adapter, CandidateResolution, InitPlan, InitState};
 use predicates::prelude::*;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -325,6 +326,15 @@ fn repository_complete_discovery_resolves_duplicate_native_identities_before_tak
             .count(),
         2
     );
+    assert_eq!(
+        plan.discovery_candidates
+            .iter()
+            .filter(|candidate| candidate.native_identity.as_deref() == Some("sample_fixture"))
+            .map(|candidate| &candidate.id)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        2
+    );
     for candidate in &mut plan.discovery_candidates {
         candidate.resolution = Some(match candidate.path.to_string_lossy().as_ref() {
             "fixtures/alpha/pubspec.yaml"
@@ -377,6 +387,7 @@ fn repository_complete_discovery_resolves_duplicate_native_identities_before_tak
 #[test]
 fn structurally_unused_private_npm_identity_is_an_explicit_removal_choice() {
     let repository = Repository::new();
+    repository.write(".gitignore", "generated/\n");
     repository.write(
         "components/feature/package.json",
         "{\n  \"name\": \"sample-placeholder\",\n  \"version\": \"1.0.0\",\n  \"private\": true,\n  \"description\": \"Words do not affect structural evidence.\"\n}\n",
@@ -392,6 +403,14 @@ fn structurally_unused_private_npm_identity_is_an_explicit_removal_choice() {
     repository.write(
         ".changeset/sample-change.md",
         "---\n\"sample-placeholder\": patch\n---\n\nCorrect a user-visible defect.\n",
+    );
+    repository.write(
+        ".changeset/README.md",
+        "---\nnotes:\n  - prose is not an intent\n---\n",
+    );
+    repository.write(
+        "generated/reference.json",
+        "{\"manifest\":\"components/feature/package.json\"}\n",
     );
     git(&repository.root, &["add", "-A"]);
     git(
@@ -434,6 +453,13 @@ fn structurally_unused_private_npm_identity_is_an_explicit_removal_choice() {
     let ready: InitPlan =
         serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("ready plan"))
             .expect("valid ready plan");
+    let verified_removal = ready
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "release-tool-proxy-disposition")
+        .expect("verified proxy removal");
+    assert_eq!(verified_removal.resolution.as_deref(), Some("remove"));
+    assert!(verified_removal.verified);
     assert!(ready
         .planned_operations
         .iter()
@@ -546,8 +572,29 @@ fn genuine_npm_projection_and_conflicting_proxy_evidence_do_not_recommend_remova
     assert!(conflicting.recommended.is_none());
     assert!(conflicting.resolution.is_none());
     assert!(!conflicting.contradictory_evidence.is_empty());
-    conflicting.resolution = Some("remove".to_owned());
-    fs::write(&plan_path, assessed.to_yaml().expect("requested removal"))
+    conflicting.resolution = Some("retain".to_owned());
+    fs::write(&plan_path, assessed.to_yaml().expect("retained proxy"))
+        .expect("write retain resolution");
+
+    repository.cli().arg("init").assert().success();
+    let mut retained: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("retained plan"))
+            .expect("valid retained plan");
+    let retained_proxy = retained
+        .diagnostics
+        .iter_mut()
+        .find(|diagnostic| diagnostic.code == "release-tool-proxy-disposition")
+        .expect("retained proxy assessment");
+    assert_eq!(retained_proxy.resolution.as_deref(), Some("retain"));
+    assert!(retained_proxy.verified);
+    assert_eq!(
+        retained.inferred_config.release_units["sample-feature"]
+            .projections
+            .len(),
+        2
+    );
+    retained_proxy.resolution = Some("remove".to_owned());
+    fs::write(&plan_path, retained.to_yaml().expect("requested removal"))
         .expect("write removal resolution");
 
     repository.cli().arg("init").assert().code(2);
@@ -1418,14 +1465,17 @@ fn releasing_versionless_package_has_a_stable_parity_diagnostic() {
 }
 
 #[test]
+#[ignore = "requires read-only Design System and catalog source fixtures"]
 fn real_migration_fixtures_emit_repository_complete_plans_without_collisions() {
     for fixture in [
         Path::new("/workspaces/shared/the-wyrding-way/design-system"),
         Path::new("/workspaces/shared/the-wyrding-way/catalog"),
     ] {
-        if !fixture.is_dir() {
-            continue;
-        }
+        assert!(
+            fixture.is_dir(),
+            "required read-only migration fixture is unavailable: {}",
+            fixture.display()
+        );
         let output = Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
             .arg("-C")
             .arg(fixture)
@@ -1466,11 +1516,14 @@ fn real_migration_fixtures_emit_repository_complete_plans_without_collisions() {
 }
 
 #[test]
+#[ignore = "requires the read-only Design System source fixture"]
 fn design_system_topology_rehearsal_resolves_and_removes_only_the_authorized_proxy() {
     let fixture = Path::new("/workspaces/shared/the-wyrding-way/design-system");
-    if !fixture.is_dir() {
-        return;
-    }
+    assert!(
+        fixture.is_dir(),
+        "required read-only Design System fixture is unavailable: {}",
+        fixture.display()
+    );
     let output = Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
         .arg("-C")
         .arg(fixture)
