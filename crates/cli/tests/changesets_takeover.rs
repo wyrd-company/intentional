@@ -1784,6 +1784,75 @@ release-units:
 }
 
 #[test]
+fn baseline_retry_rejects_conflicting_existing_records_without_creating_tags() {
+    let repository = Repository::new();
+    repository.write(
+        ".intentional/config.yml",
+        r#"contract: contract-1
+release-units:
+  package-a:
+    path: .
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary: { role: primary, template: 'package-a@{version}' }
+      witness: { role: projection, template: 'witness@{version}' }
+"#,
+    );
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    git(&repository.root, &["add", "-A"]);
+    git(&repository.root, &["commit", "-q", "-m", "add fixture"]);
+    repository
+        .cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .success();
+
+    git(&repository.root, &["tag", "-d", "witness@1.0.0"]);
+    git(
+        &repository.root,
+        &[
+            "tag",
+            "-a",
+            "witness@1.0.0",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
+        ],
+    );
+    let tags_before = git(
+        &repository.root,
+        &[
+            "for-each-ref",
+            "--format=%(refname):%(objectname)",
+            "refs/tags",
+        ],
+    );
+
+    repository
+        .cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "existing release tags disagree on plan-digest",
+        ));
+    assert_eq!(
+        git(
+            &repository.root,
+            &[
+                "for-each-ref",
+                "--format=%(refname):%(objectname)",
+                "refs/tags",
+            ],
+        ),
+        tags_before
+    );
+}
+
+#[test]
 fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     let repository = Repository::new();
     repository.write(
