@@ -883,6 +883,7 @@ struct NpmDependencyEdge {
     dependency: String,
     kind: NpmDependencyKind,
     range: String,
+    manifest: PathBuf,
 }
 
 struct ManifestObservation {
@@ -1456,6 +1457,7 @@ fn apply_changesets_candidate_resolutions(
                 .release_units
                 .contains_key(&edge.dependency)
     });
+    retain_materialized_npm_dependencies(&mut discovery.config, &mut discovery.npm_dependencies);
     discovery
         .config
         .discovery
@@ -1844,6 +1846,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         &diagnostics,
         &discovery.candidates,
     )?;
+    retain_materialized_npm_dependencies(&mut discovery.config, &mut discovery.npm_dependencies);
     discovery.config.validate()?;
 
     let declared: BTreeMap<String, Bump> =
@@ -2758,36 +2761,44 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
         .collect::<BTreeSet<_>>();
     let mut edges = Vec::new();
     for (id, release_unit) in &mut config.release_units {
-        let npm = release_unit
+        let npm_manifests = release_unit
             .projections
             .iter()
-            .find(|projection| projection.adapter == Adapter::Npm);
-        let Some(npm) = npm else { continue };
-        let path = root.join(&release_unit.path).join(&npm.file);
-        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-        let value: JsonValue = serde_json::from_str(&text)
-            .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
+            .filter(|projection| projection.adapter == Adapter::Npm)
+            .map(|projection| projection_workspace_path(release_unit, projection))
+            .collect::<Vec<_>>();
+        if npm_manifests.is_empty() {
+            continue;
+        }
         let mut dependencies = BTreeSet::new();
-        for (group, kind) in [
-            ("dependencies", NpmDependencyKind::Dependency),
-            ("optionalDependencies", NpmDependencyKind::Optional),
-            ("peerDependencies", NpmDependencyKind::Peer),
-            ("devDependencies", NpmDependencyKind::Dev),
-        ] {
-            if let Some(entries) = value[group].as_object() {
-                for (dependency, range) in entries {
-                    if !ids.contains(dependency) {
-                        continue;
+        for manifest in npm_manifests {
+            let path = root.join(&manifest);
+            let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+            let value: JsonValue = serde_json::from_str(&text).map_err(|error| {
+                Error::Validation(format!("invalid {}: {error}", path.display()))
+            })?;
+            for (group, kind) in [
+                ("dependencies", NpmDependencyKind::Dependency),
+                ("optionalDependencies", NpmDependencyKind::Optional),
+                ("peerDependencies", NpmDependencyKind::Peer),
+                ("devDependencies", NpmDependencyKind::Dev),
+            ] {
+                if let Some(entries) = value[group].as_object() {
+                    for (dependency, range) in entries {
+                        if !ids.contains(dependency) {
+                            continue;
+                        }
+                        if kind != NpmDependencyKind::Dev {
+                            dependencies.insert(dependency.clone());
+                        }
+                        edges.push(NpmDependencyEdge {
+                            dependent: id.clone(),
+                            dependency: dependency.clone(),
+                            kind,
+                            range: range.as_str().unwrap_or_default().to_owned(),
+                            manifest: manifest.clone(),
+                        });
                     }
-                    if kind != NpmDependencyKind::Dev {
-                        dependencies.insert(dependency.clone());
-                    }
-                    edges.push(NpmDependencyEdge {
-                        dependent: id.clone(),
-                        dependency: dependency.clone(),
-                        kind,
-                        range: range.as_str().unwrap_or_default().to_owned(),
-                    });
                 }
             }
         }
@@ -2799,15 +2810,48 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
             &left.dependency,
             left.kind as u8,
             &left.range,
+            &left.manifest,
         )
             .cmp(&(
                 &right.dependent,
                 &right.dependency,
                 right.kind as u8,
                 &right.range,
+                &right.manifest,
             ))
     });
     Ok(edges)
+}
+
+fn retain_materialized_npm_dependencies(config: &mut Config, edges: &mut Vec<NpmDependencyEdge>) {
+    edges.retain(|edge| {
+        config
+            .release_units
+            .get(&edge.dependent)
+            .is_some_and(|unit| {
+                unit.projections.iter().any(|projection| {
+                    projection.adapter == Adapter::Npm
+                        && projection_workspace_path(unit, projection) == edge.manifest
+                })
+            })
+            && config.release_units.contains_key(&edge.dependency)
+    });
+    for (id, unit) in &mut config.release_units {
+        if !unit
+            .projections
+            .iter()
+            .any(|projection| projection.adapter == Adapter::Npm)
+        {
+            continue;
+        }
+        unit.depends_on = edges
+            .iter()
+            .filter(|edge| edge.dependent == *id && edge.kind != NpmDependencyKind::Dev)
+            .map(|edge| edge.dependency.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
 }
 
 fn load_changesets_intents(root: &Path) -> Result<Vec<ConvertedIntent>> {
@@ -3307,6 +3351,7 @@ fn structural_line_references_path(line: &str, path: &str) -> bool {
     let trimmed = normalized.trim_start();
     if trimmed.starts_with("//")
         || trimmed.starts_with('#')
+        || trimmed.starts_with("/*")
         || trimmed.starts_with("<!--")
         || trimmed.starts_with('*')
     {
@@ -3314,6 +3359,7 @@ fn structural_line_references_path(line: &str, path: &str) -> bool {
     }
     let before_reference = &normalized[..reference_offset];
     if before_reference.contains("//")
+        || before_reference.contains("/*")
         || before_reference.contains("<!--")
         || before_reference.find('#').is_some_and(|offset| {
             offset == 0 || before_reference.as_bytes()[offset - 1].is_ascii_whitespace()
@@ -4340,10 +4386,90 @@ mod tests {
             "const enabled = true; // load examples/sample.json",
             path
         ));
+        assert!(!structural_line_references_path(
+            "/* load examples/sample.json */",
+            path
+        ));
         assert!(structural_line_references_path(
             r#"const manifest = "examples/sample.json";"#,
             path
         ));
+    }
+
+    #[test]
+    fn npm_dependency_evidence_follows_the_materialized_projection_path() {
+        struct TestDirectory(PathBuf);
+        impl Drop for TestDirectory {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let root = TestDirectory(std::env::temp_dir().join(format!(
+            "intentional-init-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        )));
+        for directory in ["base", "duplicates/alpha", "duplicates/beta"] {
+            std::fs::create_dir_all(root.0.join(directory)).expect("create fixture directory");
+        }
+        std::fs::write(
+            root.0.join("base/package.json"),
+            r#"{"name":"sample-base","version":"1.0.0"}"#,
+        )
+        .expect("write base manifest");
+        std::fs::write(
+            root.0.join("duplicates/alpha/package.json"),
+            r#"{"name":"sample-duplicate","version":"1.0.0"}"#,
+        )
+        .expect("write first duplicate");
+        std::fs::write(
+            root.0.join("duplicates/beta/package.json"),
+            r#"{"name":"sample-duplicate","version":"1.0.0","dependencies":{"sample-base":"^1.0.0"}}"#,
+        )
+        .expect("write second duplicate");
+        let mut config = Config::from_yaml(
+            r#"contract: contract-1
+release-units:
+  sample-base:
+    path: base
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  sample-duplicate:
+    path: .
+    projections:
+      - { adapter: npm, file: duplicates/alpha/package.json, mode: committed }
+      - { adapter: npm, file: duplicates/beta/package.json, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+        )
+        .expect("fixture config");
+
+        let mut edges = derive_npm_dependencies(&root.0, &mut config).expect("dependency evidence");
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].manifest, Path::new("duplicates/beta/package.json"));
+        assert_eq!(
+            config.release_units["sample-duplicate"].depends_on,
+            vec!["sample-base"]
+        );
+
+        config
+            .release_units
+            .get_mut("sample-duplicate")
+            .expect("duplicate unit")
+            .projections
+            .retain(|projection| projection.file != Path::new("duplicates/beta/package.json"));
+        retain_materialized_npm_dependencies(&mut config, &mut edges);
+        assert!(edges.is_empty());
+        assert!(config.release_units["sample-duplicate"]
+            .depends_on
+            .is_empty());
     }
 
     #[test]
