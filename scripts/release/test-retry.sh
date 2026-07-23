@@ -55,7 +55,7 @@ if [[ "$1 $2" == "release view" ]]; then
     exit 0
   fi
   if [[ " $* " == *" --json assets "* ]]; then
-    printf '1\n'
+    printf '%s\n' "${MOCK_ASSET_COUNT:-1}"
     exit 0
   fi
   [[ "$MOCK_RELEASE_EXISTS" == "1" ]]
@@ -223,6 +223,28 @@ printf 'Release notes\n' > "$release_repository/notes.md"
 
   grep -qx "release verify $version" "$gh_log"
   test "$(grep -c "^release verify-asset $version " "$gh_log")" -eq 5
+
+  : > "$gh_log"
+  missing_asset_error="$temporary/missing-asset-error"
+  if PATH="$temporary/bin:$PATH" \
+    MOCK_ASSET_COUNT=0 \
+    MOCK_GH_LOG="$gh_log" \
+    MOCK_RELEASE_EXISTS=1 \
+    MOCK_RELEASE_IMMUTABLE=true \
+    MOCK_REMOTE_ASSETS="$remote_assets" \
+    "$root/scripts/release/ensure-github-release.sh" \
+      "$version" "$artifacts" notes.md \
+      >/dev/null 2>"$missing_asset_error"; then
+    echo "GitHub Release retry check accepted a missing immutable asset." >&2
+    exit 1
+  fi
+  grep -Fqx \
+    "Immutable GitHub Release $version is missing expected asset intentional-linux-x86_64.tar.gz." \
+    "$missing_asset_error"
+  if grep -q "^release upload " "$gh_log"; then
+    echo "GitHub Release retry check attempted to mutate an immutable release." >&2
+    exit 1
+  fi
 
   printf different > "$remote_assets/intentional-linux-x86_64.tar.gz"
   if PATH="$temporary/bin:$PATH" \

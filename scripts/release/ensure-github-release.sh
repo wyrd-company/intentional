@@ -56,7 +56,8 @@ for asset in "${assets[@]}"; do
     "[.assets[] | select(.name == \"$name\")] | length")"
   case "$asset_count" in
     0)
-      gh release upload "$tag" "$asset"
+      echo "Immutable GitHub Release $tag is missing expected asset $name." >&2
+      exit 1
       ;;
     1)
       gh release download "$tag" --pattern "$name" --dir "$download_directory"
