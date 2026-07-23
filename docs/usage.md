@@ -46,6 +46,15 @@ Every discovery result first appears as a candidate in
 - `projection`: attach the manifest to another release unit; or
 - `excluded`: record why the manifest is outside Intentional's inventory.
 
+Resolution fields use the schema's kebab-case spelling:
+
+```yaml
+resolution:
+  kind: projection
+  release-unit: sample-library
+  target-candidate: candidate:0000000000000000000000000000000000000000000000000000000000000000
+```
+
 Rerun `intentional init` after setting the explicit resolutions. Intentional
 writes `.intentional/config.yml` only after the complete candidate graph
 validates. This prevents discovery guesses from silently becoming release
@@ -143,7 +152,11 @@ intentional tag --plan release-plan.json --phase before-publication
 ```
 
 Intentional verifies `tag-after` prerequisites before creating a dependent
-tag. It never creates the surrounding commit or pushes tags.
+tag. An exact existing selected record satisfies the operation, so repeating
+the same dry run or tag command verifies completed records and creates only
+missing records. Any conflicting target, version, contract, plan digest,
+baseline, or prerequisite fails closed. Intentional never creates the
+surrounding commit or pushes tags.
 
 ## Stamp build versions
 

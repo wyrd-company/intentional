@@ -20,10 +20,11 @@ Run it without a global installation:
 npx --yes @wyrd-company/intentional --version
 ```
 
-The installer downloads `SHA256SUMS` and the matching archive over HTTPS. It
-requires an exact checksum entry before extracting only the expected native
-executable. Redirect overflow, HTTP errors, missing checksums, checksum
-mismatches, unsafe archive paths, and unsupported platforms stop installation.
+The installer downloads `SHA256SUMS` and the matching archive from the
+immutable, attested GitHub Release for this package version. It requires an
+exact checksum entry before extracting only the expected native executable.
+Redirect overflow, HTTP errors, missing checksums, checksum mismatches, unsafe
+archive paths, and unsupported platforms stop installation.
 
 Supported platforms are Linux x64 and arm64, macOS arm64, and Windows x64.
 Install the `intentional-cli` crate with Cargo or build from source on other

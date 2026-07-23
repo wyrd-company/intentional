@@ -43,10 +43,11 @@ Or run the scoped package without a global installation:
 npx --yes @wyrd-company/intentional --version
 ```
 
-The npm package downloads the matching checksum-verified GitHub Release binary.
-It supports Linux x64 and arm64, macOS arm64, and Windows x64. GitHub Releases
-also publish those archives and `SHA256SUMS` for direct installation. Other
-platforms can build from source with `cargo install --path crates/cli --locked`.
+The npm package downloads the matching binary from an immutable, attested
+GitHub Release and verifies its checksum before installation. It supports Linux
+x64 and arm64, macOS arm64, and Windows x64. GitHub Releases also publish those
+archives and `SHA256SUMS` for direct installation. Other platforms can build
+from source with `cargo install --path crates/cli --locked`.
 
 The minimum supported Rust version is 1.85. The library crate is
 `intentional-core`; the binary package is `intentional-cli` and installs the
@@ -405,8 +406,11 @@ intentional tag --plan release-plan.json --phase after-publication
 
 The declaration does not assert or verify publication. `tag-after` expresses
 only observable tag prerequisites; Intentional verifies prerequisite tag
-records before creating dependent tags. External continuous delivery owns all
-publication sequencing and registry evidence.
+records before creating dependent tags. An exact existing selected record
+satisfies the operation, so dry-run verification and retries after partial or
+complete tag creation are idempotent. Any record mismatch still fails closed.
+External continuous delivery owns all publication sequencing and registry
+evidence.
 
 ## Stamp build versions
 

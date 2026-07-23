@@ -208,7 +208,9 @@ proposed-design:
     projection either targets an existing configured release unit or follows a
     candidate in the same plan to an independent creator. Validation rejects
     duplicate creators, absent targets, release-unit disagreement, and
-    projection cycles before configuration is written.
+    projection cycles before configuration is written. Candidate resolution
+    fields use the schema's canonical kebab-case spelling, including
+    `release-unit` and `target-candidate`.
 
     New and configured repositories use the same candidate workflow. Managed
     receipts resolve their detector/path identity; excluded receipts resolve it
@@ -392,8 +394,25 @@ proposed-design:
     previous release's tag. In both paths the recomputed result must match
     the materialized tree (projections and the leading changelog section,
     which serves as witness, not source); on mismatch, tag refuses and
-    reports the divergence. Channel releases need no recovery, since channel
-    applies retain intents.
+    reports the divergence. For the selected phase, an exact existing annotated
+    record satisfies the operation, missing records are created in
+    prerequisite-safe order, and any target, version, interpretation-contract,
+    plan-digest, baseline, or prerequisite mismatch fails closed. Fully
+    completed and partially completed tag operations are therefore idempotent.
+    Channel releases need no recovery, since channel applies retain intents.
+  release-asset-identity: >-
+    A published native archive is authoritative only as an asset of an
+    immutable GitHub Release for its exact plain-SemVer tag. The immutable
+    release binds the tag and complete asset set against modification or
+    deletion and carries GitHub's cryptographically signed release attestation.
+    The attestation exposes a stable SHA-256 identity for every platform
+    archive and can verify downloaded bytes independently on a fresh runner.
+    `SHA256SUMS` provides portable checksum verification inside the same
+    immutable release; it is evidence, not a separately mutable authority.
+    Release automation accepts a publication only when GitHub reports the
+    release as published, final, and immutable, its signed attestation
+    verifies, every expected asset matches the locally built bytes, and every
+    downloaded asset verifies against the release attestation.
   crate-layout-and-distribution: >-
     A Cargo workspace mirroring tagver: intentional-core (model, adapters,
     planning; no CLI dependencies) and intentional-cli (thin clap binary).
@@ -403,7 +422,8 @@ proposed-design:
     transitively. The CLI embeds its canonical agent workflow skill and prints
     the complete installable document through the skill command. Distribution
     includes the intentional-core and intentional-cli crates on crates.io,
-    native archives and portable checksums on GitHub Releases, the
+    native archives and portable checksums on immutable, attested GitHub
+    Releases, the
     @wyrd-company/intentional npm launcher, the wyrd-company/tools Homebrew tap,
     and a plumbing GitHub Action that runs the binary. The npm launcher selects
     only release-matrix platforms and installs the matching archive after
@@ -413,5 +433,4 @@ proposed-design:
     Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
     committing, pushing, or opening pull requests permanently; language
     parsing and API surface scanning permanently (delegated to per-release-unit
-    commands); forge API calls for changelog enrichment; artifact digests and
-    evidence binding in the first version.
+    commands); forge API calls for changelog enrichment.
