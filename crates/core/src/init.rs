@@ -4424,6 +4424,11 @@ mod tests {
                 target_candidate: Some("candidate:1234".to_owned()),
             }
         );
+        let rendered = serde_yaml::to_string(&projection).expect("canonical resolution YAML");
+        assert!(rendered.contains("release-unit: sample-library"));
+        assert!(rendered.contains("target-candidate: candidate:1234"));
+        assert!(!rendered.contains("release_unit"));
+        assert!(!rendered.contains("target_candidate"));
 
         for undocumented in [
             "kind: independent\nrelease_unit: sample-library\n",
