@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+### Fixes
+
+- Make initialization repository-complete and safely remove authorized release-tool proxies.
+
 ## 0.1.3
 
 ### Features
