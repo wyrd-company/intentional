@@ -2843,13 +2843,6 @@ fn retain_materialized_npm_dependencies(config: &mut Config, edges: &mut Vec<Npm
             && config.release_units.contains_key(&edge.dependency)
     });
     for (id, unit) in &mut config.release_units {
-        if !unit
-            .projections
-            .iter()
-            .any(|projection| projection.adapter == Adapter::Npm)
-        {
-            continue;
-        }
         unit.depends_on = edges
             .iter()
             .filter(|edge| edge.dependent == *id && edge.kind != NpmDependencyKind::Dev)
@@ -4529,6 +4522,17 @@ release-units:
             .retain(|projection| projection.file != Path::new("duplicates/beta/package.json"));
         retain_materialized_npm_dependencies(&mut config, &mut edges);
         assert!(edges.is_empty());
+        assert!(config.release_units["sample-duplicate"]
+            .depends_on
+            .is_empty());
+
+        let duplicate = config
+            .release_units
+            .get_mut("sample-duplicate")
+            .expect("duplicate unit");
+        duplicate.projections.clear();
+        duplicate.depends_on = vec!["sample-base".to_owned()];
+        retain_materialized_npm_dependencies(&mut config, &mut edges);
         assert!(config.release_units["sample-duplicate"]
             .depends_on
             .is_empty());
