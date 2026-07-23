@@ -105,7 +105,10 @@ sha256sum --check --ignore-missing SHA256SUMS
 `gh release verify` prints the stable per-asset digests from GitHub's signed
 attestation. `gh release verify-asset` binds the downloaded bytes to that
 specific release rather than trusting a checksum file as an independent
-authority.
+authority. The npm launcher does not query GitHub's attestation API; its
+checksum trust derives from the immutable release that binds the archive and
+`SHA256SUMS`. The fresh-runner commands above additionally expose and verify
+GitHub's independently signed proof.
 
 ## GitHub Actions
 
