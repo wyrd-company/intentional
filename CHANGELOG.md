@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.5
+
+### Fixes
+
+- Correct initialization plans, tag retries, and native archive integrity verification.
+
 ## 0.1.4
 
 ### Fixes
