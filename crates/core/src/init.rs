@@ -120,7 +120,12 @@ pub struct ExtractionDiagnostic {
 
 /// Explicit user or agent resolution for one discovery candidate.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "kebab-case",
+    deny_unknown_fields
+)]
 pub enum CandidateResolution {
     /// Create one independently versioned release unit from this candidate.
     Independent {
@@ -4393,6 +4398,39 @@ mod tests {
             },
             planned_operations: Vec::new(),
             post_commit_action: "intentional tag --baseline".to_owned(),
+        }
+    }
+
+    #[test]
+    fn candidate_resolution_uses_only_documented_kebab_case_fields() {
+        let independent: CandidateResolution =
+            serde_yaml::from_str("kind: independent\nrelease-unit: sample-library\n")
+                .expect("documented independent resolution");
+        assert_eq!(
+            independent,
+            CandidateResolution::Independent {
+                release_unit: "sample-library".to_owned(),
+            }
+        );
+
+        let projection: CandidateResolution = serde_yaml::from_str(
+            "kind: projection\nrelease-unit: sample-library\ntarget-candidate: candidate:1234\n",
+        )
+        .expect("documented projection resolution");
+        assert_eq!(
+            projection,
+            CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: Some("candidate:1234".to_owned()),
+            }
+        );
+
+        for undocumented in [
+            "kind: independent\nrelease_unit: sample-library\n",
+            "kind: projection\nrelease-unit: sample-library\ntarget_candidate: candidate:1234\n",
+        ] {
+            serde_yaml::from_str::<CandidateResolution>(undocumented)
+                .expect_err("undocumented snake-case field");
         }
     }
 

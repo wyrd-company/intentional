@@ -911,6 +911,7 @@ fn discovery_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         ("build", "sample-build"),
         ("dist", "sample-dist"),
         ("bin", "sample-bin"),
+        ("tests/fixtures", "sample-fixture"),
         ("vendor", "sample-vendor"),
     ] {
         repo.write(
@@ -934,6 +935,7 @@ fn discovery_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         "sample-build",
         "sample-dist",
         "sample-bin",
+        "sample-fixture",
         "sample-vendor",
     ])));
     for excluded in [
