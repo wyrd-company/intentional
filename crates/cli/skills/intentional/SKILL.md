@@ -94,6 +94,15 @@ Intentional writes `.intentional/config.yml` only when the complete candidate
 graph validates. Review and commit the resulting configuration before creating
 baseline tags.
 
+Use the schema's kebab-case field spelling:
+
+```yaml
+resolution:
+  kind: projection
+  release-unit: sample-library
+  target-candidate: candidate:0000000000000000000000000000000000000000000000000000000000000000
+```
+
 Candidates remain distinct by detector and exact path even when their native
 identities match. Resolve each path explicitly; do not collapse duplicates
 before the plan applies every resolution.
@@ -181,7 +190,10 @@ intentional tag --plan release-plan.json --phase before-publication
 
 Never claim a publication phase speculatively. Intentional verifies phase and
 `tag-after` prerequisites and computes deterministic tag order. Tags remain
-local until the authorized harness pushes them.
+local until the authorized harness pushes them. Repeating the same tag command
+validates exact existing records and creates only missing selected records, so
+dry-run verification and recovery after partial or complete tag creation are
+safe. Any record mismatch fails closed.
 
 ## Establish baseline tags
 

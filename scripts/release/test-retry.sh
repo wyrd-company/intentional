@@ -50,8 +50,8 @@ cat > "$temporary/bin/gh" <<'MOCK_GH'
 set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_GH_LOG"
 if [[ "$1 $2" == "release view" ]]; then
-  if [[ " $* " == *" --json isDraft,isPrerelease "* ]]; then
-    printf 'false\tfalse\n'
+  if [[ " $* " == *" --json isDraft,isPrerelease,isImmutable "* ]]; then
+    printf 'false\tfalse\t%s\n' "$MOCK_RELEASE_IMMUTABLE"
     exit 0
   fi
   if [[ " $* " == *" --json assets "* ]]; then
@@ -60,6 +60,9 @@ if [[ "$1 $2" == "release view" ]]; then
   fi
   [[ "$MOCK_RELEASE_EXISTS" == "1" ]]
   exit
+fi
+if [[ "$1 $2" == "release verify" || "$1 $2" == "release verify-asset" ]]; then
+  exit 0
 fi
 if [[ "$1 $2" == "release download" ]]; then
   pattern=""
@@ -212,20 +215,37 @@ printf 'Release notes\n' > "$release_repository/notes.md"
   PATH="$temporary/bin:$PATH" \
     MOCK_GH_LOG="$gh_log" \
     MOCK_RELEASE_EXISTS=1 \
+    MOCK_RELEASE_IMMUTABLE=true \
     MOCK_REMOTE_ASSETS="$remote_assets" \
     "$root/scripts/release/ensure-github-release.sh" \
       "$version" "$artifacts" notes.md \
       >/dev/null
 
+  grep -qx "release verify $version" "$gh_log"
+  test "$(grep -c "^release verify-asset $version " "$gh_log")" -eq 5
+
   printf different > "$remote_assets/intentional-linux-x86_64.tar.gz"
   if PATH="$temporary/bin:$PATH" \
     MOCK_GH_LOG="$gh_log" \
     MOCK_RELEASE_EXISTS=1 \
+    MOCK_RELEASE_IMMUTABLE=true \
     MOCK_REMOTE_ASSETS="$remote_assets" \
     "$root/scripts/release/ensure-github-release.sh" \
       "$version" "$artifacts" notes.md \
       >/dev/null 2>&1; then
     echo "GitHub Release retry check accepted different asset bytes." >&2
+    exit 1
+  fi
+
+  if PATH="$temporary/bin:$PATH" \
+    MOCK_GH_LOG="$gh_log" \
+    MOCK_RELEASE_EXISTS=1 \
+    MOCK_RELEASE_IMMUTABLE=false \
+    MOCK_REMOTE_ASSETS="$remote_assets" \
+    "$root/scripts/release/ensure-github-release.sh" \
+      "$version" "$artifacts" notes.md \
+      >/dev/null 2>&1; then
+    echo "GitHub Release retry check accepted a mutable release." >&2
     exit 1
   fi
 )

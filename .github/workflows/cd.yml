@@ -270,6 +270,10 @@ jobs:
           --dir dist \
           --pattern 'intentional-*' \
           --pattern SHA256SUMS
+          gh release verify "$GITHUB_REF_NAME"
+          for ASSET in dist/intentional-* dist/SHA256SUMS; do
+          gh release verify-asset "$GITHUB_REF_NAME" "$ASSET"
+          done
           cd dist
           sha256sum --check SHA256SUMS
       - name: Checkout tap repository

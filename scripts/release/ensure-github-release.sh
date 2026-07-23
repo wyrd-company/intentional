@@ -37,14 +37,15 @@ if ! gh release view "$tag" >/dev/null 2>&1; then
     --title "$tag" \
     --notes-file "$notes_file" \
     --verify-tag
-  exit 0
 fi
 
-release_state="$(gh release view "$tag" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')"
-if [[ "$release_state" != $'false\tfalse' ]]; then
-  echo "Existing GitHub Release $tag is draft or prerelease." >&2
+release_state="$(gh release view "$tag" --json isDraft,isPrerelease,isImmutable \
+  --jq '[.isDraft,.isPrerelease,.isImmutable] | @tsv')"
+if [[ "$release_state" != $'false\tfalse\ttrue' ]]; then
+  echo "GitHub Release $tag must be published, final, and immutable." >&2
   exit 1
 fi
+gh release verify "$tag" >/dev/null
 
 download_directory="$(mktemp -d)"
 trap 'rm -rf "$download_directory"' EXIT
@@ -65,6 +66,7 @@ for asset in "${assets[@]}"; do
         echo "Existing GitHub Release asset $name has different bytes." >&2
         exit 1
       fi
+      gh release verify-asset "$tag" "$download_directory/$name" >/dev/null
       ;;
     *)
       echo "Existing GitHub Release contains duplicate assets named $name." >&2
@@ -73,4 +75,4 @@ for asset in "${assets[@]}"; do
   esac
 done
 
-echo "GitHub Release $tag contains matching release assets."
+echo "GitHub Release $tag is immutable and contains matching attested assets."
