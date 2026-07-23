@@ -247,6 +247,17 @@ fn init_add_status_plan_apply_tag_round_trip() {
         .success()
         .stdout(predicate::str::contains("Drift: none"));
     repo.cli().arg("check").assert().success();
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert_eq!(git(&repo.root, &["tag", "--list"]), tags);
 }
 
 #[test]
@@ -1032,10 +1043,8 @@ fn channel_iteration_comes_only_from_tags_and_final_consolidates() {
     repo.cli()
         .args(["tag", "--channel", "beta"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "tag sample@1.1.0-beta.1 already exists",
-        ));
+        .success()
+        .stdout(predicate::str::is_empty());
     assert!(!git(&repo.root, &["tag", "--list"]).contains("beta.2"));
 
     let second: Value = serde_json::from_slice(

@@ -286,7 +286,6 @@ impl TagResult {
             .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
             .detach();
         let mut tags = Vec::new();
-        let mut existing = Vec::new();
         for id in order {
             let candidate = &selected[&id];
             if let Some(record) = read_tag_record(&repository, &candidate.name)? {
@@ -300,7 +299,6 @@ impl TagResult {
                     baseline,
                     head,
                 )?;
-                existing.push(candidate.name.clone());
                 continue;
             }
             if repository
@@ -342,12 +340,6 @@ impl TagResult {
                 name: candidate.name.clone(),
                 message: tag_message(&config.contract, digest, &id, &candidate.version, baseline),
             });
-        }
-        if tags.is_empty() {
-            return Err(Error::Validation(format!(
-                "tag {} already exists",
-                existing.first().expect("selected tag set was non-empty")
-            )));
         }
         Ok(Self { tags })
     }

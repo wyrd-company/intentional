@@ -1767,6 +1767,10 @@ release-units:
         role: primary
         template: 'package-a@{version}'
         require-phase: before-publication
+      witness:
+        role: projection
+        template: 'witness@{version}'
+        require-phase: before-publication
       mirror:
         role: projection
         template: 'mirror@{version}'
@@ -1829,11 +1833,67 @@ release-units:
         .args(["tag", "--phase", "after-publication"])
         .assert()
         .success();
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    repository
+        .cli()
+        .args(["tag", "--phase", "after-publication"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    git(&repository.root, &["tag", "-d", "witness@1.1.0"]);
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "create annotated tag witness@1.1.0",
+        ))
+        .stdout(predicate::str::contains("package-a@1.1.0").not());
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication"])
+        .assert()
+        .success();
+    assert_eq!(
+        git(&repository.root, &["cat-file", "-t", "witness@1.1.0"]),
+        "tag"
+    );
+    repository.cli().arg("check").assert().success();
+    git(&repository.root, &["tag", "-d", "witness@1.1.0"]);
+    git(
+        &repository.root,
+        &[
+            "tag",
+            "-a",
+            "witness@1.1.0",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
+        ],
+    );
+    repository
+        .cli()
+        .args(["tag", "--phase", "before-publication"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "existing release tags at HEAD disagree on plan-digest",
+        ));
     assert_eq!(
         git(&repository.root, &["cat-file", "-t", "mirror@1.1.0"]),
         "tag"
     );
-    repository.cli().arg("check").assert().success();
 }
 
 #[test]
