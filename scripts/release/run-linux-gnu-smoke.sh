@@ -32,7 +32,9 @@ git -C "$workspace" check-ignore -q node_modules || true
 
 home_dir="$workspace/.home"
 mkdir -p "$home_dir"
-chmod 700 "$home_dir"
+chmod 755 "$workspace"
+chmod -R u=rwX,go=rX "$workspace"
+chmod 755 "$workspace/intentional"
 
 user_id="$(id -u)"
 group_id="$(id -g)"
@@ -41,15 +43,17 @@ smoke_log="$workspace/smoke.log"
 set +e
 docker run --rm \
   --user "${user_id}:${group_id}" \
-  -v "$workspace:/workspace" \
+  -v "$workspace:/workspace:rw" \
   -w /workspace \
   -e HOME=/workspace/.home \
   -e PATH=/workspace:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$runtime_image" \
   bash -euxo pipefail -c '
+    cd /workspace
+    test -d .git
     intentional --version
     set +e
-    intentional init
+    intentional --directory /workspace init
     init_status=$?
     set -e
     if [[ "$init_status" -eq 2 ]]; then
@@ -57,10 +61,10 @@ docker run --rm \
     elif [[ "$init_status" -ne 0 ]]; then
       exit "$init_status"
     fi
-    intentional tag --baseline --version garden-notes=1.0.0
-    intentional status
-    intentional check
-    intentional plan
+    intentional --directory /workspace tag --baseline --version garden-notes=1.0.0
+    intentional --directory /workspace status
+    intentional --directory /workspace check
+    intentional --directory /workspace plan
   ' >"$smoke_log" 2>&1
 smoke_status=$?
 set -e
