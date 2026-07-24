@@ -128,24 +128,6 @@ impl ReleasePlan {
         Self::from_inputs_before(root, config, intents, channel, None, None)
     }
 
-    /// Reconstruct a release plan using a specific plan-generator version.
-    pub fn from_inputs_with_generator(
-        root: &Path,
-        config: &Config,
-        intents: &[Intent],
-        channel: Option<&str>,
-        generator_version: &str,
-    ) -> Result<Self> {
-        Self::from_inputs_before(
-            root,
-            config,
-            intents,
-            channel,
-            None,
-            Some(generator_version),
-        )
-    }
-
     pub(crate) fn from_inputs_before(
         root: &Path,
         config: &Config,
