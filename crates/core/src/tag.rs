@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
-use crate::plan::{canonical_json, ReleasePlan};
+use crate::plan::{canonical_json, Generator, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
 use semver::Version;
@@ -545,6 +545,29 @@ fn existing_head_release_digest(
     Ok(digest)
 }
 
+fn verify_plan_generator(generator: &Generator) -> Result<()> {
+    if generator.tool != "intentional" {
+        return Err(Error::Validation(format!(
+            "release plan generator tool {} is not intentional",
+            generator.tool
+        )));
+    }
+    let version = Version::parse(&generator.version).map_err(|error| {
+        Error::Validation(format!(
+            "release plan generator version {} is not valid SemVer: {error}",
+            generator.version
+        ))
+    })?;
+    let current = Version::parse(crate::VERSION)?;
+    if version > current {
+        return Err(Error::Validation(format!(
+            "release plan generator {} is newer than intentional {}",
+            generator.version, crate::VERSION
+        )));
+    }
+    Ok(())
+}
+
 fn supplied_release_plan(
     root: &Path,
     config: &Config,
@@ -562,14 +585,7 @@ fn supplied_release_plan(
             plan.contract, config.contract
         )));
     }
-    if plan.generator.tool != "intentional" || plan.generator.version != crate::VERSION {
-        return Err(Error::Validation(format!(
-            "release plan generator {} {} does not match intentional {}",
-            plan.generator.tool,
-            plan.generator.version,
-            crate::VERSION
-        )));
-    }
+    verify_plan_generator(&plan.generator)?;
     if plan.channel.as_deref() != channel {
         return Err(Error::Validation(
             "release plan channel does not match tag invocation".to_owned(),
@@ -593,6 +609,7 @@ fn supplied_release_plan(
                 Some(_) => Intent::load_all(root, config)?,
                 None => recover_deleted_intents(root, config)?,
             };
+            let generator_version = Some(plan.generator.version.as_str());
             let expected = match partial_digest {
                 Some(_) => ReleasePlan::from_inputs_before(
                     root,
@@ -607,8 +624,16 @@ fn supplied_release_plan(
                             })?
                             .detach(),
                     ),
+                    generator_version,
                 )?,
-                None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
+                None => ReleasePlan::from_inputs_before(
+                    root,
+                    config,
+                    &intents,
+                    channel,
+                    None,
+                    generator_version,
+                )?,
             };
             if expected != plan {
                 return Err(Error::Validation(
@@ -691,6 +716,7 @@ fn recovered_release_plan(
                     .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
                     .detach(),
             ),
+            None,
         )?,
         None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
     };
@@ -1142,5 +1168,54 @@ mod tests {
         assert!(message.contains("contract: contract-1"));
         assert!(message.contains("plan-digest: sha256:abc"));
         assert!(message.contains("version: 1.2.0"));
+        assert!(message.contains(&format!("generator: intentional {}", crate::VERSION)));
+    }
+
+    #[test]
+    fn accepts_compatible_prior_plan_generator() {
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: "0.1.0".to_owned(),
+        };
+        verify_plan_generator(&generator).expect("older generator");
+    }
+
+    #[test]
+    fn accepts_current_plan_generator() {
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: crate::VERSION.to_owned(),
+        };
+        verify_plan_generator(&generator).expect("current generator");
+    }
+
+    #[test]
+    fn rejects_non_intentional_plan_generator() {
+        let generator = Generator {
+            tool: "other-tool".to_owned(),
+            version: "1.0.0".to_owned(),
+        };
+        let error = verify_plan_generator(&generator).expect_err("foreign tool");
+        assert!(error.to_string().contains("is not intentional"));
+    }
+
+    #[test]
+    fn rejects_malformed_plan_generator_version() {
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: "not-semver".to_owned(),
+        };
+        let error = verify_plan_generator(&generator).expect_err("malformed version");
+        assert!(error.to_string().contains("not valid SemVer"));
+    }
+
+    #[test]
+    fn rejects_future_plan_generator_version() {
+        let generator = Generator {
+            tool: "intentional".to_owned(),
+            version: "99.0.0".to_owned(),
+        };
+        let error = verify_plan_generator(&generator).expect_err("future version");
+        assert!(error.to_string().contains("newer than intentional"));
     }
 }

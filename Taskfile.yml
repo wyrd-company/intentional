@@ -62,6 +62,13 @@ tasks:
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
       - scripts/release/assert-consumer-contract.sh
 
+  self-release:verify:
+    desc: Build the workspace binary and verify self-hosted tag acceptance of a sealed plan
+    cmds:
+      - scripts/release/verify-self-hosted-tag.sh {{.SEALED_PLAN}}
+    requires:
+      vars: [SEALED_PLAN]
+
   docs:demo:
     desc: Regenerate and optimize the public documentation demo
     deps: [ build ]

@@ -125,7 +125,25 @@ impl ReleasePlan {
         intents: &[Intent],
         channel: Option<&str>,
     ) -> Result<Self> {
-        Self::from_inputs_before(root, config, intents, channel, None)
+        Self::from_inputs_before(root, config, intents, channel, None, None)
+    }
+
+    /// Reconstruct a release plan using a specific plan-generator version.
+    pub fn from_inputs_with_generator(
+        root: &Path,
+        config: &Config,
+        intents: &[Intent],
+        channel: Option<&str>,
+        generator_version: &str,
+    ) -> Result<Self> {
+        Self::from_inputs_before(
+            root,
+            config,
+            intents,
+            channel,
+            None,
+            Some(generator_version),
+        )
     }
 
     pub(crate) fn from_inputs_before(
@@ -134,6 +152,7 @@ impl ReleasePlan {
         intents: &[Intent],
         channel: Option<&str>,
         excluded_target: Option<gix::ObjectId>,
+        generator_version: Option<&str>,
     ) -> Result<Self> {
         if channel.is_some_and(str::is_empty) {
             return Err(Error::Validation("channel must not be empty".to_owned()));
@@ -264,7 +283,9 @@ impl ReleasePlan {
         let tag_order = tag_order(&tags)?;
         let generator = Generator {
             tool: "intentional".to_owned(),
-            version: crate::VERSION.to_owned(),
+            version: generator_version
+                .unwrap_or(crate::VERSION)
+                .to_owned(),
         };
         let payload = PlanPayload {
             contract: &config.contract,
