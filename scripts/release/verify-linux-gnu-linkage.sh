@@ -19,7 +19,7 @@ fi
 source "$baseline_env"
 
 binary="${1:?release GNU binary path is required}"
-label="${2:-$binary}"
+label="${2:?target label is required}"
 
 if [[ ! -f "$binary" ]]; then
   echo "Release GNU binary does not exist: $binary" >&2
@@ -33,10 +33,79 @@ for tool in file readelf; do
   fi
 done
 
+case "$label" in
+  *x86_64*)
+    target_arch=x86_64
+    expected_interpreter=/lib64/ld-linux-x86-64.so.2
+    expected_needed=(
+      libgcc_s.so.1
+      librt.so.1
+      libpthread.so.0
+      libm.so.6
+      libdl.so.2
+      libc.so.6
+    )
+    ;;
+  *aarch64*|*arm64*)
+    target_arch=aarch64
+    expected_interpreter=/lib/ld-linux-aarch64.so.1
+    expected_needed=(
+      libgcc_s.so.1
+      libpthread.so.0
+      libm.so.6
+      libdl.so.2
+      libc.so.6
+    )
+    ;;
+  *)
+    echo "Unsupported Linux GNU target label: $label" >&2
+    exit 1
+    ;;
+esac
+
 echo "label=$label"
-file "$binary"
+echo "target_arch=$target_arch"
+
+file_output="$(file "$binary")"
+echo "$file_output"
+
+if ! grep -Fq 'ELF' <<<"$file_output"; then
+  echo "Binary is not an ELF executable: $binary" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'dynamically linked' <<<"$file_output"; then
+  echo "Binary must be dynamically linked: $binary" >&2
+  exit 1
+fi
+
+if ! grep -Fq 'pie executable' <<<"$file_output"; then
+  echo "Binary must be a position-independent executable: $binary" >&2
+  exit 1
+fi
+
 readelf -l "$binary" | sed -n '/INTERP/,+1p'
-readelf -d "$binary" | sed -n '/NEEDED/p' || true
+interpreter="$(readelf -l "$binary" | sed -n 's/.*interpreter: \(.*\)]/\1/p')"
+echo "interpreter=$interpreter"
+echo "expected_interpreter=$expected_interpreter"
+
+if [[ "$interpreter" != "$expected_interpreter" ]]; then
+  echo "Unexpected interpreter for $label: $interpreter" >&2
+  exit 1
+fi
+
+needed_libs="$(
+  readelf -d "$binary" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort
+)"
+echo "needed_libraries:"
+printf '%s\n' "$needed_libs"
+
+for library in "${expected_needed[@]}"; do
+  if ! grep -Fxq "$library" <<<"$needed_libs"; then
+    echo "Missing expected shared library $library in $binary" >&2
+    exit 1
+  fi
+done
 
 version_symbols="$(readelf -V "$binary")"
 printf '%s\n' "$version_symbols"
@@ -57,13 +126,22 @@ echo "max_glibc_symbol=$max_glibc"
 echo "allowed_max_glibc_symbol=$LINUX_GNU_MAX_GLIBC_SYMBOL"
 
 if [[ "$(printf '%s\n' "$max_glibc" "$LINUX_GNU_MAX_GLIBC_SYMBOL" | sort -V | tail -1)" != "$LINUX_GNU_MAX_GLIBC_SYMBOL" ]]; then
-  echo "Binary $label requires $max_glibc, exceeding supported floor $LINUX_GNU_MAX_GLIBC_SYMBOL." >&2
+  echo "Binary $label requires $max_glibc, exceeding supported ceiling $LINUX_GNU_MAX_GLIBC_SYMBOL." >&2
   exit 1
 fi
 
-if command -v ldd >/dev/null 2>&1; then
+host_arch="$(uname -m)"
+run_ldd=false
+case "$host_arch" in
+  x86_64) [[ "$target_arch" == x86_64 ]] && run_ldd=true ;;
+  aarch64|arm64) [[ "$target_arch" == aarch64 ]] && run_ldd=true ;;
+esac
+
+if [[ "$run_ldd" == true ]] && command -v ldd >/dev/null 2>&1; then
   echo "ldd:"
-  ldd "$binary" || true
+  ldd "$binary"
+else
+  echo "ldd: skipped (readelf-only inspection for $label on $host_arch host)"
 fi
 
 echo "linux-gnu linkage contract satisfied for $label."

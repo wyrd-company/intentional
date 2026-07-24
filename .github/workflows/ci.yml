@@ -73,4 +73,5 @@ jobs:
       - name: Guard Linux GNU release baseline and consumer contract
         run: |
           scripts/release/assert-release-workflow-baseline.sh
+          scripts/release/assert-linux-gnu-baseline-provenance.sh
           scripts/release/assert-consumer-contract.sh

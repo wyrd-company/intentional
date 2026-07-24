@@ -72,9 +72,22 @@ Use Cargo or a source build on other platforms.
 ## Linux GNU compatibility
 
 The `intentional-linux-x86_64.tar.gz` and `intentional-linux-arm64.tar.gz`
-archives are dynamically linked GNU/Linux executables. Intentional builds both
-through pinned cross-rs 0.2.5 images and verifies that each release binary's
-maximum required glibc symbol version is `GLIBC_2.18` or lower before packaging.
+archives are dynamically linked GNU/Linux position-independent executables.
+Intentional builds both through pinned cross-rs 0.2.5 images whose annotated
+tag object `f8151ae777290430cf2108efacf3976d9528500b` resolves to source commit
+`88f49ff79e777bef6d3564531636ee4d3cc2f8d2`. Both image configs label
+`org.opencontainers.image.revision=88f49ff79e777bef6d3564531636ee4d3cc2f8d2`,
+version `v0.2.5`, and the cross repository source. The Dockerfiles are
+`docker/Dockerfile.x86_64-unknown-linux-gnu` and
+`docker/Dockerfile.aarch64-unknown-linux-gnu` at that commit.
+
+The build containers use Ubuntu 16.04, which is end-of-life. Both registry
+images are amd64-hosted cross-compilation containers; the aarch64 image
+produces ARM64 targets and is not a native ARM64 build container. Their GNU
+sysroots ship glibc 2.23. Release automation measures each binary and verifies
+that its maximum required glibc symbol version is `GLIBC_2.18` or lower before
+packaging. That symbol ceiling is the binary requirement; supported runtimes
+must provide glibc at least at that version.
 
 Supported GNU/Linux environments:
 
@@ -86,6 +99,14 @@ Supported GNU/Linux environments:
 Alpine Linux and other musl-only distributions are outside this GNU contract.
 Use a supported Ubuntu release or build from source when the published GNU
 archives do not match your environment.
+
+Baseline refresh is deliberate and occurs when a Rust or compiler bump, image
+deletion or registry unavailability, measured GLIBC symbol-ceiling drift, or
+security or toolchain concerns require it. A replacement image must retain the
+same-or-older compatibility sysroot and pass the full linux-gnu evidence
+matrix; moving to the next cross tag alone is not sufficient without that proof.
+The frozen end-of-life build base carries toolchain-provenance and no-rebuild
+risk that each refresh must address explicitly.
 
 ## GitHub Release binaries
 

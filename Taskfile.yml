@@ -59,6 +59,7 @@ tasks:
         .intentional/config.yml >/dev/null
       - scripts/release/test-retry.sh
       - scripts/release/assert-release-workflow-baseline.sh
+      - scripts/release/assert-linux-gnu-baseline-provenance.sh
       - scripts/release/assert-consumer-contract.sh
 
   docs:demo:

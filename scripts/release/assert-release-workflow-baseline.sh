@@ -9,10 +9,11 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 workflow="$root/.github/workflows/cd.yml"
+evidence_workflow="$root/.github/workflows/linux-gnu-evidence.yml"
 cross_toml="$root/Cross.toml"
 baseline_env="$root/scripts/release/linux-gnu-baseline.env"
 
-for file in "$workflow" "$cross_toml" "$baseline_env"; do
+for file in "$workflow" "$evidence_workflow" "$cross_toml" "$baseline_env"; do
   if [[ ! -f "$file" ]]; then
     echo "Missing release baseline file: $file" >&2
     exit 1
@@ -59,5 +60,12 @@ if grep -En 'ghcr\.io/cross-rs/[^:]+:(main|latest)' "$cross_toml" >/dev/null; th
   echo "Cross.toml must not reference mutable cross image tags." >&2
   exit 1
 fi
+
+for file in "$workflow" "$evidence_workflow"; do
+  if grep -q 'restore-keys:' "$file"; then
+    echo "Linux GNU workflow caches must not define restore-keys: $file" >&2
+    exit 1
+  fi
+done
 
 echo "Release workflow preserves the pinned Linux GNU baseline."

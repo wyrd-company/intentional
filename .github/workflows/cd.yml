@@ -107,8 +107,6 @@ jobs:
           key: >-
             ${{ runner.os }}-${{ matrix.target }}-gnu-${{
             hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-gnu-
 
       - name: Build release binary
         shell: bash

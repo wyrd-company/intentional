@@ -21,49 +21,54 @@ workspace="$(mktemp -d)"
 trap 'rm -rf "$workspace"' EXIT
 
 cp -a "$fixture/." "$workspace/"
-chmod +x "$binary"
 install -m 0755 "$binary" "$workspace/intentional"
+
+git -C "$workspace" init -b main
+git -C "$workspace" config user.email "fixture@example.invalid"
+git -C "$workspace" config user.name "Garden Notes Fixture"
+git -C "$workspace" add .
+git -C "$workspace" commit -m "Initialize garden-notes fixture"
+git -C "$workspace" check-ignore -q node_modules || true
+
+home_dir="$workspace/.home"
+mkdir -p "$home_dir"
+chmod 700 "$home_dir"
 
 user_id="$(id -u)"
 group_id="$(id -g)"
+smoke_log="$workspace/smoke.log"
 
+set +e
 docker run --rm \
+  --user "${user_id}:${group_id}" \
   -v "$workspace:/workspace" \
   -w /workspace \
-  -e USER_ID="$user_id" \
-  -e GROUP_ID="$group_id" \
+  -e HOME=/workspace/.home \
+  -e PATH=/workspace:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$runtime_image" \
   bash -euxo pipefail -c '
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq
-    apt-get install -y -qq git >/dev/null
-    export HOME=/workspace/.home
-    mkdir -p "$HOME"
-    export PATH="/workspace:$PATH"
-    git config --global --add safe.directory /workspace
-    git init
-    git config user.email "fixture@example.invalid"
-    git config user.name "Garden Notes Fixture"
-    git add .
-    git commit -m "Initialize garden-notes fixture"
     intentional --version
     set +e
     intentional init
     init_status=$?
     set -e
-    if [[ "$init_status" -ne 0 && "$init_status" -ne 2 ]]; then
+    if [[ "$init_status" -eq 2 ]]; then
+      test -s .intentional/init-plan.yml
+    elif [[ "$init_status" -ne 0 ]]; then
       exit "$init_status"
     fi
-    git check-ignore -q node_modules || true
     intentional tag --baseline --version garden-notes=1.0.0
     intentional status
     intentional check
     intentional plan
-  chown -R "$USER_ID:$GROUP_ID" /workspace
-  ' >"$workspace/smoke.log" 2>&1 || {
-  cat "$workspace/smoke.log" >&2
-  exit 1
-}
+  ' >"$smoke_log" 2>&1
+smoke_status=$?
+set -e
 
-cat "$workspace/smoke.log"
+cat "$smoke_log"
+if [[ "$smoke_status" -ne 0 ]]; then
+  echo "linux-gnu smoke failed for $label with exit $smoke_status" >&2
+  exit "$smoke_status"
+fi
+
 echo "linux-gnu smoke passed for $label"

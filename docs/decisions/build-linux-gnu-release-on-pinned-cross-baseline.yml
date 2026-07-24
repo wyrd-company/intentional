@@ -12,13 +12,20 @@ description: >-
   through cross-rs with an older GNU sysroot. The release contract must keep
   existing asset names and downstream consumers while making Ubuntu 22.04 an
   intentionally supported GNU/Linux environment with repeatable build inputs,
-  documented minimum glibc requirements, and lifecycle policy for refreshing
-  those inputs.
+  documented GLIBC symbol ceilings, and lifecycle policy for refreshing those
+  inputs. The selected cross-rs 0.2.5 GNU images resolve to source commit
+  88f49ff79e777bef6d3564531636ee4d3cc2f8d2 through annotated tag object
+  f8151ae777290430cf2108efacf3976d9528500b, label
+  org.opencontainers.image.revision=88f49ff79e777bef6d3564531636ee4d3cc2f8d2,
+  and Dockerfiles docker/Dockerfile.x86_64-unknown-linux-gnu and
+  docker/Dockerfile.aarch64-unknown-linux-gnu. Both build containers use
+  Ubuntu 16.04, which is end-of-life; both registry images are amd64-hosted
+  cross-compilation containers whose GNU sysroots ship glibc 2.23.
 
 considered-options:
   1: >-
     Replace the GNU/Linux archives with musl static executables under the
-    current asset names. Removes the glibc floor and adds Alpine support, but
+    current asset names. Removes the glibc ceiling and adds Alpine support, but
     changes the ABI contract, shifts runtime security maintenance onto product
     rebuilds, and requires pinning mutable cross `main` image digests beside an
     older cross CLI.
@@ -30,9 +37,10 @@ considered-options:
   3: >-
     Build both Linux GNU architectures through pinned cross-rs 0.2.5 images with
     digest-locked sysroots, document a maximum required GLIBC symbol version of
-    GLIBC_2.18, and continuously verify Ubuntu 22.04 and the current Ubuntu
-    environment against the release-profile artifacts. Preserves every existing
-    consumer contract and extends the ARM64 cross strategy to x86_64.
+    GLIBC_2.18 measured from the linked artifact, and continuously verify Ubuntu
+    22.04 and the current Ubuntu environment against the release-profile
+    artifacts. Preserves every existing consumer contract and extends the ARM64
+    cross strategy to x86_64.
   4: >-
     Declare a newer minimum glibc and exclude Ubuntu 22.04 from the supported
     GNU/Linux contract. Requires the least release-workflow change but leaves
@@ -45,13 +53,15 @@ decision-outcome:
     prototypes on both architectures. Older-baseline GNU matched current archive
     sizes and build durations, passed Ubuntu 22.04 and current Ubuntu smoke
     checks, and reached GLIBC_2.18 while the released x86_64 GNU artifact
-    reached GLIBC_2.39 and failed Ubuntu 22.04. Musl removed the glibc floor
+    reached GLIBC_2.39 and failed Ubuntu 22.04. Musl removed the glibc ceiling
     but introduced static-runtime maintenance, non-PIE ARM64 linkage, and
     consumer-contract changes without a demonstrated product requirement for
     Alpine support. Pinning cross-rs 0.2.5 images by digest for both GNU
     targets keeps asset names, checksum layout, npm mapping, Homebrew URLs, and
-    Action selection unchanged while making the compatibility floor explicit
-    and testable.
+    Action selection unchanged while making the compatibility ceiling explicit
+    and testable. The measured GLIBC_2.18 ceiling is lower than the glibc 2.23
+    sysroot shipped inside the pinned images; supported runtimes must provide
+    glibc at least at that ceiling.
 
 expected-outcomes:
   positive:
@@ -60,15 +70,20 @@ expected-outcomes:
       asset name without a libc-selection dimension.
     - >-
       x86_64 and ARM64 Linux GNU builds share one documented baseline policy,
-      cache-invalidation inputs, and linkage verification gate.
+      provenance record, cache-invalidation inputs, and linkage verification gate.
     - >-
-      Host operating-system glibc updates continue to satisfy the documented
-      GLIBC_2.18 symbol ceiling on supported Ubuntu environments.
+      Host operating-system glibc on supported Ubuntu environments satisfies the
+      measured GLIBC_2.18 symbol ceiling.
   negative:
     - >-
       Baseline refresh requires a deliberate digest bump, full linux-gnu evidence
       rerun, and coordinated updates to `Cross.toml`, `linux-gnu-baseline.env`,
-      and release cache keys.
+      and release cache keys. A replacement image must retain the same-or-older
+      compatibility sysroot and pass the full evidence matrix; advancing to the
+      next cross tag alone is insufficient.
+    - >-
+      The frozen Ubuntu 16.04 end-of-life build base carries toolchain-provenance
+      and no-rebuild risk until a reviewed replacement image is selected.
     - >-
       Alpine and other musl-only environments remain outside the GNU/Linux
       support contract until a separate product decision adds them.
