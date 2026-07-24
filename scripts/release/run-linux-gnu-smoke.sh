@@ -24,15 +24,23 @@ cp -a "$fixture/." "$workspace/"
 chmod +x "$binary"
 install -m 0755 "$binary" "$workspace/intentional"
 
+user_id="$(id -u)"
+group_id="$(id -g)"
+
 docker run --rm \
   -v "$workspace:/workspace" \
   -w /workspace \
+  -e USER_ID="$user_id" \
+  -e GROUP_ID="$group_id" \
   "$runtime_image" \
   bash -euxo pipefail -c '
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
     apt-get install -y -qq git >/dev/null
+    export HOME=/workspace/.home
+    mkdir -p "$HOME"
     export PATH="/workspace:$PATH"
+    git config --global --add safe.directory /workspace
     git init
     git config user.email "fixture@example.invalid"
     git config user.name "Garden Notes Fixture"
@@ -51,11 +59,11 @@ docker run --rm \
     intentional status
     intentional check
     intentional plan
+  chown -R "$USER_ID:$GROUP_ID" /workspace
   ' >"$workspace/smoke.log" 2>&1 || {
   cat "$workspace/smoke.log" >&2
   exit 1
 }
 
-cp "$workspace/smoke.log" "/tmp/linux-gnu-smoke-${label//[^a-zA-Z0-9_.-]/_}.log" 2>/dev/null || true
 cat "$workspace/smoke.log"
 echo "linux-gnu smoke passed for $label"
