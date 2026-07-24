@@ -381,13 +381,21 @@ proposed-design:
     init); the binary carries an interpreter per contract it supports, so any
     tool version interpreting a contract-1 workspace applies contract-1
     semantics regardless of the binary's age. The release plan embeds the
-    contract and a generator record (tool name and version) inside the
-    digested payload, making the plan self-describing evidence of what was
-    decided and under which rules. Tags are annotated, carrying a small
-    canonical message: contract, tool version, and plan digest — each tag is
-    thereby a complete, self-describing release record, which also gives
-    releases with no registry publish (pub-by-git-tag, Go) a real evidence
-    record. Intent files and changelogs stay unbranded; they are authoring
+    contract and a plan-generator record (tool name and version of the Intentional
+    binary that sealed the plan) inside the digested payload, making the plan
+    self-describing evidence of what was decided and under which rules. Tags are
+    annotated, carrying a small canonical message: contract, tag-generator tool
+    version, and plan digest — each tag is thereby a complete, self-describing
+    release record, which also gives releases with no registry publish
+    (pub-by-git-tag, Go) a real evidence record. The plan generator and tag
+    generator are distinct: a sealed plan records the tool version that computed
+    and digested it, while annotated tags record the tool version that created
+    the tag object. During self-hosted releases the plan may be sealed by the
+    immediately preceding published Intentional version while tagging runs with
+    the newly materialized release binary, provided the plan generator is
+    Intentional, parses as SemVer, is not newer than the tagging binary, and the
+    recovered plan bytes match when reconstructed with the recorded plan-generator
+    version. Intent files and changelogs stay unbranded; they are authoring
     artifacts interpreted under the workspace contract. The configured
     pre-1-0-bump-mapping is an input to that contract, so component and
     compatibility workspaces remain deterministic under every supporting tool
@@ -403,7 +411,13 @@ proposed-design:
     previous release's tag. In both paths the recomputed result must match
     the materialized tree (projections and the leading changelog section,
     which serves as witness, not source); on mismatch, tag refuses and
-    reports the divergence. For the selected phase, an exact existing annotated
+    reports the divergence. When verifying a supplied sealed plan, tag
+    reconstructs the plan payload using the recorded plan-generator version
+    rather than the tagging binary version so self-hosted releases can apply
+    with an older published Intentional and tag with the materialized release
+    binary without weakening digest, contract, recovered-intent,
+    materialized-tree, target, version, existing-record, or MustNotExist
+    validation. For the selected phase, an exact existing annotated
     record satisfies the operation, missing records are created in
     prerequisite-safe order, and any target, version, interpretation-contract,
     plan-digest, baseline, or prerequisite mismatch fails closed. Fully

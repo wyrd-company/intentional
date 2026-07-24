@@ -5,7 +5,8 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    initialize, Adapter, CandidateResolution, InitPlan, InitState, ProjectionMode,
+    initialize, Adapter, CandidateResolution, Config, InitPlan, InitState, Intent, ProjectionMode,
+    ReleasePlan,
 };
 use predicates::prelude::*;
 use serde_json::Value;
@@ -1411,4 +1412,102 @@ fn legacy_taggerless_release_records_remain_valid_authority() {
         .success()
         .stdout(predicate::str::contains("Drift: none"));
     let _ = plan;
+}
+
+fn prepare_applied_release_with_prior_plan_generator(
+    repo: &TestRepo,
+    prior_generator: &str,
+) -> ReleasePlan {
+    repo.write("package.json", &npm_manifest("0.0.0"));
+    repo.commit("add fixture");
+    initialize_independent(repo);
+    let generated = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
+    repo.write(
+        ".intentional/config.yml",
+        &generated.replace(
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
+        ),
+    );
+    repo.cli()
+        .args([
+            "add",
+            "--release-unit",
+            "sample-library:patch",
+            "--message",
+            "Correct a user-visible defect.",
+        ])
+        .assert()
+        .success();
+    repo.commit("add release intent");
+    let config = Config::load(&repo.root).expect("config");
+    let intents = Intent::load_all(&repo.root, &config).expect("intents");
+    let plan = ReleasePlan::from_inputs_with_generator(
+        &repo.root,
+        &config,
+        &intents,
+        None,
+        prior_generator,
+    )
+    .expect("prior-version plan");
+    fs::write(
+        repo.root.join("release-plan.json"),
+        plan.to_canonical_json().expect("plan JSON"),
+    )
+    .expect("write plan");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    plan
+}
+
+#[test]
+fn accepts_prior_version_sealed_plan_for_self_hosted_release() {
+    let repo = TestRepo::new();
+    let prior_generator = "0.1.0";
+    let plan = prepare_applied_release_with_prior_plan_generator(&repo, prior_generator);
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("create annotated tag 0.0.1"));
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    let tag_generator = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
+    let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    assert!(release_record.contains(&tag_generator));
+    assert!(release_record.contains(&format!(
+        "plan-digest: {}",
+        plan.digest
+    )));
+    assert_tagger_header(&repo.root, "0.0.1");
+    assert_tagger_header(&repo.root, "sample-library@0.0.1");
+    git_fsck_strict(&repo.root);
+}
+
+#[test]
+fn rejects_future_plan_generator_version() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release_with_prior_plan_generator(&repo, "99.0.0");
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("newer than intentional"));
+    let _ = plan;
+}
+
+#[test]
+fn rejects_supplied_plan_digest_mismatch() {
+    let repo = TestRepo::new();
+    prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
+    let mut plan_text = fs::read_to_string(repo.root.join("release-plan.json")).unwrap();
+    plan_text = plan_text.replace("sha256:", "sha256:deadbeef");
+    fs::write(repo.root.join("release-plan.json"), plan_text).unwrap();
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("digest mismatch"));
 }
