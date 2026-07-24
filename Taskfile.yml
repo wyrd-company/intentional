@@ -61,6 +61,7 @@ tasks:
       - scripts/release/assert-release-workflow-baseline.sh
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
       - scripts/release/assert-consumer-contract.sh
+      - scripts/release/test-self-hosted-tag.sh
 
   self-release:verify:
     desc: Build the workspace binary and verify self-hosted tag acceptance of a sealed plan
@@ -68,6 +69,18 @@ tasks:
       - scripts/release/verify-self-hosted-tag.sh {{ .SEALED_PLAN }}
     requires:
       vars: [ SEALED_PLAN ]
+
+  self-release:tag:
+    desc: Create annotated release tags with the materialized workspace binary (explicit operator action)
+    cmds:
+      - >-
+        INTENTIONAL_SELF_RELEASE_CREATE={{ .CREATE_ACK }}
+        scripts/release/create-self-hosted-tag.sh {{ .SEALED_PLAN }}
+    requires:
+      vars: [ SEALED_PLAN, CREATE_ACK ]
+    preconditions:
+      - sh: '[ "{{.CREATE_ACK}}" = "create-annotated-tag" ]'
+        msg: CREATE_ACK must be exactly create-annotated-tag
 
   docs:demo:
     desc: Regenerate and optimize the public documentation demo

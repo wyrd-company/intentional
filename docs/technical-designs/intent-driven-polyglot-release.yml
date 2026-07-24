@@ -417,7 +417,12 @@ proposed-design:
     with an older published Intentional and tag with the materialized release
     binary without weakening digest, contract, recovered-intent,
     materialized-tree, target, version, existing-record, or MustNotExist
-    validation. For the selected phase, an exact existing annotated
+    validation. Repository operators verify acceptance with
+    `task self-release:verify` (dry-run only) and create annotated tags only
+    through `task self-release:tag` with
+    `CREATE_ACK=create-annotated-tag`, which invokes the materialized workspace
+    binary without `--dry-run`; routine CI never runs the create path. For the
+    selected phase, an exact existing annotated
     record satisfies the operation, missing records are created in
     prerequisite-safe order, and any target, version, interpretation-contract,
     plan-digest, baseline, or prerequisite mismatch fails closed. Fully

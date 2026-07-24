@@ -158,6 +158,12 @@ missing records. Any conflicting target, version, contract, plan digest,
 baseline, or prerequisite fails closed. Intentional never creates the
 surrounding commit or pushes tags.
 
+For repository self-releases, verify tag acceptance with the materialized
+workspace binary (`task self-release:verify`) and create annotated tags only
+through the guarded operator path (`CREATE_ACK=create-annotated-tag task
+self-release:tag`). Do not use an older installed Intentional for tag creation
+after apply.
+
 ## Stamp build versions
 
 For `injected` projections, `stamp` writes the computed version without touching
