@@ -455,7 +455,7 @@ proposed-design:
     maximum required GLIBC symbol version of GLIBC_2.18, which is the binary
     ceiling rather than the sysroot version. Supported GNU/Linux runtime
     environments must provide glibc at least at that measured ceiling; the
-    linux-gnu smoke workflow exercises Ubuntu 22.04 and current Ubuntu on
+    linux-gnu smoke workflow exercises Ubuntu 22.04 LTS and Ubuntu 24.04 LTS on
     pinned images. Baseline inputs live in Cross.toml and
     scripts/release/linux-gnu-baseline.env; Linux GNU Cargo caches key those
     files without restore-key fallbacks so sysroot or image changes cannot

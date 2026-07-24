@@ -38,7 +38,7 @@ considered-options:
     Build both Linux GNU architectures through pinned cross-rs 0.2.5 images with
     digest-locked sysroots, document a maximum required GLIBC symbol version of
     GLIBC_2.18 measured from the linked artifact, and continuously verify Ubuntu
-    22.04 and the current Ubuntu environment against the release-profile
+    22.04 LTS and Ubuntu 24.04 LTS against the release-profile
     artifacts. Preserves every existing consumer contract and extends the ARM64
     cross strategy to x86_64.
   4: >-
@@ -51,7 +51,7 @@ decision-outcome:
   justification: >-
     Task 47 measured release-profile GNU, older-baseline GNU, and musl
     prototypes on both architectures. Older-baseline GNU matched current archive
-    sizes and build durations, passed Ubuntu 22.04 and current Ubuntu smoke
+    sizes and build durations, passed Ubuntu 22.04 LTS and Ubuntu 24.04 LTS smoke
     checks, and reached GLIBC_2.18 while the released x86_64 GNU artifact
     reached GLIBC_2.39 and failed Ubuntu 22.04. Musl removed the glibc ceiling
     but introduced static-runtime maintenance, non-PIE ARM64 linkage, and

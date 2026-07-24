@@ -94,7 +94,7 @@ Supported GNU/Linux environments:
 | Environment | Execution model |
 | --- | --- |
 | Ubuntu 22.04 LTS | native or containerized |
-| Current Ubuntu LTS/non-LTS used by Intentional smoke automation | native or containerized |
+| Ubuntu 24.04 LTS | native or containerized |
 
 Alpine Linux and other musl-only distributions are outside this GNU contract.
 Use a supported Ubuntu release or build from source when the published GNU
