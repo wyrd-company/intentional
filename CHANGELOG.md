@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+### Fixes
+
+- Add deterministic tagger headers to annotated release records for strict Git integrity checks.
+- Published Linux GNU archives support Ubuntu 22.04 LTS through the pinned cross-rs compatibility baseline.
+
 ## 0.1.5
 
 ### Fixes
