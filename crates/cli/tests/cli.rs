@@ -52,9 +52,21 @@ impl TestRepo {
         command.arg("-C").arg(&self.root);
         command
     }
+
+    fn cli_with_env(&self, env: &[(&str, &str)]) -> Command {
+        let mut command = self.cli();
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command
+    }
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
+    git_raw(root, args).trim().to_owned()
+}
+
+fn git_raw(root: &Path, args: &[&str]) -> String {
     let output = ProcessCommand::new("git")
         .args(args)
         .current_dir(root)
@@ -68,7 +80,6 @@ fn git(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(output.stdout)
         .expect("UTF-8 git output")
-        .trim()
         .to_owned()
 }
 
@@ -1213,25 +1224,6 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
     assert_eq!(git(&repo.root, &["tag", "--list"]), tags_before);
 }
 
-fn git_with_env(root: &Path, env: &[(&str, &str)], args: &[&str]) -> String {
-    let mut command = ProcessCommand::new("git");
-    command.args(args).current_dir(root);
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let output = command.output().expect("run git");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .expect("UTF-8 git output")
-        .trim()
-        .to_owned()
-}
-
 fn git_fsck_strict(root: &Path) {
     let output = ProcessCommand::new("git")
         .args(["fsck", "--strict"])
@@ -1261,16 +1253,14 @@ fn assert_tagger_header(root: &Path, name: &str) {
     );
 }
 
-fn create_taggerless_fixture_tag(root: &Path, name: &str, message: &str) {
-    let commit = git(root, &["rev-parse", "HEAD"]);
-    let body = format!("object {commit}\ntype commit\ntag {name}\n\n{message}");
-    let mut child = ProcessCommand::new("python3")
-        .args(["-c", "import hashlib, pathlib, sys, zlib; body=sys.stdin.buffer.read(); data=b'tag '+str(len(body)).encode()+b'\\0'+body; oid=hashlib.sha1(data).hexdigest(); path=pathlib.Path('.git/objects')/oid[:2]/oid[2:]; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(zlib.compress(data)); print(oid)"])
+fn create_taggerless_fixture_tag(root: &Path, name: &str, body: &str) {
+    let mut child = ProcessCommand::new("git")
+        .args(["hash-object", "-t", "tag", "-w", "--literally", "--stdin"])
         .current_dir(root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .expect("spawn python");
+        .expect("spawn git hash-object");
     use std::io::Write;
     child
         .stdin
@@ -1278,15 +1268,38 @@ fn create_taggerless_fixture_tag(root: &Path, name: &str, message: &str) {
         .expect("stdin")
         .write_all(body.as_bytes())
         .expect("write tag body");
-    let output = child.wait_with_output().expect("finish python");
-    assert!(output.status.success(), "write tag object failed");
+    let output = child.wait_with_output().expect("finish git hash-object");
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let oid = String::from_utf8(output.stdout)
-        .expect("UTF-8 python output")
+        .expect("UTF-8 git output")
         .trim()
         .to_owned();
     git(root, &["update-ref", &format!("refs/tags/{name}"), &oid]);
     assert_eq!(git(root, &["cat-file", "-t", name]), "tag");
 }
+
+fn strip_tagger_from_tag_object(raw: &str) -> String {
+    raw.split_inclusive('\n')
+        .filter(|line| !line.starts_with("tagger "))
+        .collect()
+}
+
+fn raw_tag_object(root: &Path, name: &str) -> String {
+    let oid = git(root, &["rev-parse", &format!("refs/tags/{name}")]);
+    git_raw(root, &["cat-file", "tag", &oid])
+}
+
+const VARIED_AMBIENT_ENV: &[(&str, &str)] = &[
+    ("GIT_AUTHOR_NAME", "Different Author"),
+    ("GIT_AUTHOR_EMAIL", "different@example.invalid"),
+    ("GIT_COMMITTER_NAME", "Different Committer"),
+    ("GIT_COMMITTER_EMAIL", "committer@example.invalid"),
+    ("TZ", "Pacific/Auckland"),
+];
 
 fn prepare_applied_release(repo: &TestRepo) -> Value {
     repo.write("package.json", &npm_manifest("0.0.0"));
@@ -1339,6 +1352,17 @@ fn annotated_release_tags_include_deterministic_tagger_and_pass_strict_fsck() {
 }
 
 #[test]
+fn baseline_tags_include_deterministic_tagger_and_pass_strict_fsck() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.commit("add fixture");
+    initialize_independent(&repo);
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    assert_tagger_header(&repo.root, "sample-library@1.0.0");
+    git_fsck_strict(&repo.root);
+}
+
+#[test]
 fn tag_object_identity_is_independent_of_ambient_git_identity_and_timezone() {
     let repo = TestRepo::new();
     let plan = prepare_applied_release(&repo);
@@ -1350,23 +1374,7 @@ fn tag_object_identity_is_independent_of_ambient_git_identity_and_timezone() {
     let release_unit_tag_id = tag_object_id(&repo.root, "sample-library@0.0.1");
     git(&repo.root, &["tag", "-d", "0.0.1"]);
     git(&repo.root, &["tag", "-d", "sample-library@0.0.1"]);
-    git_with_env(
-        &repo.root,
-        &[
-            ("GIT_AUTHOR_NAME", "Different Author"),
-            ("GIT_AUTHOR_EMAIL", "different@example.invalid"),
-            ("GIT_COMMITTER_NAME", "Different Committer"),
-            ("GIT_COMMITTER_EMAIL", "committer@example.invalid"),
-            ("TZ", "Pacific/Auckland"),
-        ],
-        &["config", "user.name", "Different Author"],
-    );
-    git_with_env(
-        &repo.root,
-        &[("TZ", "Pacific/Auckland")],
-        &["config", "user.email", "different@example.invalid"],
-    );
-    repo.cli()
+    repo.cli_with_env(VARIED_AMBIENT_ENV)
         .args(["tag", "--plan", "release-plan.json"])
         .assert()
         .success();
@@ -1387,13 +1395,10 @@ fn legacy_taggerless_release_records_remain_valid_authority() {
         .args(["tag", "--plan", "release-plan.json"])
         .assert()
         .success();
-    let release_record = git(&repo.root, &["cat-file", "-p", "sample-library@0.0.1"]);
-    let message = release_record
-        .split_once("intentional release record")
-        .map(|(_, rest)| format!("intentional release record{rest}"))
-        .expect("tag message");
+    let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    let taggerless = strip_tagger_from_tag_object(&release_record);
     git(&repo.root, &["tag", "-d", "sample-library@0.0.1"]);
-    create_taggerless_fixture_tag(&repo.root, "sample-library@0.0.1", &message);
+    create_taggerless_fixture_tag(&repo.root, "sample-library@0.0.1", &taggerless);
     repo.cli()
         .args(["tag", "--plan", "release-plan.json"])
         .assert()
