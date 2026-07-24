@@ -52,9 +52,21 @@ impl TestRepo {
         command.arg("-C").arg(&self.root);
         command
     }
+
+    fn cli_with_env(&self, env: &[(&str, &str)]) -> Command {
+        let mut command = self.cli();
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        command
+    }
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
+    git_raw(root, args).trim().to_owned()
+}
+
+fn git_raw(root: &Path, args: &[&str]) -> String {
     let output = ProcessCommand::new("git")
         .args(args)
         .current_dir(root)
@@ -68,7 +80,6 @@ fn git(root: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(output.stdout)
         .expect("UTF-8 git output")
-        .trim()
         .to_owned()
 }
 
@@ -1211,4 +1222,193 @@ fn dry_runs_print_operations_without_filesystem_or_git_changes() {
             "create annotated tag sample-library@0.0.1",
         ));
     assert_eq!(git(&repo.root, &["tag", "--list"]), tags_before);
+}
+
+fn git_fsck_strict(root: &Path) {
+    let output = ProcessCommand::new("git")
+        .args(["fsck", "--strict"])
+        .current_dir(root)
+        .output()
+        .expect("run git fsck");
+    assert!(
+        output.status.success(),
+        "git fsck --strict failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn tag_object_id(root: &Path, name: &str) -> String {
+    git(root, &["rev-parse", &format!("refs/tags/{name}")])
+}
+
+fn assert_tagger_header(root: &Path, name: &str) {
+    let record = git(root, &["cat-file", "-p", name]);
+    assert!(
+        record.lines().any(|line| line.starts_with("tagger ")),
+        "expected tagger header in {name}: {record}"
+    );
+    assert!(
+        record.contains("Intentional <intentional@wyrd.company>"),
+        "expected deterministic tagger identity in {name}: {record}"
+    );
+}
+
+fn create_taggerless_fixture_tag(root: &Path, name: &str, body: &str) {
+    let mut child = ProcessCommand::new("git")
+        .args(["hash-object", "-t", "tag", "-w", "--literally", "--stdin"])
+        .current_dir(root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn git hash-object");
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(body.as_bytes())
+        .expect("write tag body");
+    let output = child.wait_with_output().expect("finish git hash-object");
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let oid = String::from_utf8(output.stdout)
+        .expect("UTF-8 git output")
+        .trim()
+        .to_owned();
+    git(root, &["update-ref", &format!("refs/tags/{name}"), &oid]);
+    assert_eq!(git(root, &["cat-file", "-t", name]), "tag");
+}
+
+fn strip_tagger_from_tag_object(raw: &str) -> String {
+    raw.split_inclusive('\n')
+        .filter(|line| !line.starts_with("tagger "))
+        .collect()
+}
+
+fn raw_tag_object(root: &Path, name: &str) -> String {
+    let oid = git(root, &["rev-parse", &format!("refs/tags/{name}")]);
+    git_raw(root, &["cat-file", "tag", &oid])
+}
+
+const VARIED_AMBIENT_ENV: &[(&str, &str)] = &[
+    ("GIT_AUTHOR_NAME", "Different Author"),
+    ("GIT_AUTHOR_EMAIL", "different@example.invalid"),
+    ("GIT_COMMITTER_NAME", "Different Committer"),
+    ("GIT_COMMITTER_EMAIL", "committer@example.invalid"),
+    ("TZ", "Pacific/Auckland"),
+];
+
+fn prepare_applied_release(repo: &TestRepo) -> Value {
+    repo.write("package.json", &npm_manifest("0.0.0"));
+    repo.commit("add fixture");
+    initialize_independent(repo);
+    let generated = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
+    repo.write(
+        ".intentional/config.yml",
+        &generated.replace(
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
+        ),
+    );
+    repo.cli()
+        .args([
+            "add",
+            "--release-unit",
+            "sample-library:patch",
+            "--message",
+            "Correct a user-visible defect.",
+        ])
+        .assert()
+        .success();
+    repo.commit("add release intent");
+    let output = repo.cli().arg("plan").output().expect("plan command");
+    assert!(output.status.success());
+    let plan: Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
+    fs::write(repo.root.join("release-plan.json"), &output.stdout).unwrap();
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    plan
+}
+
+#[test]
+fn annotated_release_tags_include_deterministic_tagger_and_pass_strict_fsck() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release(&repo);
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    assert_tagger_header(&repo.root, "0.0.1");
+    assert_tagger_header(&repo.root, "sample-library@0.0.1");
+    let record = git(&repo.root, &["cat-file", "-p", "sample-library@0.0.1"]);
+    assert!(record.contains(&format!(
+        "plan-digest: {}",
+        plan["digest"].as_str().unwrap()
+    )));
+    git_fsck_strict(&repo.root);
+}
+
+#[test]
+fn baseline_tags_include_deterministic_tagger_and_pass_strict_fsck() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.commit("add fixture");
+    initialize_independent(&repo);
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    assert_tagger_header(&repo.root, "sample-library@1.0.0");
+    git_fsck_strict(&repo.root);
+}
+
+#[test]
+fn tag_object_identity_is_independent_of_ambient_git_identity_and_timezone() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release(&repo);
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    let workspace_tag_id = tag_object_id(&repo.root, "0.0.1");
+    let release_unit_tag_id = tag_object_id(&repo.root, "sample-library@0.0.1");
+    git(&repo.root, &["tag", "-d", "0.0.1"]);
+    git(&repo.root, &["tag", "-d", "sample-library@0.0.1"]);
+    repo.cli_with_env(VARIED_AMBIENT_ENV)
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    assert_eq!(tag_object_id(&repo.root, "0.0.1"), workspace_tag_id);
+    assert_eq!(
+        tag_object_id(&repo.root, "sample-library@0.0.1"),
+        release_unit_tag_id
+    );
+    git_fsck_strict(&repo.root);
+    let _ = plan;
+}
+
+#[test]
+fn legacy_taggerless_release_records_remain_valid_authority() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release(&repo);
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    let taggerless = strip_tagger_from_tag_object(&release_record);
+    git(&repo.root, &["tag", "-d", "sample-library@0.0.1"]);
+    create_taggerless_fixture_tag(&repo.root, "sample-library@0.0.1", &taggerless);
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    repo.cli().arg("check").assert().success();
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Drift: none"));
+    let _ = plan;
 }
