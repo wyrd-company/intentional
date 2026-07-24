@@ -1477,10 +1477,7 @@ fn accepts_prior_version_sealed_plan_for_self_hosted_release() {
     let tag_generator = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
     let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
     assert!(release_record.contains(&tag_generator));
-    assert!(release_record.contains(&format!(
-        "plan-digest: {}",
-        plan.digest
-    )));
+    assert!(release_record.contains(&format!("plan-digest: {}", plan.digest)));
     assert_tagger_header(&repo.root, "0.0.1");
     assert_tagger_header(&repo.root, "sample-library@0.0.1");
     git_fsck_strict(&repo.root);

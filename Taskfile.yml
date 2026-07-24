@@ -65,9 +65,9 @@ tasks:
   self-release:verify:
     desc: Build the workspace binary and verify self-hosted tag acceptance of a sealed plan
     cmds:
-      - scripts/release/verify-self-hosted-tag.sh {{.SEALED_PLAN}}
+      - scripts/release/verify-self-hosted-tag.sh {{ .SEALED_PLAN }}
     requires:
-      vars: [SEALED_PLAN]
+      vars: [ SEALED_PLAN ]
 
   docs:demo:
     desc: Regenerate and optimize the public documentation demo
