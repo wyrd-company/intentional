@@ -97,15 +97,22 @@ fi
 needed_libs="$(
   readelf -d "$binary" | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort
 )"
+expected_needed_sorted="$(
+  printf '%s\n' "${expected_needed[@]}" | sort
+)"
 echo "needed_libraries:"
 printf '%s\n' "$needed_libs"
+echo "expected_needed_libraries:"
+printf '%s\n' "$expected_needed_sorted"
 
-for library in "${expected_needed[@]}"; do
-  if ! grep -Fxq "$library" <<<"$needed_libs"; then
-    echo "Missing expected shared library $library in $binary" >&2
-    exit 1
-  fi
-done
+if [[ "$needed_libs" != "$expected_needed_sorted" ]]; then
+  echo "NEEDED library set mismatch for $label." >&2
+  echo "unexpected libraries (present in binary, not expected):" >&2
+  comm -23 <(printf '%s\n' "$needed_libs") <(printf '%s\n' "$expected_needed_sorted") >&2 || true
+  echo "missing libraries (expected, not present in binary):" >&2
+  comm -13 <(printf '%s\n' "$needed_libs") <(printf '%s\n' "$expected_needed_sorted") >&2 || true
+  exit 1
+fi
 
 version_symbols="$(readelf -V "$binary")"
 printf '%s\n' "$version_symbols"

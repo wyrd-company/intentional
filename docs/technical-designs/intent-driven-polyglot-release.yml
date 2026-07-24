@@ -1,6 +1,6 @@
 $schema: https://refinery.systems/ontology/technical-design
 relationships:
-  related-to:
+  contextualized-by:
     - build-linux-gnu-release-on-pinned-cross-baseline
 objective: >-
   Provide a single, fast, dependency-free CLI that manages change intents,

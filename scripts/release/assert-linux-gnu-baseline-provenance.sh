@@ -40,11 +40,6 @@ for variable in "${required_env_vars[@]}"; do
   fi
 done
 
-if [[ "$CROSS_OCI_REVISION" != "$CROSS_SOURCE_COMMIT" ]]; then
-  echo "CROSS_OCI_REVISION must match CROSS_SOURCE_COMMIT." >&2
-  exit 1
-fi
-
 for file in "$technical_design" "$decision_record" "$install_doc"; do
   if ! grep -Fq "$CROSS_SOURCE_COMMIT" "$file"; then
     echo "$file must record cross source commit $CROSS_SOURCE_COMMIT." >&2

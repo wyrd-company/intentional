@@ -48,6 +48,8 @@ docker run --rm \
     git add .
     git commit -m "Initialize garden-notes fixture"
     intentional --version
+    # Fixture ships .intentional/config.yml so init exercises re-init on a
+    # configured release unit (NeedsInput + init-plan witness), not greenfield.
     set +e
     intentional init
     init_status=$?
@@ -57,7 +59,6 @@ docker run --rm \
     elif [[ "$init_status" -ne 0 ]]; then
       exit "$init_status"
     fi
-    git check-ignore -q node_modules || true
     intentional tag --baseline --version garden-notes=1.0.0
     intentional status
     intentional check
