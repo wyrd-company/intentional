@@ -1,9 +1,12 @@
+$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
 release-units:
   garden-notes:
     path: .
     tags:
-      primary: garden-notes-v{version}
+      primary:
+        role: primary
+        template: "{version}"
     projections:
       - adapter: npm
         file: package.json

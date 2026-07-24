@@ -39,13 +39,22 @@ docker run --rm \
     git add .
     git commit -m "Initialize garden-notes fixture"
     intentional --version
+    set +e
     intentional init
+    init_status=$?
+    set -e
+    if [[ "$init_status" -ne 0 && "$init_status" -ne 2 ]]; then
+      exit "$init_status"
+    fi
     git check-ignore -q node_modules || true
     intentional tag --baseline --version garden-notes=1.0.0
     intentional status
     intentional check
     intentional plan
-  ' >"$workspace/smoke.log" 2>&1
+  ' >"$workspace/smoke.log" 2>&1 || {
+  cat "$workspace/smoke.log" >&2
+  exit 1
+}
 
 cp "$workspace/smoke.log" "/tmp/linux-gnu-smoke-${label//[^a-zA-Z0-9_.-]/_}.log" 2>/dev/null || true
 cat "$workspace/smoke.log"
