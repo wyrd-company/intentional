@@ -1,5 +1,7 @@
 $schema: https://refinery.systems/ontology/technical-design
-relationships: {}
+relationships:
+  contextualized-by:
+    - build-linux-gnu-release-on-pinned-cross-baseline
 objective: >-
   Provide a single, fast, dependency-free CLI that manages change intents,
   version computation, manifest projection, changelogs, tags, and a verifiable
@@ -436,6 +438,36 @@ proposed-design:
     only release-matrix platforms and installs the matching archive after
     checksum verification. A higher-level orchestration action (version-PR
     choreography) is future scope. MSRV and CI conventions follow tagver.
+  linux-gnu-compatibility-baseline: >-
+    Linux x86_64 and ARM64 release archives are dynamically linked GNU
+    position-independent executables built through cross-rs 0.2.5 with
+    digest-pinned ghcr.io/cross-rs target images. The cross v0.2.5 annotated
+    tag object f8151ae777290430cf2108efacf3976d9528500b points to source commit
+    88f49ff79e777bef6d3564531636ee4d3cc2f8d2; both pinned image configs carry
+    org.opencontainers.image.revision=88f49ff79e777bef6d3564531636ee4d3cc2f8d2,
+    version v0.2.5, and the cross repository source. The images are built from
+    docker/Dockerfile.x86_64-unknown-linux-gnu and
+    docker/Dockerfile.aarch64-unknown-linux-gnu at that commit. Both build
+    containers use Ubuntu 16.04, which is end-of-life; both registry images are
+    amd64-hosted cross-compilation containers (the aarch64 image produces ARM64
+    targets, it is not a native ARM64 build container). Their GNU sysroots ship
+    glibc 2.23; release automation measures the linked artifact and enforces a
+    maximum required GLIBC symbol version of GLIBC_2.18, which is the binary
+    ceiling rather than the sysroot version. Supported GNU/Linux runtime
+    environments must provide glibc at least at that measured ceiling; the
+    linux-gnu smoke workflow exercises Ubuntu 22.04 LTS and Ubuntu 24.04 LTS on
+    pinned images. Baseline inputs live in Cross.toml and
+    scripts/release/linux-gnu-baseline.env; Linux GNU Cargo caches key those
+    files without restore-key fallbacks so sysroot or image changes cannot
+    restore incompatible target output. Refreshing the baseline is deliberate
+    and triggered by a Rust or compiler bump, image deletion or registry
+    unavailability, measured GLIBC symbol-ceiling drift, or security or
+    toolchain concerns. A replacement image must retain the same-or-older
+    compatibility sysroot and pass the full linux-gnu evidence matrix; advancing
+    to the next cross tag alone is insufficient without that proof. The frozen
+    end-of-life build base carries toolchain-provenance and no-rebuild risk that
+    the refresh policy must address explicitly. Alpine and musl-only environments
+    are outside this GNU contract.
   out-of-scope: >-
     Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
     committing, pushing, or opening pull requests permanently; language

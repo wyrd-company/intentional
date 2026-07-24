@@ -1,0 +1,179 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+#   references: build-linux-gnu-release-on-pinned-cross-baseline
+# ---
+name: Linux GNU evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/linux-gnu-evidence.yml"
+      - ".github/workflows/cd.yml"
+      - "Cross.toml"
+      - "scripts/release/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-online-provenance:
+    name: Verify cross-rs image provenance (ghcr.io)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public :0.2.5 tags resolve to pinned digests and labels
+        run: scripts/release/verify-linux-gnu-baseline-provenance-online.sh
+
+  build:
+    needs: verify-online-provenance
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact_name: intentional-linux-x86_64
+            bin_path: target/x86_64-unknown-linux-gnu/release/intentional
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact_name: intentional-linux-arm64
+            bin_path: target/aarch64-unknown-linux-gnu/release/intentional
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross@0.2.5
+
+      - uses: dtolnay/rust-toolchain@1.85.0
+
+      - name: Cache Cargo inputs and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: >-
+            linux-gnu-${{ matrix.target }}-${{
+            hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
+
+      - name: Build release-profile GNU binary
+        run: cross build --workspace --release --locked --target "${{ matrix.target }}"
+
+      - name: Verify GNU linkage contract
+        run: >-
+          scripts/release/verify-linux-gnu-linkage.sh
+          "${{ matrix.bin_path }}" "${{ matrix.target }}"
+
+      - name: Assemble release archive
+        run: |
+          python3 scripts/release/package-archive.py \
+          --artifact "${{ matrix.artifact_name }}" \
+          --binary "${{ matrix.bin_path }}" \
+          --format tar.gz \
+          --output "${{ matrix.artifact_name }}.tar.gz"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-evidence
+          path: ${{ matrix.artifact_name }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  test-x86_64-gnu-toolchain:
+    name: Test through x86_64 GNU toolchain
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross@0.2.5
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Cache Cargo inputs and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: >-
+            linux-gnu-x86_64-unknown-linux-gnu-${{
+            hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
+      - name: Run workspace tests through the pinned GNU target
+        run: cross test --workspace --locked --target x86_64-unknown-linux-gnu
+
+  smoke-x86_64:
+    name: Smoke x86_64 (${{ matrix.label }})
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu-22.04
+            image: ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
+          - label: ubuntu-24.04
+            image: ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: intentional-linux-x86_64-evidence
+          path: dist
+      - name: Extract release binary
+        run: |
+          tar -xOzf dist/intentional-linux-x86_64.tar.gz \
+          intentional-linux-x86_64/intentional > intentional-smoke
+      - name: Exercise release artifact in clean runtime
+        run: |
+          scripts/release/run-linux-gnu-smoke.sh \
+          intentional-smoke \
+          "${{ matrix.image }}" \
+          "x86_64-${{ matrix.label }}"
+
+  native-arm64:
+    name: Native ARM64 GNU evidence
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: intentional-linux-arm64-evidence
+          path: dist
+      - name: Extract release binary
+        run: |
+          tar -xOzf dist/intentional-linux-arm64.tar.gz \
+          intentional-linux-arm64/intentional > intentional-smoke
+      - name: Verify GNU linkage on native ARM64 host
+        run: >-
+          scripts/release/verify-linux-gnu-linkage.sh
+          intentional-smoke aarch64-unknown-linux-gnu-native
+      - name: Smoke on Ubuntu 22.04 (containerized)
+        run: |
+          scripts/release/run-linux-gnu-smoke.sh \
+          intentional-smoke \
+          ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 \
+          arm64-ubuntu-22.04
+      - name: Smoke on Ubuntu 24.04 (containerized)
+        run: |
+          scripts/release/run-linux-gnu-smoke.sh \
+          intentional-smoke \
+          ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 \
+          arm64-ubuntu-24.04
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Run ARM64 library tests natively on host
+        run: cargo test --workspace --locked
