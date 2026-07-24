@@ -10,4 +10,4 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=scripts/release/self-hosted-tag-lib.sh
 source "$root/scripts/release/self-hosted-tag-lib.sh"
 
-run_self_hosted_tag dry-run "$root" "${1:-}"
+run_self_hosted_tag create "$root" "${1:-}"
