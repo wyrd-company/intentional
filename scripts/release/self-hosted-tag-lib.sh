@@ -25,7 +25,22 @@ resolve_self_hosted_plan_path() {
   printf '%s' "$plan_path"
 }
 
-materialize_workspace_binary() {
+reject_self_hosted_create_test_seams() {
+  if [[ -n "${SELF_HOSTED_TAG_BINARY_OVERRIDE:-}" ]]; then
+    echo "refusing real self-hosted tag creation with SELF_HOSTED_TAG_BINARY_OVERRIDE set" >&2
+    return 1
+  fi
+  if [[ "${SELF_HOSTED_TAG_SKIP_BUILD:-}" == "1" ]]; then
+    echo "refusing real self-hosted tag creation with SELF_HOSTED_TAG_SKIP_BUILD=1" >&2
+    return 1
+  fi
+  if [[ "${SELF_HOSTED_TAG_PRINT_COMMAND:-}" == "1" ]]; then
+    echo "refusing real self-hosted tag creation with SELF_HOSTED_TAG_PRINT_COMMAND=1" >&2
+    return 1
+  fi
+}
+
+materialize_workspace_binary_for_verify() {
   local root="$1"
   if [[ -n "${SELF_HOSTED_TAG_BINARY_OVERRIDE:-}" ]]; then
     if [[ ! -x "$SELF_HOSTED_TAG_BINARY_OVERRIDE" ]]; then
@@ -41,6 +56,22 @@ materialize_workspace_binary() {
   local binary="$root/target/release/intentional"
   if [[ ! -x "$binary" ]]; then
     echo "materialized workspace binary is missing: $binary" >&2
+    return 1
+  fi
+  printf '%s' "$binary"
+}
+
+materialize_workspace_binary_for_create() {
+  local root="$1"
+  reject_self_hosted_create_test_seams
+  cargo build --release --locked -p intentional-cli --manifest-path "$root/Cargo.toml"
+  local binary="$root/target/release/intentional"
+  if [[ ! -x "$binary" ]]; then
+    echo "materialized workspace binary is missing: $binary" >&2
+    return 1
+  fi
+  if [[ "$binary" != "$root/target/release/intentional" ]]; then
+    echo "refusing real self-hosted tag creation without workspace target/release/intentional" >&2
     return 1
   fi
   printf '%s' "$binary"
@@ -115,16 +146,21 @@ run_self_hosted_tag() {
   local plan_path="$3"
   local binary version
   plan_path="$(resolve_self_hosted_plan_path "$plan_path")"
-  binary="$(materialize_workspace_binary "$root")"
-  version="$(verify_materialized_binary_version "$root" "$binary")"
-  echo "materialized workspace binary agrees at $version"
   if [[ "$mode" == "create" ]]; then
     require_self_hosted_create_ack
+    reject_self_hosted_create_test_seams
+    binary="$(materialize_workspace_binary_for_create "$root")"
+  else
+    binary="$(materialize_workspace_binary_for_verify "$root")"
+    if [[ "${SELF_HOSTED_TAG_PRINT_COMMAND:-}" == "1" ]]; then
+      version="$(verify_materialized_binary_version "$root" "$binary")"
+      echo "materialized workspace binary agrees at $version"
+      print_self_hosted_tag_command "$mode" "$root" "$binary" "$plan_path"
+      return 0
+    fi
   fi
-  if [[ "${SELF_HOSTED_TAG_PRINT_COMMAND:-}" == "1" ]]; then
-    print_self_hosted_tag_command "$mode" "$root" "$binary" "$plan_path"
-    return 0
-  fi
+  version="$(verify_materialized_binary_version "$root" "$binary")"
+  echo "materialized workspace binary agrees at $version"
   local -a argv=()
   local entry
   while IFS= read -r -d '' entry; do

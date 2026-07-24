@@ -5,11 +5,13 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    initialize, Adapter, CandidateResolution, Config, InitPlan, InitState, Intent, ProjectionMode,
-    ReleasePlan,
+    canonical_json, initialize, Adapter, CandidateResolution, Generator, InitPlan, InitState,
+    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
 };
 use predicates::prelude::*;
+use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -1414,6 +1416,34 @@ fn legacy_taggerless_release_records_remain_valid_authority() {
     let _ = plan;
 }
 
+#[derive(Serialize)]
+struct PlanDigestPayload<'a> {
+    contract: &'a str,
+    generator: &'a Generator,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel: &'a Option<String>,
+    release_units: &'a [PlanReleaseUnit],
+    tags: &'a [PlanTag],
+    tag_order: &'a [String],
+}
+
+fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) -> ReleasePlan {
+    plan.generator.version = generator_version.to_owned();
+    let payload = PlanDigestPayload {
+        contract: &plan.contract,
+        generator: &plan.generator,
+        channel: &plan.channel,
+        release_units: &plan.release_units,
+        tags: &plan.tags,
+        tag_order: &plan.tag_order,
+    };
+    plan.digest = format!(
+        "sha256:{:x}",
+        Sha256::digest(canonical_json(&payload).expect("canonical JSON").as_bytes())
+    );
+    plan
+}
+
 fn prepare_applied_release_with_prior_plan_generator(
     repo: &TestRepo,
     prior_generator: &str,
@@ -1440,16 +1470,10 @@ fn prepare_applied_release_with_prior_plan_generator(
         .assert()
         .success();
     repo.commit("add release intent");
-    let config = Config::load(&repo.root).expect("config");
-    let intents = Intent::load_all(&repo.root, &config).expect("intents");
-    let plan = ReleasePlan::from_inputs_with_generator(
-        &repo.root,
-        &config,
-        &intents,
-        None,
-        prior_generator,
-    )
-    .expect("prior-version plan");
+    let output = repo.cli().arg("plan").output().expect("plan command");
+    assert!(output.status.success());
+    let plan: ReleasePlan = serde_json::from_slice(&output.stdout).expect("plan JSON from CLI");
+    let plan = reseal_plan_with_generator(plan, prior_generator);
     fs::write(
         repo.root.join("release-plan.json"),
         plan.to_canonical_json().expect("plan JSON"),
