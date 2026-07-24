@@ -1,0 +1,10 @@
+contract: contract-1
+release-units:
+  garden-notes:
+    path: .
+    tags:
+      primary: garden-notes-v{version}
+    projections:
+      - adapter: npm
+        file: package.json
+        mode: committed

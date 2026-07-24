@@ -1,5 +1,7 @@
 $schema: https://refinery.systems/ontology/technical-design
-relationships: {}
+relationships:
+  related-to:
+    - build-linux-gnu-release-on-pinned-cross-baseline
 objective: >-
   Provide a single, fast, dependency-free CLI that manages change intents,
   version computation, manifest projection, changelogs, tags, and a verifiable
@@ -436,6 +438,22 @@ proposed-design:
     only release-matrix platforms and installs the matching archive after
     checksum verification. A higher-level orchestration action (version-PR
     choreography) is future scope. MSRV and CI conventions follow tagver.
+  linux-gnu-compatibility-baseline: >-
+    Linux x86_64 and ARM64 release archives are dynamically linked GNU
+    executables built through cross-rs 0.2.5 with digest-pinned
+    ghcr.io/cross-rs target images tagged 0.2.5 and sourced from the cross-rs
+    repository tag v0.2.5. Rust 1.85.0 is the release compiler. The documented
+    maximum required glibc symbol version is GLIBC_2.18; release automation
+    verifies every Linux GNU binary with readelf before packaging. Supported
+    GNU/Linux runtime environments are Ubuntu 22.04 LTS and the current Ubuntu
+    environment exercised by the linux-gnu smoke workflow on pinned ubuntu 22.04
+    and ubuntu 24.04 images. Baseline inputs live in Cross.toml and
+    scripts/release/linux-gnu-baseline.env; Cargo caches include those files in
+    their keys so sysroot or image changes invalidate prior build output.
+    Refreshing the baseline is deliberate: update the digest pins, rerun the
+    linux-gnu evidence workflow, and record the new maximum glibc symbol version
+    if linkage changes. Alpine and musl-only environments are outside this GNU
+    contract.
   out-of-scope: >-
     Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
     committing, pushing, or opening pull requests permanently; language

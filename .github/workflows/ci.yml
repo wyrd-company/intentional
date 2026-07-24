@@ -70,3 +70,7 @@ jobs:
           python3 scripts/release/verify-versions.py
       - name: Exercise matching, conflicting, and retry paths
         run: scripts/release/test-retry.sh
+      - name: Guard Linux GNU release baseline and consumer contract
+        run: |
+          scripts/release/assert-release-workflow-baseline.sh
+          scripts/release/assert-consumer-contract.sh

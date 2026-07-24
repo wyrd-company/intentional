@@ -69,6 +69,24 @@ The npm launcher supports these released platform and architecture pairs:
 
 Use Cargo or a source build on other platforms.
 
+## Linux GNU compatibility
+
+The `intentional-linux-x86_64.tar.gz` and `intentional-linux-arm64.tar.gz`
+archives are dynamically linked GNU/Linux executables. Intentional builds both
+through pinned cross-rs 0.2.5 images and verifies that each release binary's
+maximum required glibc symbol version is `GLIBC_2.18` or lower before packaging.
+
+Supported GNU/Linux environments:
+
+| Environment | Execution model |
+| --- | --- |
+| Ubuntu 22.04 LTS | native or containerized |
+| Current Ubuntu LTS/non-LTS used by Intentional smoke automation | native or containerized |
+
+Alpine Linux and other musl-only distributions are outside this GNU contract.
+Use a supported Ubuntu release or build from source when the published GNU
+archives do not match your environment.
+
 ## GitHub Release binaries
 
 Each published GitHub Release is immutable and contains the native archives

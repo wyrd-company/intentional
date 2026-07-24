@@ -87,7 +87,9 @@ jobs:
           "$TAG" CHANGELOG.md "$RUNNER_TEMP/release-notes-preflight.md"
 
       - name: Install cross
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        if: >-
+          matrix.target == 'x86_64-unknown-linux-gnu' ||
+          matrix.target == 'aarch64-unknown-linux-gnu'
         uses: taiki-e/install-action@v2
         with:
           tool: cross@0.2.5
@@ -102,22 +104,33 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: >-
+            ${{ runner.os }}-${{ matrix.target }}-gnu-${{
+            hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+            ${{ runner.os }}-${{ matrix.target }}-gnu-
 
       - name: Build release binary
         shell: bash
         run: |
-          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" || \
+          "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
           cross build --workspace --release --locked --target "${{ matrix.target }}"
           else
           cargo build --workspace --release --locked --target "${{ matrix.target }}"
           fi
 
-      - name: Test release source
-        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --workspace --locked --target "${{ matrix.target }}"
+      - name: Verify Linux GNU linkage contract
+        if: >-
+          matrix.target == 'x86_64-unknown-linux-gnu' ||
+          matrix.target == 'aarch64-unknown-linux-gnu'
+        run: >-
+          scripts/release/verify-linux-gnu-linkage.sh
+          "${{ matrix.bin_path }}" "${{ matrix.target }}"
+
+      - name: Test release source through pinned x86_64 GNU toolchain
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cross test --workspace --locked --target "${{ matrix.target }}"
 
       - name: Assemble deterministic release archive
         shell: bash
