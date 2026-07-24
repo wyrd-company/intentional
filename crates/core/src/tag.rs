@@ -562,7 +562,8 @@ fn verify_plan_generator(generator: &Generator) -> Result<()> {
     if version > current {
         return Err(Error::Validation(format!(
             "release plan generator {} is newer than intentional {}",
-            generator.version, crate::VERSION
+            generator.version,
+            crate::VERSION
         )));
     }
     Ok(())

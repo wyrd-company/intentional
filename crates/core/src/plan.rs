@@ -283,9 +283,7 @@ impl ReleasePlan {
         let tag_order = tag_order(&tags)?;
         let generator = Generator {
             tool: "intentional".to_owned(),
-            version: generator_version
-                .unwrap_or(crate::VERSION)
-                .to_owned(),
+            version: generator_version.unwrap_or(crate::VERSION).to_owned(),
         };
         let payload = PlanPayload {
             contract: &config.contract,
