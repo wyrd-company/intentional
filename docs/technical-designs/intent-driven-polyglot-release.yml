@@ -148,20 +148,27 @@ proposed-design:
     evaluated to a fixed point before the release plan is sealed.
   tag-contract: >-
     Every tag is an annotated release record carrying the interpretation
-    contract, generator name and version, and release-plan digest. A logical
-    release unit has exactly one primary tag and any number of projection tags. All
-    tags for one logical release target the same commit and agree on release-unit
-    version, contract, and plan digest. A projection tag can trigger external
-    automation but does not become lesser evidence or an alternate version
-    source. Named workspace tags carry the same record for a workspace release
-    and can use a plain {version} template. Each workspace tag has its own
-    version stream: its latest matching tag supplies the current version and
-    the highest bump among participating release units supplies its next bump. A
-    workspace tag without an existing stream requires an explicit baseline
-    version. A tag can declare require-phase as before-publication or
-    after-publication; creating it requires an equal --phase value. The phase
-    is an executor declaration bound to the plan. Publication state and
-    registry evidence belong to the external release executor.
+    contract, generator name and version, and release-plan digest. Newly created
+    annotated tags also carry a deterministic tagger identity of
+    Intentional <intentional@wyrd.company> and the target commit's committer
+    timestamp including its timezone offset. The tagger is derived only from the
+    release target commit and stable Intentional identity; it does not use
+    ambient Git configuration, wall-clock time, randomness, host timezone, or
+    network state. Previously published tagger-less Intentional records remain
+    valid release authority and are not rewritten. A logical release unit has
+    exactly one primary tag and any number of projection tags. All tags for one
+    logical release target the same commit and agree on release-unit version,
+    contract, and plan digest. A projection tag can trigger external automation
+    but does not become lesser evidence or an alternate version source. Named
+    workspace tags carry the same record for a workspace release and can use a
+    plain {version} template. Each workspace tag has its own version stream: its
+    latest matching tag supplies the current version and the highest bump among
+    participating release units supplies its next bump. A workspace tag without
+    an existing stream requires an explicit baseline version. A tag can declare
+    require-phase as before-publication or after-publication; creating it
+    requires an equal --phase value. The phase is an executor declaration bound
+    to the plan. Publication state and registry evidence belong to the external
+    release executor.
   tag-ordering: >-
     Tags express observable prerequisites with tag-after. Before creating a
     tag, Intentional resolves every prerequisite tag expected by the plan and

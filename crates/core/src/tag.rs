@@ -347,13 +347,19 @@ impl TagResult {
             .head_id()
             .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
             .detach();
+        let head_commit = repository
+            .find_object(head)
+            .map_err(|error| Error::Git(format!("failed to read HEAD commit: {error}")))?
+            .try_into_commit()
+            .map_err(|error| Error::Git(format!("HEAD is not a commit: {error}")))?;
+        let tagger = tagger_signature(&head_commit)?;
         for tag in &self.tags {
             repository
                 .tag(
                     &tag.name,
                     head,
                     gix::object::Kind::Commit,
-                    None,
+                    Some(tagger),
                     &tag.message,
                     gix::refs::transaction::PreviousValue::MustNotExist,
                 )
@@ -1073,6 +1079,17 @@ fn order_tags(candidates: &BTreeMap<String, TagCandidate>) -> Result<Vec<String>
         visit(id, candidates, &mut visiting, &mut visited, &mut order)?;
     }
     Ok(order)
+}
+
+fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::SignatureRef<'a>> {
+    let committer = commit
+        .committer()
+        .map_err(|error| Error::Git(format!("failed to read committer signature: {error}")))?;
+    Ok(gix::actor::SignatureRef {
+        name: b"Intentional".into(),
+        email: b"intentional@wyrd.company".into(),
+        time: committer.time,
+    })
 }
 
 fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: bool) -> String {
