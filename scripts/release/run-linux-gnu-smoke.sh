@@ -53,7 +53,7 @@ docker run --rm \
     test -d .git
     intentional --version
     set +e
-    intentional --directory /workspace init
+    intentional init
     init_status=$?
     set -e
     if [[ "$init_status" -eq 2 ]]; then
@@ -61,10 +61,10 @@ docker run --rm \
     elif [[ "$init_status" -ne 0 ]]; then
       exit "$init_status"
     fi
-    intentional --directory /workspace tag --baseline --version garden-notes=1.0.0
-    intentional --directory /workspace status
-    intentional --directory /workspace check
-    intentional --directory /workspace plan
+    intentional tag --baseline --version garden-notes=1.0.0
+    intentional status
+    intentional check
+    intentional plan
   ' >"$smoke_log" 2>&1
 smoke_status=$?
 set -e
