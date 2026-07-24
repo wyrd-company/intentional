@@ -17,32 +17,32 @@ expected_assets=(
 )
 
 for asset in "${expected_assets[@]}"; do
-  if ! rg -Fq "$asset" "$root/scripts/release/ensure-github-release.sh"; then
+  if ! grep -Fq "$asset" "$root/scripts/release/ensure-github-release.sh"; then
     echo "ensure-github-release.sh is missing asset $asset" >&2
     exit 1
   fi
 done
 
 for asset in intentional-linux-x86_64.tar.gz intentional-linux-arm64.tar.gz; do
-  if ! rg -Fq "$asset" "$root/npm/install.js"; then
+  if ! grep -Fq "$asset" "$root/npm/install.js"; then
     echo "npm/install.js is missing asset $asset" >&2
     exit 1
   fi
-  if ! rg -Fq "$asset" "$root/action.yml"; then
+  if ! grep -Fq "$asset" "$root/action.yml"; then
     echo "action.yml is missing asset $asset" >&2
     exit 1
   fi
-  if ! rg -Fq "$asset" "$root/scripts/release/render-homebrew-formula.sh"; then
+  if ! grep -Fq "$asset" "$root/scripts/release/render-homebrew-formula.sh"; then
     echo "render-homebrew-formula.sh is missing asset $asset" >&2
     exit 1
   fi
-  if ! rg -Fq "$asset" "$root/docs/install.md"; then
+  if ! grep -Fq "$asset" "$root/docs/install.md"; then
     echo "docs/install.md is missing asset $asset" >&2
     exit 1
   fi
 done
 
-if ! rg -q 'f"\{artifact\}/"' "$root/scripts/release/package-archive.py"; then
+if ! grep -Fq 'f"{artifact}/"' "$root/scripts/release/package-archive.py"; then
   echo "package-archive.py must preserve artifact directory layout." >&2
   exit 1
 fi

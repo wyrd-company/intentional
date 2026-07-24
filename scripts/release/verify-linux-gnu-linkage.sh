@@ -38,12 +38,12 @@ file "$binary"
 readelf -l "$binary" | sed -n '/INTERP/,+1p'
 readelf -d "$binary" | sed -n '/NEEDED/p' || true
 
-version_symbols="$(readelf --version --symbols "$binary" 2>/dev/null || readelf -V "$binary")"
+version_symbols="$(readelf -V "$binary")"
 printf '%s\n' "$version_symbols"
 
 max_glibc="$(
   printf '%s\n' "$version_symbols" |
-    rg -o 'GLIBC_[0-9]+(\.[0-9]+)*' |
+    grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' |
     sort -V |
     tail -1
 )"

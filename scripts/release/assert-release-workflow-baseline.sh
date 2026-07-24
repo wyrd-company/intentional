@@ -22,40 +22,40 @@ done
 # shellcheck disable=SC1090
 source "$baseline_env"
 
-if rg -n 'cargo build --workspace --release.*x86_64-unknown-linux-gnu' "$workflow"; then
+if grep -En 'cargo build --workspace --release.*x86_64-unknown-linux-gnu' "$workflow" >/dev/null; then
   echo "Release workflow must not build x86_64-unknown-linux-gnu with host cargo." >&2
   exit 1
 fi
 
-if ! rg -q 'cross build --workspace --release --locked --target "\$\{\{ matrix\.target \}\}"' "$workflow"; then
+if ! grep -Fq 'cross build --workspace --release --locked --target' "$workflow"; then
   echo "Release workflow must build Linux GNU targets through cross." >&2
   exit 1
 fi
 
-if ! rg -q 'x86_64-unknown-linux-gnu' "$workflow" || ! rg -q 'aarch64-unknown-linux-gnu' "$workflow"; then
+if ! grep -Fq 'x86_64-unknown-linux-gnu' "$workflow" || ! grep -Fq 'aarch64-unknown-linux-gnu' "$workflow"; then
   echo "Release workflow must reference both Linux GNU targets." >&2
   exit 1
 fi
 
-if ! rg -q 'cross@0\.2\.5' "$workflow"; then
+if ! grep -Fq 'cross@0.2.5' "$workflow"; then
   echo "Release workflow must install cross 0.2.5 for Linux GNU builds." >&2
   exit 1
 fi
 
-if ! rg -q "hashFiles\\('Cross\\.toml'" "$workflow" || \
-   ! rg -q "scripts/release/linux-gnu-baseline\\.env" "$workflow"; then
+if ! grep -Fq "hashFiles('Cross.toml'" "$workflow" || \
+   ! grep -Fq 'scripts/release/linux-gnu-baseline.env' "$workflow"; then
   echo "Release workflow cache key must include the Linux GNU baseline inputs." >&2
   exit 1
 fi
 
 for image in "$X86_64_GNU_CROSS_IMAGE" "$AARCH64_GNU_CROSS_IMAGE"; do
-  if ! rg -Fq "$image" "$cross_toml"; then
+  if ! grep -Fq "$image" "$cross_toml"; then
     echo "Cross.toml is missing pinned image: $image" >&2
     exit 1
   fi
 done
 
-if rg -n 'ghcr\.io/cross-rs/[^:]+:(main|latest)' "$cross_toml"; then
+if grep -En 'ghcr\.io/cross-rs/[^:]+:(main|latest)' "$cross_toml" >/dev/null; then
   echo "Cross.toml must not reference mutable cross image tags." >&2
   exit 1
 fi
