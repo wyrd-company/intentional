@@ -29,6 +29,9 @@ docker run --rm \
   -w /workspace \
   "$runtime_image" \
   bash -euxo pipefail -c '
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq git >/dev/null
     export PATH="/workspace:$PATH"
     git init
     git config user.email "fixture@example.invalid"
