@@ -43,13 +43,13 @@ smoke_log="$workspace/smoke.log"
 set +e
 docker run --rm \
   --user "${user_id}:${group_id}" \
-  -v "$workspace:/workspace:rw" \
-  -w /workspace \
-  -e HOME=/workspace/.home \
-  -e PATH=/workspace:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  -v "$workspace:/smoke:rw" \
+  -w /smoke \
+  -e HOME=/smoke/.home \
+  -e PATH=/smoke:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
   "$runtime_image" \
   bash -euxo pipefail -c '
-    cd /workspace
+    cd /smoke
     test -d .git
     intentional --version
     set +e
