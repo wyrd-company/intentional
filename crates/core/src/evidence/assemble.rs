@@ -1128,6 +1128,100 @@ mod tests {
     use crate::evidence::contribution::{artifact_name, contribute, ContributionRequest};
     use crate::executor::fixture::Workspace;
 
+    /// Every published schema that enumerates the retrieval modes.
+    const MODE_SCHEMAS: [&str; 2] = [
+        "publisher-evidence.json-schema.yml",
+        "publication-observation.json-schema.yml",
+    ];
+
+    // The mode set is written down in four places: this enum, the schema of the
+    // document a recipe writes, the schema of the fragment verification derives
+    // from it, and the live check that decides which modes a published release
+    // may still be retrieved by. Widening the enum alone is silent -- nothing
+    // deserializes these schemas at runtime -- so a publication would write a
+    // fragment that fails its own published schema and only a consumer
+    // validating the release evidence would ever find out. Reading the schemas
+    // here is what makes the enum and the documents one decision.
+    #[test]
+    fn every_published_schema_enumerates_the_retrieval_modes_this_enum_admits() {
+        let admitted = [
+            CleanClientMode::Public,
+            CleanClientMode::AuthenticatedDraft,
+            CleanClientMode::AuthenticatedRegistry,
+        ]
+        .into_iter()
+        .map(|mode| {
+            serde_yaml::to_string(&mode)
+                .expect("a mode serializes")
+                .trim()
+                .to_owned()
+        })
+        .collect::<BTreeSet<_>>();
+
+        for name in MODE_SCHEMAS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/specifications")
+                .join(name);
+            let document: serde_yaml::Value = serde_yaml::from_str(
+                &std::fs::read_to_string(&path).expect("the published schema is readable"),
+            )
+            .expect("the published schema parses");
+            let enumerated = mode_enumerations(&document);
+            assert!(
+                !enumerated.is_empty(),
+                "{name} enumerates the retrieval modes somewhere"
+            );
+            for (pointer, values) in enumerated {
+                assert_eq!(
+                    values, admitted,
+                    "{name} at {pointer} enumerates the modes this crate admits"
+                );
+            }
+        }
+    }
+
+    /// Every `mode` enumeration one schema document declares, by rough location.
+    ///
+    /// The search is by property name rather than by a fixed path so a schema
+    /// that grows a second `mode` enumeration is read too, instead of passing
+    /// because the one path this knew about still agreed.
+    fn mode_enumerations(document: &serde_yaml::Value) -> Vec<(String, BTreeSet<String>)> {
+        fn walk(
+            value: &serde_yaml::Value,
+            path: &str,
+            found: &mut Vec<(String, BTreeSet<String>)>,
+        ) {
+            let Some(mapping) = value.as_mapping() else {
+                if let Some(sequence) = value.as_sequence() {
+                    for (index, item) in sequence.iter().enumerate() {
+                        walk(item, &format!("{path}/{index}"), found);
+                    }
+                }
+                return;
+            };
+            for (key, child) in mapping {
+                let key = key.as_str().unwrap_or_default();
+                let child_path = format!("{path}/{key}");
+                if key == "mode" {
+                    if let Some(values) = child.get("enum").and_then(serde_yaml::Value::as_sequence)
+                    {
+                        found.push((
+                            child_path.clone(),
+                            values
+                                .iter()
+                                .filter_map(|value| value.as_str().map(str::to_owned))
+                                .collect(),
+                        ));
+                    }
+                }
+                walk(child, &child_path, found);
+            }
+        }
+        let mut found = Vec::new();
+        walk(document, "", &mut found);
+        found
+    }
+
     const SOURCE: &str = "1111111111111111111111111111111111111111";
     const RELEASE: &str = "2222222222222222222222222222222222222222";
     const TAG_OBJECT: &str = "3333333333333333333333333333333333333333";

@@ -1002,10 +1002,21 @@ fn verify_live(
             None => findings.push(format!(
                 "live verification of {identity} performed no consumer retrieval"
             )),
-            Some(retrieval) if retrieval.mode != CleanClientMode::Public => findings.push(format!(
-                "live retrieval of {identity} was performed by a {:?} client rather than a public one",
-                retrieval.mode
-            )),
+            // Live verification runs after closure, so what a destination
+            // admits then is not always what it admitted during publication. A
+            // draft-dependent publisher sealed `authenticated-draft` against a
+            // Release that is now published, and its consumer path has become
+            // the public one; a destination that serves no anonymous client
+            // never had a public path and still does not. Requiring `public` of
+            // everything reports the second as a finding for doing exactly what
+            // its recipe fixes.
+            Some(retrieval) if retrieval.mode != live_mode(fragment.clean_client.mode) => {
+                findings.push(format!(
+                    "live retrieval of {identity} was performed by a {:?} client, but a published release at this destination is retrieved by a {:?} one",
+                    retrieval.mode,
+                    live_mode(fragment.clean_client.mode)
+                ))
+            }
             Some(retrieval) if retrieval.digest != fragment.clean_client.digest => {
                 findings.push(format!(
                     "live retrieval of {identity} produced {} but the evidence records {}",
@@ -1026,6 +1037,20 @@ fn verify_live(
 /// authenticated readback of a Release asset. A publisher whose subject does
 /// not live in the Release has nothing here to read, so it is reported as
 /// unverifiable rather than as either a proved or a broken publication.
+/// Retrieval mode a published release admits, given what publication recorded.
+///
+/// Publication happened before the GitHub Release was published, so a
+/// draft-dependent destination's sealed `authenticated-draft` describes a
+/// window that has closed: its consumer path is public now. A destination that
+/// admits no anonymous read is the one whose mode does not change, because
+/// nothing about closure gives it one.
+const fn live_mode(sealed: CleanClientMode) -> CleanClientMode {
+    match sealed {
+        CleanClientMode::AuthenticatedRegistry => CleanClientMode::AuthenticatedRegistry,
+        CleanClientMode::Public | CleanClientMode::AuthenticatedDraft => CleanClientMode::Public,
+    }
+}
+
 fn verify_live_readback(
     repository: &str,
     evidence: &ReleaseEvidence,
@@ -1857,6 +1882,99 @@ release-units:
             declared,
             ["release", "assets", "asset_bytes", "attestation"],
             "a write operation added to the seam would let verification alter what it observes"
+        );
+    }
+
+    // Live verification runs after closure, so the mode a destination admits
+    // then is not always the mode publication recorded. A draft-dependent
+    // publisher's Release is published by now and its consumer path has become
+    // the public one; a destination that serves no anonymous client never had a
+    // public path and closure does not give it one. Holding every live
+    // retrieval to `public` reported the second as a finding for doing exactly
+    // what its recipe fixes, which is a finding about the check rather than
+    // about the release.
+    #[test]
+    fn live_verification_holds_each_destination_to_the_mode_it_still_admits() {
+        let observed = |sealed: CleanClientMode, live: CleanClientMode| {
+            let released = released(&format!("verify-live-mode-{sealed:?}-{live:?}"));
+            let mut fragment = fragment_for(
+                &released,
+                "component",
+                PublisherKind::Npm,
+                "component@1.0.0",
+                DELIVERABLE,
+            );
+            fragment.clean_client.mode = sealed;
+            released.seal(&phase_evidence(&released, &fragment));
+            let observer = FakeObserver(PublicationObservation {
+                schema: PUBLICATION_OBSERVATION_SCHEMA.to_owned(),
+                contract: PUBLICATION_OBSERVATION_CONTRACT.to_owned(),
+                release_unit: "component".to_owned(),
+                publisher: PublisherKind::Npm,
+                target: "primary".to_owned(),
+                state: ObservationState::Present,
+                subject: None,
+                packager: None,
+                build_provenance: Vec::new(),
+                attached_metadata: Vec::new(),
+                destination: Some(fragment.destination.clone()),
+                retrieval: Some(CleanClient {
+                    mode: live,
+                    client: "npm".to_owned(),
+                    version: "11.5.1".to_owned(),
+                    digest: fragment.clean_client.digest.clone(),
+                }),
+                destination_aliases: Vec::new(),
+                conflict: None,
+            });
+            let evidence = evidence(&released, fragment);
+            let source = source(&evidence);
+            verify_release_observed(
+                released.workspace.root(),
+                "1.0.0",
+                true,
+                &source,
+                Some(&observer),
+            )
+            .map(|verification| verification.report())
+        };
+
+        // A destination that admits no anonymous read keeps the mode it sealed,
+        // and does not acquire a public path by being closed.
+        observed(
+            CleanClientMode::AuthenticatedRegistry,
+            CleanClientMode::AuthenticatedRegistry,
+        )
+        .expect("a registry without anonymous read verifies live under its own mode");
+        let error = observed(
+            CleanClientMode::AuthenticatedRegistry,
+            CleanClientMode::Public,
+        )
+        .expect_err("a public claim at a registry without anonymous read is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("was performed by a Public client")
+                && error
+                    .to_string()
+                    .contains("retrieved by a AuthenticatedRegistry one"),
+            "{error}"
+        );
+
+        // A draft-dependent destination's Release is published by now, so its
+        // live retrieval is the public one its sealed mode could not be.
+        observed(CleanClientMode::AuthenticatedDraft, CleanClientMode::Public)
+            .expect("a draft-dependent publication verifies live through the public path");
+        let error = observed(
+            CleanClientMode::AuthenticatedDraft,
+            CleanClientMode::AuthenticatedDraft,
+        )
+        .expect_err("a draft claim against a published Release is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("was performed by a AuthenticatedDraft client"),
+            "{error}"
         );
     }
 

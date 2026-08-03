@@ -30,9 +30,14 @@ description: >-
   proved. `public` means the recipe retrieved the release through the
   destination's normal unauthenticated consumer path. `authenticated-draft`
   means the target depended on an asset of the still-draft GitHub Release and
-  retrieved those bytes through the authenticated GitHub API. Draft-dependent
-  publication records `authenticated-draft` and never represents that check as
-  public retrieval.
+  retrieved those bytes through the authenticated GitHub API.
+  `authenticated-registry` means the destination admits no anonymous read at
+  all, so its normal client path is an authenticated one and the recipe drove
+  that path with the credential it always requires. The maintained recipe for
+  each destination fixes which mode its evidence may record, so a recipe never
+  represents one check as another: draft-dependent publication never claims
+  public retrieval, and a destination that serves anonymous clients never claims
+  an authenticated one.
 
   The credential-free verification Action projects `evidence-path` as the path
   of this completed schema-backed fragment. The output is a file location, not

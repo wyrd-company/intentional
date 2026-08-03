@@ -98,7 +98,10 @@ properties:
     required: [ mode, client, version, digest ]
     properties:
       mode:
-        enum: [ public, authenticated-draft ]
+        description: >-
+          Consumer path the closure-time retrieval used. The maintained recipe
+          for the destination fixes which one its evidence may record.
+        enum: [ public, authenticated-draft, authenticated-registry ]
       client:
         type: string
         minLength: 1
