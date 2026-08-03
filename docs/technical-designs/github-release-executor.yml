@@ -343,7 +343,13 @@ proposed-design:
     pinned to complete commit identities. Intentional's own Actions are pinned
     to the released version that derived the workflow, because derivation must
     name a revision carrying the release this build belongs to and that commit
-    does not exist when the workflow is derived.
+    does not exist when the workflow is derived. A version is a tag and a tag
+    can be repointed, so every consuming repository holds a reference the
+    publishing repository can move after the fact. That is the property this
+    pinning gives up, and it is accepted on the same ground the trust boundary
+    below rests on: the publishing repository already supplies the binary whose
+    verification decides whether the authority transition happens at all, so a
+    repointed tag reaches a repository that was already trusting that channel.
 
     A privileged job that reaches a portable command through an Action fetches
     and executes Intentional-owned code and installs a released binary over the
