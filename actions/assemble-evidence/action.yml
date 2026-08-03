@@ -34,7 +34,9 @@ runs:
   steps:
     - name: Install intentional
       shell: bash
-      run: bash "$GITHUB_ACTION_PATH/../install.sh" "${{ inputs.intentional-version }}"
+      env:
+        INTENTIONAL_VERSION: ${{ inputs.intentional-version }}
+      run: bash "$GITHUB_ACTION_PATH/../install.sh" "$INTENTIONAL_VERSION"
 
     - name: Assemble release evidence
       shell: bash

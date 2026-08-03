@@ -36,7 +36,9 @@ runs:
   steps:
     - name: Install intentional
       shell: bash
-      run: bash "$GITHUB_ACTION_PATH/../install.sh" "${{ inputs.intentional-version }}"
+      env:
+        INTENTIONAL_VERSION: ${{ inputs.intentional-version }}
+      run: bash "$GITHUB_ACTION_PATH/../install.sh" "$INTENTIONAL_VERSION"
 
     - name: Construct contribution
       id: contribution
@@ -70,8 +72,10 @@ runs:
         echo "$RESULT"
 
         ARTIFACT="$(printf '%s\n' "$RESULT" | sed -n 's/^artifact-name: //p')"
-        if [[ -z "$ARTIFACT" ]]; then
-          echo "::error::intentional evidence contribute did not name its transport artifact."
+        # Only a value matching the transport contract reaches GITHUB_OUTPUT, so
+        # no other stdout line can become a second output assignment.
+        if [[ ! "$ARTIFACT" =~ ^intentional-contribution-[0-9a-f]{64}-[A-Za-z0-9_-]+-[0-9]+$ ]]; then
+          echo "::error::intentional evidence contribute did not name one transport artifact."
           exit 1
         fi
         # A step output routes the transport name to the upload step only; the
