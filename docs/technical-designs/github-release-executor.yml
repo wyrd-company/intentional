@@ -335,7 +335,10 @@ proposed-design:
     built-subject document travel together as one workflow artifact the
     publisher jobs receive; the before-publication tag job reads a
     document-only artifact of the same build, because it compares documents and
-    does not need the bytes.
+    does not need the bytes. The build job also projects the version and digest
+    it recorded as job outputs, because the publisher recipes write both into
+    their observations and assembly compares them against what the phase tag
+    sealed.
 
     A managed upload job depends on every build job and precedes every
     publisher job. It is repository-local and runs inside the configured
@@ -395,10 +398,39 @@ proposed-design:
     written whether or not the invocation created a tag, so a retried
     publication reaches assembly with the evidence the release carries.
 
-    Each publisher job runs `intentional verify publication` with explicit
+    Between receiving the subject and verifying the publication, a publisher job
+    runs the repository-local steps its maintained recipe derives: registry
+    authentication, promotion, destination readback, and the pre-closure
+    consumer retrieval. Those steps hold the publisher credentials, so they are
+    `run:` bodies rather than Intentional-owned Actions, and every value they
+    read arrives through `env:` because an expression expanded inside a script
+    is substitution into shell source. Their one output is the schema-backed
+    publication observation.
+
+    A recipe observes and does not adjudicate. A destination that has not
+    indexed the release yet is recorded as pending and one holding different
+    bytes as conflict, and the step succeeds either way, so the decision about
+    whether a publication completed stays in the command that reads the
+    observation.
+
+    Nothing a recipe writes about the release is asserted by the recipe where
+    the graph already proved it. The subject's version and digest are projected
+    from the build job that recorded them, which derived the version from the
+    verified global release tag and the digest from the bytes it emitted. A
+    recipe reading a version out of its own package manifest instead could
+    publish under a version the plan never assigned and record that as
+    agreement.
+
+    Where a packager has no upload-only client and publication necessarily
+    re-packages the sources, notably Cargo, the recipe proves the packaging is
+    reproducible before it uploads anything: it re-packages and refuses to
+    publish unless the result is byte-identical to the subject the build
+    produced. A published version is immutable, so discovering that drift from
+    the destination readback afterwards would be too late to prevent it.
+
+    Each publisher job then runs `intentional verify publication` with explicit
     release-unit and publisher identity and the target selector required by the
-    adapter after destination readback and its pre-closure consumer checks. The
-    command produces the
+    adapter. The command produces the
     schema-backed publisher evidence fragment consumed by
     `intentional evidence assemble`.
 
@@ -472,6 +504,30 @@ proposed-design:
     failure. Docker Hub uses a username variable and personal access token by
     default, conventionally `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
 
+    npm's primary destination publishes through registry trusted publishing and
+    conventionally names its bootstrap secret `NPM_TOKEN`. The recipe installs a
+    client new enough to perform the exchange rather than trusting whichever
+    client the runner image carries, because an older client looks for a token a
+    trusted-publishing repository deliberately does not hold and reports the
+    absence rather than the cause. GitHub Package Registry implements no trusted
+    publishing and needs no secret: it accepts the repository-scoped workflow
+    token, which expires with the job.
+
+    Cargo's crates.io primary exchanges the run's workflow identity for a
+    short-lived publish token and conventionally names its bootstrap secret
+    `CARGO_REGISTRY_TOKEN`. A configured Cargo registry that is not crates.io
+    defines its own trusted publishing, if any, so the maintained recipe
+    authenticates it with the token every such registry does accept, read from
+    the conventional or overridden secret and presented through the
+    registry-specific `CARGO_REGISTRIES_<NAME>_TOKEN` variable.
+
+    The workflow identity is granted only to publisher jobs whose recipe
+    presents one, whether to exchange it for a publish token or to bind a
+    provenance attestation to the run. A destination authenticated by a
+    repository-scoped or configured token is derived without it, because an
+    identity a job never presents is still a credential every step of that job
+    can reach.
+
   build-provenance-and-attached-metadata: >-
     Maintained recipes generate strong intrinsic release evidence when the
     selected packager and destination support it without unusual account
@@ -504,8 +560,16 @@ proposed-design:
     A publisher command is followed by destination readback that verifies the
     expected identity, version, and observable immutable bytes or digest. A
     publisher whose consumer path is independent of GitHub draft assets then
-    requires a public clean client to resolve and retrieve the release through
-    the destination's normal client path before closure. Each adapter defines a
+    requires a clean client to resolve and retrieve the release through the
+    destination's normal client path before closure. Most destinations serve
+    that path anonymously and their evidence records public retrieval. A
+    destination that admits no anonymous read at all, GitHub Package Registry
+    among the maintained ones, has an authenticated normal client path, and its
+    evidence says so rather than claiming a public retrieval nobody could
+    perform or omitting the consumer check entirely. The maintained recipe for
+    each destination fixes which of the three retrieval modes its evidence may
+    record, so a recipe never chooses between reporting its retrieval faithfully
+    and passing verification. Each adapter defines a
     bounded eventual-consistency policy containing retryable pending responses,
     intervals, backoff, and a deadline. A missing or not-yet-indexed result
     remains pending until the deadline, while an observable identity, checksum,

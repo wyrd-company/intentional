@@ -14,6 +14,7 @@ world-schema:
   publication_visible: boolean
   clean_client_retrieval: boolean
   authenticated_draft_retrieval: boolean
+  authenticated_registry_retrieval: boolean
   public_client_retrieval: boolean
   evidence_rewritten: boolean
   publication_resubmitted: boolean
@@ -343,6 +344,36 @@ rules:
               clean_client_retrieval: true
               public_client_retrieval: true
               evidence_complete: true
+      complete-after-authenticated-registry-retrieval:
+        addresses: Consumer-path verification of a destination without anonymous read
+        steps:
+          - given: A destination serves its normal client path only to authenticated clients
+            world:
+              publisher_option: npm
+              target_option: github
+              publication_visible: true
+              destination_digest_matches: true
+          - when: A clean client authenticates to that path and retrieves the released version
+          - then: Evidence records authenticated-registry retrieval rather than a public one
+            world:
+              authenticated_registry_retrieval: true
+              public_client_retrieval: false
+              clean_client_retrieval: true
+              evidence_complete: true
+      reject-a-retrieval-mode-the-recipe-does-not-fix:
+        addresses: Consumer-path verification of a destination without anonymous read
+        steps:
+          - given: The npmjs primary destination serves anonymous clients
+            world:
+              publisher_option: npm
+              target_option: npmjs
+              publication_visible: true
+          - when: The observation claims authenticated-registry retrieval
+          - then: Verification refuses the fragment and names the mode the recipe fixes
+            world:
+              evidence_verifies: false
+              evidence_complete: false
+              diagnostic: Retrieval mode disagrees with the mode the maintained recipe fixes
       verify-draft-dependent-publisher-authentically:
         addresses: Pre-closure draft-dependent consumer verification
         steps:
