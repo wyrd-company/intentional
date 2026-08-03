@@ -7,11 +7,15 @@ description: >-
   workflow kind and path, binds the comparison to the SHA-256 digest of the
   exact input bytes. A conformant or different result records the digest of the
   proposed output bytes, carries the same unified patch shown by patch output,
-  and reports whether the requested transformation was applied. A blocked
-  result carries diagnostics instead of a proposed transformation.
+  and reports whether the requested transformation was applied. It may also
+  carry advisory diagnostics naming consequences a user should read before
+  accepting the transformation. A blocked result carries diagnostics instead of
+  a proposed transformation.
 validation-criteria: >-
   A result conforms when it validates against `workflow-diff.json-schema.yml`,
   the input digest matches the compared workflow bytes, applying the unified
   patch to those bytes produces the declared output digest, and status, changed,
   and applied agree with the transformation and command mode. A blocked result
-  has at least one diagnostic and no output claim.
+  has at least one diagnostic and no output claim. Every diagnostic on a
+  conformant or different result is advisory and never contradicts the
+  transformation it accompanies.

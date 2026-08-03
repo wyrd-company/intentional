@@ -125,7 +125,8 @@ pub struct WorkflowComparison {
     pub patch: String,
     /// Whether the transformation was written to the workflow.
     pub applied: bool,
-    /// Reasons a blocked comparison produced no transformation.
+    /// Reasons a blocked comparison produced no transformation, or advisories a
+    /// user should read before accepting a proposed one.
     pub diagnostics: Vec<WorkflowDiagnostic>,
     /// Proposed workflow bytes.
     output: Option<String>,
@@ -281,8 +282,8 @@ pub fn compare_configured_workflow(
         }
     };
 
-    let output = match reconcile(document, &contract) {
-        Ok(output) => output,
+    let (output, diagnostics) = match reconcile(document, &contract) {
+        Ok(result) => result,
         Err(diagnostic) => return Ok(blocked(role, relative, file, text, vec![diagnostic])),
     };
     let patch = textdiff::unified(&relative.display().to_string(), &text, &output);
@@ -299,7 +300,7 @@ pub fn compare_configured_workflow(
         output_digest: Some(digest(&output)),
         patch,
         applied: false,
-        diagnostics: Vec::new(),
+        diagnostics,
         output: Some(output),
         file,
     })
@@ -353,10 +354,14 @@ struct WorkflowContract {
 }
 
 /// Apply a contract to a repository-owned workflow document.
+///
+/// Returns the proposed bytes and any advisory diagnostic the user should read
+/// before accepting them.
 fn reconcile(
     mut document: Document,
     contract: &WorkflowContract,
-) -> std::result::Result<String, WorkflowDiagnostic> {
+) -> std::result::Result<(String, Vec<WorkflowDiagnostic>), WorkflowDiagnostic> {
+    let mut advisories = Vec::new();
     // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
     // Expanding them first means adding a required trigger never discards the
     // repository's own.
@@ -379,7 +384,22 @@ fn reconcile(
             .set_before(&["concurrency"], &contract.concurrency, "jobs")
             .map_err(unparsable)?;
     }
-    if !read_only_permissions(document.get(&["permissions"]).map_err(unparsable)?.as_ref()) {
+    let permissions = document.get(&["permissions"]).map_err(unparsable)?;
+    if !read_only_permissions(permissions.as_ref()) {
+        // Intentional owns the safe default, but narrowing a grant the
+        // repository's own jobs may depend on is not something to do silently.
+        let narrowed = narrowed_scopes(permissions.as_ref());
+        if !narrowed.is_empty() {
+            advisories.push(WorkflowDiagnostic::at(
+                "permissions-narrowed",
+                format!(
+                    "the safe top-level permission default drops the workflow-level {}; any repository-owned job relying on {} must declare it per job",
+                    narrowed.join(", "),
+                    if narrowed.len() == 1 { "it" } else { "them" }
+                ),
+                "permissions",
+            ));
+        }
         document
             .set_before(&["permissions"], &read_only_default(), "jobs")
             .map_err(unparsable)?;
@@ -411,14 +431,65 @@ fn reconcile(
     }
 
     let output = document.into_text();
-    // A transformation that does not parse is never offered to the user.
-    Document::parse(&output).map_err(|error| {
+    // Well-formed YAML is not proof that the transformation carries the
+    // contract, so the proposed bytes are read back and checked against it the
+    // way configuration edits are checked against their validated model.
+    let parsed: Value = serde_yaml::from_str(&output).map_err(|error| {
         WorkflowDiagnostic::new(
             "transformation-invalid",
             format!("the derived transformation is not valid YAML: {error}"),
         )
     })?;
-    Ok(output)
+    carries_contract(&parsed, contract)?;
+    Ok((output, advisories))
+}
+
+/// Prove the proposed bytes carry every part of the derived contract.
+fn carries_contract(
+    parsed: &Value,
+    contract: &WorkflowContract,
+) -> std::result::Result<(), WorkflowDiagnostic> {
+    let invalid = |location: &str| {
+        WorkflowDiagnostic::at(
+            "transformation-invalid",
+            format!("the derived transformation does not carry the contract at {location}"),
+            location,
+        )
+    };
+    for (path, required) in &contract.triggers {
+        let mut current = Some(parsed);
+        for segment in path {
+            current = current.and_then(|value| value.get(segment.as_str()));
+        }
+        if trigger_update(current, required).is_some() {
+            return Err(invalid(&path.join(".")));
+        }
+    }
+    if parsed.get("concurrency") != Some(&contract.concurrency) {
+        return Err(invalid("concurrency"));
+    }
+    if !read_only_permissions(parsed.get("permissions")) {
+        return Err(invalid("permissions"));
+    }
+    for (id, body) in &contract.jobs {
+        if parsed.get("jobs").and_then(|jobs| jobs.get(id.as_str())) != Some(body) {
+            return Err(invalid(&format!("jobs.{id}")));
+        }
+    }
+    Ok(())
+}
+
+/// Scopes an existing permission block grants beyond read-only.
+fn narrowed_scopes(permissions: Option<&Value>) -> Vec<String> {
+    match permissions {
+        Some(Value::Mapping(mapping)) => mapping
+            .iter()
+            .filter(|(_, value)| !matches!(value.as_str(), Some("read" | "none")))
+            .filter_map(|(scope, value)| Some(format!("{}: {}", scope.as_str()?, value.as_str()?)))
+            .collect(),
+        Some(Value::String(scope)) => vec![format!("permissions: {scope}")],
+        _ => Vec::new(),
+    }
 }
 
 fn unparsable(error: Error) -> WorkflowDiagnostic {
@@ -518,35 +589,53 @@ fn derive_contract(
         .map_err(|error| vec![WorkflowDiagnostic::new("prefix-invalid", error.to_string())])?;
     let gates = github.workflow(role).gates.clone();
     match role {
-        WorkflowRole::Release => Ok(release_contract(&namespaces, &gates)),
+        WorkflowRole::Release => release_contract(&namespaces, &gates),
         WorkflowRole::Publish => publish_contract(root, config, &namespaces, &gates),
     }
 }
 
-fn release_contract(namespaces: &PrefixNamespaces, gates: &[String]) -> WorkflowContract {
+fn release_contract(
+    namespaces: &PrefixNamespaces,
+    gates: &[String],
+) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
     let prepare = format!("{}prepare", namespaces.job);
     let release = format!("{}release", namespaces.job);
     let mut needs = vec![prepare.clone()];
     needs.extend(gates.iter().cloned());
-    WorkflowContract {
+    let jobs = vec![
+        (prepare, job(RELEASE_PREPARE_JOB, namespaces, &[])),
+        (
+            release,
+            job(
+                RELEASE_AUTHORITY_JOB,
+                namespaces,
+                &[("@NEEDS@", &render_list(&needs))],
+            ),
+        ),
+    ];
+    Ok(WorkflowContract {
         namespaces: namespaces.clone(),
         triggers: vec![(
             vec!["on".to_owned(), "workflow_dispatch".to_owned()],
             Value::Null,
         )],
         concurrency: concurrency(&namespaces.environment),
-        jobs: vec![
-            (prepare, job(RELEASE_PREPARE_JOB, namespaces, &[])),
-            (
-                release,
-                job(
-                    RELEASE_AUTHORITY_JOB,
-                    namespaces,
-                    &[("@NEEDS@", &render_list(&needs))],
-                ),
-            ),
-        ],
+        jobs: rendered_jobs(jobs)?,
+    })
+}
+
+/// Collect rendered managed jobs, reporting a template that did not render.
+fn rendered_jobs(
+    jobs: Vec<(String, std::result::Result<Value, WorkflowDiagnostic>)>,
+) -> std::result::Result<Vec<(String, Value)>, Vec<WorkflowDiagnostic>> {
+    let mut rendered = Vec::new();
+    for (id, body) in jobs {
+        match body {
+            Ok(body) => rendered.push((id, body)),
+            Err(diagnostic) => return Err(vec![diagnostic]),
+        }
     }
+    Ok(rendered)
 }
 
 fn publish_contract(
@@ -607,14 +696,14 @@ fn publish_contract(
         jobs.push((id, publisher_job(namespaces, &verify, publication, config)));
     }
 
-    // Gate contributors are dependencies of assembly so their contributions are
-    // available to it, and of closure so the configured gate governs the final
-    // authority transition.
-    let mut assemble_needs = publisher_jobs.clone();
+    // Tag verification seeds the graph unconditionally so that closure can
+    // never mint repository authority concurrently with the check that proves
+    // the tag it is closing. Gate contributors are dependencies of assembly so
+    // their contributions are available to it, and of closure so the configured
+    // gate governs the final authority transition.
+    let mut assemble_needs = vec![verify.clone()];
+    assemble_needs.extend(publisher_jobs.iter().cloned());
     assemble_needs.extend(gates.iter().cloned());
-    if assemble_needs.is_empty() {
-        assemble_needs.push(verify.clone());
-    }
     let mut close_needs = vec![assemble.clone()];
     close_needs.extend(gates.iter().cloned());
     jobs.push((
@@ -644,7 +733,7 @@ fn publish_contract(
             "{}publish-${{{{ github.ref }}}}",
             namespaces.job.replace('_', "-")
         )),
-        jobs,
+        jobs: rendered_jobs(jobs)?,
     })
 }
 
@@ -702,7 +791,16 @@ fn scalar(value: &str) -> String {
 }
 
 /// Parse a managed job template after substituting its derived values.
-fn job(template: &str, namespaces: &PrefixNamespaces, extra: &[(&str, &str)]) -> Value {
+///
+/// Every substituted value that lands in a scalar position is rendered through
+/// [`scalar`], and a template that still does not parse is reported rather than
+/// panicking: these bodies carry repository-write authority, so an unexpected
+/// configuration-derived id must fail loudly, not silently reshape a job.
+fn job(
+    template: &str,
+    namespaces: &PrefixNamespaces,
+    extra: &[(&str, &str)],
+) -> std::result::Result<Value, WorkflowDiagnostic> {
     let mut rendered = template
         .replace("@JOB@", &namespaces.job)
         .replace("@ENVVAR@", &namespaces.envvar)
@@ -716,7 +814,12 @@ fn job(template: &str, namespaces: &PrefixNamespaces, extra: &[(&str, &str)]) ->
     for (placeholder, value) in extra {
         rendered = rendered.replace(placeholder, value);
     }
-    serde_yaml::from_str(&rendered).expect("maintained job templates are valid YAML")
+    serde_yaml::from_str(&rendered).map_err(|error| {
+        WorkflowDiagnostic::new(
+            "job-template-invalid",
+            format!("a managed job template did not render to valid YAML: {error}"),
+        )
+    })
 }
 
 /// Publisher job derived from one resolved publication and its recipe.
@@ -725,23 +828,37 @@ fn publisher_job(
     verify: &str,
     publication: &SelectedPublication,
     config: &Config,
-) -> Value {
+) -> std::result::Result<Value, WorkflowDiagnostic> {
     let unit = &config.release_units[&publication.release_unit];
     let target = if publication.target == PRIMARY_TARGET {
         String::new()
     } else {
         format!(" --target {}", publication.target)
     };
+    let identity = publication.identity();
+    let slug = identifier(&identity);
+    let verify_command = format!(
+        "intentional verify publication --release-unit {} --publisher {}{target} --output \"${{{{ runner.temp }}}}/{}evidence/{slug}.yml\"",
+        publication.release_unit,
+        publication.publisher.as_str(),
+        namespaces.job
+    );
     job(
         PUBLISH_PUBLISHER_JOB,
         namespaces,
         &[
             ("@NEEDS@", &render_list(&[verify.to_owned()])),
-            ("@IDENTITY@", &publication.identity()),
-            ("@SLUG@", &identifier(&publication.identity())),
-            ("@RELEASE_UNIT@", &publication.release_unit),
-            ("@PUBLISHER@", publication.publisher.as_str()),
-            ("@TARGET_OPTION@", &target),
+            ("@SLUG@", &slug),
+            ("@PUBLISH_NAME@", &scalar(&format!("Publish {identity}"))),
+            (
+                "@VERIFY_NAME@",
+                &scalar(&format!("Verify the {identity} publication")),
+            ),
+            (
+                "@FRAGMENT_NAME@",
+                &scalar(&format!("Upload the {identity} evidence fragment")),
+            ),
+            ("@VERIFY_COMMAND@", &scalar(&verify_command)),
             (
                 "@WORKING_DIRECTORY@",
                 &scalar(&unit.path.display().to_string()),
@@ -779,6 +896,17 @@ fn publisher_permissions(publication: &SelectedPublication) -> String {
     scopes.concat()
 }
 
+/// Managed job templates.
+///
+/// Every managed checkout states `fetch-tags: true` rather than inheriting tags
+/// from `fetch-depth: 0`. The portable commands these jobs invoke derive
+/// version authority and resolve the global release tag from the repository's
+/// tags, so anyone shortening the fetch depth to speed a job up would otherwise
+/// silently remove a guarantee the release protocol depends on.
+///
+/// The rationale cannot live in the emitted workflow: each template is parsed
+/// into a value before it is spliced, and the editor has no comment support, so
+/// managed jobs are emitted comment-free by construction.
 const RELEASE_PREPARE_JOB: &str = r#"
 runs-on: ubuntu-latest
 permissions:
@@ -791,6 +919,7 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
   - name: Construct the release candidate
     run: intentional release prepare --output "${{ runner.temp }}/@JOB@candidate"
@@ -817,6 +946,7 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
   - name: Download the release candidate
     uses: @DOWNLOAD@
@@ -862,6 +992,7 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
   - name: Verify the global release tag
     run: intentional verify release-tag
@@ -881,17 +1012,14 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
-  - name: Publish @IDENTITY@
+  - name: @PUBLISH_NAME@
     working-directory: @WORKING_DIRECTORY@
     run: @PACKAGE_COMMAND@
-  - name: Verify the @IDENTITY@ publication
-    run: >-
-      intentional verify publication
-      --release-unit @RELEASE_UNIT@
-      --publisher @PUBLISHER@@TARGET_OPTION@
-      --output "${{ runner.temp }}/@JOB@evidence/@SLUG@.yml"
-  - name: Upload the @IDENTITY@ evidence fragment
+  - name: @VERIFY_NAME@
+    run: @VERIFY_COMMAND@
+  - name: @FRAGMENT_NAME@
     uses: @UPLOAD@
     with:
       name: @JOB@evidence-@SLUG@
@@ -913,6 +1041,7 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
   - name: Download every evidence fragment
     uses: @DOWNLOAD@
@@ -947,6 +1076,7 @@ steps:
     uses: @CHECKOUT@
     with:
       fetch-depth: 0
+      fetch-tags: true
       persist-credentials: false
   - name: Download the assembled release evidence
     uses: @DOWNLOAD@
@@ -1273,6 +1403,145 @@ jobs:
                 "{trigger} survives shorthand expansion: {triggers:?}"
             );
         }
+    }
+
+    #[test]
+    fn states_the_release_tag_requirement_in_every_managed_checkout() {
+        let workspace = workspace("workflow-fetch-tags");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            let document: Value =
+                serde_yaml::from_str(&workflow(workspace.root(), role)).expect("result parses");
+            let jobs = document["jobs"].as_mapping().expect("jobs");
+            let mut checkouts = 0;
+            for (id, body) in jobs {
+                let Some(id) = id.as_str().filter(|id| id.starts_with("intentional_")) else {
+                    continue;
+                };
+                for step in body["steps"].as_sequence().expect("steps") {
+                    if step
+                        .get("uses")
+                        .and_then(Value::as_str)
+                        .is_some_and(|uses| uses.starts_with("actions/checkout@"))
+                    {
+                        checkouts += 1;
+                        assert_eq!(
+                            step["with"]["fetch-tags"].as_bool(),
+                            Some(true),
+                            "{id} states its release-tag requirement rather than inheriting it"
+                        );
+                    }
+                }
+            }
+            assert!(
+                checkouts > 0,
+                "the {role} workflow checks out in managed jobs"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_the_permission_scopes_the_safe_default_drops() {
+        let workspace = workspace("workflow-permissions");
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non:\n  workflow_dispatch:\npermissions:\n  contents: read\n  id-token: write\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Release, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Different);
+        let advisory = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "permissions-narrowed")
+            .expect("the dropped scope is reported before the user applies it");
+        assert!(
+            advisory.message.contains("id-token: write"),
+            "the advisory names the dropped scope: {}",
+            advisory.message
+        );
+        assert_eq!(advisory.path.as_deref(), Some("permissions"));
+
+        // An already-safe default is left alone and reported as nothing.
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non:\n  workflow_dispatch:\npermissions:\n  contents: read\n  actions: read\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Release, None).expect("comparison");
+        assert!(
+            comparison.diagnostics.is_empty(),
+            "a read-only default is preserved without comment: {:?}",
+            comparison.diagnostics
+        );
+    }
+
+    #[test]
+    fn refuses_a_transformation_that_does_not_carry_the_contract() {
+        let workspace = workspace("workflow-postcondition");
+        let config = Config::load(workspace.root()).expect("config loads");
+        let namespaces = config
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("namespaces");
+        let contract = release_contract(&namespaces, &[]).expect("contract derives");
+        let text = std::fs::read_to_string(workspace.root().join(".github/workflows/release.yml"))
+            .expect("workflow readable");
+        let (output, _) =
+            reconcile(Document::parse(&text).expect("parses"), &contract).expect("reconciles");
+
+        let mut parsed: Value = serde_yaml::from_str(&output).expect("output parses");
+        carries_contract(&parsed, &contract).expect("the real transformation carries the contract");
+
+        // A splicer defect that emits well-formed YAML in the wrong place looks
+        // exactly like this to the post-condition.
+        parsed["jobs"]
+            .as_mapping_mut()
+            .expect("jobs mapping")
+            .remove(Value::String("intentional_prepare".to_owned()));
+        let diagnostic =
+            carries_contract(&parsed, &contract).expect_err("a missing managed job is refused");
+        assert_eq!(diagnostic.code, "transformation-invalid");
+        assert_eq!(diagnostic.path.as_deref(), Some("jobs.intentional_prepare"));
+    }
+
+    #[test]
+    fn orders_closure_after_tag_verification_without_any_publication() {
+        let workspace = workspace("workflow-zero-publications");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace("    cargo: {}\n", ""),
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+
+        let needs = |id: &str| {
+            jobs[&Value::String(id.to_owned())]["needs"]
+                .as_sequence()
+                .expect("needs")
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            needs("intentional_assemble_evidence").contains(&"intentional_verify_tag".to_owned()),
+            "tag verification dominates the graph even with no publication to publish"
+        );
+        assert!(
+            needs("intentional_close_release")
+                .contains(&"intentional_assemble_evidence".to_owned()),
+            "closure stays downstream of assembly"
+        );
+        assert!(
+            needs("intentional_assemble_evidence").contains(&"artifact_check".to_owned()),
+            "the configured publish gate precedes assembly"
+        );
     }
 
     #[test]

@@ -61,9 +61,6 @@ allOf:
           - required: [ patch ]
     else:
       required: [ output-digest, changed, applied, patch ]
-      properties:
-        diagnostics:
-          maxItems: 0
 $defs:
   digest:
     type: string
