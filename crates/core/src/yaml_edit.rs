@@ -295,7 +295,10 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
             continue;
         }
         if content.trim_start().starts_with('#') {
-            if indent_of(content) >= indent {
+            // The mirror of the rule in `trimmed_end`: a `#` line indented past
+            // the container is script text inside the previous entry's value,
+            // so it must neither end that entry nor lead the next one.
+            if indent_of(content) <= indent {
                 pending_comment.get_or_insert(line.start);
             }
             continue;
@@ -352,7 +355,14 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
 /// container is script text inside a literal block scalar, not a comment about
 /// the container: `run: |` bodies routinely end in a shell comment, and
 /// treating one as a container line would splice the next entry into the middle
-/// of somebody's script. Blank lines carry no such ambiguity at any column.
+/// of somebody's script.
+///
+/// Blank lines are pulled back at any column. That is right for every chomping
+/// style but `|+`, which keeps its trailing blank lines as content; pulling
+/// those out of the entry alters the scalar. The post-condition in workflow
+/// reconciliation refuses such a transformation rather than writing it, and
+/// `|+` is rare enough not to justify a scanner that reads chomping
+/// indicators.
 fn trimmed_end(text: &str, floor: usize, mut end: usize, indent: usize) -> usize {
     while end > floor {
         let start = line_start(text, end - 1);
@@ -757,6 +767,58 @@ mod tests {
                 .expect("script"),
             "make build\n# tidy up afterwards\n",
             "the script survives intact"
+        );
+    }
+
+    #[test]
+    fn keeps_a_deep_comment_out_of_the_following_entry_when_inserting_before_an_anchor() {
+        let source = "on:\n  push:\n    branches:\n      - main\n      # only main is released\njobs:\n  test:\n    runs-on: x\n";
+        let mut document = Document::parse(source).expect("parses");
+        document
+            .set_before(&["permissions"], &value("contents: read\n"), "jobs")
+            .expect("inserts before the anchor");
+        assert_eq!(
+            document.text(),
+            "on:\n  push:\n    branches:\n      - main\n      # only main is released\npermissions:\n  contents: read\njobs:\n  test:\n    runs-on: x\n",
+            "a comment about branches stays with branches rather than leading jobs"
+        );
+    }
+
+    #[test]
+    fn keeps_a_deep_comment_out_of_a_following_top_level_key() {
+        let source = "env:\n  BOOTSTRAP: |\n    make build\n    # tidy up afterwards\njobs:\n  test:\n    runs-on: x\n";
+        let mut document = Document::parse(source).expect("parses");
+        document
+            .set_before(&["permissions"], &value("contents: read\n"), "jobs")
+            .expect("inserts before the anchor");
+        assert_eq!(
+            document
+                .get(&["env", "BOOTSTRAP"])
+                .expect("bootstrap")
+                .expect("present")
+                .as_str()
+                .expect("script"),
+            "make build\n# tidy up afterwards\n",
+            "a top-level block scalar keeps its last script line"
+        );
+        assert!(
+            document
+                .text()
+                .contains("    # tidy up afterwards\npermissions:\n"),
+            "the inserted key lands after the scalar, not inside it: {}",
+            document.text()
+        );
+    }
+
+    #[test]
+    fn removes_only_the_entry_asked_for_when_the_one_above_ends_in_a_comment() {
+        let source = "jobs:\n  artifact_check:\n    steps:\n      - run: |\n          make check\n          # leftovers cleaned\n  retired:\n    runs-on: x\n";
+        let mut document = Document::parse(source).expect("parses");
+        assert!(document.remove(&["jobs", "retired"]).expect("removes"));
+        assert_eq!(
+            document.text(),
+            "jobs:\n  artifact_check:\n    steps:\n      - run: |\n          make check\n          # leftovers cleaned\n",
+            "retiring a job leaves the script of the job above it intact"
         );
     }
 
