@@ -61,6 +61,9 @@ reformatting unrelated content:
 | Go modules | `go` | Module version via tags only |
 | Dev Container Features | `json` | `devcontainer-feature.json` version |
 | Dev Container Templates | `json` | `devcontainer-template.json` version |
+| GitHub Actions | none | Action version via tags only |
+| Terraform modules and providers | none | Module version via tags only |
+| Docker/OCI images | none | Image version via tags only |
 | JSON | `json` | Arbitrary field, format-preserving |
 | TOML | `toml` | Arbitrary field, format-preserving |
 | YAML | `yaml` | Arbitrary field, format-preserving |

@@ -270,6 +270,16 @@ Intentional rejects unknown release units, invalid bumps, and empty prose.
 | `devcontainer-feature.json` | `json` | `committed` |
 | `devcontainer-template.json` | `json` | `committed` |
 
+`init` also recognizes these tag-only artifact formats, which carry no version
+in their own files and take their version authority from a canonical Git tag:
+
+| Artifact | Detector | Evidence |
+| --- | --- | --- |
+| GitHub Action | `github-action` | `action.yml` or `action.yaml` |
+| Terraform module | `terraform-module` | a directory holding `.tf` files |
+| Terraform provider | `terraform-provider` | `go.mod` requiring a Terraform plugin module |
+| Docker/OCI image | `docker-image` | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile` |
+
 Each candidate contains source evidence, extracted identity and version when
 available, and only the projection or tag suggestions supported by that
 evidence. Set its `resolution` to `independent`, `projection`, or `excluded`,

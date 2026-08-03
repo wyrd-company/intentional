@@ -80,7 +80,8 @@ Intentional state, and ecosystem caches; ordinary names such as `build`,
 `dist`, `bin`, and `vendor` are scanned unless the repository ignores them.
 
 Every newly discovered npm, Cargo, Go, Python, MSBuild, Dart, Dev Container
-Feature, or Dev Container Template manifest first appears in
+Feature, Dev Container Template, GitHub Action, Terraform module, Terraform
+provider, or Docker/OCI build definition first appears in
 `.intentional/init-plan.yml` as an unresolved candidate. Choose `independent`,
 `projection`, or `excluded`, then rerun `intentional init` to write
 configuration only after the complete candidate graph validates. New
@@ -170,6 +171,35 @@ do not inspect companion files such as `install.sh` or `devcontainer.json`, nor
 do they inspect workflows, OCI registries, publication state, or overall
 artifact correctness.
 
+Tag-only detectors recognize artifact formats that carry no version in their
+own files, so a canonical Git tag is their only version authority. They suggest
+a primary `{id}@{version}` tag and never a projection or raw version:
+
+| Detector             | Evidence                                                                           | Suggested identity                                    |
+| -------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `github-action`      | `action.yml` or `action.yaml`                                                      | containing directory name                             |
+| `terraform-module`   | every non-ignored directory holding `.tf` files                                    | directory name                                        |
+| `terraform-provider` | `go.mod` directly requiring `terraform-plugin-framework` or `terraform-plugin-sdk` | Go module path                                        |
+| `docker-image`       | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile`                                    | filename variant, otherwise containing directory name |
+
+One Terraform module candidate covers one directory: every `.tf` file in it is
+evidence and `main.tf` anchors the candidate path when it exists, so adding a
+sibling `.tf` file to an already resolved module does not reopen it. Terraform
+providers are Go modules, so their `go.mod` produces exactly one candidate
+under the more specific provider detector. Terraform example or test
+directories inside a provider repository still surface as module candidates and
+are resolved as projections or exclusions.
+
+The Docker/OCI detector reads the filename only. It never parses build
+instructions, workflows, Compose files, registry coordinates, or image names,
+and a candidate makes no claim that the image is built or published. Rolling
+tags, `latest` aliases, and registry retention stay publisher policy.
+
+A path that yields no usable id — a `Dockerfile` or `action.yml` at the
+repository root, for example — still produces a candidate with a tag
+suggestion, plus an `identity-not-path-derivable` extraction diagnostic. Name
+the release unit explicitly in the resolution.
+
 An initialization-plan candidate has this shape (shown as an excerpt):
 
 ```yaml
@@ -198,6 +228,28 @@ discovery-candidates:
     resolution:
       kind: independent
       release-unit: library
+```
+
+A tag-only candidate carries the same shape without version-bearing fields:
+
+```yaml
+discovery-candidates:
+  - id: candidate:1cbb4b7e2f6c5f2d1a3f4b5c6d7e8f90112233445566778899aabbccddeeff00
+    detector: terraform-module
+    path: modules/network/main.tf
+    evidence:
+      - path: modules/network/main.tf
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+      - path: modules/network/variables.tf
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    native-identity: network
+    tag:
+      id: primary
+      role: primary
+      template: "{id}@{version}"
+    resolution:
+      kind: independent
+      release-unit: network
 ```
 
 A resolution is `independent`, `projection`, or `excluded`. Independent and
@@ -317,8 +369,15 @@ explicit versions:
 ```console
 intentional tag --baseline \
   --version library=1.2.3 \
+  --version runtime=1.4.0 \
   --version workspace/release=1.2.3
 ```
+
+Every GitHub Action, Terraform module, Terraform provider, and Docker/OCI
+release unit is tag-only, so each one needs its own `--version` until its
+primary tag exists. Where a stream already has published tags, supply the
+version that stream last released so the baseline continues it rather than
+restarting it.
 
 `status` and `check` report the missing-baseline diagnostic and command until
 the configured primary baselines exist.
