@@ -103,6 +103,9 @@ pub(crate) fn is_flat_name(value: &str) -> bool {
 /// transient fault into a permanently unwritable output: a failed run leaves
 /// nothing behind, so the next run — a workflow retry included — starts from
 /// the same state as the first.
+///
+/// A directory that content raced into after the emptiness check is refused
+/// rather than overwritten, on every platform.
 pub(crate) fn write_bundle<T>(
     output: &Path,
     label: &str,
@@ -136,8 +139,15 @@ pub(crate) fn write_bundle<T>(
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|error| Error::io(&staging, error))?;
     let built = build(&staging).and_then(|built| {
-        // Renaming a complete directory over an empty one is the single step
-        // that makes the bundle observable.
+        // Renaming the complete directory into place is the single step that
+        // makes the bundle observable. A verified-empty output is removed
+        // first, because replacing an existing directory by rename is a Unix
+        // guarantee that Windows does not share. `remove_dir` refuses a
+        // directory that gained content after the emptiness check, so the
+        // window between the two stays fail-closed.
+        if output.exists() {
+            std::fs::remove_dir(output).map_err(|error| Error::io(output, error))?;
+        }
         std::fs::rename(&staging, output).map_err(|error| Error::io(output, error))?;
         Ok(built)
     });
@@ -180,6 +190,33 @@ mod tests {
         })
         .expect("the next attempt succeeds");
         assert!(output.join("complete.txt").is_file());
+    }
+
+    #[test]
+    fn refuses_an_output_directory_that_gained_content_after_the_check() {
+        let workspace = Workspace::new("bundle-race");
+        let output = workspace.root().join("bundle");
+        std::fs::create_dir_all(&output).expect("empty output");
+        let error = write_bundle(&output, "evidence", |staging| {
+            std::fs::write(staging.join("statement.yml"), "written")
+                .map_err(|error| Error::io(staging, error))?;
+            // Content races into the verified-empty output before the move.
+            std::fs::write(output.join("raced.txt"), "raced")
+                .map_err(|error| Error::io(&output, error))
+        })
+        .expect_err("the raced output is refused");
+        assert!(
+            error.to_string().contains(&output.display().to_string()),
+            "{error}"
+        );
+        assert!(
+            output.join("raced.txt").is_file(),
+            "a refused move leaves the output as it found it"
+        );
+        assert!(
+            !output.join("statement.yml").exists(),
+            "a refused move publishes nothing"
+        );
     }
 
     #[test]
