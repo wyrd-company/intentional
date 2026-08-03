@@ -794,10 +794,20 @@ fn prompt(label: &str) -> Result<String> {
 /// executor produces and parse each generated invocation with the real parser,
 /// so this binary is the authority on what a template may say.
 ///
-/// The coverage is the `run:` bodies of derived workflows and nothing else. The
-/// composite Actions this repository publishes under `actions/` invoke the same
-/// portable commands from their own `run:` bodies and are not read here, so
-/// those invocations agree with the parser by inspection rather than by gate.
+/// Coverage is the `run:` bodies of derived workflows and the `run:` bodies of
+/// every composite Action this repository publishes under `actions/`. Both
+/// surfaces name portable commands, and a managed job that invokes one through
+/// an Action moves the argument contract from the first surface to the second
+/// without weakening it, so both are read here.
+///
+/// Recognition requires the executable to be named literally. A step that names
+/// it through an expression — `${{ env.BIN }} release prepare` or `"$BIN"
+/// release prepare` — produces no word this recognizer can match and is
+/// invisible to the gate. Replacing an existing invocation that way still
+/// fails, because the expected invocation counts are exact; the uncovered case
+/// is a net-new step added in an indirect form. Every template and every Action
+/// spells the executable literally today, and the counts are what keep that
+/// true.
 #[cfg(test)]
 mod generated_invocations {
     use super::*;
@@ -818,6 +828,53 @@ mod generated_invocations {
     /// a deliberate update instead of quietly binding a smaller surface.
     const GENERATED_INVOCATIONS: usize = 5;
 
+    /// Invocations the published composite Actions run.
+    ///
+    /// One per Action: `prepare-release`, `verify-handoff`,
+    /// `verify-release-tag`, `verify-publication`, `assemble-evidence`, and
+    /// `contribute`. Asserted exactly for the same reason the generated count
+    /// is: an Action that stops invoking the command, and a recognizer that
+    /// stops seeing one, must both fail here rather than bind a smaller surface
+    /// than this module claims.
+    const ACTION_INVOCATIONS: usize = 6;
+
+    /// Directory holding the composite Actions this repository publishes.
+    fn actions_directory() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../actions")
+    }
+
+    /// Every `intentional` invocation each published Action runs, by Action.
+    fn action_invocations() -> Vec<(String, Vec<Vec<String>>)> {
+        let mut actions = std::fs::read_dir(actions_directory())
+            .expect("the published Actions directory is readable")
+            .filter_map(|entry| {
+                let path = entry.expect("directory entry").path().join("action.yml");
+                path.is_file().then_some(path)
+            })
+            .collect::<Vec<_>>();
+        actions.sort();
+        assert!(
+            !actions.is_empty(),
+            "the published Actions are read from {}",
+            actions_directory().display()
+        );
+        actions
+            .into_iter()
+            .map(|path| {
+                let text = std::fs::read_to_string(&path).expect("action document readable");
+                let document: serde_yaml::Value =
+                    serde_yaml::from_str(&text).expect("action document parses");
+                let mut bodies = Vec::new();
+                collect_run_bodies(&document, &mut bodies);
+                let invocations = bodies
+                    .iter()
+                    .flat_map(|body| body_invocations(body))
+                    .collect();
+                (path.display().to_string(), invocations)
+            })
+            .collect()
+    }
+
     /// Every `intentional` invocation any step of one workflow runs.
     fn invocations(workflow: &str) -> Vec<Vec<String>> {
         let document: serde_yaml::Value =
@@ -832,58 +889,168 @@ mod generated_invocations {
 
     /// Every `intentional` invocation one `run:` body executes.
     ///
-    /// Recognition is conservative rather than permissive. Each command line is
-    /// counted for mentions of the executable first, and a line whose mentions
-    /// are not all classified as invocations fails instead of passing quietly.
-    /// A step that wraps the command in a substitution, names it by an absolute
-    /// path, or quotes it in a way this cannot tokenize is therefore reported,
-    /// because a recognizer that shrugs at a shape it does not understand is a
-    /// hole in exactly the gate this module exists to be.
+    /// Recognition is conservative rather than permissive. Each simple command
+    /// the body runs is tokenized the way a shell would, and a fragment that
+    /// names the executable but cannot be read as a command fails instead of
+    /// passing quietly: a fragment this cannot tokenize, and one that names the
+    /// executable somewhere other than command position, are both reported. A
+    /// recognizer that shrugs at a shape it does not understand is a hole in
+    /// exactly the gate this module exists to be.
+    ///
+    /// Tokenizing rather than counting raw mentions is what separates a command
+    /// from prose about a command. The executable named inside a comment, or
+    /// inside a single quoted argument such as an `echo` message, survives
+    /// tokenization as one word that is not the executable, so it is neither
+    /// classified nor reported. The shell cannot execute it either.
     fn body_invocations(body: &str) -> Vec<Vec<String>> {
-        let mut invocations = Vec::new();
-        for line in shell_lines(body) {
-            let mentions = executable_mentions(&line);
-            if mentions == 0 {
-                continue;
-            }
-            let classified = line_invocations(&line);
-            assert_eq!(
-                classified.len(),
-                mentions,
-                "`{line}` names the intentional executable {mentions} time(s) but {} of them could be read as a command; an unclassifiable invocation must fail rather than pass",
-                classified.len()
-            );
-            invocations.extend(classified);
-        }
-        invocations
-    }
-
-    /// The `intentional` invocations one command line runs in command position.
-    fn line_invocations(line: &str) -> Vec<Vec<String>> {
-        simple_commands(line)
+        let arrays = array_assignments(body);
+        shell_lines(body)
             .iter()
-            .filter_map(|fragment| shell_words::split(fragment).ok())
-            .filter(|tokens| tokens.first().is_some_and(|token| is_executable(token)))
+            .flat_map(|line| simple_commands(line))
+            .filter_map(|fragment| fragment_invocation(&fragment, &arrays))
             .collect()
     }
 
-    /// Whether a command word runs this binary, bare or named by a path.
-    fn is_executable(word: &str) -> bool {
-        word.rsplit('/').next() == Some("intentional")
+    /// The invocation one simple command runs, if it runs this binary.
+    ///
+    /// Argument arrays the same body assembles are expanded in place, because a
+    /// step that collects optional options into an array and expands them into
+    /// the command line is still spelling an argument contract this binary has
+    /// to accept. Leaving `"${ARGS[@]}"` unexpanded would hand the parser a
+    /// command nobody wrote and hide every option the array carries.
+    fn fragment_invocation(
+        fragment: &str,
+        arrays: &BTreeMap<String, Vec<String>>,
+    ) -> Option<Vec<String>> {
+        let Ok(tokens) = shell_words::split(fragment) else {
+            assert!(
+                !names_executable(fragment),
+                "`{fragment}` names the intentional executable but cannot be tokenized; an unclassifiable invocation must fail rather than pass"
+            );
+            return None;
+        };
+        let tokens = expand_arrays(&tokens, arrays);
+        // A command may be preceded by environment assignments; the first word
+        // that is not one is the command word.
+        let command = tokens.iter().position(|token| !is_assignment(token));
+        if command.is_some_and(|index| is_executable(&tokens[index])) {
+            return Some(tokens[command.expect("command word")..].to_vec());
+        }
+        assert!(
+            !tokens.iter().any(|token| is_executable(token)),
+            "`{fragment}` names the intentional executable outside command position; an unclassifiable invocation must fail rather than pass"
+        );
+        None
     }
 
-    /// Count every mention of the executable in a command line, wherever it sits.
+    /// Whether a command word runs this binary, bare or named by a path.
     ///
-    /// Splitting on shell punctuation but not on `/` keeps a path-qualified
-    /// mention whole and leaves a mention inside a command substitution or an
-    /// assignment visible, while `intentional_candidate` and
+    /// An assignment word is excluded because `BIN=/usr/local/bin/intentional`
+    /// sets a variable rather than running anything, and classifying it as an
+    /// invocation would ask the parser to reject a command nobody wrote.
+    fn is_executable(word: &str) -> bool {
+        !is_assignment(word) && word.rsplit('/').next() == Some("intentional")
+    }
+
+    /// Whether a word assigns a shell variable rather than naming a command.
+    fn is_assignment(word: &str) -> bool {
+        let Some((name, _)) = word.split_once('=') else {
+            return false;
+        };
+        let name = name.strip_suffix('+').unwrap_or(name);
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            && !name.starts_with(|character: char| character.is_ascii_digit())
+    }
+
+    /// Whether any whole word of a fragment names the executable.
+    ///
+    /// Used only to decide whether an untokenizable fragment must be reported,
+    /// so it splits on shell punctuation but not on `/`, keeping a
+    /// path-qualified mention whole while `intentional_candidate` and
     /// `INTENTIONAL_GLOBAL_TAG` stay distinct words that are not this binary.
-    fn executable_mentions(line: &str) -> usize {
-        line.split(|character: char| {
-            character.is_whitespace() || "\"'`$(){}[]<>;&|=,".contains(character)
-        })
-        .filter(|word| is_executable(word))
-        .count()
+    fn names_executable(fragment: &str) -> bool {
+        fragment
+            .split(|character: char| {
+                character.is_whitespace() || "\"'`$(){}[]<>;&|=,".contains(character)
+            })
+            .any(|word| word.rsplit('/').next() == Some("intentional"))
+    }
+
+    /// Substitute every `"${NAME[@]}"` token with the array the body assembled.
+    fn expand_arrays(tokens: &[String], arrays: &BTreeMap<String, Vec<String>>) -> Vec<String> {
+        tokens
+            .iter()
+            .flat_map(
+                |token| match array_expansion(token).and_then(|name| arrays.get(name)) {
+                    Some(elements) => elements.clone(),
+                    None => vec![token.clone()],
+                },
+            )
+            .collect()
+    }
+
+    /// The array name a token expands, if the token is only that expansion.
+    fn array_expansion(token: &str) -> Option<&str> {
+        token
+            .strip_prefix("${")
+            .and_then(|rest| rest.strip_suffix("[@]}"))
+            .filter(|name| !name.is_empty())
+    }
+
+    /// Every argument array one `run:` body assembles, in source order.
+    ///
+    /// `NAME=(...)` replaces the array and `NAME+=(...)` extends it, matching
+    /// what the shell does, so an array built across conditional branches
+    /// contributes every option any branch can pass.
+    fn array_assignments(body: &str) -> BTreeMap<String, Vec<String>> {
+        let mut arrays: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let lines = body.lines().collect::<Vec<_>>();
+        let mut index = 0;
+        while index < lines.len() {
+            let Some((name, append, first)) = array_assignment_head(lines[index]) else {
+                index += 1;
+                continue;
+            };
+            let mut text = first.to_owned();
+            while balance(&text) >= 0 && index + 1 < lines.len() {
+                index += 1;
+                text.push('\n');
+                text.push_str(lines[index]);
+            }
+            let elements = text
+                .rsplit_once(')')
+                .map(|(interior, _)| interior)
+                .and_then(|interior| shell_words::split(interior).ok())
+                .unwrap_or_default();
+            let entry = arrays.entry(name.to_owned()).or_default();
+            if !append {
+                entry.clear();
+            }
+            entry.extend(elements);
+            index += 1;
+        }
+        arrays
+    }
+
+    /// The array name, whether it is appended to, and the text after `(`.
+    fn array_assignment_head(line: &str) -> Option<(&str, bool, &str)> {
+        let (head, rest) = line.trim().split_once("=(")?;
+        let append = head.ends_with('+');
+        let name = head.strip_suffix('+').unwrap_or(head);
+        (!name.is_empty()
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_'))
+        .then_some((name, append, rest))
+    }
+
+    /// How many `(` an array assignment has yet to close.
+    fn balance(text: &str) -> isize {
+        text.chars().filter(|character| *character == '(').count() as isize
+            - text.chars().filter(|character| *character == ')').count() as isize
     }
 
     /// Split a command line into the simple commands a shell would run.
@@ -975,6 +1142,29 @@ mod generated_invocations {
         (path, true)
     }
 
+    /// Reject an invocation this binary would not accept, naming why.
+    ///
+    /// A shipped Action spells its options literally but takes their values
+    /// from workflow inputs, so a value the parser validates against a closed
+    /// set arrives as `$INPUT_PUBLISHER` rather than as `npm`. Only that one
+    /// case is tolerated, and only when the value clap rejected is itself an
+    /// unexpanded shell parameter: every structural rejection — an unknown
+    /// option, an unknown subcommand, a missing required argument, an
+    /// unexpected positional — still fails. The option names and the command
+    /// path are what these documents fix; their values are supplied at runtime.
+    fn parser_rejection(tokens: &[String]) -> Option<String> {
+        let error = Cli::try_parse_from(tokens).err()?;
+        let value_level = matches!(
+            error.kind(),
+            clap::error::ErrorKind::InvalidValue | clap::error::ErrorKind::ValueValidation
+        );
+        let rejected = match error.get(clap::error::ContextKind::InvalidValue) {
+            Some(clap::error::ContextValue::String(value)) => value.clone(),
+            _ => String::new(),
+        };
+        (!value_level || !rejected.contains('$')).then(|| error.to_string())
+    }
+
     #[test]
     fn the_parser_accepts_every_generated_invocation() {
         let mut total = 0usize;
@@ -996,6 +1186,30 @@ mod generated_invocations {
         assert_eq!(
             total, GENERATED_INVOCATIONS,
             "the managed job templates generate a known number of invocations; a template that stopped generating one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
+        );
+    }
+
+    #[test]
+    fn the_parser_accepts_every_published_action_invocation() {
+        let mut total = 0usize;
+        for (action, invocations) in action_invocations() {
+            for tokens in invocations {
+                total += 1;
+                let rendered = shell_words::join(&tokens);
+                let (path, complete) = command_path(&tokens);
+                assert!(
+                    complete,
+                    "{action} runs `{rendered}`, but `intentional {}` is not a command",
+                    path.join(" ")
+                );
+                if let Some(error) = parser_rejection(&tokens) {
+                    panic!("{action} runs `{rendered}`, which this binary rejects:\n{error}");
+                }
+            }
+        }
+        assert_eq!(
+            total, ACTION_INVOCATIONS,
+            "the published Actions invoke a known number of commands; an Action that stopped invoking one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
         );
     }
 
@@ -1032,5 +1246,63 @@ mod generated_invocations {
     #[should_panic(expected = "unclassifiable invocation must fail rather than pass")]
     fn refuses_a_command_line_it_cannot_read() {
         body_invocations("intentional release prepare --output \"/tmp/unterminated");
+    }
+
+    #[test]
+    #[should_panic(expected = "outside command position")]
+    fn refuses_an_invocation_reached_through_another_command() {
+        body_invocations("xargs intentional release prepare --output /tmp/candidate");
+    }
+
+    #[test]
+    fn reads_prose_about_the_command_as_prose() {
+        for body in [
+            "# intentional release prepare --output /tmp/candidate",
+            "echo \"::error::intentional evidence contribute did not name one artifact.\"",
+            "echo 'run intentional release prepare first'",
+        ] {
+            assert!(
+                body_invocations(body).is_empty(),
+                "`{body}` mentions the command without running it"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_an_assignment_of_the_binary_path_as_an_assignment() {
+        assert!(
+            body_invocations("BIN=/usr/local/bin/intentional").is_empty(),
+            "an assignment word names a path rather than running it"
+        );
+        let prefixed = body_invocations("INTENTIONAL_LOG=debug intentional verify release-tag");
+        assert_eq!(
+            prefixed.len(),
+            1,
+            "an environment prefix still runs the command: {prefixed:?}"
+        );
+        assert_eq!(prefixed[0][1..], ["verify", "release-tag"]);
+    }
+
+    #[test]
+    fn expands_an_argument_array_the_same_body_assembled() {
+        let body = "ARGS=(--namespace ns\n  --output /tmp/bundle)\n\
+                    if [[ -n \"$VALUE\" ]]; then\n  ARGS+=(--value-file \"$VALUE\")\nfi\n\
+                    RESULT=\"$(intentional evidence contribute \"${ARGS[@]}\")\"";
+        let invocations = body_invocations(body);
+        assert_eq!(invocations.len(), 1, "{invocations:?}");
+        assert_eq!(
+            invocations[0][1..],
+            [
+                "evidence",
+                "contribute",
+                "--namespace",
+                "ns",
+                "--output",
+                "/tmp/bundle",
+                "--value-file",
+                "$VALUE"
+            ],
+            "every option the array can carry reaches the parser"
+        );
     }
 }
