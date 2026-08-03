@@ -64,6 +64,10 @@ const DOWNLOAD_ARTIFACT_ACTION: &str =
 /// downgrade.
 const AUR_HOST_FINGERPRINT: &str = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4";
 
+/// Action installing the GoReleaser command a stock runner does not carry.
+const GORELEASER_INSTALL_ACTION: &str =
+    "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94";
+
 const APP_TOKEN_ACTION: &str =
     "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349";
 
@@ -1223,6 +1227,7 @@ fn job(
         .replace("@UPLOAD@", UPLOAD_ARTIFACT_ACTION)
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
+        .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
         .replace("@VERSION@", &scalar(crate::VERSION))
         .replace("@PREPARE_ACTION@", &action_reference("prepare-release"))
         .replace(
@@ -1288,6 +1293,7 @@ fn build_job(
                 )),
             ),
             ("@BUILD_COMMAND@", build_command(subject.packager)),
+            ("@TOOLCHAIN_STEPS@", toolchain_steps(subject.packager)),
             ("@RELEASE_UNIT@", &scalar(&subject.release_unit)),
             ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
             ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
@@ -1554,6 +1560,26 @@ fn goreleaser_promotion(
             ])
         }
         publisher => unreachable!("{publisher} is refused above"),
+    }
+}
+
+/// Steps installing the packager the build job runs.
+///
+/// A stock runner already carries the toolchains its hosted images ship, so most
+/// packagers need nothing here. GoReleaser is not one of them: it is a separate
+/// command, the build job is the sole producer of every Go deliverable the
+/// publisher jobs promote, and a build job that cannot run its packager produces
+/// nothing at all.
+///
+/// The installer is pinned to a complete commit identity for the same reason
+/// every other external Action is, and it installs only the command: the release
+/// itself is driven by the build step, which is where the graph can see it.
+const fn toolchain_steps(packager: Packager) -> &'static str {
+    match packager {
+        Packager::GoReleaser => {
+            "  - name: Install the GoReleaser packager\n    uses: @GORELEASER_INSTALL@\n    with:\n      install-only: true\n"
+        }
+        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => "",
     }
 }
 
@@ -1832,7 +1858,7 @@ steps:
       fetch-depth: 0
       fetch-tags: true
       persist-credentials: false
-  - name: @BUILD_NAME@
+@TOOLCHAIN_STEPS@  - name: @BUILD_NAME@
     working-directory: @WORKING_DIRECTORY@
     env:
       @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/@SLUG@/bytes
