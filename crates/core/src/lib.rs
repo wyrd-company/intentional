@@ -57,7 +57,7 @@ pub use executor::recipe::{
 };
 pub use executor::workflow::{
     compare_configured_workflow, compare_workflow, ComparisonStatus, WorkflowComparison,
-    OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
+    WorkflowDiagnostic, OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
 };
 pub use init::{
     discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,

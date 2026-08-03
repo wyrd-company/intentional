@@ -210,7 +210,7 @@ release-units:
             let comparison = crate::executor::workflow::compare_workflow(root, role, None)
                 .expect("comparison runs");
             if comparison.changed() {
-                comparison.apply(root).expect("transformation applies");
+                comparison.apply().expect("transformation applies");
             }
         }
     }

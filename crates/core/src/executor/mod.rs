@@ -17,8 +17,8 @@ pub use init::{
     EXECUTOR_INIT_PLAN_SCHEMA,
 };
 pub use workflow::{
-    compare_configured_workflow, compare_workflow, ComparisonStatus, Diagnostic,
-    WorkflowComparison, OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
+    compare_configured_workflow, compare_workflow, ComparisonStatus, WorkflowComparison,
+    WorkflowDiagnostic, OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
 };
 
 pub use recipe::{

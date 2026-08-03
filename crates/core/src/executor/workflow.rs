@@ -80,7 +80,7 @@ impl std::fmt::Display for ComparisonStatus {
 
 /// One reason a comparison could not produce a transformation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Diagnostic {
+pub struct WorkflowDiagnostic {
     /// Stable machine-readable code.
     pub code: String,
     /// Human-readable explanation.
@@ -90,7 +90,7 @@ pub struct Diagnostic {
     pub path: Option<String>,
 }
 
-impl Diagnostic {
+impl WorkflowDiagnostic {
     fn new(code: &str, message: String) -> Self {
         Self {
             code: code.to_owned(),
@@ -126,7 +126,7 @@ pub struct WorkflowComparison {
     /// Whether the transformation was written to the workflow.
     pub applied: bool,
     /// Reasons a blocked comparison produced no transformation.
-    pub diagnostics: Vec<Diagnostic>,
+    pub diagnostics: Vec<WorkflowDiagnostic>,
     /// Proposed workflow bytes.
     output: Option<String>,
     /// Exact file the comparison read.
@@ -149,22 +149,22 @@ impl WorkflowComparison {
     /// The workflow is re-read and its digest re-checked, so a transformation
     /// computed against bytes that have since changed is refused rather than
     /// silently overwriting the newer content.
-    pub fn apply(&self, root: &Path) -> Result<Self> {
+    pub fn apply(&self) -> Result<Self> {
         let Some(output) = &self.output else {
             return Err(Error::Validation(format!(
                 "the {} workflow comparison is blocked and cannot be applied",
                 self.role
             )));
         };
-        let path = absolute(root, &self.file);
-        let current = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+        let path = &self.file;
+        let current = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
         if digest(&current) != self.input_digest {
             return Err(Error::Validation(format!(
                 "Workflow input digest does not match {}; recompute the transformation",
                 self.path.display()
             )));
         }
-        std::fs::write(&path, output).map_err(|error| Error::io(&path, error))?;
+        std::fs::write(path, output).map_err(|error| Error::io(path, error))?;
         Ok(Self {
             applied: true,
             ..self.clone()
@@ -244,13 +244,13 @@ pub fn compare_configured_workflow(
         Ok(text) => text,
         Err(error) => {
             let diagnostic = if file.exists() {
-                Diagnostic::at(
+                WorkflowDiagnostic::at(
                     "workflow-unreadable",
                     format!("{} could not be read: {error}", relative.display()),
                     &relative.display().to_string(),
                 )
             } else {
-                Diagnostic::at(
+                WorkflowDiagnostic::at(
                     "workflow-missing",
                     format!("{} does not exist", relative.display()),
                     &relative.display().to_string(),
@@ -273,7 +273,7 @@ pub fn compare_configured_workflow(
     let document = match Document::parse(&text) {
         Ok(document) => document,
         Err(error) => {
-            let diagnostic = Diagnostic::new(
+            let diagnostic = WorkflowDiagnostic::new(
                 "workflow-unparsable",
                 format!("{} is not valid YAML: {error}", relative.display()),
             );
@@ -310,7 +310,7 @@ fn blocked(
     relative: PathBuf,
     file: PathBuf,
     text: String,
-    diagnostics: Vec<Diagnostic>,
+    diagnostics: Vec<WorkflowDiagnostic>,
 ) -> WorkflowComparison {
     WorkflowComparison {
         role,
@@ -356,7 +356,7 @@ struct WorkflowContract {
 fn reconcile(
     mut document: Document,
     contract: &WorkflowContract,
-) -> std::result::Result<String, Diagnostic> {
+) -> std::result::Result<String, WorkflowDiagnostic> {
     // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
     // Expanding them first means adding a required trigger never discards the
     // repository's own.
@@ -385,27 +385,35 @@ fn reconcile(
             .map_err(unparsable)?;
     }
 
+    // Jobs are independent of one another, so one parse serves every job
+    // decision this reconciliation makes.
+    let jobs = document
+        .get(&["jobs"])
+        .map_err(unparsable)?
+        .and_then(|jobs| jobs.as_mapping().cloned())
+        .unwrap_or_default();
     let managed = contract
         .jobs
         .iter()
         .map(|(id, _)| id.clone())
         .collect::<BTreeSet<_>>();
-    for job in owned_jobs(&document, &contract.namespaces).map_err(unparsable)? {
+    for job in owned_jobs(&jobs, &contract.namespaces) {
         if !managed.contains(&job) {
             document.remove(&["jobs", &job]).map_err(unparsable)?;
         }
     }
     for (id, body) in &contract.jobs {
-        let path = ["jobs", id.as_str()];
-        if document.get(&path).map_err(unparsable)?.as_ref() != Some(body) {
-            document.set(&path, body).map_err(unparsable)?;
+        if jobs.get(Value::String(id.clone())) != Some(body) {
+            document
+                .set(&["jobs", id.as_str()], body)
+                .map_err(unparsable)?;
         }
     }
 
     let output = document.into_text();
     // A transformation that does not parse is never offered to the user.
     Document::parse(&output).map_err(|error| {
-        Diagnostic::new(
+        WorkflowDiagnostic::new(
             "transformation-invalid",
             format!("the derived transformation is not valid YAML: {error}"),
         )
@@ -413,8 +421,8 @@ fn reconcile(
     Ok(output)
 }
 
-fn unparsable(error: Error) -> Diagnostic {
-    Diagnostic::new(
+fn unparsable(error: Error) -> WorkflowDiagnostic {
+    WorkflowDiagnostic::new(
         "workflow-unparsable",
         format!("the workflow could not be reconciled: {error}"),
     )
@@ -476,24 +484,26 @@ fn read_only_default() -> Value {
 }
 
 /// Job identifiers the executor owns in the compared document.
-fn owned_jobs(document: &Document, namespaces: &PrefixNamespaces) -> Result<Vec<String>> {
-    let mut owned = Vec::new();
-    for id in document.keys(&["jobs"])? {
-        let sentinel = document
-            .get(&["jobs", &id])?
-            .as_ref()
-            .and_then(|job| job.get("steps").cloned())
-            .and_then(|steps| steps.as_sequence().cloned())
-            .is_some_and(|steps| {
-                steps
-                    .iter()
-                    .any(|step| step.get("id").and_then(Value::as_str) == Some(OWNERSHIP_SENTINEL))
-            });
-        if sentinel || id.starts_with(&namespaces.job) {
-            owned.push(id);
-        }
-    }
-    Ok(owned)
+///
+/// A reserved identifier is Intentional's even when a repository chose the same
+/// name; the sentinel step identifies Intentional's own jobs after the
+/// configured prefix changes.
+fn owned_jobs(jobs: &serde_yaml::Mapping, namespaces: &PrefixNamespaces) -> Vec<String> {
+    jobs.iter()
+        .filter_map(|(id, job)| id.as_str().map(|id| (id, job)))
+        .filter(|(id, job)| id.starts_with(&namespaces.job) || carries_sentinel(job))
+        .map(|(id, _)| id.to_owned())
+        .collect()
+}
+
+fn carries_sentinel(job: &Value) -> bool {
+    job.get("steps")
+        .and_then(Value::as_sequence)
+        .is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|step| step.get("id").and_then(Value::as_str) == Some(OWNERSHIP_SENTINEL))
+        })
 }
 
 /// Derive the complete contract for one workflow role.
@@ -502,10 +512,10 @@ fn derive_contract(
     config: &Config,
     github: &GithubConfig,
     role: WorkflowRole,
-) -> std::result::Result<WorkflowContract, Vec<Diagnostic>> {
+) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
     let namespaces = github
         .namespaces()
-        .map_err(|error| vec![Diagnostic::new("prefix-invalid", error.to_string())])?;
+        .map_err(|error| vec![WorkflowDiagnostic::new("prefix-invalid", error.to_string())])?;
     let gates = github.workflow(role).gates.clone();
     match role {
         WorkflowRole::Release => Ok(release_contract(&namespaces, &gates)),
@@ -544,7 +554,7 @@ fn publish_contract(
     config: &Config,
     namespaces: &PrefixNamespaces,
     gates: &[String],
-) -> std::result::Result<WorkflowContract, Vec<Diagnostic>> {
+) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
     let mut diagnostics = Vec::new();
     let patterns = config
         .workspace_tags
@@ -552,17 +562,24 @@ fn publish_contract(
         .map(|tag| Value::String(tag.template.replace("{version}", "*")))
         .collect::<Vec<_>>();
     if patterns.is_empty() {
-        diagnostics.push(Diagnostic::at(
+        diagnostics.push(WorkflowDiagnostic::at(
             "release-tag-undefined",
             "the publish workflow is triggered by the global release tag; configure a workspace tag"
                 .to_owned(),
             "workspace-tags",
         ));
     }
-    let selection = resolve_publications(root, config)
-        .map_err(|error| vec![Diagnostic::new("publication-unresolved", error.to_string())])?;
+    let selection = resolve_publications(root, config).map_err(|error| {
+        vec![WorkflowDiagnostic::new(
+            "publication-unresolved",
+            error.to_string(),
+        )]
+    })?;
     for diagnostic in selection.diagnostics {
-        diagnostics.push(Diagnostic::new("publication-unresolved", diagnostic));
+        diagnostics.push(WorkflowDiagnostic::new(
+            "publication-unresolved",
+            diagnostic,
+        ));
     }
     if !diagnostics.is_empty() {
         return Err(diagnostics);
@@ -577,7 +594,7 @@ fn publish_contract(
     for publication in &selection.selected {
         let id = publication_job_id(namespaces, publication);
         if !identities.insert(id.clone()) {
-            return Err(vec![Diagnostic::at(
+            return Err(vec![WorkflowDiagnostic::at(
                 "job-identifier-collision",
                 format!(
                     "publication {} derives managed job {id}, which another publication already claims",
@@ -1024,7 +1041,7 @@ jobs:
             "{:?}",
             comparison.diagnostics
         );
-        comparison.apply(root).expect("transformation applies")
+        comparison.apply().expect("transformation applies")
     }
 
     fn workflow(root: &Path, role: WorkflowRole) -> String {
@@ -1132,7 +1149,7 @@ jobs:
         let comparison =
             compare_workflow(workspace.root(), WorkflowRole::Release, None).expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Different);
-        let restored = comparison.apply(workspace.root()).expect("apply");
+        let restored = comparison.apply().expect("apply");
         assert!(restored.applied);
         assert_eq!(workflow(workspace.root(), WorkflowRole::Release), converged);
     }
@@ -1150,7 +1167,7 @@ jobs:
         .expect("concurrent edit");
 
         let error = comparison
-            .apply(workspace.root())
+            .apply()
             .expect_err("stale transformation refused");
         assert!(
             error

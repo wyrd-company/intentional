@@ -350,7 +350,7 @@ fn executor_diff(root: &std::path::Path, args: DiffArgs) -> Result<u8> {
         .map_err(anyhow::Error::msg)?;
     let comparison = compare_workflow(root, role, args.workflow.as_deref())?;
     let comparison = if args.apply && comparison.changed() {
-        comparison.apply(root)?
+        comparison.apply()?
     } else {
         comparison
     };
