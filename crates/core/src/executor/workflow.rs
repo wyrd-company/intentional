@@ -1021,6 +1021,14 @@ fn publisher_permissions(publication: &SelectedPublication) -> String {
 /// tags, so anyone shortening the fetch depth to speed a job up would otherwise
 /// silently remove a guarantee the release protocol depends on.
 ///
+/// Every `intentional` command a template runs is an argument-level contract
+/// with the command-line interface that nothing else in this module checks:
+/// workflow derivation never consults the argument parser, and a workflow
+/// linter validates syntax and action references rather than the semantics of a
+/// `run:` body. The command-line crate parses every generated invocation with
+/// the real parser for that reason, so a renamed flag or a changed positional
+/// fails there rather than in a privileged job on a release runner.
+///
 /// The rationale cannot live in the emitted workflow: each template is parsed
 /// into a value before it is spliced, and the editor has no comment support, so
 /// managed jobs are emitted comment-free by construction.
@@ -1072,7 +1080,7 @@ steps:
       path: ${{ runner.temp }}/@JOB@candidate
   - id: @JOB@handoff
     name: Verify the release candidate handoff
-    run: intentional verify handoff --candidate "${{ runner.temp }}/@JOB@candidate"
+    run: intentional verify handoff "${{ runner.temp }}/@JOB@candidate"
   - id: @JOB@token
     name: Mint a short-lived repository token
     uses: @APP_TOKEN@
