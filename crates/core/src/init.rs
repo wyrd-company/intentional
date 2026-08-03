@@ -63,6 +63,23 @@ pub enum InitState {
     Ready,
 }
 
+impl InitState {
+    /// Stable name matching the state's serialized spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::NeedsInput => "needs-input",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+impl std::fmt::Display for InitState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// One source artifact used as initialization evidence.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]

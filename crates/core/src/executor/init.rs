@@ -18,7 +18,9 @@ use crate::executor::recipe::{
 use crate::init::SourceEvidence;
 use crate::model::{PublisherKind, ReleaseUnitDisposition};
 use crate::plan::canonical_json;
+use crate::yaml_edit::Document;
 use serde::{Deserialize, Serialize};
+use serde_yaml::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -270,7 +272,10 @@ impl ExecutorInitResult {
 
 /// Create or resume the executor initialization plan and apply it when it is ready.
 pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
-    let mut config = Config::load(root)?;
+    let config_path = root.join(CONFIG_PATH);
+    let config_text =
+        std::fs::read_to_string(&config_path).map_err(|error| Error::io(&config_path, error))?;
+    let mut config = Config::from_yaml(&config_text)?;
     let recorded = read_plan(root)?;
     let existing = recorded.as_ref().map(|text| parse_plan(text)).transpose()?;
     let inferred_github = match (&config.github, existing.as_ref()) {
@@ -303,8 +308,10 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
         ExecutorInitState::Ready
     };
 
-    let original = config.clone();
     let mut writes = Vec::new();
+    // Configuration is edited in place rather than re-serialized, so the file
+    // keeps its comments and never gains defaults the user did not write.
+    let mut edits: Vec<(Vec<String>, Value)> = Vec::new();
     // `operations` reports what this run does; `outstanding` is persisted into
     // the plan and describes what applying that plan still performs.
     let mut operations = Vec::new();
@@ -318,20 +325,28 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
                 inferred_github.workflows.release.path.display(),
                 inferred_github.workflows.publish.path.display()
             ));
+            edits.push((
+                vec!["github".to_owned()],
+                serde_yaml::to_value(&inferred_github)?,
+            ));
         }
         for candidate in &candidates {
-            apply_candidate(root, &mut config, candidate, &mut writes, &mut operations)?;
+            apply_candidate(
+                root,
+                &mut config,
+                candidate,
+                &mut writes,
+                &mut operations,
+                &mut edits,
+            )?;
         }
         config.validate()?;
         select_publications(root, &config)?;
-        if config != original {
-            // Configuration is re-serialized from the parsed model, so the
-            // rewrite normalizes the whole document. Say so before applying it
-            // rather than letting the user discover it in the diff.
+        if let Some(updated) = edited_config(&config_text, &edits, &config)? {
             operations.push(format!(
-                "rewrite {CONFIG_PATH} in canonical form; comments, key order, and formatting in that file are not preserved"
+                "update {CONFIG_PATH} in place; comments, key order, and formatting outside the edited keys are preserved"
             ));
-            writes.push((PathBuf::from(CONFIG_PATH), config.to_yaml()?));
+            writes.push((PathBuf::from(CONFIG_PATH), updated));
         }
     } else {
         let unresolved = format!(
@@ -377,6 +392,32 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
         plan,
         writes,
     })
+}
+
+/// Apply the planned configuration edits to the exact file the user wrote.
+///
+/// The edited document must mean exactly what the validated model means; a
+/// disagreement is a defect in the edit, never something to write out.
+fn edited_config(
+    text: &str,
+    edits: &[(Vec<String>, Value)],
+    expected: &Config,
+) -> Result<Option<String>> {
+    if edits.is_empty() {
+        return Ok(None);
+    }
+    let mut document = Document::parse(text)?;
+    for (path, value) in edits {
+        let path = path.iter().map(String::as_str).collect::<Vec<_>>();
+        document.set(&path, value)?;
+    }
+    let updated = document.into_text();
+    if &Config::from_yaml(&updated)? != expected {
+        return Err(Error::Validation(format!(
+            "editing {CONFIG_PATH} in place did not reproduce the planned configuration"
+        )));
+    }
+    Ok((updated != text).then_some(updated))
 }
 
 /// Repository settings Intentional reports without mutating.
@@ -696,6 +737,7 @@ fn apply_candidate(
     candidate: &ExecutorCandidate,
     writes: &mut Vec<(PathBuf, String)>,
     operations: &mut Vec<String>,
+    edits: &mut Vec<(Vec<String>, Value)>,
 ) -> Result<()> {
     let Some(choice) = candidate.selected() else {
         return Ok(());
@@ -722,6 +764,14 @@ fn apply_candidate(
                 )));
             };
             enable_publisher(release_unit, publisher, target)?;
+            edits.push((
+                vec![
+                    "release-units".to_owned(),
+                    candidate.release_unit.clone(),
+                    publisher.as_str().to_owned(),
+                ],
+                publisher_value(release_unit, publisher)?,
+            ));
             operations.push(format!(
                 "configure the {publisher} {target} publisher for release unit {}",
                 candidate.release_unit
@@ -754,6 +804,19 @@ fn apply_candidate(
         }
     }
     Ok(())
+}
+
+/// Serialized value of one release unit's configured publisher property.
+fn publisher_value(release_unit: &ReleaseUnitConfig, publisher: PublisherKind) -> Result<Value> {
+    Ok(match publisher {
+        PublisherKind::Npm => serde_yaml::to_value(&release_unit.npm)?,
+        PublisherKind::Cargo => serde_yaml::to_value(&release_unit.cargo)?,
+        PublisherKind::Homebrew => serde_yaml::to_value(&release_unit.homebrew)?,
+        PublisherKind::Rpm => serde_yaml::to_value(&release_unit.rpm)?,
+        PublisherKind::Apt => serde_yaml::to_value(&release_unit.apt)?,
+        PublisherKind::Aur => serde_yaml::to_value(&release_unit.aur)?,
+        PublisherKind::Oci => serde_yaml::to_value(&release_unit.oci)?,
+    })
 }
 
 fn enable_publisher(
@@ -1188,39 +1251,56 @@ release-units:
     }
 
     #[test]
-    fn reports_the_canonical_configuration_rewrite_before_applying_it() {
-        let workspace = Workspace::new("init-rewrite");
+    fn preserves_comments_and_unwritten_defaults_when_it_edits_configuration() {
+        let workspace = Workspace::new("init-preserve");
         workspace
             .write(
                 ".intentional/config.yml",
                 &format!("# repository comment\n{CONFIG}"),
             )
             .write(
-                "component/package.json",
-                r#"{"name":"example-component","version":"1.0.0"}"#,
+                "component/Cargo.toml",
+                "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
             );
         run(&workspace);
         resolve(
             workspace.root(),
-            "node-package",
-            "npm/primary",
-            DECLINE_CHOICE,
+            "rust-crate",
+            "cargo/primary",
+            ACCEPT_CHOICE,
         );
 
         let result = initialize_executor(workspace.root()).expect("executor init runs");
+        result.apply(workspace.root(), false).expect("plan applies");
         assert!(
             result
                 .operations
                 .iter()
-                .any(|operation| operation.contains("comments, key order, and formatting")),
-            "the canonical rewrite is reported before it happens: {:?}",
+                .any(|operation| operation.contains("outside the edited keys are preserved")),
+            "the in-place edit is reported before it happens: {:?}",
             result.operations
         );
+
+        let updated = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+            .expect("config readable");
         assert!(
-            std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
-                .expect("config readable")
-                .starts_with("# repository comment"),
-            "the report precedes any write"
+            updated.starts_with("# repository comment"),
+            "repository comments survive an executor configuration edit: {updated}"
+        );
+        assert!(
+            !updated.contains("settings:"),
+            "an edit never materializes defaults the user did not write: {updated}"
+        );
+        assert!(
+            updated.contains("cargo: {}"),
+            "the accepted publisher is written into the release unit: {updated}"
+        );
+        assert_eq!(
+            Config::from_yaml(&updated)
+                .expect("edited config parses")
+                .release_units["component"]
+                .publishers(),
+            vec![PublisherKind::Cargo]
         );
     }
 

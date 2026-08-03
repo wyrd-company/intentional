@@ -510,7 +510,7 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
     if args.json {
         println!("{}", result.to_json()?);
     } else {
-        println!("initialization state: {:?}", result.state);
+        println!("initialization state: {}", result.state);
         for operation in &result.operations {
             println!("{operation}");
         }
