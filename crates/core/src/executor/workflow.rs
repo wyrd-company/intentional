@@ -1013,7 +1013,18 @@ fn distinct_subjects(
 /// A packager whose native manifest names the published artifact is the
 /// authority on that name, because publisher evidence records the same native
 /// identity and assembly compares the two. Where the format has no such name,
-/// the release-unit id is the identity the recipe refines.
+/// the release-unit id stands in.
+///
+/// This closed match is the seam, and it is deliberately not a configurable
+/// one. [`Packager`] enumerates the maintained recipe catalog, so a destination
+/// whose identity is not yet derived here is a packager arm this function has
+/// not learned to read, not a value a repository could supply: an identity the
+/// workspace could assert would let a release name a subject the destination
+/// does not resolve, which is the disagreement the sealed subject exists to
+/// catch. A recipe that finds the stand-in reaching its fragment refines this
+/// arm; it must never make its fragment record the release-unit id instead,
+/// because that agrees with the seal by making both sides wrong and silently
+/// retires the cross-check.
 fn subject_identity(
     root: &Path,
     unit: &crate::config::ReleaseUnitConfig,
@@ -1211,6 +1222,12 @@ fn phase_tag_job(
     // seals the built subjects, the after-publication phase seals the accepted
     // publisher fragments. Both are transported as artifacts of the jobs that
     // produced them and both leave the sealed evidence behind as a document.
+    //
+    // The sealed documents carry their own artifact prefix rather than the
+    // fragment one. Sharing it made the after-publication tag's staged pattern
+    // match the before-publication document and its own output, which the
+    // loader skipped by schema identity but which nothing in the graph said was
+    // intended; assembly reads both prefixes explicitly instead.
     let staged = match phase {
         // The before-publication phase reads documents, not bytes, so it
         // downloads the document-only artifact rather than every subject's
@@ -1598,7 +1615,7 @@ steps:
   - name: @UPLOAD_NAME@
     uses: @UPLOAD@
     with:
-      name: @JOB@evidence-phase-@PHASE@
+      name: @JOB@phase-@PHASE@
       path: ${{ runner.temp }}/@JOB@phase/@PHASE@
       retention-days: 1
 "#;
@@ -1666,6 +1683,11 @@ steps:
     uses: @DOWNLOAD@
     with:
       pattern: @JOB@evidence-*
+      path: ${{ runner.temp }}/@JOB@fragments
+  - name: Download every sealed phase document
+    uses: @DOWNLOAD@
+    with:
+      pattern: @JOB@phase-*
       path: ${{ runner.temp }}/@JOB@fragments
   - name: Assemble the release evidence
     uses: @ASSEMBLE_ACTION@
@@ -1737,6 +1759,7 @@ steps:
 mod tests {
     use super::*;
     use crate::executor::fixture::Workspace;
+    use std::collections::BTreeMap;
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
@@ -2363,6 +2386,261 @@ release-units:
                     "the {role} workflow renders every managed template placeholder"
                 );
             }
+        }
+    }
+
+    /// Every artifact a managed job uploads, as artifact name to producing job.
+    fn managed_uploads(root: &Path) -> BTreeMap<String, String> {
+        let mut uploads = BTreeMap::new();
+        for (id, steps) in managed_steps(root, WorkflowRole::Publish) {
+            for step in &steps {
+                if step.get("uses").and_then(Value::as_str) != Some(UPLOAD_ARTIFACT_ACTION) {
+                    continue;
+                }
+                let name = step["with"]["name"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{id} names the artifact it uploads"))
+                    .to_owned();
+                assert!(
+                    uploads.insert(name.clone(), id.clone()).is_none(),
+                    "{name} is uploaded by more than one managed job"
+                );
+            }
+        }
+        uploads
+    }
+
+    /// Every artifact selector a managed job downloads, with its consuming job.
+    ///
+    /// A selector is either an exact artifact name or a trailing-star prefix,
+    /// which are the only two forms the download Action is given here.
+    fn managed_downloads(root: &Path) -> Vec<(String, String, bool)> {
+        let mut downloads = Vec::new();
+        for (id, steps) in managed_steps(root, WorkflowRole::Publish) {
+            for step in &steps {
+                if step.get("uses").and_then(Value::as_str) != Some(DOWNLOAD_ARTIFACT_ACTION) {
+                    continue;
+                }
+                let with = &step["with"];
+                match (with["name"].as_str(), with["pattern"].as_str()) {
+                    (Some(name), None) => downloads.push((id.clone(), name.to_owned(), true)),
+                    (None, Some(pattern)) => {
+                        let prefix = pattern.strip_suffix('*').unwrap_or_else(|| {
+                            panic!("{id} downloads by a trailing-star prefix; got {pattern}")
+                        });
+                        downloads.push((id.clone(), prefix.to_owned(), false));
+                    }
+                    _ => panic!("{id} selects a download by exactly one of name or pattern"),
+                }
+            }
+        }
+        downloads
+    }
+
+    /// Artifact names one selector resolves to among what the graph produces.
+    fn resolved<'a>(
+        uploads: &'a BTreeMap<String, String>,
+        selector: &str,
+        exact: bool,
+    ) -> BTreeSet<&'a str> {
+        uploads
+            .keys()
+            .map(String::as_str)
+            .filter(|name| {
+                if exact {
+                    *name == selector
+                } else {
+                    name.starts_with(selector)
+                }
+            })
+            .collect()
+    }
+
+    /// Every managed job one job depends on, directly or through another.
+    fn transitive_needs(jobs: &serde_yaml::Mapping, id: &str) -> BTreeSet<String> {
+        let mut reached = BTreeSet::new();
+        let mut pending = vec![id.to_owned()];
+        while let Some(current) = pending.pop() {
+            // The graph is rooted at tag verification, which waits for nothing.
+            let needs = jobs[&Value::String(current.clone())]["needs"]
+                .as_sequence()
+                .map(|needs| {
+                    needs
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for need in needs {
+                if reached.insert(need.clone()) {
+                    pending.push(need);
+                }
+            }
+        }
+        reached
+    }
+
+    // Artifact names are the data path the derived graph runs on, and they agree
+    // only by spelling: `download-artifact` given a pattern that matches nothing
+    // does not fail, it produces an empty directory. A before-publication tag
+    // then seals an empty subject set without complaint, pushes, and the run
+    // dies at assembly naming a subject identity -- three jobs downstream of a
+    // mistyped artifact prefix. Every other property of this graph is asserted;
+    // this asserts the one the jobs actually share.
+    #[test]
+    fn binds_every_artifact_a_managed_job_consumes_to_the_job_that_produces_it() {
+        for workspace in [
+            workspace("workflow-artifact-binding"),
+            two_destination_workspace("workflow-artifact-binding-oci"),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let jobs = publish_jobs(workspace.root());
+            let uploads = managed_uploads(workspace.root());
+            let downloads = managed_downloads(workspace.root());
+            assert!(
+                !downloads.is_empty(),
+                "the publish graph transports artifacts between managed jobs"
+            );
+
+            // No managed job consumes an artifact nothing produces, and none
+            // consumes one from a job it does not wait for.
+            for (consumer, selector, exact) in &downloads {
+                let produced = resolved(&uploads, selector, *exact);
+                assert!(
+                    !produced.is_empty(),
+                    "{consumer} downloads {selector}{} which no managed job uploads; produced artifacts are {:?}",
+                    if *exact { "" } else { "*" },
+                    uploads.keys().collect::<Vec<_>>()
+                );
+                let upstream = transitive_needs(&jobs, consumer);
+                for name in &produced {
+                    let producer = &uploads[*name];
+                    assert!(
+                        upstream.contains(producer),
+                        "{consumer} downloads {name} from {producer} without depending on it"
+                    );
+                }
+            }
+
+            // Each build job publishes its subject twice: the bytes and the
+            // document together for the publishers, the document alone for the
+            // before-publication tag.
+            let builds = job_ids(&jobs, "intentional_build_");
+            let documents = builds
+                .iter()
+                .map(|build| {
+                    let produced = uploads
+                        .iter()
+                        .filter(|(_, producer)| *producer == build)
+                        .map(|(name, _)| name.clone())
+                        .collect::<BTreeSet<_>>();
+                    let slug = build
+                        .strip_prefix("intentional_build_")
+                        .expect("the build job carries its subject slug");
+                    assert_eq!(
+                        produced,
+                        [
+                            format!("intentional_subject-{slug}"),
+                            format!("intentional_subjectdoc-{slug}"),
+                        ]
+                        .into_iter()
+                        .collect::<BTreeSet<_>>(),
+                        "{build} uploads the combined subject and the document alone"
+                    );
+                    format!("intentional_subjectdoc-{slug}")
+                })
+                .collect::<BTreeSet<_>>();
+
+            // A publisher promotes the subject its own build job produced, by
+            // exact name, so it can never receive another subject's bytes.
+            let publishers = job_ids(&jobs, "intentional_publish_");
+            let fragments = publishers
+                .iter()
+                .map(|publisher| {
+                    let downloaded = downloads
+                        .iter()
+                        .filter(|(consumer, _, _)| consumer == publisher)
+                        .collect::<Vec<_>>();
+                    let [(_, selector, exact)] = downloaded.as_slice() else {
+                        panic!("{publisher} downloads exactly its own subject: {downloaded:?}");
+                    };
+                    assert!(*exact, "{publisher} names the subject artifact exactly");
+                    let build = job_needs(&jobs, publisher)
+                        .into_iter()
+                        .find(|need| need.starts_with("intentional_build_"))
+                        .expect("a publisher depends on the job that built its subject");
+                    let slug = build
+                        .strip_prefix("intentional_build_")
+                        .expect("the build job carries its subject slug");
+                    assert_eq!(
+                        *selector,
+                        format!("intentional_subject-{slug}"),
+                        "{publisher} promotes the subject {build} produced"
+                    );
+                    uploads
+                        .iter()
+                        .find(|(_, producer)| *producer == publisher)
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_else(|| panic!("{publisher} uploads its evidence fragment"))
+                })
+                .collect::<BTreeSet<_>>();
+
+            // Each phase stages exactly what it seals: the before-publication
+            // tag reads the built-subject documents, the after-publication tag
+            // reads the accepted fragments.
+            let staged = |job: &str| {
+                let selected = downloads
+                    .iter()
+                    .filter(|(consumer, _, _)| consumer == job)
+                    .collect::<Vec<_>>();
+                let [(_, selector, exact)] = selected.as_slice() else {
+                    panic!("{job} stages one artifact selection: {selected:?}");
+                };
+                resolved(&uploads, selector, *exact)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>()
+            };
+            assert_eq!(
+                staged("intentional_tag_before_publication"),
+                documents,
+                "the before-publication tag stages every built-subject document and no bytes"
+            );
+            let after = staged("intentional_tag_after_publication");
+            assert!(
+                fragments.iter().all(|fragment| after.contains(fragment)),
+                "the after-publication tag stages every publisher fragment: {after:?}"
+            );
+            assert_eq!(
+                after, fragments,
+                "the after-publication tag stages the publisher fragments and nothing else"
+            );
+            let phase_documents = uploads
+                .keys()
+                .filter(|name| name.starts_with("intentional_phase-"))
+                .cloned()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                phase_documents.len(),
+                job_ids(&jobs, "intentional_tag_").len(),
+                "each phase tag job seals one document: {phase_documents:?}"
+            );
+
+            // Assembly reads every fragment and every sealed phase document,
+            // which is what makes a phase whose evidence never arrived a
+            // failure rather than a silent agreement.
+            let assembled = downloads
+                .iter()
+                .filter(|(consumer, _, _)| consumer == "intentional_assemble_evidence")
+                .flat_map(|(_, selector, exact)| resolved(&uploads, selector, *exact))
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                assembled,
+                fragments.union(&phase_documents).cloned().collect(),
+                "assembly stages every fragment and every sealed phase document"
+            );
         }
     }
 
