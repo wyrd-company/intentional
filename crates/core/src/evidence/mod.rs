@@ -95,26 +95,118 @@ pub(crate) fn is_flat_name(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-/// Require that a directory is absent or empty before one writer fills it.
+/// Build one write-once bundle and move it into place only once it is complete.
 ///
-/// Evidence bundles are written exactly once, so refusing a populated
-/// directory keeps a partially written or previously assembled bundle from
-/// being silently merged with a new one.
-pub(crate) fn prepare_output(path: &Path, label: &str) -> Result<()> {
-    if path.exists() {
-        if !path.is_dir() {
+/// Evidence bundles are written exactly once, so refusing a populated output
+/// keeps a previously written bundle from being silently merged with a new one.
+/// Building in a sibling staging directory keeps that rule from turning a
+/// transient fault into a permanently unwritable output: a failed run leaves
+/// nothing behind, so the next run — a workflow retry included — starts from
+/// the same state as the first.
+pub(crate) fn write_bundle<T>(
+    output: &Path,
+    label: &str,
+    build: impl FnOnce(&Path) -> Result<T>,
+) -> Result<T> {
+    if output.exists() {
+        if !output.is_dir() {
             return Err(Error::Validation(format!(
                 "{label} output {} is not a directory",
-                path.display()
+                output.display()
             )));
         }
-        let mut entries = std::fs::read_dir(path).map_err(|error| Error::io(path, error))?;
+        let mut entries = std::fs::read_dir(output).map_err(|error| Error::io(output, error))?;
         if entries.next().is_some() {
             return Err(Error::Validation(format!(
-                "{label} output directory {} is not empty; assembly writes one complete bundle",
-                path.display()
+                "{label} output directory {} is not empty; one complete bundle is written once",
+                output.display()
             )));
         }
     }
-    std::fs::create_dir_all(path).map_err(|error| Error::io(path, error))
+    let parent = output.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+    let staging = parent.join(format!(
+        ".intentional-{label}-staging-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default()
+    ));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|error| Error::io(&staging, error))?;
+    let built = build(&staging).and_then(|built| {
+        // Renaming a complete directory over an empty one is the single step
+        // that makes the bundle observable.
+        std::fs::rename(&staging, output).map_err(|error| Error::io(output, error))?;
+        Ok(built)
+    });
+    if built.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    built
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Error;
+    use crate::executor::fixture::Workspace;
+
+    #[test]
+    fn a_failed_build_leaves_no_output_and_no_staging_residue() {
+        let workspace = Workspace::new("bundle-failure");
+        let output = workspace.root().join("bundle");
+        let error = write_bundle(&output, "evidence", |staging| {
+            std::fs::write(staging.join("partial.txt"), "partial")
+                .map_err(|error| Error::io(staging, error))?;
+            Err::<(), _>(Error::Validation("build failed".to_owned()))
+        })
+        .expect_err("the failure is reported");
+        assert!(error.to_string().contains("build failed"), "{error}");
+        assert!(!output.exists(), "a failed build publishes nothing");
+        assert_eq!(
+            std::fs::read_dir(workspace.root())
+                .expect("workspace")
+                .count(),
+            0,
+            "a failed build leaves no staging directory behind"
+        );
+
+        // A transient failure must not make the output permanently unwritable.
+        write_bundle(&output, "evidence", |staging| {
+            std::fs::write(staging.join("complete.txt"), "complete")
+                .map_err(|error| Error::io(staging, error))
+        })
+        .expect("the next attempt succeeds");
+        assert!(output.join("complete.txt").is_file());
+    }
+
+    #[test]
+    fn an_empty_output_directory_is_filled_and_a_populated_one_is_refused() {
+        let workspace = Workspace::new("bundle-output");
+        let output = workspace.root().join("bundle");
+        std::fs::create_dir_all(&output).expect("empty output");
+        write_bundle(&output, "evidence", |staging| {
+            std::fs::write(staging.join("statement.yml"), "written")
+                .map_err(|error| Error::io(staging, error))
+        })
+        .expect("an empty output directory accepts the bundle");
+        assert_eq!(
+            std::fs::read_to_string(output.join("statement.yml")).expect("statement"),
+            "written"
+        );
+
+        let error = write_bundle(&output, "evidence", |staging| {
+            std::fs::write(staging.join("statement.yml"), "replacement")
+                .map_err(|error| Error::io(staging, error))
+        })
+        .expect_err("a populated output directory is refused");
+        assert!(error.to_string().contains("is not empty"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(output.join("statement.yml")).expect("statement"),
+            "written",
+            "a refused write never replaces a complete bundle"
+        );
+    }
 }

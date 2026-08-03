@@ -7,7 +7,7 @@
 
 use crate::error::{Error, Result};
 use crate::evidence::{
-    copy_and_digest, digest_bytes, is_digest, is_flat_name, is_namespace, prepare_output,
+    copy_and_digest, digest_bytes, is_digest, is_flat_name, is_namespace, write_bundle,
     DIGEST_PREFIX,
 };
 use serde::{Deserialize, Serialize};
@@ -232,35 +232,37 @@ pub fn contribute(request: &ContributionRequest<'_>) -> Result<ContributionBundl
         return Err(Error::Validation(findings.join("\n")));
     }
 
-    prepare_output(request.output, "contribution")?;
-    let attachments_directory = request.output.join(ATTACHMENTS_DIRECTORY);
-    if !sources.is_empty() {
-        std::fs::create_dir_all(&attachments_directory)
-            .map_err(|error| Error::io(&attachments_directory, error))?;
-    }
-    sources.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut attachments = Vec::new();
-    for (name, source) in &sources {
-        let destination = attachments_directory.join(name);
-        let sha256 = copy_and_digest(source, &destination)?;
-        attachments.push(ContributionAttachment {
-            name: name.clone(),
-            file: format!("{ATTACHMENTS_DIRECTORY}/{name}"),
-            sha256,
-        });
-    }
-    let manifest = ContributionManifest {
-        schema: CONTRIBUTION_SCHEMA.to_owned(),
-        namespace: request.namespace.to_owned(),
-        value,
-        attachments,
-    };
-    let manifest_path = request.output.join(CONTRIBUTION_MANIFEST);
-    std::fs::write(&manifest_path, serde_yaml::to_string(&manifest)?)
-        .map_err(|error| Error::io(&manifest_path, error))?;
+    let manifest = write_bundle(request.output, "contribution", |staging| {
+        let attachments_directory = staging.join(ATTACHMENTS_DIRECTORY);
+        if !sources.is_empty() {
+            std::fs::create_dir_all(&attachments_directory)
+                .map_err(|error| Error::io(&attachments_directory, error))?;
+        }
+        sources.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut attachments = Vec::new();
+        for (name, source) in &sources {
+            let destination = attachments_directory.join(name);
+            let sha256 = copy_and_digest(source, &destination)?;
+            attachments.push(ContributionAttachment {
+                name: name.clone(),
+                file: format!("{ATTACHMENTS_DIRECTORY}/{name}"),
+                sha256,
+            });
+        }
+        let manifest = ContributionManifest {
+            schema: CONTRIBUTION_SCHEMA.to_owned(),
+            namespace: request.namespace.to_owned(),
+            value,
+            attachments,
+        };
+        let manifest_path = staging.join(CONTRIBUTION_MANIFEST);
+        std::fs::write(&manifest_path, serde_yaml::to_string(&manifest)?)
+            .map_err(|error| Error::io(&manifest_path, error))?;
+        Ok(manifest)
+    })?;
     Ok(ContributionBundle {
         path: request.output.to_path_buf(),
-        manifest_path,
+        manifest_path: request.output.join(CONTRIBUTION_MANIFEST),
         artifact_name: artifact_name(request.namespace, request.job, request.run_attempt),
         manifest,
     })

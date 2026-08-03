@@ -12,7 +12,7 @@ use crate::evidence::contribution::{
     ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX, CONTRIBUTION_MANIFEST,
     CONTRIBUTION_SCHEMA,
 };
-use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, prepare_output};
+use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
 use crate::executor::recipe::resolve_publications;
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use serde::{Deserialize, Serialize};
@@ -451,12 +451,6 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         contribution_attachments,
     };
 
-    prepare_output(request.output, "evidence")?;
-    let attachments_directory = request.output.join(ATTACHMENTS_DIRECTORY);
-    if !evidence.contribution_attachments.is_empty() {
-        std::fs::create_dir_all(&attachments_directory)
-            .map_err(|error| Error::io(&attachments_directory, error))?;
-    }
     let mut sources = BTreeMap::new();
     for contribution in &accepted {
         for attachment in &contribution.manifest.attachments {
@@ -469,20 +463,27 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
             );
         }
     }
-    for (name, (source, expected_digest)) in &sources {
-        let digest = copy_and_digest(source, &attachments_directory.join(name))?;
-        if &digest != expected_digest {
-            return Err(Error::Validation(format!(
-                "contributed attachment {name} changed while it was being assembled"
-            )));
+    write_bundle(request.output, "evidence", |staging| {
+        let attachments_directory = staging.join(ATTACHMENTS_DIRECTORY);
+        if !evidence.contribution_attachments.is_empty() {
+            std::fs::create_dir_all(&attachments_directory)
+                .map_err(|error| Error::io(&attachments_directory, error))?;
         }
-    }
-    let evidence_path = request.output.join(RELEASE_EVIDENCE_FILE);
-    std::fs::write(&evidence_path, evidence.to_yaml()?)
-        .map_err(|error| Error::io(&evidence_path, error))?;
+        for (name, (source, expected_digest)) in &sources {
+            let digest = copy_and_digest(source, &attachments_directory.join(name))?;
+            if &digest != expected_digest {
+                return Err(Error::Validation(format!(
+                    "contributed attachment {name} changed while it was being assembled"
+                )));
+            }
+        }
+        let evidence_path = staging.join(RELEASE_EVIDENCE_FILE);
+        std::fs::write(&evidence_path, evidence.to_yaml()?)
+            .map_err(|error| Error::io(&evidence_path, error))
+    })?;
     Ok(Assembly {
         path: request.output.to_path_buf(),
-        evidence_path,
+        evidence_path: request.output.join(RELEASE_EVIDENCE_FILE),
         attachments: sources.keys().cloned().collect(),
         evidence,
     })
