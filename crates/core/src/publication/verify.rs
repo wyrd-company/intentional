@@ -453,15 +453,6 @@ fn canonical_target(
     }
 }
 
-/// Wire spelling of one retrieval mode, as evidence and diagnostics name it.
-const fn mode_name(mode: CleanClientMode) -> &'static str {
-    match mode {
-        CleanClientMode::Public => "public",
-        CleanClientMode::AuthenticatedDraft => "authenticated-draft",
-        CleanClientMode::AuthenticatedRegistry => "authenticated-registry",
-    }
-}
-
 /// Consumer path one retrieval mode names, for a diagnostic that says why.
 const fn retrieval_path(mode: CleanClientMode) -> &'static str {
     match mode {
@@ -533,9 +524,9 @@ fn accept_observation<'a>(
     if retrieval.mode != selected.retrieval {
         return Err(Error::Validation(format!(
             "publication {identity} claims {} retrieval; the maintained recipe for this destination retrieves it through {} and records mode {}",
-            mode_name(retrieval.mode),
+            retrieval.mode.as_str(),
             retrieval_path(selected.retrieval),
-            mode_name(selected.retrieval)
+            selected.retrieval.as_str()
         )));
     }
     Ok(ObservedPublication {

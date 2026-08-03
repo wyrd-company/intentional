@@ -11,11 +11,13 @@
 //! consumer retrieval all happen in `run:` bodies this module derives. What
 //! reaches the portable command is one schema-backed publication observation.
 //!
-//! Three rules shape every script here.
+//! Four rules shape every script here.
 //!
 //! Values arrive through `env:` and are read as shell variables. A `${{ }}`
 //! expansion inside a `run:` body is textual substitution into shell source, and
-//! these bodies hold publisher credentials.
+//! so is a configured value interpolated into a template. These bodies hold
+//! publisher credentials, so a configured name reaches a command as a quoted
+//! shell variable and is validated before it is derived at all.
 //!
 //! Nothing a script writes into the observation is asserted by the script where
 //! the graph already proved it. The subject's version and digest are the build
@@ -29,6 +31,11 @@
 //! `conflict` or `pending` and the step succeeds. `intentional verify
 //! publication` is what decides whether that observation completes the
 //! publication, so the decision stays in one place and stays testable.
+//!
+//! A probe that did not succeed is not an answer. Every existence check
+//! separates "the destination does not hold this" from "the check did not
+//! complete", because the two are one shell exit status apart and only the
+//! first may reach a bootstrap credential.
 
 use crate::config::ReleaseUnitConfig;
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
@@ -70,6 +77,9 @@ const GITHUB_PACKAGES_REGISTRY: &str = "https://npm.pkg.github.com";
 /// Destination identity GitHub Package Registry publications record.
 const GITHUB_PACKAGES_DESTINATION: &str = "npm.pkg.github.com";
 
+/// Default Cargo registry, which is also the one that implements trusted publishing.
+const CRATES_IO: &str = "crates.io";
+
 /// Lowest npm release that implements registry trusted publishing.
 ///
 /// A stock runner's bundled npm is older than this on the images this executor
@@ -80,42 +90,38 @@ const GITHUB_PACKAGES_DESTINATION: &str = "npm.pkg.github.com";
 const NPM_TRUSTED_PUBLISHING_RANGE: &str = ">=11.5.1";
 
 /// Steps one publication's maintained recipe contributes to its publisher job.
+///
+/// The three packagers below each keep one arm rather than sharing a collapsed
+/// one. Their recipes are owned by separate tasks working from a common base,
+/// and a shared arm makes one edit each of them has to make into one edit they
+/// have to make together.
 pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     match context.publication.packager {
         Packager::Npm => npm_steps(context),
         Packager::Cargo => cargo_steps(context),
-        // The GoReleaser, Buildx and Dev Container recipes still promote their
-        // subject through one native command. Their authentication, readback and
-        // retrieval belong to the tasks that own those destinations.
-        Packager::GoReleaser | Packager::Buildx | Packager::DevContainerCli => {
-            Ok(promote_only(context))
-        }
+        Packager::GoReleaser => Ok(promote_only(context, "goreleaser release --clean")),
+        Packager::Buildx => Ok(promote_only(
+            context,
+            "docker buildx build --push --provenance true --sbom true .",
+        )),
+        Packager::DevContainerCli => Ok(promote_only(
+            context,
+            "devcontainer features publish --namespace \"${GITHUB_REPOSITORY}\" .",
+        )),
     }
 }
 
 /// The single promotion step a recipe without derived readback still emits.
-fn promote_only(context: &RecipeContext<'_>) -> String {
+///
+/// Authentication, readback and retrieval belong to the tasks that own those
+/// destinations; until then the job promotes its subject with one native
+/// command and writes no observation, which the verification step reports.
+fn promote_only(context: &RecipeContext<'_>, command: &str) -> String {
     format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n    run: {}\n",
+        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n    run: {command}\n",
         scalar(&format!("Publish {}", context.publication.identity())),
         scalar(context.working_directory),
-        package_command(context.publication.packager),
     )
-}
-
-/// Native command a recipe without derived readback drives.
-const fn package_command(packager: Packager) -> &'static str {
-    match packager {
-        Packager::GoReleaser => "goreleaser release --clean",
-        Packager::Buildx => "docker buildx build --push --provenance true --sbom true .",
-        Packager::DevContainerCli => {
-            "devcontainer features publish --namespace \"${GITHUB_REPOSITORY}\" ."
-        }
-        // Both derive their own steps, and this arm exists only because the
-        // packager set is closed.
-        Packager::Npm => "npm publish --provenance --access public",
-        Packager::Cargo => "cargo publish --locked",
-    }
 }
 
 /// Reject a configured secret name GitHub could not resolve.
@@ -128,18 +134,58 @@ fn secret_name(configured: Option<&str>, conventional: &str) -> Result<String, S
     let Some(name) = configured else {
         return Ok(conventional.to_owned());
     };
-    let valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_')
-        && !name.starts_with(|character: char| character.is_ascii_digit());
-    if valid {
+    if identifier_shaped(name, &['_']) {
         Ok(name.to_owned())
     } else {
         Err(format!(
             "token-secret {name:?} is not a GitHub secret name; a secret name contains letters, digits and underscores and does not start with a digit"
         ))
     }
+}
+
+/// Reject a configured Cargo registry name a maintained recipe will not name.
+///
+/// The name reaches the recipe as a `--registry` argument in a `run:` body that
+/// holds the registry token, and it also becomes part of the
+/// `CARGO_REGISTRIES_<NAME>_TOKEN` variable cargo reads. It comes from
+/// `package.publish` in the release unit's own manifest, which is repository
+/// content rather than a value this executor chose, so it is validated for the
+/// same reason the secret name is: a name carrying a quote is not a registry
+/// this fails to find, it is shell source the publisher job runs while holding
+/// a credential. The scripts also quote it, and it is still refused here,
+/// because the two defences fail differently — quoting is a property of every
+/// future call site, validation is a property of the name.
+fn registry_name(name: &str) -> Result<String, String> {
+    if identifier_shaped(name, &['_', '-']) {
+        Ok(name.to_owned())
+    } else {
+        Err(format!(
+            "Cargo registry {name:?} is not a registry name; a registry name contains letters, digits, hyphens and underscores and starts with a letter"
+        ))
+    }
+}
+
+/// Whether one configured name is an identifier over the permitted extra characters.
+fn identifier_shaped(name: &str, extra: &[char]) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || extra.contains(&character))
+        && name.starts_with(|character: char| character.is_ascii_alphabetic())
+}
+
+/// Cargo's environment spelling of one configured registry name.
+fn environment_fragment(registry: &str) -> String {
+    registry
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Bounded eventual-consistency values one adapter's policy states, in seconds.
@@ -175,39 +221,71 @@ fn subject_environment(context: &RecipeContext<'_>) -> String {
 }
 
 /// Observation members every recipe writes identically, for a step's `env:`.
-fn observation_environment(context: &RecipeContext<'_>) -> String {
+///
+/// The retrieval mode among them is the one the selected recipe fixes, not a
+/// spelling the script chose: `intentional verify publication` refuses any
+/// other, and a recipe that named its own would be discovered by that refusal
+/// on a release runner rather than by derivation here.
+fn observation_environment(context: &RecipeContext<'_>, kind: &str, packager: &str) -> String {
     format!(
-        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n",
+        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n",
         scalar(context.observation),
         scalar(&context.publication.release_unit),
         scalar(context.publication.publisher.as_str()),
         scalar(&context.publication.target),
         scalar(context.work),
+        scalar(kind),
+        scalar(packager),
+        scalar(context.publication.retrieval.as_str()),
     )
 }
 
-/// Shell every recipe step opens with.
+/// Shell writing any one of the three observation documents a recipe produces.
 ///
-/// The strict-mode line comes before any helper definition so a reader can see
-/// at a glance that everything below it is guarded, and so a helper added later
-/// cannot quietly land above the line that makes a failure fatal.
-const STRICT_MODE: &str = "      set -euo pipefail\n";
-
-/// Shell writing one unobservable or disagreeing observation and succeeding.
-///
-/// A state carrying no destination detail is the same three lines for every
-/// adapter, and the command that reads it is what turns `pending` into a
-/// bounded wait and `conflict` into an immediate failure.
-const OBSERVE_WITHOUT_DETAIL: &str = r#"      @ENVVAR@observe_state() {
+/// Every literal the schema fixes appears once. Three copies of a schema
+/// identity is three chances for one of them to be edited alone, and a document
+/// that names the wrong schema or misspells a member is rejected by the loader
+/// three jobs downstream, as a verification failure naming the destination
+/// rather than the recipe. The helpers are also the reason those documents can
+/// be executed by a test at all: everything the adapter computes reaches them
+/// as a variable, so the writing can be driven without reaching a registry.
+const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
+        printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
+        printf 'contract: publication-observation-1\n'
+        printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
+        printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
+        printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
+      }
+      @ENVVAR@observe_state() {
         mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
         {
-          printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
-          printf 'contract: publication-observation-1\n'
-          printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
-          printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
-          printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
+          @ENVVAR@observe_header
           printf 'state: %s\n' "$1"
           if [ "$1" = conflict ]; then printf 'conflict: "%s"\n' "$2"; fi
+        } > "${@ENVVAR@OBSERVATION}"
+      }
+      @ENVVAR@observe_present() {
+        mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
+        {
+          @ENVVAR@observe_header
+          printf 'state: present\n'
+          printf 'subject:\n'
+          printf '  kind: "%s"\n' "${@ENVVAR@SUBJECT_KIND}"
+          printf '  identity: "%s"\n' "${@ENVVAR@SUBJECT_IDENTITY}"
+          printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
+          printf '  digest: "%s"\n' "${@ENVVAR@SUBJECT_DIGEST}"
+          printf 'packager:\n'
+          printf '  id: "%s"\n' "${@ENVVAR@PACKAGER_ID}"
+          printf '  version: "%s"\n' "${@ENVVAR@PACKAGER_VERSION}"
+          printf 'destination:\n'
+          printf '  identity: "%s"\n' "${@ENVVAR@DESTINATION}"
+          printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
+          printf '  digest: "%s"\n' "${@ENVVAR@DESTINATION_DIGEST}"
+          printf 'retrieval:\n'
+          printf '  mode: %s\n' "${@ENVVAR@RETRIEVAL_MODE}"
+          printf '  client: "%s"\n' "${@ENVVAR@PACKAGER_ID}"
+          printf '  version: "%s"\n' "${@ENVVAR@RETRIEVAL_VERSION}"
+          printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_DIGEST}"
         } > "${@ENVVAR@OBSERVATION}"
       }
 "#;
@@ -229,6 +307,18 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         .destination
         .as_deref()
         .unwrap_or(GITHUB_PACKAGES_DESTINATION);
+    // GitHub Package Registry resolves a package under the owning account's
+    // scope and rejects a package name that carries none. The name is the one
+    // the npmjs primary publishes, so a repository that adds this destination to
+    // an unscoped package has configured something the registry will refuse.
+    // Saying so here names the cause; letting it derive turns it into a publish
+    // failure in a job holding a token, after the primary has already shipped.
+    if !primary && !context.subject_identity.starts_with('@') {
+        return Err(format!(
+            "GitHub Package Registry resolves {} under the publishing account's scope, and package name {:?} carries none; scope the package as @owner/name or remove the github additional target",
+            context.publication.release_unit, context.subject_identity
+        ));
+    }
     let bootstrap = secret_name(
         context
             .unit
@@ -245,13 +335,14 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     // its recipe stays on the runner's own client.
     if primary {
         steps.push_str(&format!(
-            "  - name: Prepare the npm client for trusted publishing\n    env:\n      @ENVVAR@NPM_RANGE: {}\n    run: |\n      set -euo pipefail\n      npm install --global \"npm@${{@ENVVAR@NPM_RANGE}}\"\n      npm --version\n",
+            "  - name: Prepare the npm client for trusted publishing\n    env:\n      @ENVVAR@NPM_RANGE: {}\n    run: |\n{}      npm install --global \"npm@${{@ENVVAR@NPM_RANGE}}\"\n      npm --version\n",
             scalar(NPM_TRUSTED_PUBLISHING_RANGE),
+            STRICT_MODE,
         ));
     }
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@SUBJECT_IDENTITY: {}\n{}    run: |\n{}{}",
+        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@SUBJECT_IDENTITY: {}\n{}    run: |\n{}{}{}",
         scalar(&format!("Authenticate the {identity} publication")),
         scalar(registry),
         scalar(context.subject_identity),
@@ -261,6 +352,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
             "      @ENVVAR@GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n".to_owned()
         },
         STRICT_MODE,
+        if primary { NPM_HOLDS } else { "" },
         if primary {
             NPM_TRUSTED_AUTHENTICATION
         } else {
@@ -269,12 +361,13 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{}    run: |\n{}{}",
+        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{}    run: |\n{}{}{}",
         scalar(&format!("Publish {identity}")),
         scalar(context.working_directory),
         scalar(registry),
         subject_environment(context),
         STRICT_MODE,
+        NPM_HOLDS,
         if primary {
             NPM_PUBLISH_PRIMARY
         } else {
@@ -283,38 +376,79 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n{}{}{}    run: |\n{}{}{}",
+        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{}{}{}{}    run: |\n{}{}{}{}",
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
         scalar(destination),
         if primary {
-            "public"
+            String::new()
         } else {
-            "authenticated-registry"
+            "      @ENVVAR@GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n".to_owned()
         },
         subject_environment(context),
-        observation_environment(context),
+        observation_environment(context, "npm-package", "npm"),
         policy_environment(context.publication.publisher),
         STRICT_MODE,
-        OBSERVE_WITHOUT_DETAIL,
-        NPM_READBACK,
+        OBSERVE,
+        NPM_HOLDS,
+        npm_readback(if primary {
+            NPM_RETRIEVE_PUBLIC
+        } else {
+            NPM_RETRIEVE_AUTHENTICATED
+        }),
     ));
     Ok(steps)
 }
+
+/// Shell every recipe step opens with.
+///
+/// The strict-mode line comes before any helper definition so a reader can see
+/// at a glance that everything below it is guarded, and so a helper added later
+/// cannot quietly land above the line that makes a failure fatal.
+const STRICT_MODE: &str = "      set -euo pipefail\n";
+
+/// Shell separating "the registry does not hold this" from "the check failed".
+///
+/// A missing package, a rate limit, a proxy failure and a 5xx are one exit
+/// status in `npm view`. Collapsing them makes every transient failure look
+/// like a first publication, which is the one condition that unlocks the
+/// long-lived bootstrap token. The registry distinguishes them in its output,
+/// so the helper does too and every caller decides on three outcomes.
+const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
+        if @ENVVAR@VIEW="$(npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" 2>&1)"; then
+          printf '%s' "${@ENVVAR@VIEW}"
+          return 0
+        fi
+        case "${@ENVVAR@VIEW}" in
+          *E404*|*"404 Not Found"*) return 1 ;;
+          *) printf '%s\n' "${@ENVVAR@VIEW}" >&2 ; return 2 ;;
+        esac
+      }
+"#;
 
 /// Trusted-publishing authentication with a protected first-publication path.
 ///
 /// npmjs can only bind a trusted publisher to a package that already exists, so
 /// the very first publication of a package has nothing to be trusted against.
-/// The bootstrap token covers exactly that case and is reachable only while the
-/// package is absent: once the destination holds the package, this step never
-/// reads the secret again, so a trusted-identity failure cannot silently fall
-/// back to a long-lived token.
+/// The bootstrap token covers exactly that case and is reachable only on a
+/// probe that proved the package absent: an inconclusive probe fails the job
+/// rather than reaching for the token, because a rerun after a transient
+/// registry failure would otherwise publish a long-established package with a
+/// long-lived credential and never mention it.
 const NPM_TRUSTED_AUTHENTICATION: &str = r#"      npm config set registry "${@ENVVAR@REGISTRY}"
-      if npm view "${@ENVVAR@SUBJECT_IDENTITY}" version --registry "${@ENVVAR@REGISTRY}" >/dev/null 2>&1; then
-        echo "${@ENVVAR@SUBJECT_IDENTITY} exists; this publication uses its configured trusted publisher"
-        exit 0
-      fi
+      @ENVVAR@npm_holds "${@ENVVAR@SUBJECT_IDENTITY}" >/dev/null && @ENVVAR@HELD=0 || @ENVVAR@HELD=$?
+      case "${@ENVVAR@HELD}" in
+        0)
+          echo "${@ENVVAR@SUBJECT_IDENTITY} exists; this publication uses its configured trusted publisher"
+          exit 0
+          ;;
+        1) ;;
+        *)
+          echo "the registry did not answer whether it holds ${@ENVVAR@SUBJECT_IDENTITY}" >&2
+          echo "a bootstrap token is reachable only on a proven first publication" >&2
+          exit 1
+          ;;
+      esac
       if [ -z "${@ENVVAR@BOOTSTRAP_TOKEN:-}" ]; then
         echo "${@ENVVAR@SUBJECT_IDENTITY} does not exist yet and no bootstrap token secret is available" >&2
         echo "a trusted publisher can only be configured for an existing package" >&2
@@ -339,14 +473,24 @@ const NPM_GITHUB_AUTHENTICATION: &str = r#"      @ENVVAR@HOST="${@ENVVAR@REGISTR
 /// destination receives the subject the release sealed rather than a second
 /// packaging of the same source. Reading the destination first is what makes a
 /// rerun recover: a release already accepted is left alone and the readback
-/// decides whether what is there is this release.
+/// decides whether what is there is this release. A probe that did not answer
+/// stops the job, because submitting an immutable version on a guess is the one
+/// thing a rerun cannot undo.
 const NPM_PUBLISH_PRIMARY: &str = r#"      @ENVVAR@TARBALL="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.tgz' -print -quit)"
       test -n "${@ENVVAR@TARBALL}"
-      if npm view "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" dist.integrity \
-        --registry "${@ENVVAR@REGISTRY}" >/dev/null 2>&1; then
-        echo "the destination already holds this version; the readback decides whether it is this release"
-        exit 0
-      fi
+      @ENVVAR@npm_holds "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" >/dev/null \
+        && @ENVVAR@HELD=0 || @ENVVAR@HELD=$?
+      case "${@ENVVAR@HELD}" in
+        0)
+          echo "the destination already holds this version; the readback decides whether it is this release"
+          exit 0
+          ;;
+        1) ;;
+        *)
+          echo "the registry did not answer whether it holds this version; refusing to submit" >&2
+          exit 1
+          ;;
+      esac
       npm publish "${@ENVVAR@TARBALL}" --provenance --access public \
         --registry "${@ENVVAR@REGISTRY}"
 "#;
@@ -357,15 +501,23 @@ const NPM_PUBLISH_PRIMARY: &str = r#"      @ENVVAR@TARBALL="$(find "${@ENVVAR@SU
 /// for one it could not then record as an attached component.
 const NPM_PUBLISH_GITHUB: &str = r#"      @ENVVAR@TARBALL="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.tgz' -print -quit)"
       test -n "${@ENVVAR@TARBALL}"
-      if npm view "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" dist.integrity \
-        --registry "${@ENVVAR@REGISTRY}" >/dev/null 2>&1; then
-        echo "the destination already holds this version; the readback decides whether it is this release"
-        exit 0
-      fi
+      @ENVVAR@npm_holds "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" >/dev/null \
+        && @ENVVAR@HELD=0 || @ENVVAR@HELD=$?
+      case "${@ENVVAR@HELD}" in
+        0)
+          echo "the destination already holds this version; the readback decides whether it is this release"
+          exit 0
+          ;;
+        1) ;;
+        *)
+          echo "the registry did not answer whether it holds this version; refusing to submit" >&2
+          exit 1
+          ;;
+      esac
       npm publish "${@ENVVAR@TARBALL}" --registry "${@ENVVAR@REGISTRY}"
 "#;
 
-/// Destination readback, clean-client retrieval, and the observation they produce.
+/// Destination readback and the bounded wait it runs under.
 ///
 /// The chain this establishes is what lets the observation say the retrieved
 /// bytes are the published subject: the tarball the build produced, the
@@ -377,12 +529,12 @@ const NPM_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
       @ENVVAR@TARBALL="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.tgz' -print -quit)"
       test -n "${@ENVVAR@TARBALL}"
       @ENVVAR@LOCAL="sha512-$(openssl dgst -sha512 -binary "${@ENVVAR@TARBALL}" | base64 -w0)"
-      @ENVVAR@INDEXED=""
+      @ENVVAR@DESTINATION_DIGEST=""
       @ENVVAR@ELAPSED=0
       while : ; do
-        @ENVVAR@INDEXED="$(npm view "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" dist.integrity \
-          --registry "${@ENVVAR@REGISTRY}" 2>/dev/null || true)"
-        if [ -n "${@ENVVAR@INDEXED}" ]; then break; fi
+        @ENVVAR@DESTINATION_DIGEST="$(@ENVVAR@npm_holds \
+          "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" || true)"
+        if [ -n "${@ENVVAR@DESTINATION_DIGEST}" ]; then break; fi
         if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then break; fi
         sleep "${@ENVVAR@INTERVAL}"
         @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@INTERVAL ))
@@ -391,50 +543,59 @@ const NPM_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
           @ENVVAR@INTERVAL="${@ENVVAR@MAXIMUM_INTERVAL}"
         fi
       done
-      if [ -z "${@ENVVAR@INDEXED}" ]; then
+      if [ -z "${@ENVVAR@DESTINATION_DIGEST}" ]; then
         @ENVVAR@observe_state pending
         exit 0
       fi
-      if [ "${@ENVVAR@INDEXED}" != "${@ENVVAR@LOCAL}" ]; then
+      if [ "${@ENVVAR@DESTINATION_DIGEST}" != "${@ENVVAR@LOCAL}" ]; then
         @ENVVAR@observe_state conflict \
-          "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION} publishes integrity ${@ENVVAR@INDEXED}, not the promoted ${@ENVVAR@LOCAL}"
+          "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION} publishes integrity ${@ENVVAR@DESTINATION_DIGEST}, not the promoted ${@ENVVAR@LOCAL}"
         exit 0
       fi
       rm -rf "${@ENVVAR@WORK}/clean"
       mkdir -p "${@ENVVAR@WORK}/clean"
-      ( cd "${@ENVVAR@WORK}/clean" && npm pack "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" \
-        --registry "${@ENVVAR@REGISTRY}" --cache "${@ENVVAR@WORK}/clean/cache" >/dev/null )
+"#;
+
+/// Clean-client retrieval and the observation it completes.
+///
+/// The retrieval runs under a scratch npm configuration rather than the job's
+/// own. The bootstrap path writes an auth token into the user configuration and
+/// it persists for the rest of the job, so a retrieval reading that file would
+/// send a credential while the observation recorded a public retrieval. The
+/// mode field states what happened, so the retrieval is made to be what the
+/// field says.
+const NPM_RETRIEVE_PUBLIC: &str = r#"      : > "${@ENVVAR@WORK}/clean/npmrc"
+"#;
+
+/// The scratch configuration a destination without anonymous read retrieves under.
+///
+/// The credential is the one the destination always requires of every consumer,
+/// which is what `authenticated-registry` records. Writing it into the scratch
+/// file rather than inheriting the job's keeps the retrieval's identity the one
+/// this step chose.
+const NPM_RETRIEVE_AUTHENTICATED: &str = r#"      @ENVVAR@HOST="${@ENVVAR@REGISTRY#https://}"
+      printf '//%s/:_authToken=%s\n' "${@ENVVAR@HOST%/}" "${@ENVVAR@GITHUB_PACKAGES_TOKEN}" \
+        > "${@ENVVAR@WORK}/clean/npmrc"
+"#;
+
+/// Retrieval, comparison, and the present observation the recipe writes.
+const NPM_RETRIEVE: &str = r#"      ( cd "${@ENVVAR@WORK}/clean" \
+        && npm_config_userconfig="${@ENVVAR@WORK}/clean/npmrc" \
+          npm pack "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" \
+          --registry "${@ENVVAR@REGISTRY}" --cache "${@ENVVAR@WORK}/clean/cache" >/dev/null )
       @ENVVAR@RETRIEVED="$(find "${@ENVVAR@WORK}/clean" -maxdepth 1 -name '*.tgz' -print -quit)"
       test -n "${@ENVVAR@RETRIEVED}"
-      @ENVVAR@RETRIEVED_INTEGRITY="sha512-$(openssl dgst -sha512 -binary "${@ENVVAR@RETRIEVED}" | base64 -w0)"
-      test "${@ENVVAR@RETRIEVED_INTEGRITY}" = "${@ENVVAR@LOCAL}"
-      mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
-      {
-        printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
-        printf 'contract: publication-observation-1\n'
-        printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
-        printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
-        printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
-        printf 'state: present\n'
-        printf 'subject:\n'
-        printf '  kind: npm-package\n'
-        printf '  identity: "%s"\n' "${@ENVVAR@SUBJECT_IDENTITY}"
-        printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-        printf '  digest: "%s"\n' "${@ENVVAR@SUBJECT_DIGEST}"
-        printf 'packager:\n'
-        printf '  id: npm\n'
-        printf '  version: "%s"\n' "$(npm --version)"
-        printf 'destination:\n'
-        printf '  identity: "%s"\n' "${@ENVVAR@DESTINATION}"
-        printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-        printf '  digest: "%s"\n' "${@ENVVAR@INDEXED}"
-        printf 'retrieval:\n'
-        printf '  mode: %s\n' "${@ENVVAR@RETRIEVAL_MODE}"
-        printf '  client: npm\n'
-        printf '  version: "%s"\n' "$(npm --version)"
-        printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_INTEGRITY}"
-      } > "${@ENVVAR@OBSERVATION}"
+      @ENVVAR@RETRIEVED_DIGEST="sha512-$(openssl dgst -sha512 -binary "${@ENVVAR@RETRIEVED}" | base64 -w0)"
+      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@LOCAL}"
+      @ENVVAR@PACKAGER_VERSION="$(npm --version)"
+      @ENVVAR@RETRIEVAL_VERSION="${@ENVVAR@PACKAGER_VERSION}"
+      @ENVVAR@observe_present
 "#;
+
+/// One npm readback, with the retrieval identity its destination admits.
+fn npm_readback(identity: &str) -> String {
+    format!("{NPM_READBACK}{identity}{NPM_RETRIEVE}")
+}
 
 /// Cargo recipe: trusted publishing, a promotion gate, and cargo's own retrieval.
 fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
@@ -453,31 +614,34 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         CARGO_TOKEN_SECRET,
     )?;
     // Cargo names an alternate registry on the command line and reads its
-    // credential from the matching environment variable, so the flag and the
-    // variable are derived together from the one configured destination.
-    let (flag, token_variable) = if registry == CRATES_IO {
+    // credential from the matching environment variable, so the name and the
+    // variable are derived together from the one configured destination. The
+    // name reaches the scripts through `env:` and is quoted where it is used;
+    // it is validated here as well, because the scripts and the name fail in
+    // different ways.
+    let crates_io = registry == CRATES_IO;
+    let (registry_name, token_variable) = if crates_io {
         (String::new(), "CARGO_REGISTRY_TOKEN".to_owned())
     } else {
-        (
-            format!(" --registry {registry}"),
-            format!("CARGO_REGISTRIES_{}_TOKEN", environment_fragment(registry)),
-        )
+        let name = registry_name(registry)?;
+        let variable = format!("CARGO_REGISTRIES_{}_TOKEN", environment_fragment(&name));
+        (name, variable)
     };
+    let registry_environment = format!(
+        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n",
+        scalar(registry),
+        scalar(&registry_name),
+    );
     let mut steps = String::new();
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@BOOTSTRAP_TOKEN: ${{{{ secrets.{bootstrap} }}}}\n      @ENVVAR@TOKEN_VARIABLE: {}\n{}    run: |\n{}{}{}",
+        "  - name: {}\n    env:\n{registry_environment}      @ENVVAR@BOOTSTRAP_TOKEN: ${{{{ secrets.{bootstrap} }}}}\n      @ENVVAR@TOKEN_VARIABLE: {}\n{}    run: |\n{}{}{}",
         scalar(&format!("Authenticate the {identity} publication")),
-        scalar(registry),
         scalar(&token_variable),
         subject_environment(context),
         STRICT_MODE,
-        if registry == CRATES_IO {
-            cargo_probe(&flag)
-        } else {
-            String::new()
-        },
-        if registry == CRATES_IO {
+        if crates_io { CARGO_RESOLVE } else { "" },
+        if crates_io {
             CARGO_TRUSTED_AUTHENTICATION
         } else {
             CARGO_TOKEN_AUTHENTICATION
@@ -485,46 +649,28 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{}    run: |\n{}{}{}",
+        "  - name: {}\n    working-directory: {}\n    env:\n{registry_environment}{}    run: |\n{}{}{}",
         scalar(&format!("Publish {identity}")),
         scalar(context.working_directory),
-        scalar(registry),
         subject_environment(context),
         STRICT_MODE,
-        cargo_probe(&flag),
-        cargo_publish(&flag),
+        CARGO_RESOLVE,
+        CARGO_PUBLISH,
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{}{}{}    run: |\n{}{}{}{}",
+        "  - name: {}\n    env:\n{registry_environment}      @ENVVAR@DESTINATION: {}\n{}{}{}    run: |\n{}{}{}{}",
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
         subject_environment(context),
-        observation_environment(context),
+        observation_environment(context, "cargo-crate", "cargo"),
         policy_environment(context.publication.publisher),
         STRICT_MODE,
-        OBSERVE_WITHOUT_DETAIL,
-        cargo_probe(&flag),
+        OBSERVE,
+        CARGO_RESOLVE,
         CARGO_READBACK,
     ));
     Ok(steps)
-}
-
-/// Default Cargo registry, which is also the one that implements trusted publishing.
-const CRATES_IO: &str = "crates.io";
-
-/// Cargo's environment spelling of one configured registry name.
-fn environment_fragment(registry: &str) -> String {
-    registry
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_uppercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 /// Shell that resolves one exact crate release through cargo's own index.
@@ -538,24 +684,36 @@ fn environment_fragment(registry: &str) -> String {
 /// The scratch crate copies the workspace's `.cargo/config.toml` when there is
 /// one, because an alternate registry is declared there and a crate outside the
 /// workspace would otherwise not know the name it is being asked to resolve.
-fn cargo_probe(flag: &str) -> String {
-    format!(
-        r#"      @ENVVAR@resolve() {{
+///
+/// The three outcomes are distinct. Cargo reports a crate the index does not
+/// carry differently from a fetch it could not perform, and only the first is
+/// evidence of absence; treating both as absence routes a transient failure
+/// into the bootstrap credential.
+const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
+      if [ -n "${@ENVVAR@REGISTRY_NAME:-}" ]; then
+        @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${@ENVVAR@REGISTRY_NAME}")
+      fi
+      @ENVVAR@resolve() {
         rm -rf "$1"
         mkdir -p "$1"
         cargo new --quiet --lib "$1/probe" >/dev/null
         mkdir -p "$1/probe/.cargo"
-        if [ -f "${{GITHUB_WORKSPACE}}/.cargo/config.toml" ]; then
-          cp "${{GITHUB_WORKSPACE}}/.cargo/config.toml" "$1/probe/.cargo/config.toml"
+        if [ -f "${GITHUB_WORKSPACE}/.cargo/config.toml" ]; then
+          cp "${GITHUB_WORKSPACE}/.cargo/config.toml" "$1/probe/.cargo/config.toml"
         fi
-        ( cd "$1/probe" \
-          && CARGO_HOME="$1/home" cargo add --quiet{flag} \
-            "${{@ENVVAR@SUBJECT_IDENTITY}}@=${{@ENVVAR@VERSION}}" >/dev/null 2>&1 \
-          && CARGO_HOME="$1/home" cargo fetch --quiet >/dev/null 2>&1 )
-      }}
-"#
-    )
-}
+        if ( cd "$1/probe" \
+          && CARGO_HOME="$1/home" cargo add --quiet "${@ENVVAR@REGISTRY_ARGUMENTS[@]}" \
+            "${@ENVVAR@SUBJECT_IDENTITY}@=${@ENVVAR@VERSION}" \
+          && CARGO_HOME="$1/home" cargo fetch --quiet ) > "$1/log" 2>&1; then
+          return 0
+        fi
+        if grep -qiE 'could not be found|not found in registry|no matching package' "$1/log"; then
+          return 1
+        fi
+        cat "$1/log" >&2
+        return 2
+      }
+"#;
 
 /// crates.io trusted publishing with a protected first-publication path.
 ///
@@ -563,16 +721,26 @@ fn cargo_probe(flag: &str) -> String {
 /// publish token, and it can only do that for a crate a trusted publisher is
 /// already configured on. A crate the registry does not hold yet therefore has
 /// no trusted identity to present, which is the one case the bootstrap token
-/// covers; once the crate resolves, this step stops reading the secret.
-const CARGO_TRUSTED_AUTHENTICATION: &str = r#"      if ! @ENVVAR@resolve "${RUNNER_TEMP}/@JOB@bootstrap-probe"; then
-        if [ -z "${@ENVVAR@BOOTSTRAP_TOKEN:-}" ]; then
-          echo "${@ENVVAR@SUBJECT_IDENTITY} does not exist yet and no bootstrap token secret is available" >&2
-          echo "a trusted publisher can only be configured for an existing crate" >&2
+/// covers. A probe that did not answer is not that case: it fails the job
+/// rather than reaching for the token.
+const CARGO_TRUSTED_AUTHENTICATION: &str = r#"      @ENVVAR@resolve "${RUNNER_TEMP}/@JOB@bootstrap-probe" && @ENVVAR@HELD=0 || @ENVVAR@HELD=$?
+      case "${@ENVVAR@HELD}" in
+        0) ;;
+        1)
+          if [ -z "${@ENVVAR@BOOTSTRAP_TOKEN:-}" ]; then
+            echo "${@ENVVAR@SUBJECT_IDENTITY} does not exist yet and no bootstrap token secret is available" >&2
+            echo "a trusted publisher can only be configured for an existing crate" >&2
+            exit 1
+          fi
+          echo "${@ENVVAR@TOKEN_VARIABLE}=${@ENVVAR@BOOTSTRAP_TOKEN}" >> "${GITHUB_ENV}"
+          exit 0
+          ;;
+        *)
+          echo "the registry did not answer whether it holds ${@ENVVAR@SUBJECT_IDENTITY}" >&2
+          echo "a bootstrap token is reachable only on a proven first publication" >&2
           exit 1
-        fi
-        echo "${@ENVVAR@TOKEN_VARIABLE}=${@ENVVAR@BOOTSTRAP_TOKEN}" >> "${GITHUB_ENV}"
-        exit 0
-      fi
+          ;;
+      esac
       @ENVVAR@JWT="$(curl --fail --silent --show-error \
         --header "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
         "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=crates.io" | jq -r '.value')"
@@ -600,28 +768,34 @@ const CARGO_TOKEN_AUTHENTICATION: &str = r#"      if [ -z "${@ENVVAR@BOOTSTRAP_T
 /// Promotion gate and publication for one Cargo destination.
 ///
 /// Cargo has no command that uploads an existing `.crate`, so publication
-/// necessarily re-packages the release-unit sources. That is a rebuild, and a
-/// rebuild that drifted would send the registry bytes no phase tag sealed, so
-/// the recipe proves the packaging is reproducible before it uploads anything:
-/// it re-packages here and refuses to publish unless the result is byte-identical
-/// to the subject the build job produced. Discovering the drift afterwards would
-/// be too late, because a published crate version is immutable.
-fn cargo_publish(flag: &str) -> String {
-    format!(
-        r#"      @ENVVAR@CRATE="$(find "${{@ENVVAR@SUBJECT}}" -maxdepth 1 -name '*.crate' -print -quit)"
-      test -n "${{@ENVVAR@CRATE}}"
-      if @ENVVAR@resolve "${{RUNNER_TEMP}}/@JOB@publish-probe"; then
-        echo "the destination already holds this version; the readback decides whether it is this release"
-        exit 0
-      fi
-      cargo package --locked --no-verify --target-dir "${{RUNNER_TEMP}}/@JOB@repackage"
-      @ENVVAR@REPACKAGED="${{RUNNER_TEMP}}/@JOB@repackage/package/$(basename "${{@ENVVAR@CRATE}}")"
-      test "$(sha256sum < "${{@ENVVAR@REPACKAGED}}" | cut -d' ' -f1)" \
-        = "$(sha256sum < "${{@ENVVAR@CRATE}}" | cut -d' ' -f1)"
-      cargo publish --locked --no-verify{flag}
-"#
-    )
-}
+/// necessarily re-packages the release-unit sources, and `cargo publish`
+/// packages once more of its own. What this gate proves is therefore
+/// reproducibility rather than identity: packaging the same sources twice in
+/// this job produced the same bytes as the build job's subject, so the third
+/// packaging inside `cargo publish` produces them too. The claim is closed on
+/// the other side by the readback, which compares the checksum the registry
+/// publishes against the sealed subject and records a conflict if they differ.
+/// Both halves are needed; the gate alone would still be one packaging short.
+const CARGO_PUBLISH: &str = r#"      @ENVVAR@CRATE="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.crate' -print -quit)"
+      test -n "${@ENVVAR@CRATE}"
+      @ENVVAR@resolve "${RUNNER_TEMP}/@JOB@publish-probe" && @ENVVAR@HELD=0 || @ENVVAR@HELD=$?
+      case "${@ENVVAR@HELD}" in
+        0)
+          echo "the destination already holds this version; the readback decides whether it is this release"
+          exit 0
+          ;;
+        1) ;;
+        *)
+          echo "the registry did not answer whether it holds this version; refusing to submit" >&2
+          exit 1
+          ;;
+      esac
+      cargo package --locked --no-verify --target-dir "${RUNNER_TEMP}/@JOB@repackage"
+      @ENVVAR@REPACKAGED="${RUNNER_TEMP}/@JOB@repackage/package/$(basename "${@ENVVAR@CRATE}")"
+      test "$(sha256sum < "${@ENVVAR@REPACKAGED}" | cut -d' ' -f1)" \
+        = "$(sha256sum < "${@ENVVAR@CRATE}" | cut -d' ' -f1)"
+      cargo publish --locked --no-verify "${@ENVVAR@REGISTRY_ARGUMENTS[@]}"
+"#;
 
 /// Destination readback, clean-client retrieval, and the observation they produce.
 ///
@@ -651,43 +825,20 @@ const CARGO_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
         @ENVVAR@observe_state pending
         exit 0
       fi
-      @ENVVAR@PUBLISHED="$(sed -n "/^name = \"${@ENVVAR@SUBJECT_IDENTITY}\"$/,/^$/p" \
+      @ENVVAR@DESTINATION_DIGEST="$(sed -n "/^name = \"${@ENVVAR@SUBJECT_IDENTITY}\"$/,/^$/p" \
         "${@ENVVAR@WORK}/clean/probe/Cargo.lock" | sed -n 's/^checksum = "\(.*\)"$/\1/p')"
-      test -n "${@ENVVAR@PUBLISHED}"
+      test -n "${@ENVVAR@DESTINATION_DIGEST}"
       @ENVVAR@RETRIEVED="$(find "${@ENVVAR@WORK}/clean/home/registry/cache" -type f \
         -name "${@ENVVAR@SUBJECT_IDENTITY}-${@ENVVAR@VERSION}.crate" -print -quit)"
       test -n "${@ENVVAR@RETRIEVED}"
       @ENVVAR@RETRIEVED_DIGEST="$(sha256sum < "${@ENVVAR@RETRIEVED}" | cut -d' ' -f1)"
-      if [ "${@ENVVAR@PUBLISHED}" != "${@ENVVAR@LOCAL}" ]; then
+      if [ "${@ENVVAR@DESTINATION_DIGEST}" != "${@ENVVAR@LOCAL}" ]; then
         @ENVVAR@observe_state conflict \
-          "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@VERSION} publishes checksum ${@ENVVAR@PUBLISHED}, not the promoted ${@ENVVAR@LOCAL}"
+          "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@VERSION} publishes checksum ${@ENVVAR@DESTINATION_DIGEST}, not the promoted ${@ENVVAR@LOCAL}"
         exit 0
       fi
       test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@LOCAL}"
-      mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
-      {
-        printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
-        printf 'contract: publication-observation-1\n'
-        printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
-        printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
-        printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
-        printf 'state: present\n'
-        printf 'subject:\n'
-        printf '  kind: cargo-crate\n'
-        printf '  identity: "%s"\n' "${@ENVVAR@SUBJECT_IDENTITY}"
-        printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-        printf '  digest: "%s"\n' "${@ENVVAR@SUBJECT_DIGEST}"
-        printf 'packager:\n'
-        printf '  id: cargo\n'
-        printf '  version: "%s"\n' "$(cargo --version | cut -d' ' -f2)"
-        printf 'destination:\n'
-        printf '  identity: "%s"\n' "${@ENVVAR@REGISTRY}"
-        printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-        printf '  digest: "%s"\n' "${@ENVVAR@PUBLISHED}"
-        printf 'retrieval:\n'
-        printf '  mode: public\n'
-        printf '  client: cargo\n'
-        printf '  version: "%s"\n' "$(cargo --version | cut -d' ' -f2)"
-        printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_DIGEST}"
-      } > "${@ENVVAR@OBSERVATION}"
+      @ENVVAR@PACKAGER_VERSION="$(cargo --version | cut -d' ' -f2)"
+      @ENVVAR@RETRIEVAL_VERSION="${@ENVVAR@PACKAGER_VERSION}"
+      @ENVVAR@observe_present
 "#;

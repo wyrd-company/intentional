@@ -126,6 +126,17 @@ pub enum CleanClientMode {
     AuthenticatedRegistry,
 }
 
+impl CleanClientMode {
+    /// Wire spelling of this mode, as every schema and diagnostic names it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::AuthenticatedDraft => "authenticated-draft",
+            Self::AuthenticatedRegistry => "authenticated-registry",
+        }
+    }
+}
+
 /// Consumer verification a publisher truthfully performed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

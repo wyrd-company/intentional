@@ -461,6 +461,7 @@ fn select_one(
         }
         (None, _) => None,
     };
+    let retrieval = retrieval_mode(&recipe, destination.as_deref());
     Ok(SelectedPublication {
         release_unit: id.to_owned(),
         publisher,
@@ -474,8 +475,27 @@ fn select_one(
             .copied()
             .filter(|component| !configured.omit.contains(component))
             .collect(),
-        retrieval: recipe.retrieval,
+        retrieval,
     })
+}
+
+/// Retrieval one selected recipe's resolved destination admits.
+///
+/// A recipe whose destination the catalog names fixes the mode outright. Cargo
+/// does not: its one primary target resolves to whatever registry
+/// `package.publish` names, and the maintained recipe authenticates every
+/// registry that is not crates.io with a configured token. Such a registry is
+/// ordinarily a private or internal one, and the retrieval the recipe performs
+/// against it runs with that credential in its environment, so recording the
+/// catalog's public default there would assert a consumer path nobody outside
+/// the credential holder could take — the exact untruth the authenticated mode
+/// exists to prevent.
+fn retrieval_mode(recipe: &Recipe, destination: Option<&str>) -> CleanClientMode {
+    match (recipe.publisher, destination) {
+        (PublisherKind::Cargo, Some(CRATES_IO) | None) => recipe.retrieval,
+        (PublisherKind::Cargo, Some(_)) => CleanClientMode::AuthenticatedRegistry,
+        _ => recipe.retrieval,
+    }
 }
 
 fn capability_names(capabilities: &BTreeSet<Capability>) -> String {

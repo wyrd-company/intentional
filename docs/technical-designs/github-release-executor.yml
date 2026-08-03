@@ -404,8 +404,16 @@ proposed-design:
     consumer retrieval. Those steps hold the publisher credentials, so they are
     `run:` bodies rather than Intentional-owned Actions, and every value they
     read arrives through `env:` because an expression expanded inside a script
-    is substitution into shell source. Their one output is the schema-backed
-    publication observation.
+    is substitution into shell source. A name a repository supplies is
+    substitution into shell source for the same reason, so a configured registry
+    or secret identifier is validated at derivation and reaches its command as a
+    quoted variable. Their one output is the schema-backed publication
+    observation.
+
+    A recipe's consumer retrieval is performed under the identity its recorded
+    mode names. A retrieval that claims the public consumer path runs under a
+    scratch client configuration rather than the job's, because a bootstrap
+    credential written earlier in the job would otherwise still be presented.
 
     A recipe observes and does not adjudicate. A destination that has not
     indexed the release yet is recorded as pending and one holding different
@@ -519,7 +527,18 @@ proposed-design:
     defines its own trusted publishing, if any, so the maintained recipe
     authenticates it with the token every such registry does accept, read from
     the conventional or overridden secret and presented through the
-    registry-specific `CARGO_REGISTRIES_<NAME>_TOKEN` variable.
+    registry-specific `CARGO_REGISTRIES_<NAME>_TOKEN` variable. That registry's
+    consumer path is authenticated too, so its retrieval is recorded as such
+    rather than as the public retrieval the crates.io primary performs.
+
+    A bootstrap path opens only on a probe that proved the destination does not
+    hold the package. A probe that did not complete is not that proof: a
+    registry client reports a missing package and a failed request the same way,
+    and treating them alike turns any transient registry failure into a
+    steady-state publication authenticated by a long-lived credential. Each
+    recipe therefore separates the two outcomes from what its client reported
+    and fails the job on an inconclusive probe, and it applies the same
+    separation before submitting an immutable version.
 
     The workflow identity is granted only to publisher jobs whose recipe
     presents one, whether to exchange it for a publish token or to bind a

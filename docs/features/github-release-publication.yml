@@ -438,6 +438,17 @@ rules:
             world:
               target_exists: false
               authentication_method: token
+      refuse-bootstrap-when-the-probe-is-inconclusive:
+        addresses: Trusted-publisher bootstrap
+        steps:
+          - given: The registry does not answer whether it holds the package
+            world:
+              authentication_method: token
+          - when: The adapter probes for the target before publication
+          - then: The job fails without reaching the bootstrap token
+            world:
+              release_published: false
+              diagnostic: The registry did not answer whether it holds the package
       require-trusted-identity-after-bootstrap:
         addresses: Trusted-publisher steady state
         steps:
