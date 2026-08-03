@@ -244,11 +244,41 @@ pub struct PhaseTagEvidence {
     /// Subjects sealed by the phase tag.
     pub subjects: Vec<PhaseSubject>,
     /// Destinations a before-publication tag intends to publish.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "omitted_or_valued",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub intended_destinations: Option<Vec<IntendedDestination>>,
     /// Publisher evidence sealed by an after-publication tag.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "omitted_or_valued",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub publisher_evidence: Option<Vec<PublisherEvidence>>,
+}
+
+/// Read a phase member that is either omitted or carries a value.
+///
+/// The published schema forbids one member per phase with `not: required`, which
+/// rejects a present key whatever value it holds. Plain `Option` erases that
+/// distinction, so a producer emitting `publisher-evidence: null` on a
+/// before-publication document would satisfy every consumer check by omission
+/// while failing its own schema. Reading an explicit null as a present member
+/// keeps the two readings identical.
+fn omitted_or_valued<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| {
+            serde::de::Error::custom(
+                "a phase member is present with an explicit null; omit the member its phase forbids",
+            )
+        })
 }
 
 /// Release identity every accepted fragment agrees on.
@@ -1686,6 +1716,21 @@ publisher-evidence:
                 "after-publication",
                 "publisher-evidence: []\nintended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\n",
                 "declares after-publication but carries intended-destinations",
+            ),
+            // The published schema forbids the member itself, so an explicit
+            // null is refused exactly like a populated one rather than being
+            // read as the omission its phase requires.
+            (
+                "before-with-null-seal",
+                "before-publication",
+                "intended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\npublisher-evidence: null\n",
+                "a phase member is present with an explicit null",
+            ),
+            (
+                "after-with-null-intent",
+                "after-publication",
+                "publisher-evidence: []\nintended-destinations: null\n",
+                "a phase member is present with an explicit null",
             ),
         ] {
             let workspace = workspace(&format!("assemble-phase-{label}"));

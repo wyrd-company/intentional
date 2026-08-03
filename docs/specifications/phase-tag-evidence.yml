@@ -12,9 +12,23 @@ description: >-
   references. The value identifies itself with
   `$schema: https://intentional.foo/schemas/phase-tag-evidence/v1` so a consumer
   recognizes it by identity rather than by shape.
+
+  A phase pairs one required claim with one forbidden claim: before-publication
+  carries `intended-destinations` and forbids `publisher-evidence`, and
+  after-publication is the reverse. The forbidden member is absent, and an
+  explicit null is a present member rather than an omission. A producer omits
+  the key entirely and a consumer rejects the key whatever value it carries, so
+  a document that assembly accepts is a document its published schema accepts.
+
+  An after-publication tag seals each completed publisher-evidence fragment
+  whole. Sealing embeds the exact accepted fragment, so a later comparison is
+  equality rather than containment and "a retry reuses the sealed fragment"
+  stays mechanically checkable. There is no sealed subset or projection.
 validation-criteria: >-
   A value conforms when it validates against
-  `phase-tag-evidence.json-schema.yml`, agrees with the annotated tag target and
+  `phase-tag-evidence.json-schema.yml`, declares its schema identity, omits the
+  member its phase forbids, agrees with the annotated tag target and
   release-plan record, and every subject, destination, provenance reference,
   and completed publisher fragment verifies for the declared phase. Release
-  evidence assembly compares the embedded claims with its accepted fragments.
+  evidence assembly compares the embedded claims with its accepted fragments and
+  requires each sealed fragment to equal the accepted fragment exactly.
