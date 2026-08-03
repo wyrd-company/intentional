@@ -217,6 +217,13 @@ pub struct IntendedDestination {
     pub target: String,
 }
 
+impl IntendedDestination {
+    /// Stable publication identity this destination intends.
+    pub fn identity(&self) -> String {
+        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+    }
+}
+
 /// Canonical evidence encoded by one executor phase tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -422,7 +429,13 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
     let scan = scan_input(request.input, &mut findings)?;
     let release_units = accept_publisher_evidence(&scan.publishers, &expected, &mut findings);
     let release = release_identity(&scan, &mut findings);
-    compare_phase_evidence(&scan, release.as_ref(), &mut findings);
+    compare_phase_evidence(
+        &scan,
+        release.as_ref(),
+        &expected,
+        &accepted_by_identity(&release_units),
+        &mut findings,
+    );
     let accepted = accept_contributions(&scan.contributions, &mut findings)?;
 
     if !findings.is_empty() {
@@ -712,9 +725,22 @@ fn release_identity(scan: &ScannedInput, findings: &mut Vec<String>) -> Option<R
 }
 
 /// Reject phase-tag evidence that disagrees with the accepted release identity.
+fn accepted_by_identity(
+    release_units: &BTreeMap<String, ReleaseUnitEvidence>,
+) -> BTreeMap<String, &PublisherEvidence> {
+    release_units
+        .values()
+        .flat_map(|unit| unit.publishers.values())
+        .flat_map(|publisher| publisher.targets.values())
+        .map(|fragment| (fragment.identity(), fragment))
+        .collect()
+}
+
 fn compare_phase_evidence(
     scan: &ScannedInput,
     release: Option<&ReleaseIdentity>,
+    expected: &BTreeSet<String>,
+    accepted: &BTreeMap<String, &PublisherEvidence>,
     findings: &mut Vec<String>,
 ) {
     let Some(release) = release else {
@@ -731,6 +757,39 @@ fn compare_phase_evidence(
                 "{label} disagrees with the accepted release identity"
             ));
             continue;
+        }
+        // A phase tag seals what the release was committed to before or after
+        // publication, so assembly compares those sealed claims with what it
+        // expects and with what actually shipped.
+        if let Some(intended) = &phase.intended_destinations {
+            let sealed = intended
+                .iter()
+                .map(IntendedDestination::identity)
+                .collect::<BTreeSet<_>>();
+            for identity in sealed.difference(expected) {
+                findings.push(format!(
+                    "{label} intends publication {identity}, which the configuration does not select"
+                ));
+            }
+            for identity in expected.difference(&sealed) {
+                findings.push(format!(
+                    "{label} does not intend configured publication {identity}"
+                ));
+            }
+        }
+        if let Some(sealed) = &phase.publisher_evidence {
+            for fragment in sealed {
+                let identity = fragment.identity();
+                match accepted.get(&identity) {
+                    None => findings.push(format!(
+                        "{label} seals publisher evidence {identity} that assembly did not accept"
+                    )),
+                    Some(current) if *current != fragment => findings.push(format!(
+                        "{label} seals publisher evidence {identity} that differs from the accepted fragment"
+                    )),
+                    Some(_) => {}
+                }
+            }
         }
         for subject in &phase.subjects {
             for (fragment_path, fragment) in &scan.publishers {
@@ -1407,6 +1466,136 @@ intended-destinations:
             assemble(&request(&workspace, &input, &output)).expect_err("disagreement rejected");
         assert!(
             error.to_string().contains("while") && error.to_string().contains("sealed"),
+            "{error}"
+        );
+    }
+
+    fn before_publication_evidence(version: &str, destinations: &str) -> String {
+        format!(
+            r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: before-publication
+source-commit: {SOURCE}
+release-commit: {RELEASE}
+global-tag: release/1.0.0
+plan-digest: {PLAN_DIGEST}
+subjects:
+  - release-unit: component
+    identity: example-component
+    version: {version}
+    digest: {SUBJECT_DIGEST}
+intended-destinations:
+{destinations}"#
+        )
+    }
+
+    #[test]
+    fn accepts_phase_tag_evidence_that_agrees_with_the_accepted_fragments() {
+        let workspace = workspace("assemble-phase-agrees");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        std::fs::write(
+            input.join("before.yml"),
+            before_publication_evidence(
+                "1.0.0",
+                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+            ),
+        )
+        .expect("before evidence");
+        std::fs::write(
+            input.join("after.yml"),
+            format!(
+                r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: after-publication
+source-commit: {SOURCE}
+release-commit: {RELEASE}
+global-tag: release/1.0.0
+plan-digest: {PLAN_DIGEST}
+subjects: []
+publisher-evidence:
+  - {}
+"#,
+                fragment("component", "npm", "primary")
+                    .trim_end()
+                    .replace('\n', "\n    ")
+            ),
+        )
+        .expect("after evidence");
+        let output = workspace.root().join("release-evidence");
+        assemble(&request(&workspace, &input, &output)).expect("agreeing phase evidence assembles");
+    }
+
+    #[test]
+    fn rejects_a_phase_tag_intent_that_disagrees_with_the_configured_publications() {
+        let workspace = workspace("assemble-phase-intent");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        std::fs::write(
+            input.join("before.yml"),
+            before_publication_evidence(
+                "1.0.0",
+                "  - release-unit: component\n    publisher: cargo\n    target: primary\n",
+            ),
+        )
+        .expect("before evidence");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &input, &output)).expect_err("intent rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("intends publication component/cargo/primary"),
+            "{message}"
+        );
+        assert!(
+            message.contains("does not intend configured publication component/npm/primary"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn rejects_sealed_publisher_evidence_that_differs_from_what_shipped() {
+        let workspace = workspace("assemble-phase-sealed");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let sealed = fragment("component", "npm", "primary")
+            .replace("version: 10.8.2", "version: 10.9.0")
+            .trim_end()
+            .replace('\n', "\n    ");
+        std::fs::write(
+            input.join("after.yml"),
+            format!(
+                r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: after-publication
+source-commit: {SOURCE}
+release-commit: {RELEASE}
+global-tag: release/1.0.0
+plan-digest: {PLAN_DIGEST}
+subjects: []
+publisher-evidence:
+  - {sealed}
+"#
+            ),
+        )
+        .expect("after evidence");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &input, &output)).expect_err("seal rejected");
+        assert!(
+            error.to_string().contains(
+                "seals publisher evidence component/npm/primary that differs from the accepted"
+            ),
             "{error}"
         );
     }
