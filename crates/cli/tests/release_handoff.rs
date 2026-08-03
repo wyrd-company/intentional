@@ -997,3 +997,101 @@ fn refuses_a_manifest_that_moves_the_source_to_a_different_real_commit() {
         .failure()
         .stderr(predicates::str::contains("sole parent"));
 }
+
+/// Executor configuration whose only purpose is to derive the release workflow.
+const EXECUTOR_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    tags:
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
+"#;
+
+const STUB_WORKFLOW: &str =
+    "name: managed\n\non:\n  workflow_dispatch:\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
+
+/// The exact command the derived authority-transition job runs to verify a handoff.
+///
+/// The workflow is reconciled rather than transcribed, so this test executes
+/// whatever a repository would actually receive today, with the runner
+/// temporary directory resolved the way GitHub Actions resolves it.
+fn generated_handoff_command(runner_temp: &Path) -> Vec<String> {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let root = workspace.path();
+    for (relative, contents) in [
+        (".intentional/config.yml", EXECUTOR_CONFIG),
+        (
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
+        ),
+        (".github/workflows/release.yml", STUB_WORKFLOW),
+        (".github/workflows/publish.yml", STUB_WORKFLOW),
+    ] {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("fixture directory");
+        fs::write(path, contents).expect("fixture file");
+    }
+
+    let comparison =
+        intentional_core::compare_workflow(root, intentional_core::WorkflowRole::Release, None)
+            .expect("comparison runs");
+    let applied = comparison.apply().expect("transformation applies");
+    let derived = fs::read_to_string(root.join(&applied.path)).expect("derived workflow");
+    let document: serde_yaml::Value =
+        serde_yaml::from_str(&derived).expect("derived workflow parses");
+
+    let jobs = document["jobs"]
+        .as_mapping()
+        .expect("the derived workflow declares jobs");
+    let mut commands = jobs
+        .values()
+        .filter_map(|job| job["steps"].as_sequence())
+        .flatten()
+        .filter_map(|step| step["run"].as_str())
+        .map(|body| body.replace("${{ runner.temp }}", &runner_temp.display().to_string()))
+        .filter_map(|body| shell_words::split(&body).ok())
+        .filter(|tokens| tokens.len() > 3 && tokens[..3] == ["intentional", "verify", "handoff"]);
+    let command = commands
+        .next()
+        .expect("the authority transition verifies the handoff");
+    assert!(
+        commands.next().is_none(),
+        "exactly one managed step verifies the handoff"
+    );
+    command
+}
+
+#[test]
+fn runs_the_generated_authority_transition_command_against_a_prepared_handoff() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    let runner_temp = tempfile::tempdir().expect("runner temporary directory");
+    let command = generated_handoff_command(runner_temp.path());
+    let candidate = PathBuf::from(command.last().expect("the command names a handoff"));
+
+    // The prepare job writes the candidate to the location the artifact download
+    // restores it to, which is the location this command reads.
+    fixture
+        .cli()
+        .args(["release", "prepare", "--output"])
+        .arg(&candidate)
+        .assert()
+        .success();
+
+    // The job runs from the checkout root with no arguments the template omits.
+    Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+        .current_dir(fixture.privileged_clone("generated-command"))
+        .args(&command[1..])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("release handoff verified"))
+        .stdout(predicates::str::contains("global-tag: 1.1.0"));
+}
