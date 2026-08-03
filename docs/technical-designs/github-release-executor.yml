@@ -430,11 +430,19 @@ proposed-design:
     agreement.
 
     Where a packager has no upload-only client and publication necessarily
-    re-packages the sources, notably Cargo, the recipe proves the packaging is
-    reproducible before it uploads anything: it re-packages and refuses to
-    publish unless the result is byte-identical to the subject the build
-    produced. A published version is immutable, so discovering that drift from
-    the destination readback afterwards would be too late to prevent it.
+    re-packages the sources, notably Cargo, no single check can establish that
+    the uploaded bytes are the sealed subject, because the upload packages once
+    more of its own. Two halves establish it together. Before uploading, the
+    recipe re-packages and refuses to publish unless the result is byte-identical
+    to the subject the build produced, which is what makes the packaging
+    demonstrably reproducible in that job. After uploading, the destination
+    readback compares the checksum the destination publishes against the sealed
+    subject and records a conflict if they differ. The first half is what
+    prevents an immutable version being burned on bytes the release never sealed;
+    the second is what makes a divergence impossible to miss if it happens
+    anyway. Neither half is sufficient alone, and the residual — a divergent
+    third packaging fails the release rather than shipping quietly — is the
+    honest ceiling for a packager with no upload-only path.
 
     Each publisher job then runs `intentional verify publication` with explicit
     release-unit and publisher identity and the target selector required by the
@@ -538,7 +546,18 @@ proposed-design:
     steady-state publication authenticated by a long-lived credential. Each
     recipe therefore separates the two outcomes from what its client reported
     and fails the job on an inconclusive probe, and it applies the same
-    separation before submitting an immutable version.
+    separation before submitting an immutable version. Where a client would
+    report the two identically — an offline resolution and a missing package
+    read the same — the recipe removes the condition rather than trying to tell
+    the messages apart, so the answer it cannot interpret cannot arise.
+
+    Every name a recipe reads out of the repository it releases is validated
+    where it enters the model rather than escaped where it is used. These names
+    reach shell bodies, interpreted arguments, YAML scalars and argument
+    vectors, and a value safe for one of those is not safe for the next: quoting
+    a name into a shell command does not stop that command from interpreting it.
+    One rule per name, applied at the boundary, is what keeps a sink added later
+    from inheriting a hazard its author never saw.
 
     The workflow identity is granted only to publisher jobs whose recipe
     presents one, whether to exchange it for a publish token or to bind a

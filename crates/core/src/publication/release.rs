@@ -1023,20 +1023,20 @@ fn verify_live(
                     retrieval.digest, fragment.clean_client.digest
                 ))
             }
+            // The mode is reported rather than assumed, for the same reason
+            // the check above no longer assumes it: a destination that admits
+            // no anonymous read verifies live through its own consumer path,
+            // and an entry naming that retrieval "public" describes a check
+            // that did not happen.
             Some(retrieval) => entries.push(format!(
-                "live public retrieval of {identity} produced {}",
+                "live {} retrieval of {identity} produced {}",
+                retrieval.mode.as_str(),
                 retrieval.digest
             )),
         }
     }
 }
 
-/// Read every recorded publication back from the closed Release itself.
-///
-/// The claim this reports is exactly the one the read supports: an
-/// authenticated readback of a Release asset. A publisher whose subject does
-/// not live in the Release has nothing here to read, so it is reported as
-/// unverifiable rather than as either a proved or a broken publication.
 /// Retrieval mode a published release admits, given what publication recorded.
 ///
 /// Publication happened before the GitHub Release was published, so a
@@ -1051,6 +1051,12 @@ const fn live_mode(sealed: CleanClientMode) -> CleanClientMode {
     }
 }
 
+/// Read every recorded publication back from the closed Release itself.
+///
+/// The claim this reports is exactly the one the read supports: an
+/// authenticated readback of a Release asset. A publisher whose subject does
+/// not live in the Release has nothing here to read, so it is reported as
+/// unverifiable rather than as either a proved or a broken publication.
 fn verify_live_readback(
     repository: &str,
     evidence: &ReleaseEvidence,
@@ -1941,11 +1947,17 @@ release-units:
 
         // A destination that admits no anonymous read keeps the mode it sealed,
         // and does not acquire a public path by being closed.
-        observed(
+        let report = observed(
             CleanClientMode::AuthenticatedRegistry,
             CleanClientMode::AuthenticatedRegistry,
         )
         .expect("a registry without anonymous read verifies live under its own mode");
+        assert!(
+            report
+                .iter()
+                .any(|line| line.contains("live authenticated-registry retrieval of")),
+            "the entry names the mode the check accepted: {report:?}"
+        );
         let error = observed(
             CleanClientMode::AuthenticatedRegistry,
             CleanClientMode::Public,

@@ -7,6 +7,7 @@
 
 pub mod check;
 pub mod init;
+mod names;
 pub mod recipe;
 mod steps;
 pub mod workflow;

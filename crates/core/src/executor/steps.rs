@@ -38,6 +38,7 @@
 //! first may reach a bootstrap credential.
 
 use crate::config::ReleaseUnitConfig;
+use crate::executor::names::{self, SuppliedName};
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
 use crate::executor::workflow::scalar;
 use crate::model::PublisherKind;
@@ -122,56 +123,6 @@ fn promote_only(context: &RecipeContext<'_>, command: &str) -> String {
         scalar(&format!("Publish {}", context.publication.identity())),
         scalar(context.working_directory),
     )
-}
-
-/// Reject a configured secret name GitHub could not resolve.
-///
-/// The name is spliced into a `${{ secrets.NAME }}` expression, which is an
-/// identifier position rather than a value position: a name carrying a bracket
-/// or a quote would not name a missing secret, it would change what the
-/// expression evaluates.
-fn secret_name(configured: Option<&str>, conventional: &str) -> Result<String, String> {
-    let Some(name) = configured else {
-        return Ok(conventional.to_owned());
-    };
-    if identifier_shaped(name, &['_']) {
-        Ok(name.to_owned())
-    } else {
-        Err(format!(
-            "token-secret {name:?} is not a GitHub secret name; a secret name contains letters, digits and underscores and does not start with a digit"
-        ))
-    }
-}
-
-/// Reject a configured Cargo registry name a maintained recipe will not name.
-///
-/// The name reaches the recipe as a `--registry` argument in a `run:` body that
-/// holds the registry token, and it also becomes part of the
-/// `CARGO_REGISTRIES_<NAME>_TOKEN` variable cargo reads. It comes from
-/// `package.publish` in the release unit's own manifest, which is repository
-/// content rather than a value this executor chose, so it is validated for the
-/// same reason the secret name is: a name carrying a quote is not a registry
-/// this fails to find, it is shell source the publisher job runs while holding
-/// a credential. The scripts also quote it, and it is still refused here,
-/// because the two defences fail differently — quoting is a property of every
-/// future call site, validation is a property of the name.
-fn registry_name(name: &str) -> Result<String, String> {
-    if identifier_shaped(name, &['_', '-']) {
-        Ok(name.to_owned())
-    } else {
-        Err(format!(
-            "Cargo registry {name:?} is not a registry name; a registry name contains letters, digits, hyphens and underscores and starts with a letter"
-        ))
-    }
-}
-
-/// Whether one configured name is an identifier over the permitted extra characters.
-fn identifier_shaped(name: &str, extra: &[char]) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || extra.contains(&character))
-        && name.starts_with(|character: char| character.is_ascii_alphabetic())
 }
 
 /// Cargo's environment spelling of one configured registry name.
@@ -319,12 +270,21 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
             context.publication.release_unit, context.subject_identity
         ));
     }
-    let bootstrap = secret_name(
+    let origin = format!(
+        "release unit {} npm token-secret",
+        context.publication.release_unit
+    );
+    let bootstrap = names::secret(
         context
             .unit
             .npm
             .as_ref()
-            .and_then(|npm| npm.token_secret.as_deref()),
+            .and_then(|npm| npm.token_secret.as_deref())
+            .map(|value| SuppliedName {
+                origin: &origin,
+                value,
+            })
+            .as_ref(),
         NPM_TOKEN_SECRET,
     )?;
     let mut steps = String::new();
@@ -414,14 +374,23 @@ const STRICT_MODE: &str = "      set -euo pipefail\n";
 /// like a first publication, which is the one condition that unlocks the
 /// long-lived bootstrap token. The registry distinguishes them in its output,
 /// so the helper does too and every caller decides on three outcomes.
+///
+/// The two streams are kept apart. npm writes warnings, notices and its update
+/// notice to standard error on calls that succeed, so a helper that merged the
+/// streams would return them as part of the answer, and the readback that uses
+/// that answer as the destination digest would find it unequal to the promoted
+/// integrity and write a `conflict` observation accusing the registry of
+/// publishing bytes the release did not send. The classification reads the
+/// error stream; the value returned is only ever what the registry answered.
 const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
-        if @ENVVAR@VIEW="$(npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" 2>&1)"; then
+        if @ENVVAR@VIEW="$(npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
+          2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
           printf '%s' "${@ENVVAR@VIEW}"
           return 0
         fi
-        case "${@ENVVAR@VIEW}" in
+        case "$(cat "${RUNNER_TEMP}/@JOB@npm-error")" in
           *E404*|*"404 Not Found"*) return 1 ;;
-          *) printf '%s\n' "${@ENVVAR@VIEW}" >&2 ; return 2 ;;
+          *) cat "${RUNNER_TEMP}/@JOB@npm-error" >&2 ; return 2 ;;
         esac
       }
 "#;
@@ -605,12 +574,21 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         .destination
         .as_deref()
         .unwrap_or(CRATES_IO);
-    let bootstrap = secret_name(
+    let origin = format!(
+        "release unit {} cargo token-secret",
+        context.publication.release_unit
+    );
+    let bootstrap = names::secret(
         context
             .unit
             .cargo
             .as_ref()
-            .and_then(|cargo| cargo.token_secret.as_deref()),
+            .and_then(|cargo| cargo.token_secret.as_deref())
+            .map(|value| SuppliedName {
+                origin: &origin,
+                value,
+            })
+            .as_ref(),
         CARGO_TOKEN_SECRET,
     )?;
     // Cargo names an alternate registry on the command line and reads its
@@ -623,10 +601,21 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     let (registry_name, token_variable) = if crates_io {
         (String::new(), "CARGO_REGISTRY_TOKEN".to_owned())
     } else {
-        let name = registry_name(registry)?;
+        let name = names::registry(&SuppliedName {
+            origin: &format!(
+                "release unit {} Cargo.toml package.publish",
+                context.publication.release_unit
+            ),
+            value: registry,
+        })?;
         let variable = format!("CARGO_REGISTRIES_{}_TOKEN", environment_fragment(&name));
         (name, variable)
     };
+    // A crates.io retrieval records the public consumer path, so the resolve
+    // that performs it withholds the publish credential the authenticate step
+    // exported. An alternate registry's retrieval is the authenticated one it
+    // records, and needs the credential to read the index at all.
+    let withheld = crates_io.then_some(token_variable.as_str());
     let registry_environment = format!(
         "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n",
         scalar(registry),
@@ -640,7 +629,11 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(&token_variable),
         subject_environment(context),
         STRICT_MODE,
-        if crates_io { CARGO_RESOLVE } else { "" },
+        if crates_io {
+            cargo_resolve(withheld)
+        } else {
+            String::new()
+        },
         if crates_io {
             CARGO_TRUSTED_AUTHENTICATION
         } else {
@@ -654,7 +647,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(context.working_directory),
         subject_environment(context),
         STRICT_MODE,
-        CARGO_RESOLVE,
+        cargo_resolve(withheld),
         CARGO_PUBLISH,
     ));
 
@@ -667,7 +660,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
-        CARGO_RESOLVE,
+        cargo_resolve(withheld),
         CARGO_READBACK,
     ));
     Ok(steps)
@@ -689,22 +682,45 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// carry differently from a fetch it could not perform, and only the first is
 /// evidence of absence; treating both as absence routes a transient failure
 /// into the bootstrap credential.
-const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
-      if [ -n "${@ENVVAR@REGISTRY_NAME:-}" ]; then
-        @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${@ENVVAR@REGISTRY_NAME}")
+///
+/// Offline resolution is the one case where those two are spelled the same.
+/// `cargo add` under `net.offline` reports a crate it did not look for with the
+/// same words it uses for a crate the index does not carry, and the copied
+/// workspace configuration can carry `[net] offline = true`, so a repository
+/// could make every probe report absence for a crate the registry has held for
+/// years. The probe forces the network on rather than trying to tell the two
+/// messages apart, so the message that means "I did not look" cannot be
+/// produced.
+///
+/// The resolve also drops the publish credential. It is exported into
+/// `GITHUB_ENV` by the authenticate step and so is present in this process, and
+/// crates.io records a public consumer retrieval: reading an index and
+/// downloading a crate from crates.io does not present that token, but that is
+/// a fact about cargo rather than a property of this step. Unsetting it makes
+/// the recorded claim structural, the way the npm side's scratch configuration
+/// does. A destination whose recipe records an authenticated retrieval keeps
+/// its credential, because there the consumer path is the authenticated one.
+fn cargo_resolve(withheld: Option<&str>) -> String {
+    let withhold = withheld.map_or_else(String::new, |variable| format!("env -u {variable} "));
+    format!(
+        r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
+      if [ -n "${{@ENVVAR@REGISTRY_NAME:-}}" ]; then
+        @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${{@ENVVAR@REGISTRY_NAME}}")
       fi
-      @ENVVAR@resolve() {
+      @ENVVAR@resolve() {{
         rm -rf "$1"
         mkdir -p "$1"
         cargo new --quiet --lib "$1/probe" >/dev/null
         mkdir -p "$1/probe/.cargo"
-        if [ -f "${GITHUB_WORKSPACE}/.cargo/config.toml" ]; then
-          cp "${GITHUB_WORKSPACE}/.cargo/config.toml" "$1/probe/.cargo/config.toml"
+        if [ -f "${{GITHUB_WORKSPACE}}/.cargo/config.toml" ]; then
+          cp "${{GITHUB_WORKSPACE}}/.cargo/config.toml" "$1/probe/.cargo/config.toml"
         fi
         if ( cd "$1/probe" \
-          && CARGO_HOME="$1/home" cargo add --quiet "${@ENVVAR@REGISTRY_ARGUMENTS[@]}" \
-            "${@ENVVAR@SUBJECT_IDENTITY}@=${@ENVVAR@VERSION}" \
-          && CARGO_HOME="$1/home" cargo fetch --quiet ) > "$1/log" 2>&1; then
+          && {withhold}CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+            cargo add --quiet "${{@ENVVAR@REGISTRY_ARGUMENTS[@]}}" \
+            "${{@ENVVAR@SUBJECT_IDENTITY}}@=${{@ENVVAR@VERSION}}" \
+          && {withhold}CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+            cargo fetch --quiet ) > "$1/log" 2>&1; then
           return 0
         fi
         if grep -qiE 'could not be found|not found in registry|no matching package' "$1/log"; then
@@ -712,8 +728,10 @@ const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
         fi
         cat "$1/log" >&2
         return 2
-      }
-"#;
+      }}
+"#
+    )
+}
 
 /// crates.io trusted publishing with a protected first-publication path.
 ///

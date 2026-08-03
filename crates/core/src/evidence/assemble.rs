@@ -1139,7 +1139,12 @@ mod tests {
     use crate::evidence::contribution::{artifact_name, contribute, ContributionRequest};
     use crate::executor::fixture::Workspace;
 
-    /// Every published schema that enumerates the retrieval modes.
+    /// Published schemas that must contribute a mode enumeration.
+    ///
+    /// The guard reads every schema in the directory rather than this list.
+    /// These two are named so that a rename or a deletion that removes the only
+    /// enumeration fails here, instead of leaving a glob that reads nothing and
+    /// reports clean over it.
     const MODE_SCHEMAS: [&str; 2] = [
         "publisher-evidence.json-schema.yml",
         "publication-observation.json-schema.yml",
@@ -1169,25 +1174,54 @@ mod tests {
         })
         .collect::<BTreeSet<_>>();
 
-        for name in MODE_SCHEMAS {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../docs/specifications")
-                .join(name);
+        let directory =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/specifications");
+        let mut contributed = BTreeSet::new();
+        let mut schemas = std::fs::read_dir(&directory)
+            .expect("the specification directory is readable")
+            .filter_map(|entry| {
+                let path = entry.expect("directory entry").path();
+                path.to_str()?.ends_with(".json-schema.yml").then_some(path)
+            })
+            .collect::<Vec<_>>();
+        schemas.sort();
+        assert!(
+            !schemas.is_empty(),
+            "published schemas live in {directory:?}"
+        );
+
+        for path in schemas {
+            let name = path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .expect("a schema file name")
+                .to_owned();
             let document: serde_yaml::Value = serde_yaml::from_str(
                 &std::fs::read_to_string(&path).expect("the published schema is readable"),
             )
             .expect("the published schema parses");
-            let enumerated = mode_enumerations(&document);
-            assert!(
-                !enumerated.is_empty(),
-                "{name} enumerates the retrieval modes somewhere"
-            );
-            for (pointer, values) in enumerated {
+            for (pointer, values) in mode_enumerations(&document) {
+                // `mode` is not a reserved word: a projection has one too, and
+                // it enumerates something else entirely. An enumeration is this
+                // enumeration when it names any of these modes, which is what a
+                // schema enumerating the set would do however it nests it, and
+                // is why the check is an intersection rather than a fixed path.
+                if values.is_disjoint(&admitted) {
+                    continue;
+                }
+                contributed.insert(name.clone());
                 assert_eq!(
                     values, admitted,
                     "{name} at {pointer} enumerates the modes this crate admits"
                 );
             }
+        }
+
+        for name in MODE_SCHEMAS {
+            assert!(
+                contributed.contains(name),
+                "{name} still enumerates the retrieval modes; contributing schemas are {contributed:?}"
+            );
         }
     }
 

