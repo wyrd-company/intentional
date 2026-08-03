@@ -680,3 +680,255 @@ fn prompt(label: &str) -> Result<String> {
     io::stdin().read_line(&mut value)?;
     Ok(value.trim().to_owned())
 }
+
+/// Bind the commands managed workflow jobs run to the parser that accepts them.
+///
+/// Workflow derivation splices `intentional` commands into privileged jobs
+/// without consulting the argument parser, and workflow linting validates
+/// syntax and action references rather than the contents of a `run:` body. A
+/// managed job template can therefore name an argument shape this binary
+/// rejects while every other check stays green, and the failure surfaces only
+/// when a release runner executes it. These tests derive the workflows the
+/// executor produces and parse each generated invocation with the real parser,
+/// so this binary is the authority on what a template may say.
+#[cfg(test)]
+mod generated_invocations {
+    use super::*;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// Commands the release protocol specifies that this runtime has not implemented.
+    ///
+    /// A generated invocation of one of these cannot be parsed yet, so it passes
+    /// by declaration rather than by treating an unrecognized command as a skip.
+    /// The allowance retires itself from both directions: an entry the parser now
+    /// accepts fails `every_pending_command_is_still_absent`, and an entry no
+    /// generated workflow reaches fails
+    /// `the_parser_accepts_every_generated_invocation`. Whoever implements one of
+    /// these commands must therefore validate the invocation the workflow
+    /// generates for it instead of inheriting an unchecked one.
+    const PENDING_COMMANDS: &[&[&str]] = &[&["verify", "publication"], &["verify", "release-tag"]];
+
+    const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    cargo: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
+"#;
+
+    const COMPONENT_MANIFEST: &str =
+        "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n";
+
+    const RELEASE_WORKFLOW: &str =
+        "name: release\n\non:\n  workflow_dispatch:\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
+
+    const PUBLISH_WORKFLOW: &str =
+        "name: publish\n\non:\n  push:\n    tags:\n      - 'legacy-*'\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
+
+    /// Reconcile a representative workspace and return what each role's workflow became.
+    fn derived_workflows() -> Vec<(WorkflowRole, String)> {
+        let workspace = tempfile::tempdir().expect("temporary workspace");
+        let root = workspace.path();
+        write(root, ".intentional/config.yml", CONFIG);
+        write(root, "component/Cargo.toml", COMPONENT_MANIFEST);
+        write(root, ".github/workflows/release.yml", RELEASE_WORKFLOW);
+        write(root, ".github/workflows/publish.yml", PUBLISH_WORKFLOW);
+
+        WorkflowRole::ALL
+            .into_iter()
+            .map(|role| {
+                let comparison = compare_workflow(root, role, None).expect("comparison runs");
+                assert_eq!(
+                    comparison.status,
+                    ComparisonStatus::Different,
+                    "the {role} contract must derive: {:?}",
+                    comparison.diagnostics
+                );
+                let applied = comparison.apply().expect("transformation applies");
+                assert!(applied.applied);
+                let derived =
+                    std::fs::read_to_string(root.join(&applied.path)).expect("derived workflow");
+                (role, derived)
+            })
+            .collect()
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("fixture directory");
+        std::fs::write(path, contents).expect("fixture file");
+    }
+
+    /// Every `intentional` invocation any step of one workflow runs.
+    fn invocations(workflow: &str) -> Vec<Vec<String>> {
+        let document: serde_yaml::Value =
+            serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let mut bodies = Vec::new();
+        collect_run_bodies(&document, &mut bodies);
+        let mut invocations = Vec::new();
+        for body in bodies {
+            for line in shell_lines(&body) {
+                if !line.split_whitespace().any(|word| word == "intentional") {
+                    continue;
+                }
+                let tokens = shell_words::split(&line)
+                    .unwrap_or_else(|error| panic!("`{line}` must tokenize as a command: {error}"));
+                let start = tokens
+                    .iter()
+                    .position(|token| token == "intentional")
+                    .unwrap_or_else(|| {
+                        panic!("`{line}` names intentional but runs something else")
+                    });
+                invocations.push(tokens[start..].to_vec());
+            }
+        }
+        invocations
+    }
+
+    /// Collect the body of every `run:` step anywhere in a workflow document.
+    fn collect_run_bodies(value: &serde_yaml::Value, bodies: &mut Vec<String>) {
+        match value {
+            serde_yaml::Value::Mapping(mapping) => {
+                for (key, child) in mapping {
+                    if key.as_str() == Some("run") {
+                        if let Some(body) = child.as_str() {
+                            bodies.push(body.to_owned());
+                        }
+                    }
+                    collect_run_bodies(child, bodies);
+                }
+            }
+            serde_yaml::Value::Sequence(items) => {
+                for item in items {
+                    collect_run_bodies(item, bodies);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Split a `run:` body into the command lines a shell executes, rejoining
+    /// backslash continuations so a wrapped invocation stays one command.
+    fn shell_lines(body: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut pending = String::new();
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if let Some(head) = trimmed.strip_suffix('\\') {
+                pending.push_str(head);
+                pending.push(' ');
+            } else {
+                pending.push_str(trimmed);
+                lines.push(std::mem::take(&mut pending));
+            }
+        }
+        if !pending.is_empty() {
+            lines.push(pending);
+        }
+        lines
+    }
+
+    /// The command path an invocation names, and whether the parser knows all of it.
+    ///
+    /// The walk stops at the first option because every managed invocation names
+    /// its command before any argument, and an unknown segment is reported rather
+    /// than dropped so no invocation can pass by being unclassifiable.
+    fn command_path(tokens: &[String]) -> (Vec<String>, bool) {
+        let root = Cli::command();
+        let mut node = &root;
+        let mut path = Vec::new();
+        for token in tokens.iter().skip(1) {
+            if token.starts_with('-') {
+                break;
+            }
+            match node.find_subcommand(token.as_str()) {
+                Some(child) => {
+                    node = child;
+                    path.push(token.clone());
+                }
+                None if node.has_subcommands() => {
+                    path.push(token.clone());
+                    return (path, false);
+                }
+                None => break,
+            }
+        }
+        (path, true)
+    }
+
+    fn names(command: &[&str], path: &[String]) -> bool {
+        command.len() == path.len()
+            && command
+                .iter()
+                .zip(path)
+                .all(|(declared, observed)| *declared == observed.as_str())
+    }
+
+    fn declared_pending() -> BTreeSet<Vec<String>> {
+        PENDING_COMMANDS
+            .iter()
+            .map(|command| command.iter().map(|&part| part.to_owned()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn the_parser_accepts_every_generated_invocation() {
+        let mut reached = BTreeSet::new();
+        let mut total = 0usize;
+        for (role, workflow) in derived_workflows() {
+            for tokens in invocations(&workflow) {
+                total += 1;
+                let rendered = shell_words::join(&tokens);
+                let (path, complete) = command_path(&tokens);
+                if complete {
+                    Cli::try_parse_from(&tokens).unwrap_or_else(|error| {
+                        panic!("the derived {role} workflow runs `{rendered}`, which this binary rejects:\n{error}")
+                    });
+                    continue;
+                }
+                assert!(
+                    PENDING_COMMANDS.iter().any(|command| names(command, &path)),
+                    "the derived {role} workflow runs `{rendered}`, but `intentional {}` is not a command and is not declared pending",
+                    path.join(" ")
+                );
+                reached.insert(path);
+            }
+        }
+        assert!(
+            total > 0,
+            "the derived workflows must run portable commands for this test to bind anything"
+        );
+        assert_eq!(
+            reached,
+            declared_pending(),
+            "every pending command must still be reached by a generated invocation"
+        );
+    }
+
+    #[test]
+    fn every_pending_command_is_still_absent() {
+        let root = Cli::command();
+        for command in PENDING_COMMANDS {
+            let mut node = Some(&root);
+            for segment in *command {
+                node = node.and_then(|current| current.find_subcommand(*segment));
+            }
+            assert!(
+                node.is_none(),
+                "`intentional {}` is now a command; validate the invocation the workflow generates for it and remove it from PENDING_COMMANDS",
+                command.join(" ")
+            );
+        }
+    }
+}
