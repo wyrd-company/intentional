@@ -111,7 +111,7 @@ pub fn verify_handoff(root: &Path, handoff: &Path) -> Result<VerifiedHandoff> {
 /// Prove the handoff directory contains exactly its inventoried files.
 fn verify_transported_files(directory: &Path, candidate: &ReleaseCandidate) -> Result<()> {
     let mut present = BTreeSet::new();
-    collect(directory, directory, 0, &mut present)?;
+    collect(directory, directory, 0, &mut 0, &mut present)?;
     let inventoried = candidate
         .files
         .iter()
@@ -643,6 +643,7 @@ fn collect(
     root: &Path,
     directory: &Path,
     depth: usize,
+    visited: &mut usize,
     files: &mut BTreeSet<String>,
 ) -> Result<()> {
     if depth > MAX_CANDIDATE_DEPTH {
@@ -661,8 +662,16 @@ fn collect(
                 path.display()
             )));
         }
+        // Directories are counted alongside files, so a handoff cannot present
+        // an unbounded walk built entirely out of empty directories.
+        *visited += 1;
+        if *visited > MAX_CANDIDATE_FILES {
+            return Err(Error::Validation(format!(
+                "the release handoff contains more than {MAX_CANDIDATE_FILES} entries"
+            )));
+        }
         if kind.is_dir() {
-            collect(root, &path, depth + 1, files)?;
+            collect(root, &path, depth + 1, visited, files)?;
             continue;
         }
         if !kind.is_file() {
@@ -691,11 +700,6 @@ fn collect(
             continue;
         }
         files.insert(relative);
-        if files.len() > MAX_CANDIDATE_FILES {
-            return Err(Error::Validation(format!(
-                "the release handoff transports more than {MAX_CANDIDATE_FILES} files"
-            )));
-        }
     }
     Ok(())
 }

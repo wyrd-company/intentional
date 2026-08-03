@@ -33,8 +33,13 @@ for action in action.yml actions/*/action.yml; do
       failed=$((failed + 1))
       continue
     fi
+    # A script run through an explicit interpreter does not need its own
+    # executable bit; one invoked directly does.
+    if grep -qE "(^|[^[:alnum:]_])(bash|sh) +\"?[\$]GITHUB_ACTION_PATH/${relative//\//\\/}" "$action"; then
+      continue
+    fi
     if [[ ! -x "$resolved" ]]; then
-      echo "$action references $reference, which is not executable" >&2
+      echo "$action references $reference, which is invoked directly but is not executable" >&2
       failed=$((failed + 1))
     fi
   done < <(grep -o -- '[$]GITHUB_ACTION_PATH/[A-Za-z0-9._/-]*' "$action" | sort -u)
