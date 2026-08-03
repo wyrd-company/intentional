@@ -563,6 +563,15 @@ pub struct WorkspaceTagConfig {
     pub tag_after: Vec<String>,
 }
 
+/// One configured tag that declares no executor phase.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnphasedTag {
+    /// Canonical tag id.
+    pub id: String,
+    /// Tag name template with the release-unit id already resolved.
+    pub template: String,
+}
+
 /// A version projection into a manifest or arbitrary file.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -613,6 +622,36 @@ impl Config {
             .ok_or_else(|| {
                 Error::Validation(format!("release unit {release_unit_id} has no primary tag"))
             })
+    }
+
+    /// Configured tags that declare no executor phase, in stable order.
+    ///
+    /// The release workflow publishes exactly one annotated global release tag
+    /// with the release commit, and every other configured tag declares the
+    /// phase that creates it. The unphased tag is therefore the global release
+    /// tag: executor conformance requires exactly one, and the publish workflow
+    /// is triggered by the name it renders.
+    pub fn unphased_tags(&self) -> Vec<UnphasedTag> {
+        let mut unphased = Vec::new();
+        for (release_unit_id, release_unit) in &self.release_units {
+            for (tag_id, tag) in &release_unit.tags {
+                if tag.require_phase.is_none() {
+                    unphased.push(UnphasedTag {
+                        id: Self::release_unit_tag_id(release_unit_id, tag_id),
+                        template: tag.template.replace("{id}", release_unit_id),
+                    });
+                }
+            }
+        }
+        for (tag_id, tag) in &self.workspace_tags {
+            if tag.require_phase.is_none() {
+                unphased.push(UnphasedTag {
+                    id: Self::workspace_tag_id(tag_id),
+                    template: tag.template.clone(),
+                });
+            }
+        }
+        unphased
     }
 
     /// Canonical id for a named release-unit tag.

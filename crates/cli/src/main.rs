@@ -10,8 +10,7 @@ use intentional_core::{
     initialize_executor, prepare_release, verify_handoff, ApplyResult, AssembleRequest, Bump,
     ComparisonStatus, Config, ContributionRequest, ExecutorInitState, InitState, IntentDraft,
     ReleasePlan, StampResult, TagPhase, TagResult, WorkflowIdentity, WorkflowRole, WorkspaceStatus,
-    CONFIG_PATH, LOCAL_JOB,
-    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;

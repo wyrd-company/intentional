@@ -753,17 +753,23 @@ fn publish_contract(
     gates: &[String],
 ) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
     let mut diagnostics = Vec::new();
-    let patterns = config
-        .workspace_tags
-        .values()
+    // The global release tag is the one configured tag that declares no
+    // executor phase, whether it is a workspace tag or a release-unit tag.
+    // Executor conformance requires exactly one; a configuration that has not
+    // settled on one cannot state what triggers publication.
+    let unphased = config.unphased_tags();
+    let patterns = unphased
+        .iter()
         .map(|tag| Value::String(tag.template.replace("{version}", "*")))
         .collect::<Vec<_>>();
-    if patterns.is_empty() {
+    if unphased.len() != 1 {
         diagnostics.push(WorkflowDiagnostic::at(
             "release-tag-undefined",
-            "the publish workflow is triggered by the global release tag; configure a workspace tag"
-                .to_owned(),
-            "workspace-tags",
+            format!(
+                "the publish workflow is triggered by the one annotated global release tag, but {} configured tags omit require-phase",
+                unphased.len()
+            ),
+            "release-units",
         ));
     }
     let selection = resolve_publications(root, config).map_err(|error| {
@@ -1227,7 +1233,7 @@ release-units:
     path: component
     cargo: {}
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
 "#;
 
     const REPOSITORY_RELEASE_WORKFLOW: &str = r#"# maintained by the repository
@@ -1737,7 +1743,7 @@ jobs:
                 ".intentional/config.yml",
                 &CONFIG.replace(
                     "release-units:\n  component:\n",
-                    "release-units:\n  component.one:\n    path: one\n    cargo: {}\n    tags:\n      primary: { role: primary, template: 'one@{version}' }\n  component_one:\n",
+                    "release-units:\n  component.one:\n    path: one\n    cargo: {}\n    tags:\n      primary: { role: primary, template: 'one@{version}', require-phase: after-publication }\n  component_one:\n",
                 ),
             )
             .write(

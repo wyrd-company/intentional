@@ -76,19 +76,11 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
 /// workflow has already accepted a source commit, so it is reported here where
 /// it can still be fixed.
 fn global_tag_findings(config: &Config) -> Vec<String> {
-    let mut unphased = Vec::new();
-    for (release_unit_id, release_unit) in &config.release_units {
-        for (tag_id, tag) in &release_unit.tags {
-            if tag.require_phase.is_none() {
-                unphased.push(Config::release_unit_tag_id(release_unit_id, tag_id));
-            }
-        }
-    }
-    for (tag_id, tag) in &config.workspace_tags {
-        if tag.require_phase.is_none() {
-            unphased.push(Config::workspace_tag_id(tag_id));
-        }
-    }
+    let unphased = config
+        .unphased_tags()
+        .into_iter()
+        .map(|tag| tag.id)
+        .collect::<Vec<_>>();
     match unphased.len() {
         1 => Vec::new(),
         0 => vec![
@@ -170,9 +162,6 @@ mod tests {
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
-workspace-tags:
-  release:
-    template: '{version}'
 github:
   workflows:
     release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }

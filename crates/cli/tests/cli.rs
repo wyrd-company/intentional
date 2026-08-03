@@ -2235,7 +2235,7 @@ release-units:
     path: component
     npm: {}
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
 "#,
     );
     repo.write(

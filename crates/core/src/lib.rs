@@ -31,8 +31,8 @@ pub use config::{
     GhcrTarget, GithubConfig, GithubWorkflow, GithubWorkflows, HomebrewPublisher,
     ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher, OciPublisher,
     PrefixNamespaces, Projection, ReleaseUnitConfig, Settings, SystemPackagePublisher, TagConfig,
-    WorkflowRole, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT, DEFAULT_ENVVAR_PREFIX,
-    DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
+    UnphasedTag, WorkflowRole, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
+    DEFAULT_ENVVAR_PREFIX, DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
 pub use evidence::assemble::{
