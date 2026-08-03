@@ -7,7 +7,7 @@
 
 use crate::config::{Config, GithubConfig, WorkflowRole, CONFIG_PATH};
 use crate::error::{Error, Result};
-use crate::executor::recipe::select_publications;
+use crate::executor::recipe::resolve_publications;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -35,31 +35,28 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
             "{CONFIG_PATH} has no github executor configuration; run intentional executor init"
         )));
     };
-    let mut findings = Vec::new();
     let mut publications = Vec::new();
-    match select_publications(root, &config) {
-        Ok(selected) => {
-            for publication in selected {
-                let unit = &config.release_units[&publication.release_unit];
-                let configured = publication
-                    .packager
-                    .configuration_paths()
-                    .iter()
-                    .any(|relative| root.join(&unit.path).join(relative).is_file());
-                if !configured {
-                    findings.push(format!(
-                        "{} requires {} configuration in {}; expected one of {}",
-                        publication.identity(),
-                        publication.packager,
-                        unit.path.display(),
-                        publication.packager.configuration_paths().join(", ")
-                    ));
-                }
-                publications.push(publication.identity());
-            }
+    // Report every unresolved target in one run rather than making the user
+    // rediscover them one command at a time.
+    let selection = resolve_publications(root, &config)?;
+    let mut findings = selection.diagnostics;
+    for publication in selection.selected {
+        let unit = &config.release_units[&publication.release_unit];
+        let configured = publication
+            .packager
+            .configuration_paths()
+            .iter()
+            .any(|relative| root.join(&unit.path).join(relative).is_file());
+        if !configured {
+            findings.push(format!(
+                "{} requires {} configuration in {}; expected one of {}",
+                publication.identity(),
+                publication.packager,
+                unit.path.display(),
+                publication.packager.configuration_paths().join(", ")
+            ));
         }
-        Err(Error::Validation(message)) => findings.push(message),
-        Err(error) => return Err(error),
+        publications.push(publication.identity());
     }
     findings.extend(workflow_findings(root, github)?);
     Ok(ExecutorCheck {
@@ -205,6 +202,26 @@ release-units:
     }
 
     #[test]
+    fn reports_every_unresolved_target_in_one_run() {
+        let workspace = workspace(
+            "check-multiple",
+            "    cargo: {}\n    oci:\n      ghcr: {}\n",
+        );
+        let result = check_executor(workspace.root()).expect("check runs");
+        assert_eq!(
+            result
+                .findings
+                .iter()
+                .filter(|finding| finding
+                    .contains("no maintained publication recipe matches the configured target"))
+                .count(),
+            2,
+            "both unresolved targets are reported: {:?}",
+            result.findings
+        );
+    }
+
+    #[test]
     fn reports_unmatched_recipes_and_missing_workflow_gates() {
         let workspace = workspace("check-findings", "    cargo: {}\n");
         std::fs::remove_file(workspace.root().join(".github/workflows/publish.yml"))
@@ -219,6 +236,10 @@ release-units:
         assert!(
             findings.contains("no maintained publication recipe matches"),
             "{findings}"
+        );
+        assert!(
+            findings.contains("does not exist") && findings.contains("is not a job"),
+            "one run reports every finding it can observe: {findings}"
         );
         assert!(
             findings.contains("gate candidate_check is not a job"),

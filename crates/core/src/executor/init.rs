@@ -745,7 +745,7 @@ fn apply_candidate(
             }
             writes.push((
                 relative.clone(),
-                baseline(packager, &candidate.release_unit),
+                baseline(packager, &candidate.release_unit)?,
             ));
             operations.push(format!(
                 "create the baseline {packager} configuration {}",
@@ -808,13 +808,16 @@ fn explicit_configuration_error(publisher: PublisherKind, target: &str) -> Error
     ))
 }
 
-fn baseline(packager: Packager, release_unit: &str) -> String {
+/// Baseline native configuration for a packager whose contract authorizes one.
+fn baseline(packager: Packager, release_unit: &str) -> Result<String> {
     match packager {
-        Packager::GoReleaser => format!(
+        Packager::GoReleaser => Ok(format!(
             "version: 2\nproject_name: {release_unit}\nbuilds:\n  - main: .\n    binary: {release_unit}\n    env:\n      - CGO_ENABLED=0\n    goos: [ linux, darwin, windows ]\n    goarch: [ amd64, arm64 ]\n"
-        ),
+        )),
         Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => {
-            String::new()
+            Err(Error::Validation(format!(
+                "Intentional authors no baseline {packager} configuration for {release_unit}"
+            )))
         }
     }
 }

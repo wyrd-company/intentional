@@ -16,8 +16,9 @@ pub use init::{
     EXECUTOR_INIT_PLAN_SCHEMA,
 };
 pub use recipe::{
-    capability_set, catalog, derive_capabilities, recipes_for, select_publications, Capability,
-    CapabilityEvidence, Packager, Recipe, SelectedPublication, PRIMARY_TARGET,
+    capability_set, catalog, derive_capabilities, recipes_for, resolve_publications,
+    select_publications, Capability, CapabilityEvidence, Packager, PublicationSelection, Recipe,
+    SelectedPublication, PRIMARY_TARGET,
 };
 
 #[cfg(test)]

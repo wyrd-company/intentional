@@ -37,7 +37,8 @@ pub use executor::init::{
     EXECUTOR_INIT_PLAN_PATH,
 };
 pub use executor::recipe::{
-    select_publications, Capability, CapabilityEvidence, Packager, Recipe, SelectedPublication,
+    resolve_publications, select_publications, Capability, CapabilityEvidence, Packager,
+    PublicationSelection, Recipe, SelectedPublication,
 };
 pub use init::{
     discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,

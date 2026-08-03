@@ -1455,13 +1455,13 @@ release-units:
     }
 
     #[test]
-    fn rejects_credential_values_shaped_as_names() {
+    fn rejects_secret_names_that_are_not_identifiers() {
         let invalid = with_github("").replace(
             "    path: packages/library\n",
             "    path: packages/library\n    cargo: { token-secret: 'not a name' }\n",
         );
         assert!(Config::from_yaml(&invalid)
-            .expect_err("credential-looking value rejected")
+            .expect_err("non-identifier secret name rejected")
             .to_string()
             .contains("must be a GitHub variable or secret name"));
     }

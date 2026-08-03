@@ -223,12 +223,14 @@ intentional executor init
 ```
 
 The first run writes `.intentional/executor-init-plan.yml` and exits with code
-`2`. Add `--dry-run` to print the plan the command would write, and every file
-it would touch, without changing the workspace. Set each candidate `resolution` to `accept` or `decline`, then rerun the
+`2`. Set each candidate `resolution` to `accept` or `decline`, then rerun the
 command until it reports the `ready` state and updates
 `.intentional/config.yml`. Accepting a publication offers its dependent targets
 on the next run, so the plan converges through explicit decisions rather than
 inference.
+
+Add `--dry-run` to print the plan the command would write, and every file it
+would touch, without changing the workspace.
 
 Initialization reports the repository settings Intentional never mutates: the
 GitHub App must be a ruleset bypass actor for the default branch and every

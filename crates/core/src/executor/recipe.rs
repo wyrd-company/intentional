@@ -248,9 +248,19 @@ impl SelectedPublication {
     }
 }
 
-/// Resolve every configured publication against the maintained recipe catalog.
-pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedPublication>> {
-    let mut selected = Vec::new();
+/// Every configured publication that resolved, and every one that did not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PublicationSelection {
+    /// Publications resolved to exactly one maintained recipe.
+    pub selected: Vec<SelectedPublication>,
+    /// Stable diagnostics for publications that could not be resolved.
+    pub diagnostics: Vec<String>,
+}
+
+/// Resolve every configured publication, collecting each failure instead of
+/// stopping at the first, so one run reports every unresolved target.
+pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationSelection> {
+    let mut selection = PublicationSelection::default();
     for (id, release_unit) in &config.release_units {
         // A suspended release unit does not release, so it cannot publish.
         if release_unit.disposition != ReleaseUnitDisposition::Managed
@@ -258,9 +268,16 @@ pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedP
         {
             continue;
         }
-        let capabilities = capability_set(&derive_capabilities(root, release_unit)?);
+        let capabilities = match derive_capabilities(root, release_unit) {
+            Ok(derived) => capability_set(&derived),
+            Err(Error::Validation(message)) => {
+                selection.diagnostics.push(message);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         for (publisher, target, configured) in configured_targets(release_unit) {
-            selected.push(select_one(
+            match select_one(
                 root,
                 id,
                 release_unit,
@@ -268,10 +285,23 @@ pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedP
                 publisher,
                 target,
                 &configured,
-            )?);
+            ) {
+                Ok(publication) => selection.selected.push(publication),
+                Err(Error::Validation(message)) => selection.diagnostics.push(message),
+                Err(error) => return Err(error),
+            }
         }
     }
-    Ok(selected)
+    Ok(selection)
+}
+
+/// Resolve every configured publication, failing on the first unresolved target.
+pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedPublication>> {
+    let selection = resolve_publications(root, config)?;
+    match selection.diagnostics.into_iter().next() {
+        Some(diagnostic) => Err(Error::Validation(diagnostic)),
+        None => Ok(selection.selected),
+    }
 }
 
 /// Configured target identities and their target-scoped settings, in stable order.
@@ -912,17 +942,18 @@ release-units:
     }
 
     #[test]
-    fn maintained_catalog_is_unique_by_recipe_index() {
+    fn maintained_catalog_selects_unambiguously() {
+        // Selection matches on capability, publisher, and target only, so two
+        // entries sharing those three would make every such publication fail as
+        // ambiguous no matter which packagers they name.
         let mut index = BTreeSet::new();
         for recipe in catalog() {
             assert!(
-                index.insert((
-                    recipe.capability,
-                    recipe.publisher,
-                    recipe.target,
-                    recipe.packager
-                )),
-                "catalog repeats a recipe index entry"
+                index.insert((recipe.capability, recipe.publisher, recipe.target)),
+                "catalog repeats the index selection depends on: {}/{}/{}",
+                recipe.capability,
+                recipe.publisher,
+                recipe.target
             );
         }
     }
