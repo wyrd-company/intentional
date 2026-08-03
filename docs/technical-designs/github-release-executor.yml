@@ -154,13 +154,30 @@ proposed-design:
     promotion, attached metadata, provenance, signing, readback, consumer
     retrieval, retry policy, and evidence shape.
 
-  native-packager-contract: >-
+  native-packager-contract: |-
     Initialization can propose or create the baseline native configuration
     required by a derived packager. Intentional check validates that native
     configuration against the selected recipe. Workflow reconciliation reads
     compatible native configuration but limits its mutation to the selected
     GitHub workflow. Packager configuration therefore remains native project
     state rather than duplicated executor configuration.
+
+    Validation reaches the members a recipe depends on rather than the presence
+    of the configuration file. A Go release unit's GoReleaser configuration
+    declares the project name the recipes seal as the subject identity, the
+    distribution pipe each configured publisher promotes, and the system-package
+    format each system-package publisher distributes. Every finding names a
+    member of the packager's own configuration; none of them becomes a value
+    Intentional configuration supplies.
+
+    A Go release unit's command package is discovered from that same native
+    evidence: the main package directories the packager's configuration names,
+    the release-unit root, and the conventional command directories beneath it
+    to a bounded depth. The bound is what keeps a vendored or copied command
+    from deriving a capability the release does not publish. A Go module with no
+    discoverable command reports that as the reason it derives no publishable
+    capability, because the recipes build a command and a module without one has
+    nothing for the packager to build.
 
   workflow-reconciliation: |-
     The executor derives the required release or publish workflow contract from
@@ -490,6 +507,29 @@ proposed-design:
     the same release channel already supply the binary whose verification
     decides whether the authority transition happens at all.
 
+  goreleaser-distribution: |-
+    A Go release unit's Homebrew, RPM, APT, and AUR deliverables are one
+    subject: one packager builds them together and one build job produces them.
+    The packager offers no way to publish a distribution tree a previous
+    invocation built, so a publisher job that ran the packager again would
+    rebuild from source and produce a subject whose digest cannot equal the one
+    the release sealed. Each publisher job therefore promotes the file the build
+    already produced.
+
+    What promotion means is a property of the destination. Homebrew's
+    deliverable is a formula, and its destination is the configured tap
+    repository, so the recipe commits the generated formula there through a
+    token minted for that repository alone. The Arch User Repository is a Git
+    host of its own rather than a GitHub repository, so its recipe pushes the
+    generated package sources with an SSH key held under a conventional secret
+    name. A rerun that finds the destination already carrying this release
+    commits nothing and still succeeds, because destination readback decides
+    whether the publication is present rather than whether the step wrote.
+
+    None of these destinations accepts a workflow identity token, so none of
+    their jobs requests one. Trusted publishing is a registry capability, and a
+    tap, a package index, and the Arch User Repository are repositories.
+
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write
     authority. It is explicitly configured as a bypass actor for the default
@@ -702,6 +742,15 @@ proposed-design:
     evidence records authenticated draft-asset retrieval and those package
     checks; it does not claim public clean-client retrieval.
 
+    That claim is proved rather than asserted. The recipe reports which bytes it
+    retrieved and their digest; the draft-asset handoff states which assets
+    belong to that publication and the canonical sha256 the release sealed for
+    each. Publication verification joins the two: it proves the handoff against
+    the repository and the live draft, and refuses a fragment whose retrieval
+    digest no inventoried asset carries. A draft-dependent publisher verifies
+    only with that handoff, and a publisher whose consumer path is public is
+    refused one, because it consumes no draft asset.
+
     After all required publishers, applicable public clean-client checks,
     authenticated draft-asset checks, phase tags, configured gates, and evidence
     assembly succeed, a single closure job verifies the complete draft and
@@ -804,7 +853,15 @@ proposed-design:
     compares applicable phase-tag evidence, and verifies publisher-native
     provenance and subject digests. `--live` repeats fresh destination readback
     and consumer retrieval. For a draft-dependent publisher, this is the first
-    public client check after closure. Its result is reported by verification
+    public client check after closure. Verification speaks no registry protocol
+    itself, so that check reaches it the way a preclosure readback does: a
+    public consumer client resolves and retrieves the release and writes a
+    publication-observation document, and live verification reads each
+    publication's document from the file its own identity names. A publication
+    no supplied observation covers is reported rather than passed, and with no
+    observations at all the only available read is the closed Release asset,
+    which proves the recorded bytes are unchanged and claims nothing about what
+    an unauthenticated consumer resolves. Its result is reported by verification
     and never rewrites `intentional-evidence.yml` or another immutable Release
     asset. The GitHub Release asset is the durable human- and
     machine-readable evidence record; temporary workflow artifacts are only

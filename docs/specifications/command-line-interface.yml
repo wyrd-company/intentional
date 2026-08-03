@@ -1063,6 +1063,21 @@ commands:
               arity:
                 min: 1
                 max: 1
+          - name: draft-handoff
+            flags:
+              - --draft-handoff
+            kind: option
+            description: >-
+              Draft-Release asset handoff document a draft-dependent publisher
+              consumed. Required for a publisher whose consumer path resolves a
+              GitHub Release asset, and refused for every other publisher.
+            required: false
+            repeatable: false
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
         output:
           modes:
             - name: publisher-evidence
@@ -1161,6 +1176,21 @@ commands:
               retrieval in addition to verifying recorded evidence.
             required: false
             repeatable: false
+          - name: observations
+            flags:
+              - --observations
+            kind: option
+            description: >-
+              Directory of post-closure publication-observation documents a
+              public consumer client produced. Each publication is read from
+              the file its own identity names. Requires --live.
+            required: false
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
         output:
           modes:
             - name: human-readable
@@ -1195,6 +1225,16 @@ commands:
             the GitHub Release requires a destination adapter for that
             publisher. Without one, --live reports the publication as
             unverifiable and names the publisher whose adapter is missing.
+          - >-
+            --observations supplies that adapter as documents rather than as a
+            registry client. A public consumer client resolves and retrieves
+            each release and writes what it found, and live verification reads
+            those documents through the same publication-observation contract a
+            repository-local readback uses. This is where a draft-dependent
+            publisher's deferred public consumer check is performed, because
+            before closure it could not truthfully claim public retrieval. A
+            publication no supplied observation covers is reported rather than
+            passed.
           - >-
             Live verification reports its current result and never replaces,
             appends to, or otherwise rewrites intentional-evidence.yml or any

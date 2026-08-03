@@ -238,6 +238,16 @@ project evidence and selects exactly one maintained recipe per configured
 target. A combination with no maintained recipe, or one that matches more than
 one, is a configuration error.
 
+A Go release unit publishes through GoReleaser, and its native
+`.goreleaser.yaml` is where the rest of the contract lives. `intentional
+executor check` reports the members the selected recipes read: `project_name`,
+which the release seals as the subject identity every destination resolves; the
+distribution pipe each configured publisher promotes, `brews` for Homebrew,
+`nfpms` for RPM and APT, and `aur` for the Arch User Repository; and the
+`nfpms` format each system-package publisher distributes. The command package
+is discovered from the same file's `builds[].main`, from the release-unit root,
+or from the conventional `cmd` directories beneath it.
+
 ## Intent files
 
 An intent filename stem is its stable id. YAML frontmatter maps release-unit
