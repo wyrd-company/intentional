@@ -1720,6 +1720,41 @@ phase-tags: []
         );
     }
 
+    // The after-publication job stages every artifact in the evidence
+    // namespace, which includes the document the before-publication job
+    // uploaded. Classification by schema identity is what keeps that harmless,
+    // and nothing asserted it: a loader that stopped skipping foreign documents
+    // would seal a phase document into the phase tag with the suite green.
+    #[test]
+    fn an_after_publication_tag_ignores_a_phase_document_staged_beside_its_fragments() {
+        let workspace = phase_workspace("tag-phase-foreign-document");
+        let object = "6666666666666666666666666666666666666666";
+        let input = stage_publisher_evidence(&workspace, object);
+        let staged = stage_built_subject(&workspace, "sample-library");
+        // The before-publication document is written into the same staged
+        // directory the after-publication job downloads, which is what the
+        // shared `evidence-` artifact namespace produces on a runner.
+        plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &staged)
+            .expect("before-publication tags")
+            .write_sealed_phase_evidence(&input)
+            .expect("the sealed document is staged beside the fragments");
+        std::fs::remove_file(input.join("built-subject.yml")).expect("only the fragments remain");
+
+        let result = plan_phase_tags(workspace.root(), TagPhase::AfterPublication, &input)
+            .expect("after-publication tags");
+        let evidence = sealed(&result.tags[0].message);
+        let fragments = evidence.publisher_evidence.expect("sealed fragments");
+        assert_eq!(
+            fragments
+                .iter()
+                .map(PublisherEvidence::identity)
+                .collect::<Vec<_>>(),
+            vec!["component/npm/primary".to_owned()],
+            "a phase document beside the fragments is not sealed as one"
+        );
+        assert_eq!(evidence.subjects.len(), 1);
+    }
+
     #[test]
     fn refuses_an_after_publication_tag_that_seals_fewer_publications_than_configured() {
         let workspace = phase_workspace("tag-phase-partial-publication");
