@@ -499,7 +499,7 @@ pub fn verify_draft_handoff(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::executor::fixture::Workspace;
     use crate::publication::release::tests::FakeReleaseSource;
@@ -532,9 +532,9 @@ release-units:
     /// Handoff verification proves the declared release identity against the
     /// repository, so the fixture must be a real released repository with an
     /// origin remote rather than a bare directory of configuration files.
-    struct ReleasedWorkspace {
+    pub(crate) struct ReleasedWorkspace {
         _temp: tempfile::TempDir,
-        root: PathBuf,
+        pub(crate) root: PathBuf,
         /// Accepted source commit S.
         source: String,
         /// Deterministic release commit R.
@@ -547,7 +547,7 @@ release-units:
 
     impl ReleasedWorkspace {
         /// Author one intent, build the release, and publish its annotated global tag.
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let temp = tempfile::tempdir().expect("temporary directory");
             let root = temp.path().join("workspace");
             std::fs::create_dir_all(&root).expect("create workspace");
@@ -622,7 +622,7 @@ release-units:
         }
 
         /// A handoff declaring exactly the release identity this workspace published.
-        fn handoff(&self, bytes: &[u8]) -> DraftReleaseAssetHandoff {
+        pub(crate) fn handoff(&self, bytes: &[u8]) -> DraftReleaseAssetHandoff {
             DraftReleaseAssetHandoff {
                 global_tag: self.global_tag.clone(),
                 source_commit: self.source.clone(),
@@ -633,7 +633,7 @@ release-units:
         }
 
         /// A release source serving this workspace's draft.
-        fn source(&self, bytes: &[u8]) -> FakeReleaseSource {
+        pub(crate) fn source(&self, bytes: &[u8]) -> FakeReleaseSource {
             FakeReleaseSource::draft("example-owner/example-repository", &self.global_tag, 7)
                 .with_asset(11, "component-1.0.0.tgz", "application/gzip", bytes)
         }

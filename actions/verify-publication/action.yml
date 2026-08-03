@@ -26,6 +26,10 @@ inputs:
   output:
     description: "File the schema-backed publisher evidence fragment is written to"
     required: true
+  draft-handoff:
+    description: "Draft-Release asset handoff document a draft-dependent publisher consumed"
+    required: false
+    default: ""
   working-directory:
     description: "Repository directory holding the released commit and its tags"
     required: false
@@ -60,6 +64,7 @@ runs:
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_OBSERVATION: ${{ inputs.observation }}
         INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_DRAFT_HANDOFF: ${{ inputs.draft-handoff }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -70,11 +75,19 @@ runs:
         if [[ -n "$INPUT_TARGET" ]]; then
           SELECTOR=(--target "$INPUT_TARGET")
         fi
+        # Only a draft-dependent publisher consumes a handoff, and supplying one
+        # for any other publisher is refused, so an empty input has to reach the
+        # command as an absent option rather than as an empty path.
+        HANDOFF=()
+        if [[ -n "$INPUT_DRAFT_HANDOFF" ]]; then
+          HANDOFF=(--draft-handoff "$INPUT_DRAFT_HANDOFF")
+        fi
         intentional --directory "$INPUT_WORKING_DIRECTORY" verify publication \
           --release-unit "$INPUT_RELEASE_UNIT" \
           --publisher "$INPUT_PUBLISHER" \
           "${SELECTOR[@]}" \
           --observation "$INPUT_OBSERVATION" \
-          --output "$INPUT_OUTPUT" |
+          --output "$INPUT_OUTPUT" \
+          "${HANDOFF[@]}" |
           "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
             evidence-path

@@ -15,7 +15,11 @@ use crate::evidence::assemble::{
 use crate::evidence::phase::{decode, PHASE_EVIDENCE_FIELD};
 use crate::executor::recipe::{resolve_publications, SelectedPublication, PRIMARY_TARGET};
 use crate::model::PublisherKind;
+use crate::publication::draft::{
+    is_draft_dependent, verify_draft_handoff, DraftReleaseAssetHandoff,
+};
 use crate::publication::observation::{observe, Clock, ConsistencyPolicy, PublicationObservation};
+use crate::publication::release::ReleaseSource;
 use crate::release::git;
 use crate::release::tag::verify_release_tag;
 use std::path::{Path, PathBuf};
@@ -267,6 +271,10 @@ pub struct VerifyPublicationRequest<'a> {
     pub clock: &'a dyn Clock,
     /// Repository-derived facts the fragment binds to.
     pub context: &'a dyn PublicationContext,
+    /// Draft-Release asset handoff a draft-dependent publisher consumed.
+    pub draft_handoff: Option<&'a Path>,
+    /// GitHub Release access used to prove that handoff.
+    pub release_source: Option<&'a dyn ReleaseSource>,
 }
 
 impl<'a> VerifyPublicationRequest<'a> {
@@ -290,6 +298,8 @@ impl<'a> VerifyPublicationRequest<'a> {
             policy: None,
             clock,
             context,
+            draft_handoff: None,
+            release_source: None,
         }
     }
 }
@@ -322,6 +332,7 @@ pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<Veri
         .context
         .planned_release(request.root, &selected.release_unit)?;
     let observed = accept_observation(&observation, &selected, &identity, &release.version)?;
+    join_draft_retrieval(request, &selected, &identity, observed.retrieval)?;
     let identity_facts = &release.identity;
 
     let sealed =
@@ -364,6 +375,74 @@ pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<Veri
         evidence,
         reused,
     })
+}
+
+/// Bind a draft-dependent publisher's retrieval to the assets the release sealed.
+///
+/// The retrieval a draft-dependent recipe records and the draft-asset inventory
+/// the release sealed are the two sides of one claim, and until they are
+/// compared each is a separate assertion about the same bytes. The recipe says
+/// it downloaded a draft asset and produced a digest; the handoff says which
+/// assets belong to this publication and what their canonical sha256 values are.
+/// Joining them is what makes the mode more than a word: the digest the fragment
+/// carries has to be a digest [`retrieve_assets`] proved by downloading the
+/// asset and hashing exactly the bytes it received.
+///
+/// The join is required rather than opportunistic. A draft-dependent publisher
+/// that verified without a handoff would record authenticated-draft retrieval
+/// with nothing on the other side of the comparison, which is the same silence
+/// the mode exists to remove.
+fn join_draft_retrieval(
+    request: &VerifyPublicationRequest<'_>,
+    selected: &SelectedPublication,
+    identity: &str,
+    retrieval: &crate::evidence::assemble::CleanClient,
+) -> Result<()> {
+    if !is_draft_dependent(selected.publisher) {
+        // A publisher whose consumer path never resolves a Release asset has no
+        // inventory to be compared against, and supplying one would assert a
+        // handoff the release never made.
+        if request.draft_handoff.is_some() {
+            return Err(Error::Validation(format!(
+                "publication {identity} supplies a draft-Release asset handoff; the {} publisher resolves its release through the public consumer path and consumes no draft asset",
+                selected.publisher
+            )));
+        }
+        return Ok(());
+    }
+    let (Some(path), Some(source)) = (request.draft_handoff, request.release_source) else {
+        return Err(Error::Validation(format!(
+            "publication {identity} records authenticated draft-asset retrieval, which is proved against the draft-Release asset handoff the release sealed; supply that handoff document"
+        )));
+    };
+    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+    let handoff = DraftReleaseAssetHandoff::from_yaml(&text)?;
+    if handoff.identity() != identity {
+        return Err(Error::Validation(format!(
+            "the draft-Release asset handoff serves publication {} instead of {identity}",
+            handoff.identity()
+        )));
+    }
+    let verified = verify_draft_handoff(request.root, &handoff, source)?;
+    if !verified
+        .retrieval
+        .assets()
+        .iter()
+        .any(|asset| asset.sha256 == retrieval.digest)
+    {
+        return Err(Error::Validation(format!(
+            "publication {identity} records retrieving {}, which is not the digest of any asset the draft-Release handoff inventories; the release sealed {}",
+            retrieval.digest,
+            verified
+                .retrieval
+                .assets()
+                .iter()
+                .map(|asset| format!("{} at {}", asset.name, asset.sha256))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// Members a present observation always carries, borrowed together.
@@ -814,6 +893,8 @@ release-units:
             }),
             clock,
             context,
+            draft_handoff: None,
+            release_source: None,
         }
     }
 
@@ -1136,12 +1217,132 @@ destination-aliases:
         workspace
     }
 
+    /// Bytes the released fixture's draft Release carries as its one asset.
+    const DELIVERABLE: &[u8] = b"deliverable bytes";
+
+    /// One released workspace, its handoff document, and the draft serving it.
+    ///
+    /// The join is a comparison against a draft the release actually sealed, so
+    /// its fixture is a real released repository rather than a directory of
+    /// configuration. Anything less would prove the comparison compiles.
+    struct DraftFixture {
+        released: crate::publication::draft::tests::ReleasedWorkspace,
+        source: crate::publication::release::tests::FakeReleaseSource,
+        handoff: PathBuf,
+        observation: PathBuf,
+        output: PathBuf,
+    }
+
+    impl DraftFixture {
+        fn new(retrieved: &str) -> Self {
+            let released = crate::publication::draft::tests::ReleasedWorkspace::new();
+            let handoff = released.root.join("handoff.yml");
+            std::fs::write(
+                &handoff,
+                released
+                    .handoff(DELIVERABLE)
+                    .to_yaml()
+                    .expect("handoff renders"),
+            )
+            .expect("handoff written");
+            let observation = released.root.join("observation.yml");
+            std::fs::write(
+                &observation,
+                present_document()
+                    .replace("publisher: npm", "publisher: homebrew")
+                    .replace("identity: npmjs", "identity: example-owner/homebrew-example")
+                    .replace("kind: npm-package", "kind: homebrew-formula")
+                    .replace("id: npm\n  version: 10.9.0", "id: goreleaser\n  version: 2.4.0")
+                    .replace("mode: public", "mode: authenticated-draft")
+                    .replace("client: npm", "client: brew")
+                    .replace(
+                        &format!(
+                            "retrieval:\n  mode: authenticated-draft\n  client: brew\n  version: 10.9.0\n  digest: {}\n",
+                            digest("aa")
+                        ),
+                        &format!(
+                            "retrieval:\n  mode: authenticated-draft\n  client: brew\n  version: 10.9.0\n  digest: {retrieved}\n"
+                        ),
+                    ),
+            )
+            .expect("observation written");
+            Self {
+                source: released.source(DELIVERABLE),
+                output: released.root.join("evidence.yml"),
+                released,
+                handoff,
+                observation,
+            }
+        }
+
+        fn verify<'a>(
+            &'a self,
+            clock: &'a StillClock,
+            context: &'a dyn PublicationContext,
+        ) -> Result<VerifiedPublication> {
+            verify_publication(&VerifyPublicationRequest {
+                root: &self.released.root,
+                release_unit: "component",
+                publisher: PublisherKind::Homebrew,
+                target: None,
+                observation: &self.observation,
+                output: &self.output,
+                policy: Some(ConsistencyPolicy {
+                    interval: Duration::from_secs(1),
+                    backoff: 2,
+                    maximum_interval: Duration::from_secs(4),
+                    deadline: Duration::from_secs(4),
+                }),
+                clock,
+                context,
+                draft_handoff: Some(&self.handoff),
+                release_source: Some(&self.source),
+            })
+        }
+    }
+
+    // The recipe's claim and the release's inventory are two assertions about
+    // the same bytes until they are compared. This is that comparison.
     #[test]
-    fn a_draft_dependent_publisher_records_authenticated_draft_retrieval() {
-        let workspace = homebrew_workspace("verify-draft-dependent", "authenticated-draft");
+    fn binds_an_authenticated_draft_retrieval_to_the_sealed_asset_inventory() {
+        let fixture = DraftFixture::new(&crate::evidence::digest_bytes(DELIVERABLE));
+        let clock = clock();
+        let context = TestContext::new();
+        let verified = fixture
+            .verify(&clock, &context)
+            .expect("a draft-dependent publication verifies against its handoff");
+        assert_eq!(
+            verified.evidence.clean_client.mode,
+            CleanClientMode::AuthenticatedDraft,
+            "the recorded mode is exactly the one observed"
+        );
+    }
+
+    #[test]
+    fn rejects_a_draft_retrieval_digest_no_inventoried_asset_carries() {
+        // The digest a defect produces is a plausible one: the bytes of some
+        // other artifact this release also built, not a nonsense value.
+        let fixture = DraftFixture::new(&crate::evidence::digest_bytes(b"a different artifact"));
+        let clock = clock();
+        let context = TestContext::new();
+        let error = fixture
+            .verify(&clock, &context)
+            .expect_err("a digest outside the inventory is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("which is not the digest of any asset"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("component-1.0.0.tgz"), "{error}");
+    }
+
+    #[test]
+    fn requires_a_handoff_before_recording_authenticated_draft_retrieval() {
+        let workspace = homebrew_workspace("verify-draft-unproved", "authenticated-draft");
         let context = TestContext::new();
         let clock = clock();
-        let verified = verify_publication(&request(
+        let error = verify_publication(&request(
             &workspace,
             PublisherKind::Homebrew,
             None,
@@ -1150,11 +1351,38 @@ destination-aliases:
             &clock,
             &context,
         ))
-        .expect("a draft-dependent publication verifies");
-        assert_eq!(
-            verified.evidence.clean_client.mode,
-            CleanClientMode::AuthenticatedDraft,
-            "the recorded mode is exactly the one observed"
+        .expect_err("an unproved draft claim is reported");
+        assert!(
+            error.to_string().contains("supply that handoff document"),
+            "{error}"
+        );
+        assert!(!workspace.root().join("evidence.yml").exists());
+    }
+
+    #[test]
+    fn refuses_a_handoff_from_a_publisher_that_consumes_no_draft_asset() {
+        let workspace = npm_workspace("verify-handoff-unexpected");
+        workspace.write("observation.yml", &present_document());
+        let handoff = workspace.root().join("handoff.yml");
+        std::fs::write(&handoff, "unused").expect("handoff written");
+        let context = TestContext::new();
+        let clock = clock();
+        let observation = workspace.root().join("observation.yml");
+        let output = workspace.root().join("evidence.yml");
+        let mut request = request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &output,
+            &clock,
+            &context,
+        );
+        request.draft_handoff = Some(&handoff);
+        let error = verify_publication(&request).expect_err("an unexpected handoff is reported");
+        assert!(
+            error.to_string().contains("consumes no draft asset"),
+            "{error}"
         );
     }
 

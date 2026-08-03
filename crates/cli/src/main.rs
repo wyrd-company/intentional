@@ -10,9 +10,9 @@ use intentional_core::{
     initialize_executor, prepare_release, record_built_subject, verify_handoff, verify_publication,
     verify_release, verify_release_tag, ApplyResult, AssembleRequest, Bump, CheckoutContext,
     ComparisonStatus, Config, ContributionRequest, ExecutorInitState, GhReleaseSource, InitState,
-    IntentDraft, PublisherKind, ReleasePlan, StampResult, SystemClock, TagPhase, TagResult,
-    VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus, CONFIG_PATH,
-    LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    IntentDraft, PublisherKind, ReleasePlan, ReleaseSource, StampResult, SystemClock, TagPhase,
+    TagResult, VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus,
+    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -129,6 +129,10 @@ struct PublicationArgs {
     /// File in which to write schema-backed publisher evidence.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
+
+    /// Draft-Release asset handoff a draft-dependent publisher consumed.
+    #[arg(long, value_name = "PATH")]
+    draft_handoff: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -406,8 +410,13 @@ fn release_tag(root: &std::path::Path) -> Result<()> {
 fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
     let observation = resolve(root, args.observation);
     let output = resolve(root, args.output);
+    let handoff = args.draft_handoff.map(|path| resolve(root, path));
     let clock = SystemClock::new();
     let context = CheckoutContext::new();
+    // The Release access exists only to prove a supplied handoff. A publication
+    // that consumes no draft asset never reaches it, so a publisher whose
+    // consumer path is public still verifies without any GitHub access at all.
+    let source = handoff.as_ref().map(|_| GhReleaseSource::new(root));
     let verified = verify_publication(&VerifyPublicationRequest {
         root,
         release_unit: &args.release_unit,
@@ -418,6 +427,8 @@ fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
         policy: None,
         clock: &clock,
         context: &context,
+        draft_handoff: handoff.as_deref(),
+        release_source: source.as_ref().map(|source| source as &dyn ReleaseSource),
     })?;
     if verified.reused {
         println!("reused the sealed publisher evidence");

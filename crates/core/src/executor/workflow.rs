@@ -1394,6 +1394,19 @@ fn publisher_job(
     ];
     let template = if publication.packager == Packager::GoReleaser {
         substitutions.extend(goreleaser_promotion(namespaces, publication)?);
+        // A draft-dependent publisher's fragment records what it retrieved from
+        // the draft Release, and that claim is proved against the inventory the
+        // release sealed for this publication. The path is named by the
+        // derivation so the job consumes the handoff for its own publication
+        // rather than whichever document happens to be on the runner.
+        substitutions.push((
+            "@HANDOFF@",
+            scalar(&format!(
+                "${{{{ runner.temp }}}}/{}handoff/{slug}/{}",
+                namespaces.job,
+                crate::publication::draft::DRAFT_HANDOFF_FILE
+            )),
+        ));
         PUBLISH_GORELEASER_JOB
     } else {
         substitutions.push(("@RECIPE_STEPS@", recipe));
@@ -2000,6 +2013,7 @@ steps:
       target: @TARGET@
       observation: @OBSERVATION@
       output: @OUTPUT@
+      draft-handoff: @HANDOFF@
       intentional-version: @VERSION@
   - name: @FRAGMENT_NAME@
     uses: @UPLOAD@
