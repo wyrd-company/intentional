@@ -397,22 +397,32 @@ impl ObservedPublications {
 
     /// File one publication's observation is read from.
     ///
-    /// The name is derived from the publication identity rather than accepted
-    /// from the document, so a document naming a publication it was not written
-    /// for is read as the publication whose file it occupies and then reported
-    /// by the identity comparison.
+    /// The name is the publication identity with every character outside
+    /// `A-Za-z0-9._-` written as `%` and its two uppercase hexadecimal digits,
+    /// followed by `.yml`. So `component/homebrew/primary` is read from
+    /// `component%2Fhomebrew%2Fprimary.yml`.
+    ///
+    /// The encoding is reversible, and that is the point rather than tidiness.
+    /// This observer exists to keep one publication's proved retrieval from
+    /// standing in for another's, and a lossy name defeats it directly: folding
+    /// every separator to one character makes `component/homebrew/primary` and a
+    /// release unit named `component-homebrew` publishing `primary` resolve to
+    /// the same file. `%` is itself encoded, so no two identities can collide.
+    ///
+    /// The name is derived here rather than read from the document, so a
+    /// document written for another publication is read as the publication whose
+    /// file it occupies and then reported by the identity comparison.
     pub fn path(&self, identity: &str) -> PathBuf {
-        let slug = identity
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() {
-                    character.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect::<String>();
-        self.directory.join(format!("{slug}.yml"))
+        let mut name = String::with_capacity(identity.len() + ".yml".len());
+        for byte in identity.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_') {
+                name.push(char::from(byte));
+            } else {
+                name.push_str(&format!("%{byte:02X}"));
+            }
+        }
+        name.push_str(".yml");
+        self.directory.join(name)
     }
 }
 
@@ -1021,8 +1031,20 @@ fn verify_live(
     findings: &mut Vec<String>,
     entries: &mut Vec<String>,
 ) {
+    // The closed Release proves one claim about a draft-dependent publication
+    // without any destination adapter: the asset still carries the subject the
+    // evidence recorded. A consumer client proves a different one. Supplying
+    // observations asks for the second, never to give up the first, so both run
+    // and both are reported.
+    verify_live_readback(
+        repository,
+        evidence,
+        readback,
+        observer.is_some(),
+        findings,
+        entries,
+    );
     let Some(observer) = observer else {
-        verify_live_readback(repository, evidence, readback, findings, entries);
         return;
     };
     for (identity, fragment) in recorded_fragments(evidence) {
@@ -1118,25 +1140,30 @@ const fn live_mode(sealed: CleanClientMode) -> CleanClientMode {
     }
 }
 
-/// Read every recorded publication back from the closed Release itself.
+/// Read every draft-dependent publication back from the closed Release itself.
 ///
 /// The claim this reports is exactly the one the read supports: an
 /// authenticated readback of a Release asset. A publisher whose subject does
-/// not live in the Release has nothing here to read, so it is reported as
-/// unverifiable rather than as either a proved or a broken publication.
+/// not live in the Release has nothing here to read, so with no destination
+/// observer it is reported as unverifiable rather than as either a proved or a
+/// broken publication. With one, that publisher's consumer check is the
+/// observer's, and reporting it unverifiable here would contradict it.
 fn verify_live_readback(
     repository: &str,
     evidence: &ReleaseEvidence,
     readback: &ReleaseAssetReadback<'_>,
+    observed: bool,
     findings: &mut Vec<String>,
     entries: &mut Vec<String>,
 ) {
     for (identity, fragment) in recorded_fragments(evidence) {
         if !is_draft_dependent(fragment.publisher) {
-            findings.push(format!(
-                "live verification of {identity} is unavailable: publisher {} needs a destination observer, and a closed GitHub Release asset reaches only draft-dependent publications",
-                fragment.publisher
-            ));
+            if !observed {
+                findings.push(format!(
+                    "live verification of {identity} is unavailable: publisher {} needs a destination observer, and a closed GitHub Release asset reaches only draft-dependent publications",
+                    fragment.publisher
+                ));
+            }
             continue;
         }
         match readback.read(repository, fragment) {
@@ -2177,6 +2204,61 @@ retrieval:
                 .to_string()
                 .contains("no post-closure observation of component/homebrew/primary"),
             "{error}"
+        );
+    }
+
+    // Supplying observations asks for the consumer check in addition to the
+    // Release readback, not instead of it. Withdrawing the readback would make
+    // the richer invocation prove strictly less about the publication whose
+    // deferred public path the observations exist to cover.
+    #[test]
+    fn live_verification_adds_the_consumer_check_to_the_release_readback() {
+        let (released, _, source) = scenario("verify-live-additive");
+        let directory = released.workspace.root().join("observations");
+        let observer = ObservedPublications::new(&directory);
+        std::fs::create_dir_all(&directory).expect("observation directory");
+        std::fs::write(
+            observer.path("component/homebrew/primary"),
+            public_observation(&digest_bytes(DELIVERABLE)),
+        )
+        .expect("observation written");
+
+        let verification = verify_release_observed(
+            released.workspace.root(),
+            "1.0.0",
+            true,
+            &source,
+            Some(&observer),
+        )
+        .expect("both checks verify");
+        let report = verification.report().join("\n");
+        assert!(
+            report.contains("authenticated readback of component/homebrew/primary"),
+            "the closed-Release readback still ran: {report}"
+        );
+        assert!(
+            report.contains("live public retrieval of component/homebrew/primary"),
+            "the consumer check ran too: {report}"
+        );
+    }
+
+    // Two identities that differ only in a separator must not resolve to one
+    // file, because this observer's whole job is keeping one publication's
+    // proved retrieval from standing in for another's.
+    #[test]
+    fn distinguishes_identities_that_a_lossy_name_would_collapse() {
+        let observer = ObservedPublications::new(Path::new("observations"));
+        assert_eq!(
+            observer.path("component/homebrew/primary"),
+            Path::new("observations/component%2Fhomebrew%2Fprimary.yml")
+        );
+        assert_ne!(
+            observer.path("component/homebrew/primary"),
+            observer.path("component-homebrew/primary"),
+        );
+        assert_ne!(
+            observer.path("component%2Fhomebrew/primary"),
+            observer.path("component/homebrew/primary"),
         );
     }
 
