@@ -105,10 +105,13 @@ impl<'a> GitCommand<'a> {
         let mut command = Command::new("git");
         command
             .current_dir(self.directory)
-            // Repository-local hooks and pager configuration must never
-            // influence a release identity or a verification decision.
+            // Repository-local hooks, pager, and signature-display
+            // configuration must never influence a release identity or a
+            // verification decision, and must never prefix parsed output.
             .arg("-c")
             .arg("core.hooksPath=/dev/null")
+            .arg("-c")
+            .arg("log.showSignature=false")
             .arg("--no-pager")
             .args(&self.arguments)
             .env("GIT_TERMINAL_PROMPT", "0")

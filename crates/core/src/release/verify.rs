@@ -17,8 +17,8 @@ use crate::plan::ReleasePlan;
 use crate::release::build::build_candidate;
 use crate::release::candidate::{
     digest_bytes, ReleaseCandidate, BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD, CANDIDATE_TREE_DIRECTORY,
-    IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, MAX_CANDIDATE_FILES, MAX_CANDIDATE_FILE_BYTES,
-    RELEASE_CANDIDATE_MANIFEST,
+    IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, MAX_CANDIDATE_DEPTH, MAX_CANDIDATE_FILES,
+    MAX_CANDIDATE_FILE_BYTES, RELEASE_CANDIDATE_MANIFEST,
 };
 use crate::release::git::{self, GitCommand};
 use std::collections::BTreeSet;
@@ -91,11 +91,13 @@ pub fn verify_handoff(root: &Path, handoff: &Path) -> Result<VerifiedHandoff> {
         .map_err(|error| Error::Git(format!("failed to create a reproduction clone: {error}")))?;
     let reproduction = isolated_clone(root, reproduction_root.path(), &candidate.source.commit)?;
     reproduce_candidate(&reproduction, &directory, &candidate, &plan)?;
-
-    drop(import_root);
     drop(reproduction_root);
 
-    import_pushable_identities(root, &bundle, &candidate)?;
+    // The pushable objects are taken from the clone that already proved them,
+    // never from a second read of the untrusted handoff directory, so the
+    // bundle cannot be swapped between verification and import.
+    import_pushable_identities(root, &import, &candidate)?;
+    drop(import_root);
 
     Ok(VerifiedHandoff {
         directory,
@@ -109,7 +111,7 @@ pub fn verify_handoff(root: &Path, handoff: &Path) -> Result<VerifiedHandoff> {
 /// Prove the handoff directory contains exactly its inventoried files.
 fn verify_transported_files(directory: &Path, candidate: &ReleaseCandidate) -> Result<()> {
     let mut present = BTreeSet::new();
-    collect(directory, directory, &mut present)?;
+    collect(directory, directory, 0, &mut present)?;
     let inventoried = candidate
         .files
         .iter()
@@ -125,6 +127,7 @@ fn verify_transported_files(directory: &Path, candidate: &ReleaseCandidate) -> R
             unexpected.join(", ")
         )));
     }
+    verify_bundle_bound(directory, candidate)?;
     for file in &candidate.files {
         let path = directory.join(&file.path);
         // Bound the read by what is on disk rather than by what the manifest
@@ -155,14 +158,34 @@ fn verify_transported_files(directory: &Path, candidate: &ReleaseCandidate) -> R
                 file.path
             )));
         }
+        if file.path == candidate.git_bundle.file && digest != candidate.git_bundle.sha256 {
+            return Err(Error::Validation(
+                "the inventoried git bundle digest and the declared git bundle digest disagree"
+                    .to_owned(),
+            ));
+        }
     }
-    let bundle_size = candidate.bundle_size().ok_or_else(|| {
+    Ok(())
+}
+
+/// Bound the transported bundle by both its declared and its observed size.
+///
+/// The bundle bound is checked before any transported file is read, so an
+/// oversized bundle is refused rather than digested.
+fn verify_bundle_bound(directory: &Path, candidate: &ReleaseCandidate) -> Result<()> {
+    let declared = candidate.bundle_size().ok_or_else(|| {
         Error::Validation("the git bundle is missing from the file inventory".to_owned())
     })?;
-    if bundle_size > MAX_BUNDLE_BYTES {
-        return Err(Error::Validation(format!(
-            "the release bundle is {bundle_size} bytes and exceeds the {MAX_BUNDLE_BYTES} byte handoff bound"
-        )));
+    let path = directory.join(&candidate.git_bundle.file);
+    let observed = std::fs::metadata(&path)
+        .map_err(|error| Error::io(&path, error))?
+        .len();
+    for size in [declared, observed] {
+        if size > MAX_BUNDLE_BYTES {
+            return Err(Error::Validation(format!(
+                "the release bundle is {size} bytes and exceeds the {MAX_BUNDLE_BYTES} byte handoff bound"
+            )));
+        }
     }
     Ok(())
 }
@@ -537,14 +560,14 @@ fn discard_previously_imported_tag(clone: &Path, candidate: &ReleaseCandidate) -
 /// Import the verified release commit and annotated tag so the push step can use them.
 fn import_pushable_identities(
     root: &Path,
-    bundle: &Path,
+    proven: &Path,
     candidate: &ReleaseCandidate,
 ) -> Result<()> {
     let tag_reference = format!("refs/tags/{}", candidate.global_tag.name);
     require_importable_refs(root, candidate)?;
-    let bundle_argument = bundle
+    let source_argument = proven
         .to_str()
-        .ok_or_else(|| Error::Git("the bundle path is not valid UTF-8".to_owned()))?
+        .ok_or_else(|| Error::Git("the verified clone path is not valid UTF-8".to_owned()))?
         .to_owned();
     GitCommand::new(root)
         .args([
@@ -556,15 +579,27 @@ fn import_pushable_identities(
             "--quiet",
             "--no-tags",
             "--no-write-fetch-head",
-            &bundle_argument,
-            &format!("{BUNDLE_RELEASE_HEAD}:{IMPORTED_RELEASE_REF}"),
-            &format!("{BUNDLE_TAG_HEAD}:{tag_reference}"),
+            &source_argument,
+            &format!("{STAGED_RELEASE_REF}:{IMPORTED_RELEASE_REF}"),
+            &format!("{STAGED_TAG_REF}:{tag_reference}"),
         ])
         .run()?;
+    // Both imported refs are re-read from the repository the privileged push
+    // step will use, so neither identity is taken on the strength of the fetch
+    // having exited successfully.
     let imported = git::resolve(root, IMPORTED_RELEASE_REF)?;
     if imported != candidate.release.commit {
         return Err(Error::Validation(format!(
             "importing the verified release commit produced {imported}"
+        )));
+    }
+    let imported_tag = GitCommand::new(root)
+        .args(["rev-parse", "--verify", "--end-of-options", &tag_reference])
+        .run()?
+        .line()?;
+    if imported_tag != candidate.global_tag.object {
+        return Err(Error::Validation(format!(
+            "importing the verified global release tag produced {imported_tag}"
         )));
     }
     Ok(())
@@ -604,7 +639,17 @@ fn require_absent_or_identical(root: &Path, reference: &str, object: &str) -> Re
 }
 
 /// Collect every handoff-relative regular file path beneath the handoff directory.
-fn collect(root: &Path, directory: &Path, files: &mut BTreeSet<String>) -> Result<()> {
+fn collect(
+    root: &Path,
+    directory: &Path,
+    depth: usize,
+    files: &mut BTreeSet<String>,
+) -> Result<()> {
+    if depth > MAX_CANDIDATE_DEPTH {
+        return Err(Error::Validation(format!(
+            "the release handoff nests directories more than {MAX_CANDIDATE_DEPTH} deep"
+        )));
+    }
     let entries = std::fs::read_dir(directory).map_err(|error| Error::io(directory, error))?;
     for entry in entries {
         let entry = entry.map_err(|error| Error::io(directory, error))?;
@@ -617,7 +662,7 @@ fn collect(root: &Path, directory: &Path, files: &mut BTreeSet<String>) -> Resul
             )));
         }
         if kind.is_dir() {
-            collect(root, &path, files)?;
+            collect(root, &path, depth + 1, files)?;
             continue;
         }
         if !kind.is_file() {

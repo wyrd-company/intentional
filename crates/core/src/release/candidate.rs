@@ -33,20 +33,33 @@ pub const BUNDLE_RELEASE_HEAD: &str = "refs/heads/intentional-release";
 pub const BUNDLE_TAG_HEAD: &str = "refs/tags/intentional-global-release";
 /// Local ref under which verification imports the verified release commit.
 pub const IMPORTED_RELEASE_REF: &str = "refs/intentional/handoff/release";
+/// Reserved ref under which preparation records the annotated global tag locally.
+pub const LOCAL_GLOBAL_TAG_REF: &str = "refs/intentional/release/global-tag";
 
 /// Largest Git bundle a handoff may transport.
 ///
 /// The bundle is thin: it carries only the objects introduced by the release
 /// commit and its annotated tag, with the accepted source commit declared as a
-/// prerequisite. A bound keeps an untrusted bundle from becoming an unbounded
-/// decompression and object-ingestion surface in the privileged job.
-pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+/// prerequisite. Those objects are the release's changed files, so the bundle
+/// is far smaller than the general per-file bound and gets a bound of its own
+/// rather than inheriting one that could never reject anything.
+pub const MAX_BUNDLE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Largest single file a handoff may transport.
 pub const MAX_CANDIDATE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Largest number of files a handoff may inventory.
 pub const MAX_CANDIDATE_FILES: usize = 4096;
+
+/// The bundle bound has to be able to reject what the per-file bound accepts,
+/// otherwise it is a constant that no input can ever violate.
+const _: () = assert!(MAX_BUNDLE_BYTES < MAX_CANDIDATE_FILE_BYTES);
+
+/// Deepest directory nesting a handoff may contain.
+///
+/// The handoff arrives as an untrusted workflow artifact, so its directory walk
+/// is bounded in depth as well as in file count and size.
+pub const MAX_CANDIDATE_DEPTH: usize = 32;
 
 /// How one path changed between the accepted source tree and the release tree.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]

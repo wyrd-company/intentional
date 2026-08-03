@@ -16,9 +16,9 @@ use crate::release::build::build_candidate;
 use crate::release::candidate::{
     digest_bytes, BundleInventory, CandidateFile, CandidateReleaseIdentity, GlobalTag,
     PlanInventory, ReleaseCandidate, SourceIdentity, BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD,
-    CANDIDATE_TREE_DIRECTORY, MAX_BUNDLE_BYTES, MAX_CANDIDATE_FILES, MAX_CANDIDATE_FILE_BYTES,
-    RELEASE_BUNDLE_FILE, RELEASE_CANDIDATE_CONTRACT, RELEASE_CANDIDATE_MANIFEST,
-    RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
+    CANDIDATE_TREE_DIRECTORY, LOCAL_GLOBAL_TAG_REF, MAX_BUNDLE_BYTES, MAX_CANDIDATE_FILES,
+    MAX_CANDIDATE_FILE_BYTES, RELEASE_BUNDLE_FILE, RELEASE_CANDIDATE_CONTRACT,
+    RELEASE_CANDIDATE_MANIFEST, RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
 };
 use crate::release::git::{self, GitCommand};
 use std::path::{Path, PathBuf};
@@ -67,14 +67,13 @@ pub fn prepare_release(root: &Path, output: &Path) -> Result<PreparedRelease> {
 
     let built = build_candidate(root, &source)?;
 
-    create_tag_reference(root, &built.tag_name, &built.tag_object)?;
+    record_local_global_tag(root, &built.tag_object)?;
     let bundle = directory.join(RELEASE_BUNDLE_FILE);
     write_bundle(
         root,
         &source,
         &built.release_commit,
         &built.tag_object,
-        &built.tag_name,
         &bundle,
     )?;
 
@@ -162,6 +161,11 @@ fn require_clean_worktree(root: &Path, output: &Path) -> Result<()> {
             .run()?
             .line()?,
     );
+    // Both sides of the containment test are canonical, so a repository reached
+    // through a symbolic link still recognizes its own output directory.
+    let top_level = top_level
+        .canonicalize()
+        .map_err(|error| Error::io(&top_level, error))?;
     let output_canonical = output
         .canonicalize()
         .map_err(|error| Error::io(output, error))?;
@@ -234,67 +238,87 @@ fn require_remote_default_branch(root: &Path, source: &str) -> Result<()> {
     Ok(())
 }
 
-/// Create the local annotated global tag, accepting an identical existing record.
-fn create_tag_reference(root: &Path, name: &str, object: &str) -> Result<()> {
-    let reference = format!("refs/tags/{name}");
+/// Record the annotated global tag locally without claiming version authority.
+///
+/// Version authority comes from tags under `refs/tags`, and preparation runs
+/// before the release is accepted, so writing the rendered release tag name
+/// there would change the plan a retried preparation seals. The local record
+/// lives under a reserved namespace instead; the privileged job creates the
+/// real release tag after verification.
+fn record_local_global_tag(root: &Path, object: &str) -> Result<()> {
     let existing = GitCommand::new(root)
         .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
-        .arg(&reference)
+        .arg(LOCAL_GLOBAL_TAG_REF)
         .output()?;
-    if existing.succeeded() {
-        let current = existing.line()?;
-        if current == object {
-            return Ok(());
-        }
-        return Err(Error::Validation(format!(
-            "tag {name} already exists as {current} and does not match the prepared release record {object}"
-        )));
+    if existing.succeeded() && existing.line()? == object {
+        return Ok(());
     }
     GitCommand::new(root)
-        .args(["update-ref", &reference, object])
+        .args(["update-ref", LOCAL_GLOBAL_TAG_REF, object])
         .run()?;
     Ok(())
 }
 
 /// Write the thin Git bundle carrying only the release commit and its tag object.
+///
+/// The bundle head names are fixed by the handoff contract and could collide
+/// with a branch or tag the repository already owns, so they are created in a
+/// throwaway repository that borrows this repository's objects. The workspace's
+/// own refs are never written or deleted.
 fn write_bundle(
     root: &Path,
     source: &str,
     release: &str,
     tag_object: &str,
-    tag_name: &str,
     bundle: &Path,
 ) -> Result<()> {
-    let transport_tag_is_release_tag = format!("refs/tags/{tag_name}") == BUNDLE_TAG_HEAD;
-    GitCommand::new(root)
+    let transport = tempfile::Builder::new()
+        .prefix("intentional-release-transport")
+        .tempdir()
+        .map_err(|error| Error::Git(format!("failed to create a bundle transport: {error}")))?;
+    let repository = transport.path().join("transport.git");
+    let repository_argument = repository
+        .to_str()
+        .ok_or_else(|| Error::Git("the bundle transport path is not valid UTF-8".to_owned()))?
+        .to_owned();
+    GitCommand::new(transport.path())
+        .args(["init", "--quiet", "--bare", &repository_argument])
+        .run()?;
+
+    let common = GitCommand::new(root)
+        .args(["rev-parse", "--git-common-dir"])
+        .run()?
+        .line()?;
+    let common = Path::new(&common);
+    let objects = if common.is_absolute() {
+        common.join("objects")
+    } else {
+        root.join(common).join("objects")
+    };
+    let objects = objects
+        .canonicalize()
+        .map_err(|error| Error::io(&objects, error))?;
+    let alternates = repository.join("objects/info/alternates");
+    let objects_line = objects
+        .to_str()
+        .ok_or_else(|| Error::Git("the object database path is not valid UTF-8".to_owned()))?;
+    write_file(&alternates, format!("{objects_line}\n").as_bytes())?;
+
+    GitCommand::new(&repository)
         .args(["update-ref", BUNDLE_RELEASE_HEAD, release])
         .run()?;
-    if !transport_tag_is_release_tag {
-        GitCommand::new(root)
-            .args(["update-ref", BUNDLE_TAG_HEAD, tag_object])
-            .run()?;
-    }
+    GitCommand::new(&repository)
+        .args(["update-ref", BUNDLE_TAG_HEAD, tag_object])
+        .run()?;
+
     let path = bundle
         .to_str()
         .ok_or_else(|| Error::Validation("the bundle path is not valid UTF-8".to_owned()))?;
-    let created = GitCommand::new(root)
+    GitCommand::new(&repository)
         .args(["bundle", "create", path, &format!("^{source}")])
         .args([BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD])
-        .output()?;
-    GitCommand::new(root)
-        .args(["update-ref", "-d", BUNDLE_RELEASE_HEAD])
         .run()?;
-    if !transport_tag_is_release_tag {
-        GitCommand::new(root)
-            .args(["update-ref", "-d", BUNDLE_TAG_HEAD])
-            .run()?;
-    }
-    if !created.succeeded() {
-        return Err(Error::Git(format!(
-            "failed to create the release bundle: {}",
-            created.diagnostic()
-        )));
-    }
+
     let size = std::fs::metadata(bundle)
         .map_err(|error| Error::io(bundle, error))?
         .len();

@@ -72,9 +72,9 @@ pub use release::build::{RELEASE_IDENTITY_EMAIL, RELEASE_IDENTITY_NAME};
 pub use release::candidate::{
     BundleInventory, CandidateFile, CandidateReleaseIdentity, ChangeStatus, ChangedPath, GlobalTag,
     PlanInventory, ReleaseCandidate, SourceIdentity, BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD,
-    CANDIDATE_TREE_DIRECTORY, IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, RELEASE_BUNDLE_FILE,
-    RELEASE_CANDIDATE_CONTRACT, RELEASE_CANDIDATE_MANIFEST, RELEASE_CANDIDATE_SCHEMA,
-    RELEASE_PLAN_FILE,
+    CANDIDATE_TREE_DIRECTORY, IMPORTED_RELEASE_REF, LOCAL_GLOBAL_TAG_REF, MAX_BUNDLE_BYTES,
+    MAX_CANDIDATE_FILE_BYTES, RELEASE_BUNDLE_FILE, RELEASE_CANDIDATE_CONTRACT,
+    RELEASE_CANDIDATE_MANIFEST, RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
 };
 pub use release::prepare::{prepare_release, PreparedRelease};
 pub use release::verify::{verify_handoff, VerifiedHandoff};
