@@ -328,10 +328,27 @@ proposed-design:
     produces the subject's bytes and runs `intentional evidence built-subject`,
     which reads the version the verified global release tag reproduces and
     computes the digest over the bytes the build emitted. The bytes and the
-    built-subject document travel together as one workflow artifact: the
-    before-publication tag job reads the document and the publisher jobs promote
-    the bytes. Publisher jobs consume or promote that subject; separate
-    destinations never rebuild it.
+    built-subject document travel together as one workflow artifact the
+    publisher jobs receive; the before-publication tag job reads a
+    document-only artifact of the same build, because it compares documents and
+    does not need the bytes.
+
+    A publisher job receives those bytes on disk and names them to its publish
+    step as `<prefix>SUBJECT`. A maintained recipe's publish command consumes
+    that path and promotes what the build produced; it does not rebuild from
+    source. A recipe that rebuilds produces a second artifact whose digest
+    cannot equal the one recorded for the subject, so assembly's subject
+    cross-check reports it. Publisher jobs consume or promote that subject;
+    separate destinations never rebuild it.
+
+    A subject's identity is the name its destinations resolve. Where the
+    packager's native manifest carries that name the derivation reads it; where
+    the format has none the release-unit id stands in until the recipe that owns
+    the destination supplies the destination-native identity. That stand-in is
+    deliberately fail-closed rather than silent: a publisher fragment recording
+    the destination-native identity disagrees with the sealed subject, and
+    assembly reports it, so a format in that state cannot complete a publication
+    run until its recipe lands.
 
     A phase the configuration declares derives a managed tag job that runs
     `intentional tag --phase`. The before-publication job depends on every build
