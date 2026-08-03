@@ -381,6 +381,7 @@ fn reconcile(
     contract: &WorkflowContract,
 ) -> std::result::Result<(String, Vec<WorkflowDiagnostic>), WorkflowDiagnostic> {
     let mut advisories = Vec::new();
+    let input = document.value().map_err(unparsable)?;
     // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
     // Expanding them first means adding a required trigger never discards the
     // repository's own.
@@ -460,6 +461,7 @@ fn reconcile(
         )
     })?;
     carries_contract(&parsed, contract)?;
+    preserves_repository_content(&input, &parsed, contract)?;
     Ok((output, advisories))
 }
 
@@ -493,6 +495,93 @@ fn carries_contract(
     for (id, body) in &contract.jobs {
         if parsed.get("jobs").and_then(|jobs| jobs.get(id.as_str())) != Some(body) {
             return Err(invalid(&format!("jobs.{id}")));
+        }
+    }
+    Ok(())
+}
+
+/// Prove the proposed bytes still carry everything the contract does not own.
+///
+/// The contract check proves what Intentional put in; this proves what the
+/// repository already had is still there. A splice that damages a
+/// repository-owned job while leaving the managed jobs intact satisfies the
+/// first check and fails this one, which is what turns that class of defect
+/// into a named refusal instead of silent damage.
+fn preserves_repository_content(
+    input: &Value,
+    output: &Value,
+    contract: &WorkflowContract,
+) -> std::result::Result<(), WorkflowDiagnostic> {
+    let discarded = |location: &str| {
+        WorkflowDiagnostic::at(
+            "transformation-invalid",
+            format!("the derived transformation discards repository-owned content at {location}"),
+            location,
+        )
+    };
+    let Some(top_level) = input.as_mapping() else {
+        return Ok(());
+    };
+    let owned_triggers = contract
+        .triggers
+        .iter()
+        .filter_map(|(path, _)| path.get(1).cloned())
+        .collect::<BTreeSet<_>>();
+
+    for (key, value) in top_level {
+        let Some(key) = key.as_str() else { continue };
+        match key {
+            // Intentional owns the concurrency policy and the permission
+            // default outright, and both are proved by the contract check.
+            "concurrency" | "permissions" => {}
+            "on" => {
+                // Trigger entries the contract names are its own; every other
+                // trigger the repository wrote must survive untouched.
+                let Some(triggers) = value.as_mapping() else {
+                    continue;
+                };
+                let emitted = output.get("on");
+                for (trigger, configured) in triggers {
+                    let Some(trigger) = trigger.as_str() else {
+                        continue;
+                    };
+                    if owned_triggers.iter().any(|owned| owned == trigger) {
+                        continue;
+                    }
+                    if emitted.and_then(|on| on.get(trigger)) != Some(configured) {
+                        return Err(discarded(&format!("on.{trigger}")));
+                    }
+                }
+            }
+            "jobs" => {
+                let Some(jobs) = value.as_mapping() else {
+                    continue;
+                };
+                let managed = contract
+                    .jobs
+                    .iter()
+                    .map(|(id, _)| id.clone())
+                    .collect::<BTreeSet<_>>();
+                let reserved = owned_jobs(jobs, &contract.namespaces)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+                let emitted = output.get("jobs");
+                for (id, job) in jobs {
+                    let Some(id) = id.as_str() else { continue };
+                    // A reserved job is Intentional's to replace or retire.
+                    if managed.contains(id) || reserved.contains(id) {
+                        continue;
+                    }
+                    if emitted.and_then(|jobs| jobs.get(id)) != Some(job) {
+                        return Err(discarded(&format!("jobs.{id}")));
+                    }
+                }
+            }
+            _ => {
+                if output.get(key) != Some(value) {
+                    return Err(discarded(key));
+                }
+            }
         }
     }
     Ok(())
@@ -1524,6 +1613,66 @@ jobs:
             carries_contract(&parsed, &contract).expect_err("a missing managed job is refused");
         assert_eq!(diagnostic.code, "transformation-invalid");
         assert_eq!(diagnostic.path.as_deref(), Some("jobs.intentional_prepare"));
+    }
+
+    #[test]
+    fn refuses_a_transformation_that_discards_repository_owned_content() {
+        let workspace = workspace("workflow-preservation");
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non:\n  workflow_dispatch:\n  schedule:\n    - cron: '0 0 * * *'\nenv:\n  REPOSITORY_SETTING: kept\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        let config = Config::load(workspace.root()).expect("config loads");
+        let namespaces = config
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("namespaces");
+        let contract = release_contract(&namespaces, &["candidate_check".to_owned()])
+            .expect("contract derives");
+        let text = std::fs::read_to_string(workspace.root().join(".github/workflows/release.yml"))
+            .expect("workflow readable");
+        let input: Value = serde_yaml::from_str(&text).expect("input parses");
+        let (output, _) =
+            reconcile(Document::parse(&text).expect("parses"), &contract).expect("reconciles");
+        let parsed: Value = serde_yaml::from_str(&output).expect("output parses");
+        preserves_repository_content(&input, &parsed, &contract)
+            .expect("the real transformation preserves repository content");
+
+        // Each of these is what a splice that damaged only repository-owned
+        // content would look like; the contract check cannot see any of them.
+        for (location, damage) in [
+            ("jobs.candidate_check", "jobs"),
+            ("on.schedule", "on"),
+            ("env", "env"),
+        ] {
+            let mut damaged = parsed.clone();
+            let mapping = damaged.as_mapping_mut().expect("top level");
+            if damage == "env" {
+                mapping.remove(Value::String("env".to_owned()));
+            } else {
+                let key = location.split('.').nth(1).expect("damaged key");
+                mapping[&Value::String(damage.to_owned())]
+                    .as_mapping_mut()
+                    .expect("container")
+                    .remove(Value::String(key.to_owned()));
+            }
+            let diagnostic = preserves_repository_content(&input, &damaged, &contract)
+                .expect_err("discarded repository content is refused");
+            assert_eq!(diagnostic.code, "transformation-invalid");
+            assert_eq!(diagnostic.path.as_deref(), Some(location));
+        }
+
+        // A reserved job is Intentional's to retire, so removing one is not a
+        // loss of repository-owned content.
+        let mut retired = parsed.clone();
+        retired["jobs"]
+            .as_mapping_mut()
+            .expect("jobs")
+            .remove(Value::String("intentional_prepare".to_owned()));
+        preserves_repository_content(&input, &retired, &contract)
+            .expect("retiring a reserved job is not repository-content loss");
     }
 
     #[test]
