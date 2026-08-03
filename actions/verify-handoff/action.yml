@@ -1,0 +1,61 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional verify handoff"
+description: "Independently verify a release-candidate handoff and expose its verified identities"
+author: "wyrd-company"
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  handoff:
+    description: "Release-candidate handoff directory to verify"
+    required: false
+    default: "release-candidate"
+  working-directory:
+    description: "Repository directory the verified objects are imported into"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  source-sha:
+    description: "Verified accepted source commit"
+    value: ${{ steps.verify.outputs.source-sha }}
+  release-sha:
+    description: "Verified deterministic release commit"
+    value: ${{ steps.verify.outputs.release-sha }}
+  global-tag:
+    description: "Verified name of the annotated global release tag"
+    value: ${{ steps.verify.outputs.global-tag }}
+  plan-digest:
+    description: "Verified digest sealed inside the release plan"
+    value: ${{ steps.verify.outputs.plan-digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Verify the release handoff
+      id: verify
+      shell: bash
+      env:
+        INPUT_HANDOFF: ${{ inputs.handoff }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        intentional --directory "$INPUT_WORKING_DIRECTORY" verify handoff "$INPUT_HANDOFF" |
+          "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
+            source-sha release-sha global-tag plan-digest

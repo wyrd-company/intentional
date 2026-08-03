@@ -50,6 +50,9 @@ tasks:
       - actionlint .github/workflows/*.yml
       - shellcheck scripts/action/*.sh scripts/release/*.sh
       - ryl check .github/workflows/*.yml Taskfile.yml .intentional/config.yml
+      - >-
+        for action in action.yml actions/*/action.yml; do
+        yq -e '.runs.using' "$action" >/dev/null; done
       - python3 scripts/release/verify-versions.py
       - >-
         yq -e

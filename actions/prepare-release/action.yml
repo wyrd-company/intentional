@@ -1,0 +1,64 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional prepare release"
+description: "Construct a deterministic release candidate and its schema-backed handoff"
+author: "wyrd-company"
+branding:
+  icon: "git-branch"
+  color: "orange"
+
+inputs:
+  output:
+    description: "Directory in which to write the release-candidate handoff"
+    required: false
+    default: "release-candidate"
+  working-directory:
+    description: "Workspace directory to process"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  candidate-path:
+    description: "Directory holding the authoritative release-candidate handoff"
+    value: ${{ steps.prepare.outputs.candidate-path }}
+  source-sha:
+    description: "Accepted default-branch source commit"
+    value: ${{ steps.prepare.outputs.source-sha }}
+  release-sha:
+    description: "Deterministic release commit"
+    value: ${{ steps.prepare.outputs.release-sha }}
+  global-tag:
+    description: "Name of the annotated global release tag"
+    value: ${{ steps.prepare.outputs.global-tag }}
+  plan-digest:
+    description: "Digest sealed inside the release plan"
+    value: ${{ steps.prepare.outputs.plan-digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Prepare the release candidate
+      id: prepare
+      shell: bash
+      env:
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        intentional --directory "$INPUT_WORKING_DIRECTORY" release prepare --output "$INPUT_OUTPUT" |
+          "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
+            candidate-path source-sha release-sha global-tag plan-digest
