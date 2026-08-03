@@ -46,6 +46,22 @@ pub enum ExecutorInitState {
     Ready,
 }
 
+impl ExecutorInitState {
+    /// Stable name matching the state's serialized spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NeedsInput => "needs-input",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutorInitState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// What one candidate decides.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -223,6 +239,16 @@ pub struct ExecutorInitResult {
     /// Derived plan.
     pub plan: ExecutorInitPlan,
     writes: Vec<(PathBuf, String)>,
+}
+
+impl ExecutorInitResult {
+    /// Files this result writes, as workspace-relative paths.
+    pub fn planned_writes(&self) -> Vec<&Path> {
+        self.writes
+            .iter()
+            .map(|(relative, _)| relative.as_path())
+            .collect()
+    }
 }
 
 impl ExecutorInitResult {

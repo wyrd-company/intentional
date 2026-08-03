@@ -1655,3 +1655,45 @@ release-units:
         .failure()
         .stderr(predicate::str::contains("no github executor configuration"));
 }
+
+#[test]
+fn executor_init_dry_run_writes_nothing_and_prints_the_plan() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+release-units:
+  component:
+    path: component
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+    );
+    repo.write(
+        "component/package.json",
+        r#"{"name":"example-component","version":"1.0.0"}"#,
+    );
+
+    repo.cli()
+        .args(["executor", "init", "--dry-run"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "executor initialization state: needs-input",
+        ))
+        .stdout(predicate::str::contains(
+            "would write .intentional/executor-init-plan.yml",
+        ))
+        .stdout(predicate::str::contains(
+            "$schema: https://intentional.foo/schemas/executor-init-plan.yml",
+        ));
+
+    assert!(
+        !repo
+            .root
+            .join(".intentional/executor-init-plan.yml")
+            .exists(),
+        "a dry run never writes the plan it previews"
+    );
+}

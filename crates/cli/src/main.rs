@@ -195,11 +195,21 @@ fn skill() -> Result<()> {
 
 fn executor_init(root: &std::path::Path, dry_run: bool) -> Result<u8> {
     let result = initialize_executor(root)?;
-    println!("executor initialization state: {:?}", result.state);
+    println!("executor initialization state: {}", result.state);
     for operation in &result.operations {
         println!("{operation}");
     }
-    println!("plan: {}", result.path.display());
+    if dry_run {
+        // A dry run writes nothing, so name every file it would have written
+        // and print the plan rather than pointing at a file that is absent.
+        for relative in result.planned_writes() {
+            println!("would write {}", relative.display());
+        }
+        println!("--- {}", result.path.display());
+        print!("{}", result.plan.to_yaml()?);
+    } else {
+        println!("plan: {}", result.path.display());
+    }
     result.apply(root, dry_run)?;
     Ok(if result.state == ExecutorInitState::NeedsInput {
         2
