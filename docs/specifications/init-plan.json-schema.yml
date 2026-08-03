@@ -111,10 +111,14 @@ $defs:
     type: string
     pattern: "^[A-Za-z0-9@/_.-]+$"
   exact-path:
+    description: >-
+      One exact workspace-relative path. A lone "." names the workspace root
+      directory, which directory-scoped detectors use as a candidate path.
     type: string
     minLength: 1
-    not: { const: "." }
-    pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*[*?\[\]{}])[^/]+(?:/[^/]+)*$'
+    anyOf:
+      - const: "."
+      - pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*[*?\[\]{}])[^/]+(?:/[^/]+)*$'
   discovery-candidate:
     type: object
     additionalProperties: false
