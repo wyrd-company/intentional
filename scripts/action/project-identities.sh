@@ -40,6 +40,14 @@ for KEY in "$@"; do
         exit 1
       fi
       ;;
+    evidence-path)
+      # The projected path is the authoritative fragment, so a value that does
+      # not name a file the command actually wrote must never reach a consumer.
+      if [[ ! -f "$VALUE" ]]; then
+        echo "::error::$KEY does not name a file intentional wrote."
+        exit 1
+      fi
+      ;;
     *)
       if [[ -z "$VALUE" ]]; then
         echo "::error::$KEY is empty."

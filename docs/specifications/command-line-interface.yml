@@ -308,6 +308,24 @@ commands:
           arity:
             min: 1
             max: 1
+      - name: evidence
+        flags:
+          - --evidence
+        kind: option
+        description: >-
+          Directory of built-subject and publisher-evidence documents the
+          declared phase seals.
+        required: false
+        repeatable: false
+        requires:
+          - phase
+        conflicts-with:
+          - baseline
+        value:
+          type: directory
+          arity:
+            min: 1
+            max: 1
       - name: plan
         flags:
           - --plan
@@ -341,13 +359,21 @@ commands:
           meaning: Arguments, release state, plan verification, or tag creation failed.
     examples:
       - intentional tag --plan release-plan.json
-      - intentional tag --plan release-plan.json --phase before-publication
+      - >-
+        intentional tag --plan release-plan.json --phase before-publication
+        --evidence phase-evidence
       - intentional tag --baseline --version sample-library=1.2.3
     notes:
       - >-
-        Relative --plan paths are resolved from --directory rather than from
-        the process working directory.
+        Relative --plan and --evidence paths are resolved from --directory
+        rather than from the process working directory.
       - Repeating --version for the same identifier fails.
+      - >-
+        A phased tag encodes canonical phase evidence in its annotated record,
+        so --phase requires --evidence and --evidence is invalid without it. A
+        before-publication phase seals the built subjects and the configured
+        intended destinations; an after-publication phase seals the completed
+        publisher-evidence fragments whole.
   - name: check
     summary: Validate config, intents, and deterministic planning for continuous integration.
     mode: non-interactive
@@ -895,6 +921,20 @@ commands:
               arity:
                 min: 1
                 max: 1
+          - name: observation
+            flags:
+              - --observation
+            kind: option
+            description: >-
+              Publication-observation document the recipe's readback and
+              retrieval steps produced.
+            required: true
+            repeatable: false
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
           - name: output
             flags:
               - --output
@@ -928,15 +968,26 @@ commands:
         examples:
           - >-
             intentional verify publication --release-unit sample-library
-            --publisher npm --output publisher-evidence.yml
+            --publisher npm --observation observation.yml --output
+            publisher-evidence.yml
           - >-
             intentional verify publication --release-unit sample-application
-            --publisher oci --target ghcr --output publisher-evidence.yml
+            --publisher oci --target ghcr --observation observation.yml
+            --output publisher-evidence.yml
         notes:
           - >-
             The credential-free verify-publication Action wraps this command.
             Its only GitHub step output is evidence-path, which identifies the
             authoritative publisher-evidence file.
+          - >-
+            Publisher credentials and registry clients stay in repository-owned
+            recipe steps, so the destination is read there and reported through
+            the schema-backed publication-observation document this command
+            consumes. The command is the protocol authority over that
+            observation: it selects the configured publication, binds it to the
+            verified release identity, classifies the observation against the
+            adapter's bounded eventual-consistency policy, and writes the
+            fragment only once every check succeeds.
           - >-
             A deadline failure is safe to retry at workflow level; a rerun
             reads the destination before deciding whether publication is

@@ -1,0 +1,80 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional verify publication"
+description: "Verify one destination publication and expose its affirmative evidence fragment"
+author: "wyrd-company"
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  release-unit:
+    description: "Release-unit identifier whose publication is verified"
+    required: true
+  publisher:
+    description: "Configured publisher adapter identifier"
+    required: true
+  target:
+    description: "Publisher target selector; a publisher with a primary target accepts omission"
+    required: false
+    default: ""
+  observation:
+    description: "Publication-observation document the recipe's readback steps produced"
+    required: true
+  output:
+    description: "File the schema-backed publisher evidence fragment is written to"
+    required: true
+  working-directory:
+    description: "Repository directory holding the released commit and its tags"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  evidence-path:
+    description: "Path of the completed publisher-evidence fragment"
+    value: ${{ steps.verify.outputs.evidence-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Verify the publication
+      id: verify
+      shell: bash
+      env:
+        INPUT_RELEASE_UNIT: ${{ inputs.release-unit }}
+        INPUT_PUBLISHER: ${{ inputs.publisher }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_OBSERVATION: ${{ inputs.observation }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        # An omitted selector must reach the command as an absent option rather
+        # than as an empty one, because omission is what selects an adapter's
+        # configured primary destination.
+        SELECTOR=()
+        if [[ -n "$INPUT_TARGET" ]]; then
+          SELECTOR=(--target "$INPUT_TARGET")
+        fi
+        intentional --directory "$INPUT_WORKING_DIRECTORY" verify publication \
+          --release-unit "$INPUT_RELEASE_UNIT" \
+          --publisher "$INPUT_PUBLISHER" \
+          "${SELECTOR[@]}" \
+          --observation "$INPUT_OBSERVATION" \
+          --output "$INPUT_OUTPUT" |
+          "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
+            evidence-path
