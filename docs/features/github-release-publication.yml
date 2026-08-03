@@ -626,12 +626,15 @@ rules:
               public_client_retrieval: false
               evidence_rewritten: false
           - when: Intentional verify release runs with the live option
-          - then: Verification performs the first public client retrieval without rewriting evidence
+          - then: Verification reads the closed Release asset back without rewriting evidence
             world:
               evidence_verifies: true
               live_readback: true
-              public_client_retrieval: true
+              public_client_retrieval: false
               evidence_rewritten: false
+          - and: Public client retrieval is reported only where a destination adapter performs it
+            world:
+              public_client_retrieval: false
       report-live-public-client-failure-without-mutating-release:
         addresses: Post-closure public retrieval failure
         steps:

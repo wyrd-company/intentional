@@ -95,7 +95,7 @@ pub use publication::release::{
     LiveObservation, ReleaseAsset, ReleaseRecord, ReleaseSource, ReleaseVerification,
 };
 pub use publication::verify::{
-    verify_publication, CheckoutContext, PublicationContext, VerifiedPublication,
+    verify_publication, CheckoutContext, PlannedRelease, PublicationContext, VerifiedPublication,
     VerifyPublicationRequest,
 };
 pub use release::build::{RELEASE_IDENTITY_EMAIL, RELEASE_IDENTITY_NAME};

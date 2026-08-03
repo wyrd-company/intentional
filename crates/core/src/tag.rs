@@ -1232,10 +1232,28 @@ fn sealed_phase_evidence(
     // Phase evidence binds the global release tag, which only an executor
     // configuration declares. Executor conformance reports a configuration
     // without exactly one, so a workspace that phases its tags without the
-    // executor still records plain phased tags rather than failing here.
+    // executor still records plain phased tags rather than failing here. Staged
+    // evidence is the one thing that cannot be reconciled with that: accepting
+    // a directory and then sealing nothing from it would discard the claim the
+    // caller asked to record.
     let unphased = config.unphased_tags();
     let [global] = unphased.as_slice() else {
+        if input.is_some() {
+            return Err(Error::Validation(format!(
+                "sealing staged phase evidence requires exactly one configured tag without require-phase to bind it to; configuration declares {}",
+                unphased.len()
+            )));
+        }
         return Ok(None);
+    };
+    // Past this point the tag will seal evidence, and every claim it seals is
+    // staged rather than derivable. A phase that reaches here without its
+    // directory could only record what its own invocation asserted.
+    let Some(input) = input else {
+        return Err(Error::Validation(format!(
+            "--phase {phase} seals evidence against global release tag {} and requires the staged evidence directory",
+            global.id
+        )));
     };
     let global_tag = candidates.get(&global.id).ok_or_else(|| {
         Error::Validation(format!(
@@ -1261,17 +1279,20 @@ fn sealed_phase_evidence(
                     target: publication.target,
                 })
                 .collect::<Vec<_>>();
-            let subjects = match input {
-                Some(input) => phase::load_built_subjects(input)?,
-                None => Vec::new(),
-            };
+            let subjects = phase::load_built_subjects(config, input)?;
+            // A before-publication tag records the subjects this release built,
+            // and that sealed set is what later binds a publisher fragment to
+            // this release rather than to some other one. Sealing none would
+            // record the tag while silently disabling the check it exists for.
+            if subjects.is_empty() && !destinations.is_empty() {
+                return Err(Error::Validation(
+                    "a before-publication tag records the subjects the release built, but no built-subject document was staged".to_owned(),
+                ));
+            }
             phase::build_before_publication(bindings, &subjects, &destinations)?
         }
         TagPhase::AfterPublication => {
-            let fragments = match input {
-                Some(input) => phase::load_publisher_evidence(input)?,
-                None => Vec::new(),
-            };
+            let fragments = phase::load_publisher_evidence(input)?;
             // An after-publication tag claims that every configured publication
             // completed, so sealing fewer fragments than the configuration
             // selects would record a claim the release cannot support.
@@ -1557,14 +1578,49 @@ phase-tags: []
     }
 
     #[test]
-    fn a_phase_seals_what_it_can_prove_and_an_unphased_run_refuses_staged_evidence() {
+    fn refuses_to_discard_staged_evidence_a_workspace_cannot_bind() {
+        let workspace = phase_workspace("tag-phase-unbindable");
+        // Every configured tag declares a phase, so no global release tag
+        // exists for the evidence to bind to. Sealing nothing while accepting
+        // the directory would discard the claim the caller asked to record.
+        workspace.write(
+            ".intentional/config.yml",
+            &PHASE_CONFIG.replace(
+                "      primary: { role: primary, template: 'release/{version}' }\n",
+                "      primary: { role: primary, template: 'release/{version}', require-phase: before-publication }\n",
+            ),
+        );
+        let input = stage_built_subject(&workspace, "sample-library");
+        let config = Config::load(workspace.root()).expect("configuration");
+        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        let error = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            Some(TagPhase::BeforePublication),
+            false,
+            Some(PLAN_DIGEST),
+            Some(&input),
+        )
+        .expect_err("evidence with nothing to bind it is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("exactly one configured tag without require-phase"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_phase_without_its_staged_evidence_and_an_unphased_run_with_it_are_both_refused() {
         let workspace = phase_workspace("tag-phase-pairing");
         let input = stage_built_subject(&workspace, "sample-library");
         let config = Config::load(workspace.root()).expect("configuration");
         let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
-        // Built subjects are the one claim a phase cannot derive, so an absent
-        // directory seals none rather than refusing to record the phase at all.
-        let planned = TagResult::from_versions(
+        // Every claim a phase seals is staged rather than derivable, so a
+        // phase that reaches sealing without its directory could only record
+        // what its own invocation asserted.
+        let error = TagResult::from_versions(
             workspace.root(),
             &config,
             &versions,
@@ -1573,21 +1629,33 @@ phase-tags: []
             Some(PLAN_DIGEST),
             None,
         )
-        .expect("a phase without staged subjects still seals its bindings");
-        let sealed = planned
-            .tags
-            .first()
-            .expect("one planned phase tag")
-            .message
-            .lines()
-            .find_map(|line| line.strip_prefix(&format!("{PHASE_EVIDENCE_FIELD}: ")))
-            .expect("the record seals phase evidence");
+        .expect_err("a phase without its staged evidence is rejected");
         assert!(
-            phase::decode(sealed)
-                .expect("sealed evidence decodes")
-                .subjects
-                .is_empty(),
-            "no staged subject seals no subject"
+            error
+                .to_string()
+                .contains("requires the staged evidence directory"),
+            "{error}"
+        );
+        // The sealed subject set is what later binds a publisher fragment to
+        // this release, so a staged directory carrying no subject would record
+        // the tag while disabling the check it exists for.
+        let empty = workspace.root().join("empty-evidence");
+        std::fs::create_dir_all(&empty).expect("an empty evidence directory");
+        let error = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            Some(TagPhase::BeforePublication),
+            false,
+            Some(PLAN_DIGEST),
+            Some(&empty),
+        )
+        .expect_err("a phase staging no subject is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("no built-subject document was staged"),
+            "{error}"
         );
         let error = TagResult::from_versions(
             workspace.root(),

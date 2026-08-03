@@ -113,8 +113,8 @@ struct PublicationArgs {
     release_unit: String,
 
     /// Configured publisher adapter identifier.
-    #[arg(long, value_parser = ["npm", "cargo", "homebrew", "rpm", "apt", "aur", "oci"])]
-    publisher: String,
+    #[arg(long)]
+    publisher: PublisherKind,
 
     /// Publisher target selector; a publisher with a primary target accepts omission.
     #[arg(long)]
@@ -135,7 +135,7 @@ struct ReleaseArgs {
     #[arg(value_name = "VERSION")]
     version: String,
 
-    /// Perform post-closure destination readback and public client retrieval.
+    /// Perform post-closure destination readback in addition to recorded evidence.
     #[arg(long)]
     live: bool,
 }
@@ -383,7 +383,7 @@ fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
     let verified = verify_publication(&VerifyPublicationRequest {
         root,
         release_unit: &args.release_unit,
-        publisher: parse_publisher(&args.publisher)?,
+        publisher: args.publisher,
         target: args.target.as_deref(),
         observation: &observation,
         output: &output,
@@ -407,12 +407,6 @@ fn release(root: &std::path::Path, args: ReleaseArgs) -> Result<()> {
         println!("{entry}");
     }
     Ok(())
-}
-
-fn parse_publisher(value: &str) -> Result<PublisherKind> {
-    value
-        .parse::<PublisherKind>()
-        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn executor_init(root: &std::path::Path, dry_run: bool) -> Result<u8> {

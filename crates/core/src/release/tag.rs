@@ -46,6 +46,13 @@ pub struct VerifiedReleaseTag {
     pub global_tag: String,
     /// Digest sealed inside the release plan the tag binds.
     pub plan_digest: String,
+    /// Version the reproduced plan assigns each release unit.
+    ///
+    /// The reproduction already rebuilds the plan from S, so the version this
+    /// release publishes for each unit is proved rather than asserted. It is
+    /// what lets a later check reject evidence describing some other release's
+    /// subject.
+    pub versions: BTreeMap<String, String>,
 }
 
 impl VerifiedReleaseTag {
@@ -78,12 +85,13 @@ pub fn verify_release_tag(root: &Path) -> Result<VerifiedReleaseTag> {
             ))
         })?
         .clone();
-    reproduce_release(root, &release, &tree, &source, &tag, &plan_digest)?;
+    let versions = reproduce_release(root, &release, &tree, &source, &tag, &plan_digest)?;
     Ok(VerifiedReleaseTag {
         source,
         release,
         global_tag: tag.name,
         plan_digest,
+        versions,
     })
 }
 
@@ -305,7 +313,7 @@ fn reproduce_release(
     source: &str,
     tag: &AnnotatedTag,
     plan_digest: &str,
-) -> Result<()> {
+) -> Result<BTreeMap<String, String>> {
     if tag.target != release {
         return Err(Error::Validation(format!(
             "the global release tag {} targets {}, not the checked-out release commit {release}",
@@ -347,7 +355,12 @@ fn reproduce_release(
             tag.name
         )));
     }
-    Ok(())
+    Ok(built
+        .plan
+        .release_units
+        .iter()
+        .map(|unit| (unit.id.clone(), unit.new_version.clone()))
+        .collect())
 }
 
 /// Create an isolated clone that already contains the accepted source commit.
@@ -563,11 +576,27 @@ mod tests {
                 .to_owned()
         }
 
+        /// The published tagger line rewritten to a different identity.
+        ///
+        /// The moment is held fixed so the tagger is the only difference a
+        /// forged tag object carries.
+        fn other_tagger(&self) -> String {
+            let published = self.tagger();
+            let mut trailing = published.rsplitn(3, ' ');
+            let zone = trailing.next().expect("tagger time zone");
+            let seconds = trailing.next().expect("tagger timestamp");
+            format!("tagger Other Fixture <other@example.invalid> {seconds} {zone}")
+        }
+
         /// A well-formed release record body over `target` named `name`.
         fn record(&self, target: &str, name: &str, digest: &str) -> String {
+            self.record_as(target, name, digest, &self.tagger())
+        }
+
+        /// A well-formed release record body carrying an arbitrary tagger line.
+        fn record_as(&self, target: &str, name: &str, digest: &str, tagger: &str) -> String {
             format!(
-                "object {target}\ntype commit\ntag {name}\n{}\n\nintentional release record\n\ncontract: contract-1\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {RECORD_TAG_ID}\nversion: 1.1.0\nbaseline: false\n",
-                self.tagger(),
+                "object {target}\ntype commit\ntag {name}\n{tagger}\n\nintentional release record\n\ncontract: contract-1\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {RECORD_TAG_ID}\nversion: 1.1.0\nbaseline: false\n",
                 crate::VERSION
             )
         }
@@ -722,6 +751,63 @@ mod tests {
             error
                 .to_string()
                 .contains("does not match the released tree"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_release_commit_rewritten_around_the_reproduced_tree() {
+        let workspace = ReleasedWorkspace::new();
+        let tree = git(
+            &workspace.root,
+            &["rev-parse", &format!("{}^{{tree}}", workspace.release)],
+        );
+        let forged = GitCommand::new(&workspace.root)
+            .args(["commit-tree", &tree, "-p", &workspace.source])
+            .stdin(b"chore(release): ship 1.1.0".to_vec())
+            .run()
+            .expect("forged release commit")
+            .line()
+            .expect("commit identity");
+        let object = workspace.mktag(&workspace.record(
+            &forged,
+            &workspace.tag_name,
+            &workspace.plan_digest,
+        ));
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &object);
+        workspace.checkout(&forged);
+        let error = workspace
+            .verify()
+            .expect_err("the release commit was re-worded");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the released commit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_release_tag_re_created_by_another_tagger() {
+        let workspace = ReleasedWorkspace::new();
+        let object = workspace.mktag(&workspace.record_as(
+            &workspace.release,
+            &workspace.tag_name,
+            &workspace.plan_digest,
+            &workspace.other_tagger(),
+        ));
+        assert_ne!(
+            object, workspace.tag_object,
+            "a re-tagged record must be a different tag object"
+        );
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &object);
+        let error = workspace.verify().expect_err("the record was re-tagged");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the published tag"),
             "{error}"
         );
     }

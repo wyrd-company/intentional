@@ -369,11 +369,19 @@ commands:
         rather than from the process working directory.
       - Repeating --version for the same identifier fails.
       - >-
-        A phased tag encodes canonical phase evidence in its annotated record,
-        so --phase requires --evidence and --evidence is invalid without it. A
-        before-publication phase seals the built subjects and the configured
-        intended destinations; an after-publication phase seals the completed
-        publisher-evidence fragments whole.
+        A phased tag encodes canonical phase evidence in its annotated record
+        when the configuration declares the one global release tag that
+        evidence binds to. Such a configuration requires --evidence with
+        --phase. A configuration that declares no global release tag seals no
+        phase evidence and therefore accepts no --evidence, because accepting a
+        directory it cannot bind would silently discard the claim it carries.
+        --evidence is invalid without --phase in either case.
+      - >-
+        A before-publication phase seals the built subjects and the configured
+        intended destinations, and refuses to seal an empty subject set for a
+        release that has publications to make. An after-publication phase seals
+        the completed publisher-evidence fragments whole, and refuses to seal
+        fewer than the configuration selects.
   - name: check
     summary: Validate config, intents, and deterministic planning for continuous integration.
     mode: non-interactive
@@ -1068,9 +1076,17 @@ commands:
             Without --live, verification uses the durable recorded evidence
             and does not query publication destinations.
           - >-
-            With --live, verification performs fresh public client retrieval
-            after immutable Release closure, including the public check that a
-            draft-dependent publisher could not complete before closure.
+            With --live, verification reads every recorded publication again
+            after immutable Release closure. A draft-dependent publication is
+            read back from the closed Release asset under the operator's own
+            GitHub credentials, which proves the asset still carries the
+            recorded subject digest and claims nothing about unauthenticated
+            retrieval.
+          - >-
+            Live verification of a publication whose subject does not live in
+            the GitHub Release requires a destination adapter for that
+            publisher. Without one, --live reports the publication as
+            unverifiable and names the publisher whose adapter is missing.
           - >-
             Live verification reports its current result and never replaces,
             appends to, or otherwise rewrites intentional-evidence.yml or any

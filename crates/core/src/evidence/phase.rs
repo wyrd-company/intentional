@@ -5,6 +5,7 @@
 
 //! Canonical encoding of publication-phase evidence inside an annotated tag record.
 
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{
     EvidenceReference, IntendedDestination, PhaseSubject, PhaseTagEvidence, PublisherEvidence,
@@ -280,8 +281,12 @@ fn verify_members(evidence: &PhaseTagEvidence) -> Result<()> {
 /// Read every built-subject document one evidence input directory offers.
 ///
 /// Documents are recognized by schema identity so a build job stays free to name
-/// its own files and to place unrelated documents beside them.
-pub fn load_built_subjects(input: &Path) -> Result<Vec<BuiltSubject>> {
+/// its own files and to place unrelated documents beside them. A document is
+/// checked against the workspace it will be sealed for: a subject naming a
+/// release unit this configuration does not declare belongs to some other
+/// release, and no later comparison would find it, because nothing expects a
+/// fragment for a unit that does not exist.
+pub fn load_built_subjects(config: &Config, input: &Path) -> Result<Vec<BuiltSubject>> {
     let mut subjects: BTreeMap<String, BuiltSubject> = BTreeMap::new();
     for (path, document) in documents(input)? {
         if document.get("$schema").and_then(serde_yaml::Value::as_str) != Some(BUILT_SUBJECT_SCHEMA)
@@ -306,6 +311,13 @@ pub fn load_built_subjects(input: &Path) -> Result<Vec<BuiltSubject>> {
                 "built subject {} records digest {:?}, which is not a sha256 digest",
                 path.display(),
                 subject.digest
+            )));
+        }
+        if !config.release_units.contains_key(&subject.release_unit) {
+            return Err(Error::Validation(format!(
+                "built subject {} names release unit {:?}, which this workspace does not declare",
+                path.display(),
+                subject.release_unit
             )));
         }
         let identity = subject.identity();
@@ -607,9 +619,20 @@ mod tests {
         );
     }
 
+    /// A workspace declaring the one release unit these documents name.
+    fn configured(label: &str) -> (Workspace, Config) {
+        let workspace = Workspace::new(label);
+        workspace.write(
+            ".intentional/config.yml",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  component:\n    path: component\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+        );
+        let config = Config::load(workspace.root()).expect("configuration");
+        (workspace, config)
+    }
+
     #[test]
     fn loads_built_subjects_by_document_identity() {
-        let workspace = Workspace::new("phase-built-subjects");
+        let (workspace, config) = configured("phase-built-subjects");
         workspace
             .write(
                 "evidence/library.yml",
@@ -619,27 +642,45 @@ mod tests {
             )
             .write("evidence/unrelated.yml", "$schema: https://example.test/schemas/other/v1\nvalue: ignored\n")
             .write("evidence/notes.txt", "not a document\n");
-        let subjects =
-            load_built_subjects(&workspace.root().join("evidence")).expect("built subjects");
+        let subjects = load_built_subjects(&config, &workspace.root().join("evidence"))
+            .expect("built subjects");
         assert_eq!(subjects.len(), 1);
         assert_eq!(subjects[0].identity, "sample-library");
     }
 
     #[test]
     fn rejects_two_built_subjects_for_one_release_unit_identity() {
-        let workspace = Workspace::new("phase-built-duplicate");
+        let (workspace, config) = configured("phase-built-duplicate");
         let document = format!(
             "$schema: {BUILT_SUBJECT_SCHEMA}\ncontract: {BUILT_SUBJECT_CONTRACT}\nrelease-unit: component\nidentity: sample-library\nversion: 1.0.0\ndigest: {SUBJECT_DIGEST}\n"
         );
         workspace
             .write("evidence/first.yml", &document)
             .write("evidence/second.yml", &document);
-        let error = load_built_subjects(&workspace.root().join("evidence"))
+        let error = load_built_subjects(&config, &workspace.root().join("evidence"))
             .expect_err("a duplicate subject is rejected");
         assert!(
             error
                 .to_string()
                 .contains("component/sample-library was supplied more than once"),
+            "{error}"
+        );
+    }
+    #[test]
+    fn rejects_a_built_subject_naming_an_undeclared_release_unit() {
+        let (workspace, config) = configured("phase-built-foreign-unit");
+        workspace.write(
+            "evidence/foreign.yml",
+            &format!(
+                "$schema: {BUILT_SUBJECT_SCHEMA}\ncontract: {BUILT_SUBJECT_CONTRACT}\nrelease-unit: other-component\nidentity: sample-library\nversion: 1.0.0\ndigest: {SUBJECT_DIGEST}\n"
+            ),
+        );
+        let error = load_built_subjects(&config, &workspace.root().join("evidence"))
+            .expect_err("a subject from another workspace is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("which this workspace does not declare"),
             "{error}"
         );
     }

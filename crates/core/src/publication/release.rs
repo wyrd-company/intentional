@@ -19,18 +19,15 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{
-    CleanClient, CleanClientMode, Destination, PhaseTagEvidence, PublisherEvidence,
-    ReleaseEvidence, PHASE_TAG_EVIDENCE_SCHEMA, RELEASE_EVIDENCE_CONTRACT, RELEASE_EVIDENCE_FILE,
+    CleanClientMode, PhaseTagEvidence, PublisherEvidence, ReleaseEvidence,
+    PHASE_TAG_EVIDENCE_SCHEMA, RELEASE_EVIDENCE_CONTRACT, RELEASE_EVIDENCE_FILE,
     RELEASE_EVIDENCE_SCHEMA,
 };
 use crate::evidence::phase::{decode, PHASE_EVIDENCE_FIELD};
 use crate::evidence::{digest_bytes, is_digest, is_git_object};
 use crate::model::TagPhase;
 use crate::publication::draft::is_draft_dependent;
-use crate::publication::observation::{
-    ObservationState, PublicationObservation, PUBLICATION_OBSERVATION_CONTRACT,
-    PUBLICATION_OBSERVATION_SCHEMA,
-};
+use crate::publication::observation::{ObservationState, PublicationObservation};
 use crate::release::git::GitCommand;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -266,6 +263,14 @@ impl ReleaseSource for GhReleaseSource {
     }
 
     fn attestation(&self, repository: &str, name: &str, bytes: &[u8]) -> Result<Attestation> {
+        // The asset name is whatever GitHub reports, so an absolute or
+        // parent-relative name would otherwise choose where the staged bytes
+        // land rather than staying inside the temporary directory.
+        if !crate::evidence::is_flat_name(name) {
+            return Err(Error::Validation(format!(
+                "Release asset name {name:?} is not a flat name; expected a name carrying no path separator so an attested asset stages inside its temporary directory"
+            )));
+        }
         // `gh attestation verify` performs the cryptographic verification and
         // reports the verified statement, so the decision stays with the tool
         // that owns the trust roots rather than being re-derived here.
@@ -282,34 +287,49 @@ impl ReleaseSource for GhReleaseSource {
             .arg(path.display().to_string())
             .args(["--repo", repository, "--format", "json"])
             .json()?;
-        let result = value
-            .as_array()
-            .and_then(|results| results.first())
-            .unwrap_or(&value);
-        let subject_digest = json_str(
-            result,
-            "/verificationResult/statement/subject/0/digest/sha256",
-        )?;
-        let invocation = json_str(
-            result,
-            "/verificationResult/statement/predicate/runDetails/metadata/invocationId",
-        )?;
-        Ok(Attestation {
-            subject_digest: format!("sha256:{subject_digest}"),
-            repository: json_str(
-                result,
-                "/verificationResult/statement/predicate/buildDefinition/externalParameters/workflow/repository",
-            )
-            .map(|uri| uri.trim_start_matches("https://github.com/").to_owned())
-            .unwrap_or_else(|_| repository.to_owned()),
-            workflow: json_str(
-                result,
-                "/verificationResult/statement/predicate/buildDefinition/externalParameters/workflow/path",
-            )
-            .unwrap_or_default(),
-            run_id: run_identifier(&invocation)?,
-        })
+        attestation_from_json(name, &value)
     }
+}
+
+/// Where a verified attestation statement carries the attested subject digest.
+const SUBJECT_DIGEST_POINTER: &str = "/verificationResult/statement/subject/0/digest/sha256";
+
+/// Where a verified attestation statement carries the workflow run reference.
+const INVOCATION_POINTER: &str =
+    "/verificationResult/statement/predicate/runDetails/metadata/invocationId";
+
+/// Where a verified attestation statement carries the workflow's repository.
+const WORKFLOW_REPOSITORY_POINTER: &str =
+    "/verificationResult/statement/predicate/buildDefinition/externalParameters/workflow/repository";
+
+/// Where a verified attestation statement carries the workflow's path.
+const WORKFLOW_PATH_POINTER: &str =
+    "/verificationResult/statement/predicate/buildDefinition/externalParameters/workflow/path";
+
+/// Read one verified attestation statement into the claim it binds.
+fn attestation_from_json(name: &str, value: &serde_json::Value) -> Result<Attestation> {
+    let result = value
+        .as_array()
+        .and_then(|results| results.first())
+        .unwrap_or(value);
+    let subject_digest = json_str(result, SUBJECT_DIGEST_POINTER)?;
+    let invocation = json_str(result, INVOCATION_POINTER)?;
+    // Substituting the repository the caller asked about would make the later
+    // comparison against the recorded evidence agree with itself, so a missing
+    // workflow repository stays missing and is reported.
+    let workflow_repository = json_str(result, WORKFLOW_REPOSITORY_POINTER).map_err(|_| {
+        Error::Validation(format!(
+            "artifact attestation for {name} carries no workflow repository at {WORKFLOW_REPOSITORY_POINTER}; expected the attested workflow's own repository to compare with the recorded evidence"
+        ))
+    })?;
+    Ok(Attestation {
+        subject_digest: format!("sha256:{subject_digest}"),
+        repository: workflow_repository
+            .trim_start_matches("https://github.com/")
+            .to_owned(),
+        workflow: json_str(result, WORKFLOW_PATH_POINTER).unwrap_or_default(),
+        run_id: run_identifier(&invocation)?,
+    })
 }
 
 /// Extract the workflow run identifier from an attested invocation reference.
@@ -343,65 +363,33 @@ pub trait DestinationObserver {
     fn observe(&self, repository: &str, fragment: &PublisherEvidence) -> Result<LiveObservation>;
 }
 
-/// The live observer that a closed GitHub Release is itself sufficient for.
+/// The readback a closed GitHub Release is itself sufficient for.
 ///
-/// A draft-dependent publisher could only record authenticated draft retrieval
-/// before closure, so its first genuine public client check is exactly the one
-/// this observer performs: resolve the closed Release's assets and retrieve the
-/// subject through them. Every other publisher needs its own destination
-/// adapter, which this observer does not claim to be.
-struct ReleaseAssetObserver<'a> {
+/// A draft-dependent publisher consumes its subject from a Release asset, so
+/// closure makes one claim checkable without any destination adapter: the
+/// closed Release still carries the exact bytes the evidence recorded. The read
+/// runs through `gh` under the operator's own credentials, so it proves the
+/// asset is present and unchanged and deliberately claims nothing about what an
+/// unauthenticated consumer can retrieve. Proving that needs a destination
+/// adapter for the publisher, which this readback is not.
+struct ReleaseAssetReadback<'a> {
     source: &'a dyn ReleaseSource,
     release_id: u64,
     assets: &'a [ReleaseAsset],
 }
 
-impl DestinationObserver for ReleaseAssetObserver<'_> {
-    fn observe(
-        &self,
-        repository: &str,
-        fragment: &PublisherEvidence,
-    ) -> Result<PublicationObservation> {
-        if !is_draft_dependent(fragment.publisher) {
-            return Err(Error::Validation(format!(
-                "live readback of {} needs a destination observer for publisher {}; a closed GitHub Release only proves draft-dependent publications",
-                fragment.identity(),
-                fragment.publisher
-            )));
-        }
+impl ReleaseAssetReadback<'_> {
+    /// Name the closed Release asset whose bytes carry a fragment's subject.
+    fn read(&self, repository: &str, fragment: &PublisherEvidence) -> Result<String> {
         for asset in self.assets {
-            let digest = digest_bytes(&self.source.asset_bytes(repository, asset.id)?);
-            if digest != fragment.subject.digest {
-                continue;
+            if digest_bytes(&self.source.asset_bytes(repository, asset.id)?)
+                == fragment.subject.digest
+            {
+                return Ok(asset.name.clone());
             }
-            return Ok(PublicationObservation {
-                schema: PUBLICATION_OBSERVATION_SCHEMA.to_owned(),
-                contract: PUBLICATION_OBSERVATION_CONTRACT.to_owned(),
-                release_unit: fragment.release_unit.clone(),
-                publisher: fragment.publisher,
-                target: fragment.target.clone(),
-                state: ObservationState::Present,
-                subject: Some(fragment.subject.clone()),
-                packager: None,
-                build_provenance: Vec::new(),
-                attached_metadata: Vec::new(),
-                destination: Some(Destination {
-                    identity: fragment.destination.identity.clone(),
-                    version: fragment.subject.version.clone(),
-                    digest: digest.clone(),
-                }),
-                retrieval: Some(CleanClient {
-                    mode: CleanClientMode::Public,
-                    client: "github-release".to_owned(),
-                    version: crate::VERSION.to_owned(),
-                    digest,
-                }),
-                destination_aliases: Vec::new(),
-                conflict: None,
-            });
         }
         Err(Error::Validation(format!(
-            "public retrieval of {} found no asset carrying subject digest {} in Release {}",
+            "authenticated readback of {} found no asset carrying subject digest {} in Release {}",
             fragment.identity(),
             fragment.subject.digest,
             self.release_id
@@ -453,7 +441,7 @@ pub fn verify_release_observed(
     observer: Option<&dyn DestinationObserver>,
 ) -> Result<ReleaseVerification> {
     let config = Config::load(root)?;
-    let repository = repository_identity(root)?;
+    let repository = crate::publication::origin_identity(root)?;
     let global_tag = global_tag_name(&config, version)?;
 
     let release = source.release(&repository, &global_tag)?;
@@ -555,15 +543,15 @@ pub fn verify_release_observed(
     )?;
     verify_publishers(&evidence, &mut findings, &mut entries);
     if live {
-        let default = ReleaseAssetObserver {
-            source,
-            release_id: release.id,
-            assets: &assets,
-        };
         verify_live(
             &repository,
             &evidence,
-            observer.unwrap_or(&default),
+            observer,
+            &ReleaseAssetReadback {
+                source,
+                release_id: release.id,
+                assets: &assets,
+            },
             &mut findings,
             &mut entries,
         );
@@ -578,29 +566,6 @@ pub fn verify_release_observed(
         live,
         entries,
     })
-}
-
-/// Resolve the owner and repository the workspace pushes its release to.
-fn repository_identity(root: &Path) -> Result<String> {
-    let url = GitCommand::new(root)
-        .args(["remote", "get-url", "origin"])
-        .run()?
-        .line()?;
-    let path = url
-        .rsplit_once(':')
-        .map_or(url.as_str(), |(_, path)| path)
-        .rsplit("github.com/")
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
-    let segments = path.split('/').collect::<Vec<_>>();
-    match segments.as_slice() {
-        [owner, name] if !owner.is_empty() && !name.is_empty() => Ok(format!("{owner}/{name}")),
-        _ => Err(Error::Validation(format!(
-            "origin remote {url:?} does not name a GitHub owner/repository"
-        ))),
-    }
 }
 
 /// Render the one global release tag the configuration declares.
@@ -678,22 +643,33 @@ fn verify_identity_chain(
         )),
         Some(_) => {}
     }
-    let reachable = GitCommand::new(root)
-        .args(["merge-base", "--is-ancestor"])
-        .arg(&release.source_commit)
+    // The protocol makes R a commit whose sole parent is S. Ancestry alone
+    // would accept any descendant of S, so the claim the affirmative entry
+    // makes is the one checked here.
+    let parents = GitCommand::new(root)
+        .args(["rev-list", "--parents", "-n", "1", "--end-of-options"])
         .arg(&release.release_commit)
-        .output()?
-        .succeeded();
-    if !reachable {
+        .output()?;
+    if !parents.succeeded() {
         findings.push(format!(
-            "source commit {} is not an ancestor of release commit {} in this repository",
-            release.source_commit, release.release_commit
+            "repository cannot read release commit {}: {}",
+            release.release_commit,
+            parents.diagnostic()
         ));
     } else {
-        entries.push(format!(
-            "identity chain {} -> {} -> {} matches the repository",
-            release.source_commit, release.release_commit, release.global_tag.name
-        ));
+        let observed = parents.line()?;
+        let expected = format!("{} {}", release.release_commit, release.source_commit);
+        if observed != expected {
+            findings.push(format!(
+                "repository records release commit and parents {observed:?} but the evidence requires exactly {expected:?}, with source commit {} as the sole parent",
+                release.source_commit
+            ));
+        } else {
+            entries.push(format!(
+                "identity chain {} -> {} -> {} matches the repository",
+                release.source_commit, release.release_commit, release.global_tag.name
+            ));
+        }
     }
     Ok(())
 }
@@ -715,6 +691,8 @@ fn rev_parse(root: &Path, revision: &str) -> Result<Option<String>> {
 struct PhasedTag {
     name: String,
     phase: TagPhase,
+    /// Release unit the tag belongs to, absent when it spans the workspace.
+    release_unit: Option<String>,
 }
 
 /// Render every configured phase tag for one version, in stable order.
@@ -729,6 +707,7 @@ fn phased_tags(config: &Config, version: &str) -> Vec<PhasedTag> {
                         .replace("{id}", release_unit_id)
                         .replace("{version}", version),
                     phase,
+                    release_unit: Some(release_unit_id.clone()),
                 });
             }
         }
@@ -738,6 +717,7 @@ fn phased_tags(config: &Config, version: &str) -> Vec<PhasedTag> {
             tags.push(PhasedTag {
                 name: tag.template.replace("{version}", version),
                 phase,
+                release_unit: None,
             });
         }
     }
@@ -754,11 +734,19 @@ fn verify_phase_tags(
     entries: &mut Vec<String>,
 ) -> Result<()> {
     let recorded = recorded_fragments(evidence);
-    let identities = recorded
-        .iter()
-        .map(|(identity, _)| identity.clone())
-        .collect::<BTreeSet<_>>();
     for tag in phased_tags(config, version) {
+        // A release-unit tag speaks for its own unit's publications only, so a
+        // sibling unit's publication is neither missing from its intent nor
+        // unintended by it.
+        let identities = recorded
+            .iter()
+            .filter(|(_, fragment)| {
+                tag.release_unit
+                    .as_ref()
+                    .is_none_or(|unit| &fragment.release_unit == unit)
+            })
+            .map(|(identity, _)| identity.clone())
+            .collect::<BTreeSet<_>>();
         let Some(phase) = read_phase_evidence(root, &tag.name)? else {
             findings.push(format!(
                 "repository holds no phase tag {} carrying a {PHASE_EVIDENCE_FIELD} record",
@@ -792,6 +780,11 @@ fn verify_phase_tags(
         if let Some(intended) = &phase.intended_destinations {
             let sealed = intended
                 .iter()
+                .filter(|destination| {
+                    tag.release_unit
+                        .as_ref()
+                        .is_none_or(|unit| &destination.release_unit == unit)
+                })
                 .map(|destination| {
                     format!(
                         "{}/{}/{}",
@@ -860,15 +853,21 @@ fn verify_phase_tags(
 
 /// Read the phase evidence one annotated tag embeds, if the tag exists.
 fn read_phase_evidence(root: &Path, name: &str) -> Result<Option<PhaseTagEvidence>> {
+    // A tag name is read as a literal ref rather than as a pattern: a
+    // configured template carrying `*`, `?`, or `[` would otherwise let one
+    // tag's sealed evidence be attributed to a tag that never carried it.
     let output = GitCommand::new(root)
-        .args(["tag", "-l", "--format=%(contents)"])
-        .arg(name)
+        .args(["cat-file", "tag"])
+        .arg(format!("refs/tags/{name}"))
         .output()?;
     if !output.succeeded() {
         return Ok(None);
     }
-    let Some(encoded) = output
-        .text()?
+    let contents = output.text()?;
+    if contents.trim().is_empty() {
+        return Ok(None);
+    }
+    let Some(encoded) = contents
         .lines()
         .find_map(|line| line.strip_prefix(&format!("{PHASE_EVIDENCE_FIELD}: ")))
     else {
@@ -942,13 +941,23 @@ fn verify_publishers(
 ///
 /// Nothing here writes: a disagreement is a finding, never a correction to the
 /// immutable evidence assembled before closure.
+///
+/// Without a destination observer the only available check is the closed
+/// Release readback, which reaches a draft-dependent publisher's subject and no
+/// other publisher's destination. Reporting the rest as unverifiable keeps the
+/// report to what was actually proved.
 fn verify_live(
     repository: &str,
     evidence: &ReleaseEvidence,
-    observer: &dyn DestinationObserver,
+    observer: Option<&dyn DestinationObserver>,
+    readback: &ReleaseAssetReadback<'_>,
     findings: &mut Vec<String>,
     entries: &mut Vec<String>,
 ) {
+    let Some(observer) = observer else {
+        verify_live_readback(repository, evidence, readback, findings, entries);
+        return;
+    };
     for (identity, fragment) in recorded_fragments(evidence) {
         let observation = match observer.observe(repository, fragment) {
             Ok(observation) => observation,
@@ -1011,18 +1020,52 @@ fn verify_live(
     }
 }
 
+/// Read every recorded publication back from the closed Release itself.
+///
+/// The claim this reports is exactly the one the read supports: an
+/// authenticated readback of a Release asset. A publisher whose subject does
+/// not live in the Release has nothing here to read, so it is reported as
+/// unverifiable rather than as either a proved or a broken publication.
+fn verify_live_readback(
+    repository: &str,
+    evidence: &ReleaseEvidence,
+    readback: &ReleaseAssetReadback<'_>,
+    findings: &mut Vec<String>,
+    entries: &mut Vec<String>,
+) {
+    for (identity, fragment) in recorded_fragments(evidence) {
+        if !is_draft_dependent(fragment.publisher) {
+            findings.push(format!(
+                "live verification of {identity} is unavailable: publisher {} needs a destination observer, and a closed GitHub Release asset reaches only draft-dependent publications",
+                fragment.publisher
+            ));
+            continue;
+        }
+        match readback.read(repository, fragment) {
+            Err(error) => findings.push(format!("live verification of {identity} failed: {error}")),
+            Ok(name) => entries.push(format!(
+                "authenticated readback of {identity} found subject {} in Release asset {name} at {}",
+                fragment.subject.identity, fragment.subject.digest
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::evidence::assemble::{
-        EvidenceReference, PhaseSubject, PublisherTargets, ReleaseIdentity, ReleaseUnitEvidence,
-        Subject, TagIdentity, WorkflowIdentity, PUBLISHER_EVIDENCE_CONTRACT,
-        PUBLISHER_EVIDENCE_SCHEMA,
+        CleanClient, Destination, EvidenceReference, IntendedDestination, PhaseSubject,
+        PublisherTargets, ReleaseIdentity, ReleaseUnitEvidence, Subject, TagIdentity,
+        WorkflowIdentity, PUBLISHER_EVIDENCE_CONTRACT, PUBLISHER_EVIDENCE_SCHEMA,
     };
     use crate::evidence::assemble::{PackagerRecord, PhaseTagEvidence};
     use crate::evidence::phase::encode;
     use crate::executor::fixture::Workspace;
     use crate::model::PublisherKind;
+    use crate::publication::observation::{
+        PUBLICATION_OBSERVATION_CONTRACT, PUBLICATION_OBSERVATION_SCHEMA,
+    };
     use std::cell::RefCell;
     use std::collections::BTreeMap;
 
@@ -1048,6 +1091,57 @@ release-units:
       repository: example-owner/homebrew-example
     tags:
       primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+    /// A workspace whose after-publication tag template carries a glob character.
+    const GLOB_TAG_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  published:
+    template: 'published/*{version}'
+    require-phase: after-publication
+release-units:
+  component:
+    path: component
+    homebrew:
+      repository: example-owner/homebrew-component
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+    /// A workspace whose two release units each seal their own intent.
+    const TWO_UNIT_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release:
+    template: 'release/{version}'
+release-units:
+  component:
+    path: component
+    homebrew:
+      repository: example-owner/homebrew-component
+    tags:
+      primary:
+        role: primary
+        template: 'sealed/{id}/{version}'
+        require-phase: before-publication
+  library:
+    path: library
+    homebrew:
+      repository: example-owner/homebrew-library
+    tags:
+      primary:
+        role: primary
+        template: 'sealed/{id}/{version}'
+        require-phase: before-publication
 "#;
 
     /// An in-memory Release used by every verification test.
@@ -1120,11 +1214,6 @@ release-units:
         fn reads(&self) -> Vec<String> {
             self.reads.borrow().clone()
         }
-
-        /// The write path a release source deliberately does not have.
-        fn write(&self, name: &str) -> ! {
-            panic!("the release source is read-only; {name} cannot be written")
-        }
     }
 
     impl ReleaseSource for FakeReleaseSource {
@@ -1190,13 +1279,18 @@ release-units:
     impl Released {
         /// Create the after-publication phase tag sealing one evidence document.
         fn seal(&self, phase: &PhaseTagEvidence) {
+            self.seal_as("published/1.0.0", phase);
+        }
+
+        /// Create one named annotated phase tag carrying sealed phase evidence.
+        fn seal_as(&self, name: &str, phase: &PhaseTagEvidence) {
             let encoded = encode(phase).expect("phase evidence");
             git(
                 self.workspace.root(),
                 &[
                     "tag",
                     "-a",
-                    "published/1.0.0",
+                    name,
                     "-m",
                     &format!("{PHASE_EVIDENCE_FIELD}: {encoded}"),
                 ],
@@ -1213,16 +1307,47 @@ release-units:
             .expect("git output")
     }
 
+    /// How a fixture repository places the release commit relative to its source.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ReleaseShape {
+        /// The release commit's sole parent is the source commit.
+        SoleParent,
+        /// An unrelated commit sits between the source and release commits.
+        Interposed,
+    }
+
     /// Build a repository holding S, R, and the global release tag.
     fn released(label: &str) -> Released {
+        released_from(
+            label,
+            CONFIG,
+            &["component"],
+            "component@1.0.0",
+            ReleaseShape::SoleParent,
+        )
+    }
+
+    /// Build a repository for one configuration, its units, and its tag shape.
+    fn released_from(
+        label: &str,
+        config: &str,
+        units: &[&str],
+        global_tag: &str,
+        shape: ReleaseShape,
+    ) -> Released {
         let workspace = Workspace::new(label);
-        workspace
-            .write(".intentional/config.yml", CONFIG)
-            .write(
-                "component/go.mod",
-                "module example.test/component\n\ngo 1.22\n",
-            )
-            .write("component/main.go", "package main\n\nfunc main() {}\n");
+        workspace.write(".intentional/config.yml", config);
+        for unit in units {
+            workspace
+                .write(
+                    &format!("{unit}/go.mod"),
+                    &format!("module example.test/{unit}\n\ngo 1.22\n"),
+                )
+                .write(
+                    &format!("{unit}/main.go"),
+                    "package main\n\nfunc main() {}\n",
+                );
+        }
         let root = workspace.root().to_path_buf();
         git(&root, &["init", "--quiet", "--initial-branch=main"]);
         git(&root, &["config", "user.email", "release@example.test"]);
@@ -1239,15 +1364,22 @@ release-units:
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "--quiet", "-m", "source"]);
         let source_commit = git(&root, &["rev-parse", "HEAD"]);
-        std::fs::write(root.join("component/RELEASE"), "1.0.0\n").expect("release file");
+        if shape == ReleaseShape::Interposed {
+            std::fs::write(root.join("NOTES"), "an unrelated change\n").expect("interposed file");
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "interposed"]);
+        }
+        for unit in units {
+            std::fs::write(root.join(unit).join("RELEASE"), "1.0.0\n").expect("release file");
+        }
         git(&root, &["add", "-A"]);
         git(&root, &["commit", "--quiet", "-m", "release"]);
         let release_commit = git(&root, &["rev-parse", "HEAD"]);
         git(
             &root,
-            &["tag", "-a", "component@1.0.0", "-m", "global release tag"],
+            &["tag", "-a", global_tag, "-m", "global release tag"],
         );
-        let tag_object = git(&root, &["rev-parse", "refs/tags/component@1.0.0"]);
+        let tag_object = git(&root, &["rev-parse", &format!("refs/tags/{global_tag}")]);
         Released {
             workspace,
             source_commit,
@@ -1257,24 +1389,41 @@ release-units:
     }
 
     fn fragment(released: &Released) -> PublisherEvidence {
-        let digest = digest_bytes(DELIVERABLE);
+        fragment_for(
+            released,
+            "component",
+            PublisherKind::Homebrew,
+            "component@1.0.0",
+            DELIVERABLE,
+        )
+    }
+
+    /// One recorded fragment for a named unit, publisher, and deliverable.
+    fn fragment_for(
+        released: &Released,
+        release_unit: &str,
+        publisher: PublisherKind,
+        global_tag: &str,
+        deliverable: &[u8],
+    ) -> PublisherEvidence {
+        let digest = digest_bytes(deliverable);
         PublisherEvidence {
             schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
             contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
-            release_unit: "component".to_owned(),
-            publisher: PublisherKind::Homebrew,
+            release_unit: release_unit.to_owned(),
+            publisher,
             target: "primary".to_owned(),
             source_commit: released.source_commit.clone(),
             release_commit: released.release_commit.clone(),
             global_tag: TagIdentity {
-                name: "component@1.0.0".to_owned(),
+                name: global_tag.to_owned(),
                 object: released.tag_object.clone(),
                 target: released.release_commit.clone(),
             },
             plan_digest: PLAN_DIGEST.to_owned(),
             subject: Subject {
                 kind: "homebrew-formula".to_owned(),
-                identity: "example-component".to_owned(),
+                identity: format!("example-{release_unit}"),
                 version: "1.0.0".to_owned(),
                 digest: digest.clone(),
             },
@@ -1289,7 +1438,7 @@ release-units:
             }],
             attached_metadata: Vec::new(),
             destination: Destination {
-                identity: "example-owner/homebrew-example".to_owned(),
+                identity: format!("example-owner/homebrew-{release_unit}"),
                 version: "1.0.0".to_owned(),
                 digest: digest.clone(),
             },
@@ -1305,6 +1454,30 @@ release-units:
     }
 
     fn evidence(released: &Released, fragment: PublisherEvidence) -> ReleaseEvidence {
+        evidence_for(released, "component@1.0.0", vec![fragment])
+    }
+
+    /// One evidence document recording every supplied fragment.
+    fn evidence_for(
+        released: &Released,
+        global_tag: &str,
+        fragments: Vec<PublisherEvidence>,
+    ) -> ReleaseEvidence {
+        let mut release_units: BTreeMap<String, ReleaseUnitEvidence> = BTreeMap::new();
+        for fragment in fragments {
+            release_units
+                .entry(fragment.release_unit.clone())
+                .or_insert_with(|| ReleaseUnitEvidence {
+                    publishers: BTreeMap::new(),
+                })
+                .publishers
+                .entry(fragment.publisher.to_string())
+                .or_insert_with(|| PublisherTargets {
+                    targets: BTreeMap::new(),
+                })
+                .targets
+                .insert(fragment.target.clone(), fragment);
+        }
         ReleaseEvidence {
             schema: RELEASE_EVIDENCE_SCHEMA.to_owned(),
             contract: RELEASE_EVIDENCE_CONTRACT.to_owned(),
@@ -1312,7 +1485,7 @@ release-units:
                 source_commit: released.source_commit.clone(),
                 release_commit: released.release_commit.clone(),
                 global_tag: TagIdentity {
-                    name: "component@1.0.0".to_owned(),
+                    name: global_tag.to_owned(),
                     object: released.tag_object.clone(),
                     target: released.release_commit.clone(),
                 },
@@ -1325,17 +1498,7 @@ release-units:
                 run_attempt: 1,
                 commit: released.release_commit.clone(),
             },
-            release_units: BTreeMap::from([(
-                "component".to_owned(),
-                ReleaseUnitEvidence {
-                    publishers: BTreeMap::from([(
-                        "homebrew".to_owned(),
-                        PublisherTargets {
-                            targets: BTreeMap::from([("primary".to_owned(), fragment)]),
-                        },
-                    )]),
-                },
-            )]),
+            release_units,
             contributions: BTreeMap::new(),
             contribution_attachments: Vec::new(),
         }
@@ -1361,9 +1524,43 @@ release-units:
         }
     }
 
+    /// The before-publication intent one release unit's phase tag seals.
+    fn intent(
+        released: &Released,
+        global_tag: &str,
+        fragment: &PublisherEvidence,
+    ) -> PhaseTagEvidence {
+        PhaseTagEvidence {
+            schema: PHASE_TAG_EVIDENCE_SCHEMA.to_owned(),
+            phase: TagPhase::BeforePublication,
+            source_commit: released.source_commit.clone(),
+            release_commit: released.release_commit.clone(),
+            global_tag: global_tag.to_owned(),
+            plan_digest: PLAN_DIGEST.to_owned(),
+            subjects: vec![PhaseSubject {
+                release_unit: fragment.release_unit.clone(),
+                identity: fragment.subject.identity.clone(),
+                version: fragment.subject.version.clone(),
+                digest: fragment.subject.digest.clone(),
+                provenance: None,
+            }],
+            intended_destinations: Some(vec![IntendedDestination {
+                release_unit: fragment.release_unit.clone(),
+                publisher: fragment.publisher,
+                target: fragment.target.clone(),
+            }]),
+            publisher_evidence: None,
+        }
+    }
+
     fn source(evidence: &ReleaseEvidence) -> FakeReleaseSource {
+        source_for(evidence, "component@1.0.0")
+    }
+
+    /// A closed Release serving one evidence document under a named tag.
+    fn source_for(evidence: &ReleaseEvidence, tag: &str) -> FakeReleaseSource {
         let document = evidence.to_yaml().expect("evidence document");
-        FakeReleaseSource::draft(REPOSITORY, "component@1.0.0", 7)
+        FakeReleaseSource::draft(REPOSITORY, tag, 7)
             .published()
             .with_asset(21, RELEASE_EVIDENCE_FILE, "text/yaml", document.as_bytes())
             .with_asset(
@@ -1551,18 +1748,60 @@ release-units:
     }
 
     #[test]
-    fn live_verification_performs_the_public_check_closure_made_possible() {
+    fn live_verification_reports_the_closed_release_readback_as_authenticated() {
         let (released, _, source) = scenario("verify-live");
         let verification =
             verify_release(released.workspace.root(), "1.0.0", true, &source).expect("verifies");
         assert!(verification.live);
+        let report = verification.report();
         assert!(
-            verification
-                .report()
-                .iter()
-                .any(|line| line.contains("live public retrieval of component/homebrew/primary")),
-            "{:?}",
-            verification.report()
+            report.iter().any(|line| line.contains(
+                "authenticated readback of component/homebrew/primary found subject example-component in Release asset component-1.0.0.tar.gz"
+            )),
+            "{report:?}"
+        );
+        assert!(
+            !report.iter().any(|line| line.contains("public retrieval")),
+            "a credentialed read never reports public retrieval: {report:?}"
+        );
+    }
+
+    #[test]
+    fn the_closed_release_readback_claims_only_the_digest_it_read() {
+        let (released, evidence, source) = scenario("verify-live-claims");
+        let verification =
+            verify_release(released.workspace.root(), "1.0.0", true, &source).expect("verifies");
+        let destination = &evidence.release_units["component"].publishers["homebrew"].targets
+            ["primary"]
+            .destination
+            .identity;
+        let report = verification.report();
+        assert!(
+            !report.iter().any(|line| line.contains(destination)),
+            "reading a Release asset observes no destination identity: {report:?}"
+        );
+    }
+
+    #[test]
+    fn live_verification_reports_a_publisher_without_an_observer_as_unavailable() {
+        let released = released("verify-live-unavailable");
+        let fragment = fragment_for(
+            &released,
+            "component",
+            PublisherKind::Npm,
+            "component@1.0.0",
+            DELIVERABLE,
+        );
+        released.seal(&phase_evidence(&released, &fragment));
+        let evidence = evidence(&released, fragment);
+        let source = source(&evidence);
+        let error = verify_release(released.workspace.root(), "1.0.0", true, &source)
+            .expect_err("the missing observer is reported");
+        assert!(
+            error.to_string().contains(
+                "live verification of component/npm/primary is unavailable: publisher npm needs a destination observer"
+            ),
+            "{error}"
         );
     }
 
@@ -1597,12 +1836,27 @@ release-units:
             "the release source served only reads: {:?}",
             stripped.reads()
         );
-        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            stripped.write(RELEASE_EVIDENCE_FILE)
-        }));
-        assert!(
-            refused.is_err(),
-            "the release source refuses every attempt to write"
+    }
+
+    #[test]
+    fn the_release_source_seam_declares_only_read_operations() {
+        let declaration = include_str!("release.rs")
+            .split_once("pub trait ReleaseSource {")
+            .expect("the release source seam is declared in this module")
+            .1
+            .split_once("\n}\n")
+            .expect("the release source seam declaration is closed")
+            .0;
+        let declared = declaration
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("fn "))
+            .filter_map(|method| method.split_once('('))
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            declared,
+            ["release", "assets", "asset_bytes", "attestation"],
+            "a write operation added to the seam would let verification alter what it observes"
         );
     }
 
@@ -1643,5 +1897,166 @@ release-units:
         )
         .expect_err("the disagreement is reported");
         assert!(error.to_string().contains("live readback"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_release_commit_whose_sole_parent_is_not_the_source_commit() {
+        let released = released_from(
+            "verify-sole-parent",
+            CONFIG,
+            &["component"],
+            "component@1.0.0",
+            ReleaseShape::Interposed,
+        );
+        let fragment = fragment(&released);
+        released.seal(&phase_evidence(&released, &fragment));
+        let evidence = evidence(&released, fragment);
+        let source = source(&evidence);
+        let error = verify_release(released.workspace.root(), "1.0.0", false, &source)
+            .expect_err("the interposed commit is refused");
+        assert!(error.to_string().contains("as the sole parent"), "{error}");
+    }
+
+    #[test]
+    fn reports_a_release_commit_the_repository_cannot_read_as_unreadable() {
+        let (released, mut evidence, _) = scenario("verify-unreadable-commit");
+        evidence.release.release_commit = "2222222222222222222222222222222222222222".to_owned();
+        evidence.release.global_tag.target = evidence.release.release_commit.clone();
+        let source = source(&evidence);
+        let error = verify_release(released.workspace.root(), "1.0.0", false, &source)
+            .expect_err("the unreadable commit is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("repository cannot read release commit 2222"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_release_unit_phase_tag_intends_only_its_own_units_publications() {
+        let released = released_from(
+            "verify-two-units",
+            TWO_UNIT_CONFIG,
+            &["component", "library"],
+            "release/1.0.0",
+            ReleaseShape::SoleParent,
+        );
+        let component = fragment_for(
+            &released,
+            "component",
+            PublisherKind::Homebrew,
+            "release/1.0.0",
+            DELIVERABLE,
+        );
+        let library = fragment_for(
+            &released,
+            "library",
+            PublisherKind::Homebrew,
+            "release/1.0.0",
+            b"library deliverable bytes",
+        );
+        for fragment in [&component, &library] {
+            released.seal_as(
+                &format!("sealed/{}/1.0.0", fragment.release_unit),
+                &intent(&released, "release/1.0.0", fragment),
+            );
+        }
+        let evidence = evidence_for(&released, "release/1.0.0", vec![component, library]);
+        let source = source_for(&evidence, "release/1.0.0");
+        let verification = verify_release(released.workspace.root(), "1.0.0", false, &source)
+            .expect("each unit's intent covers its own publications");
+        let report = verification.report();
+        for unit in ["component", "library"] {
+            assert!(
+                report
+                    .iter()
+                    .any(|line| line.contains(&format!("phase tag sealed/{unit}/1.0.0 agrees"))),
+                "{report:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_phase_evidence_only_from_the_tag_a_glob_template_names() {
+        let released = released_from(
+            "verify-glob-tag",
+            GLOB_TAG_CONFIG,
+            &["component"],
+            "component@1.0.0",
+            ReleaseShape::SoleParent,
+        );
+        let fragment = fragment(&released);
+        released.seal(&phase_evidence(&released, &fragment));
+        let evidence = evidence(&released, fragment);
+        let source = source(&evidence);
+        let error = verify_release(released.workspace.root(), "1.0.0", false, &source)
+            .expect_err("another tag's sealed evidence is not borrowed");
+        assert!(
+            error.to_string().contains(&format!(
+                "repository holds no phase tag published/*1.0.0 carrying a {PHASE_EVIDENCE_FIELD} record"
+            )),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_attestation_reports_the_workflow_repository_its_statement_carries() {
+        let attestation = attestation_from_json(
+            RELEASE_EVIDENCE_FILE,
+            &attestation_statement(Some("https://github.com/other-owner/other-repository")),
+        )
+        .expect("the statement is read");
+        assert_eq!(attestation.repository, "other-owner/other-repository");
+        assert_eq!(attestation.run_id, 42);
+    }
+
+    #[test]
+    fn an_attestation_carrying_no_workflow_repository_is_reported_rather_than_assumed() {
+        let error = attestation_from_json(RELEASE_EVIDENCE_FILE, &attestation_statement(None))
+            .expect_err("the missing repository is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("carries no workflow repository at"),
+            "{error}"
+        );
+    }
+
+    /// One verified attestation statement, with or without its repository.
+    fn attestation_statement(repository: Option<&str>) -> serde_json::Value {
+        let mut workflow = serde_json::json!({ "path": ".github/workflows/publish.yml" });
+        if let Some(repository) = repository {
+            workflow["repository"] = serde_json::Value::String(repository.to_owned());
+        }
+        serde_json::json!({
+            "verificationResult": {
+                "statement": {
+                    "subject": [{ "digest": { "sha256": "1111111111111111111111111111111111111111111111111111111111111111" } }],
+                    "predicate": {
+                        "buildDefinition": { "externalParameters": { "workflow": workflow } },
+                        "runDetails": {
+                            "metadata": {
+                                "invocationId": "https://github.com/other-owner/other-repository/actions/runs/42"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn an_asset_name_that_is_not_flat_is_refused_before_it_is_staged() {
+        let workspace = Workspace::new("attestation-flat-name");
+        let error = GhReleaseSource::new(workspace.root())
+            .attestation(REPOSITORY, "../escaped-evidence.yml", DELIVERABLE)
+            .expect_err("the name is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("\"../escaped-evidence.yml\" is not a flat name"),
+            "{error}"
+        );
     }
 }

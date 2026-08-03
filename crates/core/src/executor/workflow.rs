@@ -1225,13 +1225,19 @@ steps:
       @ENVVAR@RELEASE: ${{ runner.temp }}/@JOB@release
     run: |
       set -euo pipefail
+      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json isDraft --jq '.isDraft')" = "true"
+      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json tagName --jq '.tagName')" = "${@ENVVAR@GLOBAL_TAG}"
+      test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${@ENVVAR@GLOBAL_TAG}" \
+        --jq '.object.sha' | xargs -I {} gh api "repos/${GITHUB_REPOSITORY}/git/tags/{}" \
+        --jq '.object.sha')" = "${GITHUB_SHA}"
       gh release upload "${@ENVVAR@GLOBAL_TAG}" \
         "${@ENVVAR@RELEASE}"/* --clobber
-      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json isDraft --jq '.isDraft')" = "true"
-      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json targetCommitish --jq '.targetCommitish')" = "${GITHUB_SHA}"
       for asset in "${@ENVVAR@RELEASE}"/*; do
-        gh release view "${@ENVVAR@GLOBAL_TAG}" --json assets \
-          --jq '.assets[].name' | grep -Fxq "$(basename "${asset}")"
+        name="$(basename "${asset}")"
+        gh release download "${@ENVVAR@GLOBAL_TAG}" --pattern "${name}" \
+          --output - > "${RUNNER_TEMP}/@JOB@closure-asset"
+        printf '%s  %s\n' "$(sha256sum < "${asset}" | cut -d' ' -f1)" \
+          "${RUNNER_TEMP}/@JOB@closure-asset" | sha256sum --check --status
       done
       gh release edit "${@ENVVAR@GLOBAL_TAG}" --draft=false
 "#;

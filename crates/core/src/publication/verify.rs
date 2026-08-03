@@ -15,6 +15,7 @@ use crate::evidence::assemble::{
 use crate::evidence::phase::{decode, PHASE_EVIDENCE_FIELD};
 use crate::executor::recipe::{resolve_publications, SelectedPublication, PRIMARY_TARGET};
 use crate::model::PublisherKind;
+use crate::publication::draft::is_draft_dependent;
 use crate::publication::observation::{observe, Clock, ConsistencyPolicy, PublicationObservation};
 use crate::release::git;
 use crate::release::tag::verify_release_tag;
@@ -27,13 +28,25 @@ const CRATES_IO_SELECTOR: &str = "crates.io";
 /// OCI target identities, which an adapter without a primary always requires.
 const OCI_TARGETS: [&str; 2] = ["dockerhub", "ghcr"];
 
+/// The release one publication publishes into, and the version it publishes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedRelease {
+    /// Release identity resolved from the verified global release tag.
+    pub identity: ReleaseIdentity,
+    /// Version the reproduced release plan assigns this release unit.
+    pub version: String,
+}
+
 /// Repository-derived facts one publication verification binds its fragment to.
 ///
 /// The command holds no credentials and speaks no registry protocol, so every
 /// fact outside the observation comes from the checkout through this seam.
 pub trait PublicationContext {
-    /// Release identity resolved from the verified global release tag.
-    fn release_identity(&self, root: &Path) -> Result<ReleaseIdentity>;
+    /// Release identity and planned version of one release unit.
+    ///
+    /// Both come from a single resolution, because a version read separately
+    /// from the identity it belongs to could describe a different release.
+    fn planned_release(&self, root: &Path, release_unit: &str) -> Result<PlannedRelease>;
 
     /// Fragment an after-publication tag at the release commit already sealed.
     fn sealed_fragment(
@@ -54,9 +67,10 @@ pub trait PublicationContext {
 
 /// The checkout the publication workflow runs in.
 ///
-/// Every fact this context reports is proven from the repository rather than
-/// read from the observation, so a recipe cannot describe the release its own
-/// evidence claims to belong to.
+/// The release identity, the planned version and the sealed fragments this
+/// context reports are proven from the repository rather than read from the
+/// observation, so a recipe cannot name the release or version its own evidence
+/// claims to belong to.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CheckoutContext;
 
@@ -129,18 +143,41 @@ fn sealed_tags(root: &Path, release_commit: &str) -> Result<Vec<SealedTag>> {
 }
 
 impl PublicationContext for CheckoutContext {
-    fn release_identity(&self, root: &Path) -> Result<ReleaseIdentity> {
+    fn planned_release(&self, root: &Path, release_unit: &str) -> Result<PlannedRelease> {
         let verified = verify_release_tag(root)?;
+        let version = verified
+            .versions
+            .get(release_unit)
+            .cloned()
+            .ok_or_else(|| {
+                let planned = if verified.versions.is_empty() {
+                    "none".to_owned()
+                } else {
+                    verified
+                        .versions
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                Error::Validation(format!(
+                    "release unit {release_unit:?} is not part of release {}; the release publishes {planned}",
+                    verified.global_tag
+                ))
+            })?;
         let reference = format!("refs/tags/{}", verified.global_tag);
-        Ok(ReleaseIdentity {
-            source_commit: verified.source,
-            release_commit: verified.release,
-            global_tag: TagIdentity {
-                object: git::resolve(root, &reference)?,
-                target: git::resolve(root, &format!("{reference}^{{commit}}"))?,
-                name: verified.global_tag,
+        Ok(PlannedRelease {
+            identity: ReleaseIdentity {
+                source_commit: verified.source,
+                release_commit: verified.release,
+                global_tag: TagIdentity {
+                    object: git::resolve(root, &reference)?,
+                    target: git::resolve(root, &format!("{reference}^{{commit}}"))?,
+                    name: verified.global_tag,
+                },
+                plan_digest: verified.plan_digest,
             },
-            plan_digest: verified.plan_digest,
+            version,
         })
     }
 
@@ -272,25 +309,35 @@ pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<Veri
         .policy
         .unwrap_or_else(|| ConsistencyPolicy::maintained(request.publisher));
     let observation = observe(request.observation, &identity, &policy, request.clock)?;
-    let observed = accept_observation(&observation, &selected, &identity)?;
-    let release = request.context.release_identity(request.root)?;
+    let release = request
+        .context
+        .planned_release(request.root, &selected.release_unit)?;
+    let observed = accept_observation(&observation, &selected, &identity, &release.version)?;
+    let identity_facts = &release.identity;
 
     let sealed =
         request
             .context
-            .sealed_fragment(request.root, &release.release_commit, &identity)?;
+            .sealed_fragment(request.root, &identity_facts.release_commit, &identity)?;
     let (evidence, reused) = match sealed {
         Some(fragment) => {
-            revalidate_sealed(&fragment, &release, &observed, &identity)?;
+            revalidate_sealed(&fragment, identity_facts, &observed, &identity)?;
             (fragment, true)
         }
         None => {
-            let phase_tags =
-                request
-                    .context
-                    .phase_tags(request.root, &release.release_commit, &identity)?;
+            let phase_tags = request.context.phase_tags(
+                request.root,
+                &identity_facts.release_commit,
+                &identity,
+            )?;
             (
-                construct(&selected, &observation, &observed, &release, phase_tags),
+                construct(
+                    &selected,
+                    &observation,
+                    &observed,
+                    identity_facts,
+                    phase_tags,
+                ),
                 false,
             )
         }
@@ -402,6 +449,7 @@ fn accept_observation<'a>(
     observation: &'a PublicationObservation,
     selected: &SelectedPublication,
     identity: &str,
+    version: &str,
 ) -> Result<ObservedPublication<'a>> {
     let observed = observation.identity();
     if observed != identity {
@@ -427,12 +475,37 @@ fn accept_observation<'a>(
             )));
         }
     }
-    if retrieval.mode == CleanClientMode::AuthenticatedDraft && !draft_dependent(selected.publisher)
-    {
-        return Err(Error::Validation(format!(
-            "publication {identity} claims authenticated-draft retrieval; the {} publisher resolves its release through the public consumer path and records mode public",
-            selected.publisher
-        )));
+    // An observation left at the conventional path by an earlier release of the
+    // same publication is identical in identity and destination, so the version
+    // this release plans is the only thing that separates them.
+    for (claim, observed) in [
+        ("subject version", &subject.version),
+        ("destination version", &destination.version),
+    ] {
+        if observed != version {
+            return Err(Error::Validation(format!(
+                "publication {identity} was observed with {claim} {observed:?} instead of {version:?}, the version this release publishes for release unit {}",
+                selected.release_unit
+            )));
+        }
+    }
+    match (retrieval.mode, is_draft_dependent(selected.publisher)) {
+        (CleanClientMode::AuthenticatedDraft, false) => {
+            return Err(Error::Validation(format!(
+                "publication {identity} claims authenticated-draft retrieval; the {} publisher resolves its release through the public consumer path and records mode public",
+                selected.publisher
+            )));
+        }
+        // Verification runs before closure, so the Release the consumer path of
+        // a draft-dependent publisher resolves is still a draft and a public
+        // claim is one that cannot be true.
+        (CleanClientMode::Public, true) => {
+            return Err(Error::Validation(format!(
+                "publication {identity} claims public retrieval; the {} publisher resolves its release through a draft GitHub Release asset and records mode authenticated-draft",
+                selected.publisher
+            )));
+        }
+        _ => {}
     }
     Ok(ObservedPublication {
         subject,
@@ -440,14 +513,6 @@ fn accept_observation<'a>(
         destination,
         retrieval,
     })
-}
-
-/// Whether a publisher's normal consumer path resolves a draft Release asset.
-const fn draft_dependent(publisher: PublisherKind) -> bool {
-    matches!(
-        publisher,
-        PublisherKind::Homebrew | PublisherKind::Rpm | PublisherKind::Apt | PublisherKind::Aur
-    )
 }
 
 /// Build the affirmative fragment from one accepted observation.
@@ -610,6 +675,7 @@ mod tests {
     /// Repository facts supplied directly by a test.
     struct TestContext {
         release: ReleaseIdentity,
+        version: String,
         sealed: BTreeMap<String, PublisherEvidence>,
         phase_tags: Vec<TagIdentity>,
     }
@@ -617,6 +683,7 @@ mod tests {
     impl TestContext {
         fn new() -> Self {
             Self {
+                version: "1.2.3".to_owned(),
                 release: ReleaseIdentity {
                     source_commit: "a".repeat(40),
                     release_commit: "b".repeat(40),
@@ -634,8 +701,11 @@ mod tests {
     }
 
     impl PublicationContext for TestContext {
-        fn release_identity(&self, _root: &Path) -> Result<ReleaseIdentity> {
-            Ok(self.release.clone())
+        fn planned_release(&self, _root: &Path, _release_unit: &str) -> Result<PlannedRelease> {
+            Ok(PlannedRelease {
+                identity: self.release.clone(),
+                version: self.version.clone(),
+            })
         }
 
         fn sealed_fragment(
@@ -1018,10 +1088,10 @@ destination-aliases:
         assert!(!workspace.root().join("evidence.yml").exists());
     }
 
-    #[test]
-    fn a_draft_dependent_publisher_records_authenticated_draft_retrieval() {
+    /// A workspace publishing the sample component through a draft-dependent tap.
+    fn homebrew_workspace(label: &str, mode: &str) -> Workspace {
         let workspace = workspace(
-            "verify-draft-dependent",
+            label,
             "    homebrew:\n      repository: example-org/example-tap\n",
             &[
                 ("component/go.mod", "module example.test/component\n"),
@@ -1038,9 +1108,15 @@ destination-aliases:
                     "id: npm\n  version: 10.9.0",
                     "id: goreleaser\n  version: 2.4.0",
                 )
-                .replace("mode: public", "mode: authenticated-draft")
+                .replace("mode: public", &format!("mode: {mode}"))
                 .replace("client: npm", "client: brew"),
         );
+        workspace
+    }
+
+    #[test]
+    fn a_draft_dependent_publisher_records_authenticated_draft_retrieval() {
+        let workspace = homebrew_workspace("verify-draft-dependent", "authenticated-draft");
         let context = TestContext::new();
         let clock = clock();
         let verified = verify_publication(&request(
@@ -1057,6 +1133,88 @@ destination-aliases:
             verified.evidence.clean_client.mode,
             CleanClientMode::AuthenticatedDraft,
             "the recorded mode is exactly the one observed"
+        );
+    }
+
+    #[test]
+    fn a_public_mode_claim_from_a_draft_dependent_publisher_is_rejected() {
+        let workspace = homebrew_workspace("verify-public-claim", "public");
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Homebrew,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a public claim from a draft-dependent publisher is reported");
+        assert!(
+            error.to_string().contains("claims public retrieval")
+                && error.to_string().contains("homebrew"),
+            "{error}"
+        );
+        assert!(!workspace.root().join("evidence.yml").exists());
+    }
+
+    #[test]
+    fn an_observation_whose_subject_version_is_another_releases_is_rejected() {
+        let workspace = npm_workspace("verify-foreign-subject-version");
+        workspace.write(
+            "observation.yml",
+            &present_document().replacen("version: 1.2.3", "version: 1.2.2", 1),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a subject from another release is reported");
+        assert!(
+            error.to_string().contains("subject version \"1.2.2\"")
+                && error.to_string().contains("\"1.2.3\""),
+            "{error}"
+        );
+        assert!(
+            !workspace.root().join("evidence.yml").exists(),
+            "a refused verification writes nothing"
+        );
+    }
+
+    #[test]
+    fn an_observation_whose_destination_version_disagrees_is_rejected() {
+        let workspace = npm_workspace("verify-foreign-destination-version");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace(
+                "destination:\n  identity: npmjs\n  version: 1.2.3",
+                "destination:\n  identity: npmjs\n  version: 1.2.2",
+            ),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a destination version from another release is reported");
+        assert!(
+            error.to_string().contains("destination version \"1.2.2\"")
+                && error.to_string().contains("\"1.2.3\""),
+            "{error}"
         );
     }
 

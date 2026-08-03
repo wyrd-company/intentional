@@ -19,6 +19,7 @@ use crate::evidence::{digest_bytes, is_digest, is_flat_name, is_git_object};
 use crate::executor::recipe::resolve_publications;
 use crate::model::PublisherKind;
 use crate::publication::release::ReleaseSource;
+use crate::release::tag::verify_release_tag;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -419,11 +420,49 @@ pub struct VerifiedDraftHandoff {
     pub retrieval: AuthenticatedDraftRetrieval,
 }
 
+/// Prove the handoff describes exactly the release this workspace published.
+///
+/// Independent verification of the checked-out release tag rebuilds the sealed
+/// plan, the release commit, and the annotated global tag from the source
+/// commit alone, so each identity the handoff declares is compared against a
+/// proved value instead of being accepted in the shape it was written. Without
+/// that comparison a document naming another repository's release under a
+/// familiar tag name would hand its bytes to this publisher.
+fn verify_release_identity(root: &Path, handoff: &DraftReleaseAssetHandoff) -> Result<()> {
+    let repository = crate::publication::origin_identity(root)?;
+    let verified = verify_release_tag(root)?;
+    let mut findings = Vec::new();
+    if handoff.repository != repository {
+        findings.push(format!(
+            "draft handoff names repository {:?}, but this workspace publishes {repository:?}",
+            handoff.repository
+        ));
+    }
+    for (field, declared, proved) in [
+        ("global-tag", &handoff.global_tag, &verified.global_tag),
+        ("release-commit", &handoff.release_commit, &verified.release),
+        ("source-commit", &handoff.source_commit, &verified.source),
+        ("plan-digest", &handoff.plan_digest, &verified.plan_digest),
+    ] {
+        if declared != proved {
+            findings.push(format!(
+                "draft handoff records {field} {declared:?}, but the verified release tag proves {proved:?}"
+            ));
+        }
+    }
+    if !findings.is_empty() {
+        return Err(Error::Validation(findings.join("\n")));
+    }
+    Ok(())
+}
+
 /// Verify one draft-Release asset handoff against the repository at R.
 ///
 /// The configured publication set is the authority on which publisher and
 /// target may receive draft assets at all, so a handoff for a publication the
-/// release does not select is refused before any byte is downloaded.
+/// release does not select is refused before any byte is downloaded, and the
+/// release identity the document declares is proved against the repository
+/// before its inventory is trusted.
 pub fn verify_handoff(
     root: &Path,
     handoff: &DraftReleaseAssetHandoff,
@@ -451,6 +490,7 @@ pub fn verify_handoff(
             }
         )));
     }
+    verify_release_identity(root, handoff)?;
     let retrieval = retrieve_assets(handoff, source)?;
     Ok(VerifiedDraftHandoff {
         identity,
@@ -463,6 +503,8 @@ mod tests {
     use super::*;
     use crate::executor::fixture::Workspace;
     use crate::publication::release::tests::FakeReleaseSource;
+    use crate::release::git::GitCommand;
+    use std::path::PathBuf;
 
     const SOURCE: &str = "1111111111111111111111111111111111111111";
     const RELEASE: &str = "2222222222222222222222222222222222222222";
@@ -485,16 +527,132 @@ release-units:
       primary: { role: primary, template: '{id}@{version}' }
 "#;
 
-    fn workspace(label: &str) -> Workspace {
-        let workspace = Workspace::new(label);
-        workspace
-            .write(".intentional/config.yml", CONFIG)
-            .write(
+    /// A git workspace carrying one applied release and its published global tag.
+    ///
+    /// Handoff verification proves the declared release identity against the
+    /// repository, so the fixture must be a real released repository with an
+    /// origin remote rather than a bare directory of configuration files.
+    struct ReleasedWorkspace {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        /// Accepted source commit S.
+        source: String,
+        /// Deterministic release commit R.
+        release: String,
+        /// Rendered name of the annotated global release tag.
+        global_tag: String,
+        /// Digest sealed inside the release plan.
+        plan_digest: String,
+    }
+
+    impl ReleasedWorkspace {
+        /// Author one intent, build the release, and publish its annotated global tag.
+        fn new() -> Self {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let root = temp.path().join("workspace");
+            std::fs::create_dir_all(&root).expect("create workspace");
+            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["config", "user.name", "Fixture Author"]);
+            git(&root, &["config", "user.email", "fixture@example.invalid"]);
+            git(
+                &root,
+                &[
+                    "remote",
+                    "add",
+                    "origin",
+                    "https://github.com/example-owner/example-repository.git",
+                ],
+            );
+            write(&root, ".intentional/config.yml", CONFIG);
+            write(
+                &root,
                 "component/go.mod",
                 "module example.test/component\n\ngo 1.22\n",
-            )
-            .write("component/main.go", "package main\n\nfunc main() {}\n");
-        workspace
+            );
+            write(
+                &root,
+                "component/main.go",
+                "package main\n\nfunc main() {}\n",
+            );
+            write(&root, ".intentional/intents/.keep", "");
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
+            // The release unit carries no projection, so its baseline version
+            // has no file to be read from and must be stated.
+            let baseline = BTreeMap::from([(
+                "component".to_owned(),
+                semver::Version::parse("1.0.0").expect("baseline version"),
+            )]);
+            crate::tag::TagResult::build_baseline(&root, &baseline)
+                .expect("baseline tag set")
+                .apply(&root, false)
+                .expect("record baseline tags");
+
+            write(
+                &root,
+                ".intentional/intents/quiet-otter-0001.md",
+                "---\ncomponent: minor\n---\n\nAdd a component capability\n",
+            );
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Record release intent"]);
+
+            let source = git(&root, &["rev-parse", "HEAD^{commit}"]);
+            let built =
+                crate::release::build::build_candidate(&root, &source).expect("release candidate");
+            git(
+                &root,
+                &[
+                    "update-ref",
+                    &format!("refs/tags/{}", built.tag_name),
+                    &built.tag_object,
+                ],
+            );
+            git(
+                &root,
+                &["checkout", "--quiet", "--detach", &built.release_commit],
+            );
+            Self {
+                _temp: temp,
+                root,
+                source,
+                release: built.release_commit.clone(),
+                global_tag: built.tag_name.clone(),
+                plan_digest: built.plan.digest.clone(),
+            }
+        }
+
+        /// A handoff declaring exactly the release identity this workspace published.
+        fn handoff(&self, bytes: &[u8]) -> DraftReleaseAssetHandoff {
+            DraftReleaseAssetHandoff {
+                global_tag: self.global_tag.clone(),
+                source_commit: self.source.clone(),
+                release_commit: self.release.clone(),
+                plan_digest: self.plan_digest.clone(),
+                ..handoff(bytes)
+            }
+        }
+
+        /// A release source serving this workspace's draft.
+        fn source(&self, bytes: &[u8]) -> FakeReleaseSource {
+            FakeReleaseSource::draft("example-owner/example-repository", &self.global_tag, 7)
+                .with_asset(11, "component-1.0.0.tgz", "application/gzip", bytes)
+        }
+    }
+
+    fn git(directory: &Path, arguments: &[&str]) -> String {
+        GitCommand::new(directory)
+            .args(arguments)
+            .run()
+            .unwrap_or_else(|error| panic!("git {arguments:?} failed: {error}"))
+            .line()
+            .expect("git output")
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent directory"))
+            .expect("create parent directory");
+        std::fs::write(path, contents).expect("write fixture file");
     }
 
     fn source(bytes: &[u8]) -> FakeReleaseSource {
@@ -656,10 +814,14 @@ release-units:
 
     #[test]
     fn verifies_a_handoff_the_release_configuration_selects() {
-        let workspace = workspace("handoff-verify");
+        let workspace = ReleasedWorkspace::new();
         let bytes = b"deliverable bytes";
-        let verified = verify_handoff(workspace.root(), &handoff(bytes), &source(bytes))
-            .expect("the handoff verifies");
+        let verified = verify_handoff(
+            &workspace.root,
+            &workspace.handoff(bytes),
+            &workspace.source(bytes),
+        )
+        .expect("the handoff verifies");
         assert_eq!(verified.identity, "component/homebrew/primary");
         assert_eq!(
             verified.retrieval.mode(),
@@ -669,16 +831,53 @@ release-units:
 
     #[test]
     fn refuses_a_handoff_the_release_configuration_does_not_expect() {
-        let workspace = workspace("handoff-unexpected");
+        let workspace = ReleasedWorkspace::new();
         let bytes = b"deliverable bytes";
-        let mut document = handoff(bytes);
+        let mut document = workspace.handoff(bytes);
         document.target = "sample-library".to_owned();
-        let error = verify_handoff(workspace.root(), &document, &source(bytes))
+        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
             .expect_err("the publication is refused");
         assert!(
             error
                 .to_string()
                 .contains("component/homebrew/sample-library"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_handoff_naming_a_repository_this_workspace_does_not_publish() {
+        let workspace = ReleasedWorkspace::new();
+        let bytes = b"deliverable bytes";
+        let mut document = workspace.handoff(bytes);
+        document.repository = "other-owner/other-repository".to_owned();
+        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
+            .expect_err("the repository is refused");
+        assert!(
+            error.to_string().contains("other-owner/other-repository"),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("example-owner/example-repository"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_handoff_whose_release_identity_the_tag_does_not_prove() {
+        let workspace = ReleasedWorkspace::new();
+        let bytes = b"deliverable bytes";
+        let mut document = workspace.handoff(bytes);
+        document.source_commit = RELEASE.to_owned();
+        document.plan_digest = PLAN_DIGEST.to_owned();
+        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
+            .expect_err("the release identity is refused");
+        assert!(error.to_string().contains("source-commit"), "{error}");
+        assert!(error.to_string().contains("plan-digest"), "{error}");
+        assert!(
+            error.to_string().contains(&workspace.plan_digest),
             "{error}"
         );
     }
