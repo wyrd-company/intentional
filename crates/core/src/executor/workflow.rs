@@ -57,6 +57,22 @@ const DOWNLOAD_ARTIFACT_ACTION: &str =
 const APP_TOKEN_ACTION: &str =
     "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349";
 
+/// Repository publishing Intentional's own thin, credential-free Actions.
+const ACTION_REPOSITORY: &str = "wyrd-company/intentional";
+
+/// Reference a managed job resolves one of Intentional's own Actions at.
+///
+/// External Actions are pinned to complete commit identities because their
+/// contents are outside this project's control. Intentional's own Actions are
+/// pinned to the released version that derived the workflow, and that same
+/// version is what each Action installs, so one derivation names one Action
+/// revision and one binary revision and the two cannot drift apart. A commit
+/// identity cannot serve here: derivation must name a revision that will carry
+/// the release this build belongs to, and that commit does not exist yet.
+fn action_reference(name: &str) -> String {
+    format!("{ACTION_REPOSITORY}/actions/{name}@{}", crate::VERSION)
+}
+
 /// Outcome of comparing a workflow with its derived contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComparisonStatus {
@@ -927,7 +943,22 @@ fn job(
         .replace("@CHECKOUT@", CHECKOUT_ACTION)
         .replace("@UPLOAD@", UPLOAD_ARTIFACT_ACTION)
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
-        .replace("@APP_TOKEN@", APP_TOKEN_ACTION);
+        .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
+        .replace("@VERSION@", &scalar(crate::VERSION))
+        .replace("@PREPARE_ACTION@", &action_reference("prepare-release"))
+        .replace(
+            "@VERIFY_HANDOFF_ACTION@",
+            &action_reference("verify-handoff"),
+        )
+        .replace(
+            "@VERIFY_RELEASE_TAG_ACTION@",
+            &action_reference("verify-release-tag"),
+        )
+        .replace(
+            "@VERIFY_PUBLICATION_ACTION@",
+            &action_reference("verify-publication"),
+        )
+        .replace("@ASSEMBLE_ACTION@", &action_reference("assemble-evidence"));
     for (placeholder, value) in extra {
         rendered = rendered.replace(placeholder, value);
     }
@@ -947,21 +978,25 @@ fn publisher_job(
     config: &Config,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
     let unit = &config.release_units[&publication.release_unit];
+    // An omitted selector is what chooses an adapter's configured primary
+    // destination, so a primary publication passes the Action an empty selector
+    // rather than naming `primary` as a target it would have to resolve.
     let target = if publication.target == PRIMARY_TARGET {
         String::new()
     } else {
-        format!(" --target {}", publication.target)
+        publication.target.clone()
     };
     let identity = publication.identity();
     let slug = identifier(&identity);
     // Publisher credentials stay in the repository-owned recipe steps, so the
     // destination readback they perform reaches the portable command as a
     // schema-backed observation rather than as a second verification path.
-    let verify_command = format!(
-        "intentional verify publication --release-unit {} --publisher {}{target} --observation \"${{{{ runner.temp }}}}/{}observation/{slug}.yml\" --output \"${{{{ runner.temp }}}}/{}evidence/{slug}.yml\"",
-        publication.release_unit,
-        publication.publisher.as_str(),
-        namespaces.job,
+    let observation = format!(
+        "${{{{ runner.temp }}}}/{}observation/{slug}.yml",
+        namespaces.job
+    );
+    let evidence = format!(
+        "${{{{ runner.temp }}}}/{}evidence/{slug}.yml",
         namespaces.job
     );
     job(
@@ -979,7 +1014,11 @@ fn publisher_job(
                 "@FRAGMENT_NAME@",
                 &scalar(&format!("Upload the {identity} evidence fragment")),
             ),
-            ("@VERIFY_COMMAND@", &scalar(&verify_command)),
+            ("@RELEASE_UNIT@", &scalar(&publication.release_unit)),
+            ("@PUBLISHER@", &scalar(publication.publisher.as_str())),
+            ("@TARGET@", &scalar(&target)),
+            ("@OBSERVATION@", &scalar(&observation)),
+            ("@OUTPUT@", &scalar(&evidence)),
             (
                 "@WORKING_DIRECTORY@",
                 &scalar(&unit.path.display().to_string()),
@@ -1051,7 +1090,10 @@ steps:
       fetch-tags: true
       persist-credentials: false
   - name: Construct the release candidate
-    run: intentional release prepare --output "${{ runner.temp }}/@JOB@candidate"
+    uses: @PREPARE_ACTION@
+    with:
+      output: ${{ runner.temp }}/@JOB@candidate
+      intentional-version: @VERSION@
   - name: Upload the release candidate
     uses: @UPLOAD@
     with:
@@ -1084,7 +1126,10 @@ steps:
       path: ${{ runner.temp }}/@JOB@candidate
   - id: @JOB@handoff
     name: Verify the release candidate handoff
-    run: intentional verify handoff "${{ runner.temp }}/@JOB@candidate"
+    uses: @VERIFY_HANDOFF_ACTION@
+    with:
+      handoff: ${{ runner.temp }}/@JOB@candidate
+      intentional-version: @VERSION@
   - id: @JOB@token
     name: Mint a short-lived repository token
     uses: @APP_TOKEN@
@@ -1124,7 +1169,9 @@ steps:
       fetch-tags: true
       persist-credentials: false
   - name: Verify the global release tag
-    run: intentional verify release-tag
+    uses: @VERIFY_RELEASE_TAG_ACTION@
+    with:
+      intentional-version: @VERSION@
 "#;
 
 const PUBLISH_PUBLISHER_JOB: &str = r#"
@@ -1147,7 +1194,14 @@ steps:
     working-directory: @WORKING_DIRECTORY@
     run: @PACKAGE_COMMAND@
   - name: @VERIFY_NAME@
-    run: @VERIFY_COMMAND@
+    uses: @VERIFY_PUBLICATION_ACTION@
+    with:
+      release-unit: @RELEASE_UNIT@
+      publisher: @PUBLISHER@
+      target: @TARGET@
+      observation: @OBSERVATION@
+      output: @OUTPUT@
+      intentional-version: @VERSION@
   - name: @FRAGMENT_NAME@
     uses: @UPLOAD@
     with:
@@ -1178,10 +1232,11 @@ steps:
       pattern: @JOB@evidence-*
       path: ${{ runner.temp }}/@JOB@fragments
   - name: Assemble the release evidence
-    run: >-
-      intentional evidence assemble
-      --input "${{ runner.temp }}/@JOB@fragments"
-      --output "${{ runner.temp }}/@JOB@release"
+    uses: @ASSEMBLE_ACTION@
+    with:
+      input: ${{ runner.temp }}/@JOB@fragments
+      output: ${{ runner.temp }}/@JOB@release
+      intentional-version: @VERSION@
   - name: Upload the assembled release evidence
     uses: @UPLOAD@
     with:
@@ -1525,6 +1580,244 @@ jobs:
             2,
             "the global release tag joins the repository's own: {tags:?}"
         );
+    }
+
+    /// Steps of every managed job in one derived workflow, by job identifier.
+    fn managed_steps(root: &Path, role: WorkflowRole) -> Vec<(String, Vec<Value>)> {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        document["jobs"]
+            .as_mapping()
+            .expect("jobs")
+            .iter()
+            .filter_map(|(id, body)| {
+                let id = id.as_str()?;
+                id.starts_with("intentional_").then(|| {
+                    (
+                        id.to_owned(),
+                        body["steps"].as_sequence().expect("steps").clone(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The Action one managed step resolves from this repository, if any.
+    fn intentional_action(step: &Value) -> Option<(String, String)> {
+        step.get("uses")?
+            .as_str()?
+            .strip_prefix("wyrd-company/intentional/actions/")?
+            .split_once('@')
+            .map(|(name, reference)| (name.to_owned(), reference.to_owned()))
+    }
+
+    /// The document one published Action is defined by.
+    fn action_document(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../actions")
+            .join(name)
+            .join("action.yml")
+    }
+
+    /// The declared outputs of one published Action.
+    fn action_outputs(name: &str) -> BTreeSet<String> {
+        let path = action_document(name);
+        let document: Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&path).expect("action document readable"),
+        )
+        .expect("action document parses");
+        document
+            .get("outputs")
+            .and_then(Value::as_mapping)
+            .map(|outputs| {
+                outputs
+                    .keys()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // A stock runner carries no `intentional` on PATH, and nothing in this
+    // crate writes `$GITHUB_OUTPUT`. A managed job that spelled a portable
+    // command in a `run:` body would therefore both fail to find the binary and
+    // produce no step outputs for the next step to read. Reaching every
+    // portable command through a published Action is what supplies both, so the
+    // absence of a bare invocation is the property worth asserting rather than
+    // the presence of any particular step text.
+    #[test]
+    fn reaches_every_portable_command_through_a_published_action() {
+        let workspace = workspace("workflow-command-boundary");
+        let expected = [
+            (
+                WorkflowRole::Release,
+                ["prepare-release", "verify-handoff"].as_slice(),
+            ),
+            (
+                WorkflowRole::Publish,
+                [
+                    "assemble-evidence",
+                    "verify-publication",
+                    "verify-release-tag",
+                ]
+                .as_slice(),
+            ),
+        ];
+        for (role, actions) in expected {
+            converge(workspace.root(), role);
+            let mut resolved = BTreeSet::new();
+            for (id, steps) in managed_steps(workspace.root(), role) {
+                for step in &steps {
+                    if let Some((name, _)) = intentional_action(step) {
+                        resolved.insert(name);
+                    }
+                    for line in step
+                        .get("run")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .lines()
+                    {
+                        let command = line.split_whitespace().next().unwrap_or_default();
+                        assert_ne!(
+                            command.rsplit('/').next(),
+                            Some("intentional"),
+                            "{id} runs a portable command without obtaining the binary: {line}"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                resolved,
+                actions
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<BTreeSet<_>>(),
+                "the {role} workflow reaches exactly the portable commands its protocol runs"
+            );
+        }
+    }
+
+    // One derivation names one Action revision and one binary revision. A job
+    // that resolved the Action at one version while installing another would
+    // run an argument contract neither document states.
+    #[test]
+    fn pins_every_intentional_action_and_its_binary_to_the_deriving_version() {
+        let workspace = workspace("workflow-action-pinning");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            let mut pinned = 0;
+            for (id, steps) in managed_steps(workspace.root(), role) {
+                for step in &steps {
+                    let Some((name, reference)) = intentional_action(step) else {
+                        continue;
+                    };
+                    pinned += 1;
+                    assert_eq!(reference, crate::VERSION, "{id} resolves {name}");
+                    assert!(
+                        action_document(&name).is_file(),
+                        "{id} resolves an Action this repository publishes; {name} is not one"
+                    );
+                    assert_eq!(
+                        step["with"]["intentional-version"].as_str(),
+                        Some(crate::VERSION),
+                        "{id} installs the binary {name} states its contract for"
+                    );
+                }
+            }
+            assert!(pinned > 0, "the {role} workflow resolves managed Actions");
+        }
+    }
+
+    // A managed job that reaches a portable command through an Action installs
+    // a released binary over the network, and the authority transition is also
+    // the job that mints repository-write authority. Ordering is what keeps the
+    // two apart: no credential exists on the runner while Intentional's own
+    // Action is fetched and executed. Moving the mint earlier would read as a
+    // harmless reordering and would silently widen the job's trust boundary, so
+    // the order is asserted rather than described.
+    #[test]
+    fn resolves_every_intentional_action_before_any_credential_is_minted() {
+        let workspace = workspace("workflow-credential-order");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            for (id, steps) in managed_steps(workspace.root(), role) {
+                let mint = steps.iter().position(|step| {
+                    step.get("uses")
+                        .and_then(Value::as_str)
+                        .is_some_and(|uses| uses == APP_TOKEN_ACTION)
+                });
+                let Some(mint) = mint else { continue };
+                for (index, step) in steps.iter().enumerate() {
+                    assert!(
+                        intentional_action(step).is_none() || index < mint,
+                        "{id} resolves an Intentional Action after minting a credential"
+                    );
+                }
+            }
+        }
+    }
+
+    // The authority transition pushes to the protected default branch using
+    // identities the previous step verified. Before this binding existed the
+    // step it read produced no outputs at all, so the guard compared the remote
+    // head against an empty string and the push resolved empty refs. Asserting
+    // that the consumed step is an Action that declares those exact outputs is
+    // what makes that shape impossible rather than merely absent.
+    #[test]
+    fn binds_the_verified_handoff_outputs_to_the_push_step() {
+        let workspace = workspace("workflow-identity-binding");
+        converge(workspace.root(), WorkflowRole::Release);
+        let steps = managed_steps(workspace.root(), WorkflowRole::Release)
+            .into_iter()
+            .find(|(id, _)| id == "intentional_release")
+            .expect("the authority transition is derived")
+            .1;
+
+        let (verifier, action) = steps
+            .iter()
+            .find_map(|step| {
+                let (name, _) = intentional_action(step)?;
+                (name == "verify-handoff")
+                    .then(|| (step["id"].as_str().expect("the step is addressable"), name))
+            })
+            .expect("the authority transition verifies the handoff through the Action");
+
+        let push = steps
+            .iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("git push --atomic"))
+            })
+            .expect("the authority transition pushes");
+        let consumed = push["env"]
+            .as_mapping()
+            .expect("the push step names its inputs")
+            .values()
+            .filter_map(Value::as_str)
+            .filter_map(|value| {
+                value
+                    .strip_prefix(&format!("${{{{ steps.{verifier}.outputs."))?
+                    .strip_suffix(" }}")
+                    .map(str::to_owned)
+            })
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            consumed,
+            ["global-tag", "release-sha", "source-sha"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>(),
+            "the push step reads the verified identities from the verifying step"
+        );
+        let declared = action_outputs(&action);
+        for key in &consumed {
+            assert!(
+                declared.contains(key),
+                "the {action} Action declares {key}; declared: {declared:?}"
+            );
+        }
     }
 
     /// The shell of the derived closure job, in the order a runner executes it.

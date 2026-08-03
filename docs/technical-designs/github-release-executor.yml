@@ -234,6 +234,16 @@ proposed-design:
     and verify those files; GitHub outputs route selected identities and paths
     through the workflow and never replace file contents.
 
+    These Actions are the only way a managed job invokes a portable command. A
+    managed step that spelled a command in a `run:` body would assume an
+    executable a stock runner does not carry and would expose no step outputs
+    for the next step to read, so the step form is not a matter of taste.
+    Repository-owned steps remain free to invoke the commands however they
+    like. Derivation resolves each Intentional Action at the released version
+    that derived the workflow and passes that same version as the binary the
+    Action installs, so one derivation names one Action revision and one binary
+    revision and the two cannot drift apart.
+
   release-workflow: |-
     The release workflow selects source commit S from the current remote
     default branch. A preparation job checks out S without persisted
@@ -330,7 +340,27 @@ proposed-design:
     workflow-level scopes its safe default withdraws, so a repository declares
     them per job deliberately. Write authority is minted only after validation,
     configured gates, and protected-environment approval. External Actions are
-    pinned to complete commit identities.
+    pinned to complete commit identities. Intentional's own Actions are pinned
+    to the released version that derived the workflow, because derivation must
+    name a revision carrying the release this build belongs to and that commit
+    does not exist when the workflow is derived.
+
+    A privileged job that reaches a portable command through an Action fetches
+    and executes Intentional-owned code and installs a released binary over the
+    network inside the job that later mints repository-write authority. The
+    install is required wherever the command runs, so it is the placement rather
+    than the network dependency that is chosen here. Three properties bound it.
+    The Action receives no credentials and the job mints none until after the
+    Action has finished, so no token exists on the runner while Intentional's
+    own code is first fetched and executed. The installed archive is verified
+    against its published checksum before use. The mutating step is a
+    repository-local `run:` body that the Action never sees. What remains is
+    that runner state persists across steps within a job, so an install that was
+    compromised despite checksum verification could leave behind something a
+    later privileged step executes. Ordering narrows that window; it does not
+    close it. The residual exposure is accepted because the same repository and
+    the same release channel already supply the binary whose verification
+    decides whether the authority transition happens at all.
 
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write

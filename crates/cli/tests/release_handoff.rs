@@ -1008,55 +1008,98 @@ fn derived_release_workflow(label: &str) -> serde_yaml::Value {
     serde_yaml::from_str(&derived).expect("derived workflow parses")
 }
 
-/// The exact command the derived authority-transition job runs to verify a handoff.
-///
-/// The workflow is reconciled rather than transcribed, so this test executes
-/// whatever a repository would actually receive today, with the runner
-/// temporary directory resolved the way GitHub Actions resolves it.
-fn generated_handoff_command(runner_temp: &Path) -> Vec<String> {
+/// The step of the derived authority transition that verifies the handoff.
+fn handoff_step() -> serde_yaml::Value {
     let document = derived_release_workflow("cli-handoff-command");
-
-    let jobs = document["jobs"]
+    let mut steps = document["jobs"]
         .as_mapping()
-        .expect("the derived workflow declares jobs");
-    let mut commands = jobs
+        .expect("the derived workflow declares jobs")
         .values()
         .filter_map(|job| job["steps"].as_sequence())
         .flatten()
-        .filter_map(|step| step["run"].as_str())
-        .map(|body| body.replace("${{ runner.temp }}", &runner_temp.display().to_string()))
-        .filter_map(|body| shell_words::split(&body).ok())
-        .filter(|tokens| tokens.len() > 3 && tokens[..3] == ["intentional", "verify", "handoff"]);
-    let command = commands
+        .filter(|step| {
+            step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.contains("/actions/verify-handoff@"))
+        });
+    let step = steps
         .next()
-        .expect("the authority transition verifies the handoff");
+        .expect("the authority transition verifies the handoff")
+        .clone();
     assert!(
-        commands.next().is_none(),
+        steps.next().is_none(),
         "exactly one managed step verifies the handoff"
     );
-    // A template that appends anything after the positional would otherwise be
-    // read as though the last token were still the handoff directory.
+    step
+}
+
+/// The handoff directory that step passes the Action, as a runner resolves it.
+fn generated_handoff_directory(runner_temp: &Path) -> PathBuf {
+    PathBuf::from(
+        handoff_step()["with"]["handoff"]
+            .as_str()
+            .expect("the step names the handoff it verifies")
+            .replace("${{ runner.temp }}", &runner_temp.display().to_string()),
+    )
+}
+
+/// The command the published verify-handoff Action runs, with its inputs bound.
+///
+/// The workflow names an Action and the Action names the command, so the two
+/// documents are composed the way GitHub composes them rather than transcribed.
+/// A change to either one reaches this test.
+fn generated_handoff_command(runner_temp: &Path, working_directory: &Path) -> Vec<String> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../actions/verify-handoff/action.yml");
+    let action: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("action document readable"))
+            .expect("action document parses");
+    let body = action["runs"]["steps"]
+        .as_sequence()
+        .expect("the Action declares steps")
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .find(|body| body.contains("intentional "))
+        .expect("the Action invokes the portable command");
+
+    let mut command = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("intentional "))
+        .and_then(|line| shell_words::split(line.trim_end_matches('|').trim()).ok())
+        .expect("the invocation is one readable command line");
+    for token in &mut command {
+        *token = token
+            .replace(
+                "$INPUT_HANDOFF",
+                &generated_handoff_directory(runner_temp)
+                    .display()
+                    .to_string(),
+            )
+            .replace(
+                "$INPUT_WORKING_DIRECTORY",
+                &working_directory.display().to_string(),
+            );
+    }
     assert_eq!(
         command.len(),
         HANDOFF_COMMAND_TOKENS,
-        "the derived command is `intentional verify handoff <handoff>`: {command:?}"
+        "the composed command is `intentional --directory <root> verify handoff <handoff>`: {command:?}"
     );
     command
 }
 
-/// Tokens in `intentional verify handoff <handoff>`, whose last one is the directory.
-const HANDOFF_COMMAND_TOKENS: usize = 4;
-
-/// Position of the handoff directory in that command.
-const HANDOFF_DIRECTORY_TOKEN: usize = 3;
+/// Tokens in `intentional --directory <root> verify handoff <handoff>`.
+const HANDOFF_COMMAND_TOKENS: usize = 6;
 
 #[test]
 fn runs_the_generated_authority_transition_command_against_a_prepared_handoff() {
     let fixture = ReleaseFixture::new();
     fixture.author_release();
     let runner_temp = tempfile::tempdir().expect("runner temporary directory");
-    let command = generated_handoff_command(runner_temp.path());
-    let candidate = PathBuf::from(&command[HANDOFF_DIRECTORY_TOKEN]);
+    let clone = fixture.privileged_clone("generated-command");
+    let command = generated_handoff_command(runner_temp.path(), &clone);
+    let candidate = generated_handoff_directory(runner_temp.path());
 
     // The prepare job writes the candidate to the location the artifact download
     // restores it to, which is the location this command reads.
@@ -1067,12 +1110,126 @@ fn runs_the_generated_authority_transition_command_against_a_prepared_handoff() 
         .assert()
         .success();
 
-    // The job runs from the checkout root with no arguments the template omits.
     Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
-        .current_dir(fixture.privileged_clone("generated-command"))
         .args(&command[1..])
         .assert()
         .success()
         .stdout(predicates::str::contains("release handoff verified"))
         .stdout(predicates::str::contains("global-tag: 1.1.0"));
+}
+
+/// Identity keys the derived push step reads from the verifying step.
+fn consumed_identities() -> Vec<String> {
+    let document = derived_release_workflow("cli-identity-projection");
+    let steps = document["jobs"]["intentional_release"]["steps"]
+        .as_sequence()
+        .expect("the authority transition declares steps");
+    let verifier = handoff_step()["id"]
+        .as_str()
+        .expect("the verifying step is addressable")
+        .to_owned();
+    let push = steps
+        .iter()
+        .find(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|body| body.contains("git push --atomic"))
+        })
+        .expect("the authority transition pushes");
+    push["env"]
+        .as_mapping()
+        .expect("the push step names its inputs")
+        .values()
+        .filter_map(|value| {
+            value
+                .as_str()?
+                .strip_prefix(&format!("${{{{ steps.{verifier}.outputs."))?
+                .strip_suffix(" }}")
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// Run the real command and project its identity lines the way the Action does.
+#[test]
+fn projects_the_verified_identities_the_push_step_consumes() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    let runner_temp = tempfile::tempdir().expect("runner temporary directory");
+    let clone = fixture.privileged_clone("identity-projection");
+    let command = generated_handoff_command(runner_temp.path(), &clone);
+    let candidate = generated_handoff_directory(runner_temp.path());
+    fixture
+        .cli()
+        .args(["release", "prepare", "--output"])
+        .arg(&candidate)
+        .assert()
+        .success();
+    let manifest = ReleaseCandidate::from_yaml(
+        &fs::read_to_string(candidate.join(RELEASE_CANDIDATE_MANIFEST))
+            .expect("candidate manifest"),
+    )
+    .expect("valid candidate manifest");
+
+    let keys = consumed_identities();
+    assert!(
+        !keys.is_empty(),
+        "the push step reads verified identities from the verifying step"
+    );
+    let outputs = runner_temp.path().join("github-output");
+    let projector =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/action/project-identities.sh");
+    let script = format!(
+        "set -euo pipefail; {} | {} {} {}",
+        shell_words::join(&command),
+        shell_words::quote(&projector.display().to_string()),
+        shell_words::quote(&outputs.display().to_string()),
+        shell_words::join(&keys)
+    );
+    let projected = ProcessCommand::new("bash")
+        .args(["-c", &script])
+        .env("PATH", projected_path())
+        .output()
+        .expect("the projection runs");
+    assert!(
+        projected.status.success(),
+        "projection failed: {}",
+        String::from_utf8_lossy(&projected.stderr)
+    );
+
+    // Every identity the push step reads arrives as the value the command
+    // verified, not as the empty string an unprojected step output produces.
+    let written = fs::read_to_string(&outputs).expect("the projected outputs are written");
+    let assignments = written
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for (key, expected) in [
+        ("source-sha", manifest.source.commit.clone()),
+        ("release-sha", manifest.release.commit.clone()),
+        ("global-tag", manifest.global_tag.name.clone()),
+    ] {
+        assert!(
+            keys.contains(&key.to_owned()),
+            "the push step consumes {key}: {keys:?}"
+        );
+        assert_eq!(
+            assignments.get(key),
+            Some(&expected),
+            "{key} reaches the push step as the identity verification proved"
+        );
+    }
+}
+
+/// `PATH` with the binary under test first, as the Action's install step leaves it.
+fn projected_path() -> String {
+    let binary = PathBuf::from(assert_cmd::cargo::cargo_bin!("intentional"));
+    let directory = binary.parent().expect("binary directory").to_owned();
+    std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .expect("joined path")
+    .to_string_lossy()
+    .into_owned()
 }

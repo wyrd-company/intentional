@@ -816,17 +816,18 @@ mod generated_invocations {
 
     /// Invocations the managed job templates generate for the fixture workspace.
     ///
-    /// The release role generates `intentional release prepare` and
-    /// `intentional verify handoff`. The publish role generates
-    /// `intentional verify release-tag`, one `intentional verify publication`
-    /// per selected publication, and `intentional evidence assemble`; the
-    /// fixture configures exactly one publication.
+    /// None. Managed jobs reach every portable command through a published
+    /// Action, because a stock runner carries no `intentional` on PATH and only
+    /// the Actions project a command's verified identity lines onto step
+    /// outputs. The argument contract those jobs depend on is bound by
+    /// [`ACTION_INVOCATIONS`] instead, and which Action each managed job
+    /// resolves is proved where the templates live.
     ///
-    /// Parsing what was extracted proves nothing about what was missed, so the
-    /// count is asserted rather than assumed. A template that stops generating a
-    /// command, and a recognizer that stops seeing one, both fail here and force
-    /// a deliberate update instead of quietly binding a smaller surface.
-    const GENERATED_INVOCATIONS: usize = 5;
+    /// Zero is asserted rather than assumed. A template that reintroduces a
+    /// bare `run:` invocation fails here, which is the point: the argument
+    /// shape would be bound, but the binary would not be installed and the
+    /// step would expose no outputs.
+    const GENERATED_INVOCATIONS: usize = 0;
 
     /// Invocations the published composite Actions run.
     ///
