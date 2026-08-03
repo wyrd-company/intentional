@@ -4122,6 +4122,63 @@ release-units:
         }
     }
 
+    // The mode field states what the retrieval did, so the retrieval has to be
+    // what the field says. The bootstrap path writes an auth token into the
+    // job's own npm configuration and it persists for the rest of the job, so a
+    // retrieval reading that file sends a credential while recording a public
+    // consumer path. A fresh cache is not a fresh identity. Isolation is
+    // invisible in every structural property of the graph -- the step is in the
+    // right job, in the right order, writing the right document -- so the
+    // configuration the retrieval runs under is asserted directly, together
+    // with what that configuration is made to hold.
+    #[test]
+    fn retrieves_under_the_identity_the_recorded_mode_names() {
+        let workspace = npm_workspace("workflow-clean-client-identity");
+        converge(workspace.root(), WorkflowRole::Publish);
+        for (target, credentialed) in [(PRIMARY_TARGET, false), ("github", true)] {
+            let readback = publisher_steps(workspace.root(), target)
+                .into_iter()
+                .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+                .expect("the recipe reads its destination back");
+            let environment = step_environment(&readback);
+            assert_eq!(
+                environment["INTENTIONAL_RETRIEVAL_MODE"] == "authenticated-registry",
+                credentialed,
+                "the {target} destination records the identity it retrieves under"
+            );
+            let body = readback["run"].as_str().expect("a script");
+
+            // Everything between preparing the scratch directory and the
+            // retrieval is how the retrieval's identity is decided.
+            let (_, prepared) = body
+                .split_once("mkdir -p \"${INTENTIONAL_WORK}/clean\"")
+                .expect("the step prepares a scratch directory for its retrieval");
+            let (prepared, invocation) = prepared
+                .split_once("npm pack")
+                .expect("the recipe retrieves through the client's own path");
+
+            assert!(
+                prepared.contains("> \"${INTENTIONAL_WORK}/clean/npmrc\""),
+                "the {target} step writes the configuration its retrieval reads"
+            );
+            assert_eq!(
+                prepared.contains("_authToken"),
+                credentialed,
+                "the {target} scratch configuration holds a credential only where the recorded mode says one was used"
+            );
+            assert!(
+                invocation
+                    .lines()
+                    .next()
+                    .into_iter()
+                    .chain(prepared.rsplit('\n').take(3))
+                    .any(|line| line
+                        .contains("npm_config_userconfig=\"${INTENTIONAL_WORK}/clean/npmrc\"")),
+                "the {target} retrieval runs under that configuration rather than the job's"
+            );
+        }
+    }
+
     // A probe that did not succeed is not evidence of absence. `npm view` and
     // `cargo add` fail the same way on a missing package, a rate limit, a proxy
     // failure and a 5xx, and absence is the one condition that unlocks the
