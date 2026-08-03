@@ -338,10 +338,19 @@ proposed-design:
     does not need the bytes.
 
     A managed upload job depends on every build job and precedes every
-    publisher job. It mints the short-lived installation token and uploads
-    every GitHub-hosted deliverable to the draft Release, so a publisher whose
-    consumer path resolves a Release asset finds it there and no publisher job
-    holds Release-write authority.
+    publisher job. It is repository-local and runs inside the configured
+    protected environment, like every other job that mints write authority. It
+    mints the short-lived installation token and uploads every GitHub-hosted
+    deliverable to the draft Release, so a publisher whose consumer path
+    resolves a Release asset finds it there and no publisher job holds
+    `contents: write`.
+
+    That makes it an unconditional barrier between every build job and every
+    publisher job: the slowest build gates the first publication. One job per
+    subject would narrow the barrier, because a publisher only reads its own
+    subject's asset, but it would multiply the jobs holding `contents: write`
+    by the number of subjects. Fewer jobs holding repository write authority is
+    worth more than publisher concurrency, so the barrier is one job.
 
     A publisher job receives those bytes on disk and names them to its publish
     step as `<prefix>SUBJECT`. A maintained recipe's publish command consumes
@@ -526,17 +535,23 @@ proposed-design:
     repository-local job that depends on every build job and precedes every
     publisher job. A GitHub-hosted deliverable is the release's own bytes
     reaching the release's own Release, so placing it is repository authority
-    rather than destination authority. A publisher job reaches a destination
-    the release does not own, and it is the job most exposed to the packagers,
-    registries, and third-party Actions a destination brings with it. Granting
-    one Release-write authority so it can place its own deliverable would put
-    the authority that closes the release inside the job that distributes it,
-    and would do so for every publisher that happens to share the graph. The
-    upload job keeps that authority in the same repository-local, protected
-    place as the two transitions that already hold it; the cost is one more
-    short-lived token mint and one more job between the builds and the
-    publishers. A publisher whose consumer path resolves a Release asset
-    therefore reads it and never writes it.
+    rather than destination authority.
+
+    Writing to a Release is not a bounded scope. GitHub has no Release
+    permission: creating a Release, uploading an asset to it, and publishing it
+    are all governed by `contents: write`, the same permission that pushes
+    commits and tags. A publisher job reaches a destination the release does not
+    own, and it is the job most exposed to the packagers, registries, and
+    third-party Actions a destination brings with it. Letting one place its own
+    deliverable would give it authority to rewrite the repository's default
+    branch and move its tags, and would give it to every publisher that happens
+    to share the graph. That is the trade the upload job refuses. It costs a
+    third managed job holding full repository content-write authority for the
+    duration of its uploads, one more short-lived token mint, and one more job
+    between the builds and the publishers; it buys that authority existing only
+    in repository-local jobs the protected environment already gates. A
+    publisher whose consumer path resolves a Release asset therefore reads it
+    and never writes it.
 
     Publisher adapters complete distribution and their available pre-closure
     verification before Release closure. A publisher whose normal consumer
