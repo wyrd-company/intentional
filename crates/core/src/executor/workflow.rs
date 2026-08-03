@@ -1843,6 +1843,7 @@ steps:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence::assemble::CleanClientMode;
     use crate::executor::fixture::Workspace;
     use std::collections::BTreeMap;
 
@@ -3580,6 +3581,341 @@ release-units:
             compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert_eq!(comparison.diagnostics[0].code, "job-identifier-collision");
+    }
+
+    /// A workspace publishing one npm package to both of its destinations.
+    ///
+    /// The npm adapter is the only one whose two destinations differ in what
+    /// they will accept — one serves anonymous clients and implements trusted
+    /// publishing, the other serves neither — so it is the workspace every
+    /// per-destination property is asserted against.
+    fn npm_workspace(label: &str) -> Workspace {
+        let workspace = workspace(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    cargo: {}\n",
+                    "    npm: { additional-targets: { github: {} } }\n",
+                ),
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
+        std::fs::remove_file(workspace.root().join("component/Cargo.toml")).expect("remove");
+        workspace
+    }
+
+    /// Steps of one managed publisher job, by publication identity fragment.
+    fn publisher_steps(root: &Path, target: &str) -> Vec<Value> {
+        managed_steps(root, WorkflowRole::Publish)
+            .into_iter()
+            .find(|(id, _)| id.ends_with(target))
+            .unwrap_or_else(|| panic!("a publisher job for {target} is derived"))
+            .1
+    }
+
+    /// One step's `env:` mapping, as plain strings.
+    fn step_environment(step: &Value) -> BTreeMap<String, String> {
+        step.get("env")
+            .and_then(Value::as_mapping)
+            .map(|env| {
+                env.iter()
+                    .filter_map(|(key, value)| {
+                        Some((key.as_str()?.to_owned(), value.as_str()?.to_owned()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    // A recipe's readback writes the observation and the portable command reads
+    // it, and the two agree only by path. Before the recipes existed nothing
+    // wrote one at all: `verify publication` was handed a path that never came
+    // into being, waited out its whole consistency deadline reading a file that
+    // was not there, and failed as "pending" -- a diagnostic naming the
+    // destination rather than the missing producer. Naming the file in two
+    // places is exactly the shape the artifact binding above exists to stop, so
+    // it is asserted for the observation too.
+    #[test]
+    fn binds_every_observation_a_publisher_verifies_to_the_step_that_writes_it() {
+        for (workspace, targets) in [
+            (workspace("workflow-observation-cargo"), &["primary"][..]),
+            (
+                npm_workspace("workflow-observation-npm"),
+                &["primary", "github"][..],
+            ),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            for target in targets {
+                let steps = publisher_steps(workspace.root(), target);
+                let verified = steps
+                    .iter()
+                    .find_map(|step| {
+                        let (name, _) = intentional_action(step)?;
+                        (name == "verify-publication").then(|| {
+                            step["with"]["observation"]
+                                .as_str()
+                                .expect("path")
+                                .to_owned()
+                        })
+                    })
+                    .expect("the publisher verifies its publication");
+                let writers = steps
+                    .iter()
+                    .filter(|step| {
+                        step_environment(step)
+                            .get("INTENTIONAL_OBSERVATION")
+                            .is_some_and(|path| path == &verified)
+                            && step.get("run").and_then(Value::as_str).is_some_and(|body| {
+                                body.contains("> \"${INTENTIONAL_OBSERVATION}\"")
+                            })
+                    })
+                    .count();
+                assert_eq!(
+                    writers, 1,
+                    "exactly one step of the {target} publisher writes the observation {verified} that its verification reads"
+                );
+            }
+        }
+    }
+
+    // Everything the observation says about the release comes from the build
+    // job, which derived it from the verified global release tag and from the
+    // bytes it emitted. A recipe that read its own package manifest instead
+    // would publish whatever that manifest said and record it as agreement,
+    // which is the one disagreement the sealed subject exists to catch.
+    #[test]
+    fn reads_every_published_subject_fact_from_the_job_that_built_it() {
+        let workspace = npm_workspace("workflow-subject-facts");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let build = "intentional_build_component_npm";
+        let outputs = jobs[&Value::String(build.to_owned())]["outputs"]
+            .as_mapping()
+            .expect("the build job projects what it recorded")
+            .iter()
+            .filter_map(|(key, value)| Some((key.as_str()?.to_owned(), value.as_str()?.to_owned())))
+            .collect::<BTreeMap<_, _>>();
+        let recorder = managed_steps(workspace.root(), WorkflowRole::Publish)
+            .into_iter()
+            .find(|(id, _)| id == build)
+            .expect("the build job is derived")
+            .1
+            .iter()
+            .find_map(|step| {
+                let (name, _) = intentional_action(step)?;
+                (name == "record-built-subject")
+                    .then(|| step["id"].as_str().expect("addressable").to_owned())
+            })
+            .expect("the build job records its subject through the Action");
+        for key in ["version", "digest"] {
+            assert_eq!(
+                outputs.get(key).map(String::as_str),
+                Some(format!("${{{{ steps.{recorder}.outputs.{key} }}}}").as_str()),
+                "the build job projects the {key} the recording step derived"
+            );
+            assert!(
+                action_outputs("record-built-subject").contains(key),
+                "the record-built-subject Action declares {key}"
+            );
+        }
+
+        for target in ["primary", "github"] {
+            for step in publisher_steps(workspace.root(), target) {
+                let environment = step_environment(&step);
+                for (variable, key) in [
+                    ("INTENTIONAL_VERSION", "version"),
+                    ("INTENTIONAL_SUBJECT_DIGEST", "digest"),
+                ] {
+                    let Some(value) = environment.get(variable) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        value,
+                        &format!("${{{{ needs.{build}.outputs.{key} }}}}"),
+                        "the {target} publisher reads the subject {key} from {build}"
+                    );
+                }
+            }
+        }
+    }
+
+    // A `${{ }}` expansion inside a `run:` body is textual substitution into
+    // shell source before the shell ever runs, so a value carrying a quote or a
+    // `$(...)` becomes executable text. These bodies hold registry credentials
+    // and run in a job that later reaches the publication protocol, and the
+    // same rule is already gated for the composite Actions this repository
+    // publishes; the derived workflows were the surface it did not cover.
+    #[test]
+    fn routes_every_value_a_managed_script_reads_through_its_environment() {
+        for workspace in [
+            workspace("workflow-expansion-cargo"),
+            npm_workspace("workflow-expansion-npm"),
+            two_destination_workspace("workflow-expansion-oci"),
+        ] {
+            for role in WorkflowRole::ALL {
+                converge(workspace.root(), role);
+                for (id, steps) in managed_steps(workspace.root(), role) {
+                    for step in &steps {
+                        let body = step.get("run").and_then(Value::as_str).unwrap_or_default();
+                        assert!(
+                            !body.contains("${{"),
+                            "{id} expands a workflow expression inside a run body: {body}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // The bootstrap token exists because a registry cannot bind a trusted
+    // publisher to a package it does not hold yet. That is its whole warrant,
+    // and it holds only while the package is absent: a recipe that read the
+    // secret first and probed afterwards would have a long-lived credential in
+    // hand on every steady-state publication, which is the fallback the design
+    // forbids. Ordering inside one script is the only place that can be seen,
+    // so it is asserted by relative position rather than by presence.
+    #[test]
+    fn reaches_a_bootstrap_token_only_after_proving_the_package_is_absent() {
+        for (workspace, secret) in [
+            (
+                workspace("workflow-bootstrap-cargo"),
+                "secrets.CARGO_REGISTRY_TOKEN",
+            ),
+            (npm_workspace("workflow-bootstrap-npm"), "secrets.NPM_TOKEN"),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let steps = publisher_steps(workspace.root(), "primary");
+            let holders = steps
+                .iter()
+                .filter(|step| {
+                    step_environment(step)
+                        .values()
+                        .any(|value| value.contains(secret))
+                })
+                .collect::<Vec<_>>();
+            let [authenticate] = holders.as_slice() else {
+                panic!("exactly one step of the primary publisher reads {secret}");
+            };
+            let body = authenticate["run"].as_str().expect("a script");
+            let probe = body
+                .find("INTENTIONAL_SUBJECT_IDENTITY")
+                .expect("the script resolves the package before deciding");
+            let read = body
+                .find("${INTENTIONAL_BOOTSTRAP_TOKEN:-}")
+                .expect("the script reads the bootstrap token defensively");
+            assert!(
+                probe < read,
+                "the primary publisher probes for the package before reaching its bootstrap token"
+            );
+        }
+    }
+
+    // The recipe fixes what its destination admits, and the observation it
+    // writes has to say the same thing or `verify publication` refuses it. Both
+    // sides are derived here, so a destination whose recipe changed one and not
+    // the other fails at derivation instead of on a release runner.
+    #[test]
+    fn writes_the_retrieval_mode_the_maintained_recipe_fixes() {
+        let workspace = npm_workspace("workflow-retrieval-mode");
+        converge(workspace.root(), WorkflowRole::Publish);
+        for (target, mode) in [
+            (PRIMARY_TARGET, CleanClientMode::Public),
+            ("github", CleanClientMode::AuthenticatedRegistry),
+        ] {
+            let selected = crate::executor::recipe::select_publications(
+                workspace.root(),
+                &Config::load(workspace.root()).expect("configuration loads"),
+            )
+            .expect("publications select")
+            .into_iter()
+            .find(|publication| publication.target == target)
+            .expect("the target is configured");
+            assert_eq!(selected.retrieval, mode, "the catalog fixes {target}");
+
+            let written = publisher_steps(workspace.root(), target)
+                .iter()
+                .filter_map(|step| {
+                    step_environment(step)
+                        .get("INTENTIONAL_RETRIEVAL_MODE")
+                        .cloned()
+                })
+                .collect::<Vec<_>>();
+            let expected = match mode {
+                CleanClientMode::Public => "public",
+                CleanClientMode::AuthenticatedRegistry => "authenticated-registry",
+                CleanClientMode::AuthenticatedDraft => "authenticated-draft",
+            };
+            assert_eq!(
+                written,
+                vec![expected.to_owned()],
+                "the {target} recipe records the retrieval its catalog entry fixes"
+            );
+        }
+    }
+
+    // The recipe waits for its own destination and the command that reads its
+    // observation waits under the same bound. Two hand-written copies of that
+    // policy drift silently: a recipe that gave up sooner would report pending
+    // for a release that was about to appear, and one that outlasted the
+    // command would keep a runner busy past the point anything could accept it.
+    #[test]
+    fn waits_under_the_bound_the_maintained_policy_states() {
+        let workspace = workspace("workflow-consistency-policy");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let policy =
+            crate::publication::observation::ConsistencyPolicy::maintained(PublisherKind::Cargo);
+        let readback = publisher_steps(workspace.root(), "primary")
+            .into_iter()
+            .find(|step| step_environment(step).contains_key("INTENTIONAL_DEADLINE"))
+            .expect("the recipe reads its destination back under a bound");
+        let environment = step_environment(&readback);
+        for (variable, seconds) in [
+            ("INTENTIONAL_INTERVAL", policy.interval.as_secs()),
+            (
+                "INTENTIONAL_MAXIMUM_INTERVAL",
+                policy.maximum_interval.as_secs(),
+            ),
+            ("INTENTIONAL_DEADLINE", policy.deadline.as_secs()),
+        ] {
+            assert_eq!(
+                environment.get(variable).map(String::as_str),
+                Some(seconds.to_string().as_str()),
+                "{variable} is the maintained policy's value"
+            );
+        }
+        assert_eq!(
+            environment.get("INTENTIONAL_BACKOFF").map(String::as_str),
+            Some(policy.backoff.to_string().as_str())
+        );
+    }
+
+    // A workflow identity is a credential every step of the job it is granted
+    // in can reach. Granting it to a destination whose recipe never presents
+    // one costs nothing visible and is therefore exactly the kind of scope that
+    // accumulates, so the jobs that hold it are named.
+    #[test]
+    fn grants_a_workflow_identity_only_where_a_recipe_presents_one() {
+        let workspace = npm_workspace("workflow-identity-scope");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        for (target, granted) in [("primary", true), ("github", false)] {
+            let id = job_ids(&jobs, "intentional_publish_")
+                .into_iter()
+                .find(|id| id.ends_with(target))
+                .expect("the publisher job is derived");
+            let permissions = jobs[&Value::String(id.clone())]["permissions"]
+                .as_mapping()
+                .expect("a publisher states its permissions");
+            assert_eq!(
+                permissions.contains_key(Value::String("id-token".to_owned())),
+                granted,
+                "{id} holds a workflow identity only if its recipe presents one"
+            );
+        }
     }
 
     #[test]

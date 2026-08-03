@@ -153,10 +153,10 @@ fn policy_environment(publisher: PublisherKind) -> String {
     let policy = ConsistencyPolicy::maintained(publisher);
     format!(
         "      @ENVVAR@INTERVAL: {}\n      @ENVVAR@BACKOFF: {}\n      @ENVVAR@MAXIMUM_INTERVAL: {}\n      @ENVVAR@DEADLINE: {}\n",
-        policy.interval.as_secs(),
-        policy.backoff,
-        policy.maximum_interval.as_secs(),
-        policy.deadline.as_secs(),
+        scalar(&policy.interval.as_secs().to_string()),
+        scalar(&policy.backoff.to_string()),
+        scalar(&policy.maximum_interval.as_secs().to_string()),
+        scalar(&policy.deadline.as_secs().to_string()),
     )
 }
 
