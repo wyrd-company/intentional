@@ -58,11 +58,48 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
         }
         publications.push(publication.identity());
     }
+    findings.extend(global_tag_findings(&config));
     findings.extend(workflow_findings(root, github)?);
     Ok(ExecutorCheck {
         publications,
         findings,
     })
+}
+
+/// Report a tag configuration the release workflow could not publish.
+///
+/// The release workflow publishes exactly one annotated global release tag with
+/// the release commit; every other configured tag is created later by the
+/// publication workflow and declares the phase it belongs to. A configuration
+/// with no unphased tag, or with more than one, only fails once the release
+/// workflow has already accepted a source commit, so it is reported here where
+/// it can still be fixed.
+fn global_tag_findings(config: &Config) -> Vec<String> {
+    let mut unphased = Vec::new();
+    for (release_unit_id, release_unit) in &config.release_units {
+        for (tag_id, tag) in &release_unit.tags {
+            if tag.require_phase.is_none() {
+                unphased.push(Config::release_unit_tag_id(release_unit_id, tag_id));
+            }
+        }
+    }
+    for (tag_id, tag) in &config.workspace_tags {
+        if tag.require_phase.is_none() {
+            unphased.push(Config::workspace_tag_id(tag_id));
+        }
+    }
+    match unphased.len() {
+        1 => Vec::new(),
+        0 => vec![
+            "the release workflow publishes one annotated global release tag, but no configured tag omits require-phase; leave exactly one tag unphased"
+                .to_owned(),
+        ],
+        _ => vec![format!(
+            "the release workflow publishes one annotated global release tag, but {} configured tags omit require-phase: {}; give all but one a require-phase declaration",
+            unphased.len(),
+            unphased.join(", ")
+        )],
+    }
 }
 
 fn workflow_findings(root: &Path, github: &GithubConfig) -> Result<Vec<String>> {
@@ -249,5 +286,36 @@ release-units:
             findings.contains("publish workflow .github/workflows/publish.yml does not exist"),
             "{findings}"
         );
+    }
+
+    #[test]
+    fn accepts_exactly_one_unphased_global_release_tag() {
+        let config = Config::from_yaml(CONFIG).expect("configuration");
+        assert!(global_tag_findings(&config).is_empty());
+    }
+
+    #[test]
+    fn reports_a_configuration_with_no_unphased_global_release_tag() {
+        let config = Config::from_yaml(&CONFIG.replace(
+            "primary: { role: primary, template: '{id}@{version}' }",
+            "primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }",
+        ))
+        .expect("configuration");
+        let findings = global_tag_findings(&config);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].contains("no configured tag omits require-phase"));
+    }
+
+    #[test]
+    fn reports_competing_unphased_global_release_tags_by_name() {
+        let config = Config::from_yaml(&CONFIG.replace(
+            "      primary: { role: primary, template: '{id}@{version}' }\n",
+            "      primary: { role: primary, template: '{id}@{version}' }\n      mirror: { role: projection, template: 'v{id}-{version}' }\n",
+        ))
+        .expect("configuration");
+        let findings = global_tag_findings(&config);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].contains("release-unit/component/mirror"));
+        assert!(findings[0].contains("release-unit/component/primary"));
     }
 }
