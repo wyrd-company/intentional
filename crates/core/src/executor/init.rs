@@ -1256,7 +1256,7 @@ release-units:
         workspace
             .write(
                 ".intentional/config.yml",
-                &format!("# repository comment\n{CONFIG}"),
+                &format!("---\n# repository comment\n{CONFIG}"),
             )
             .write(
                 "component/Cargo.toml",
@@ -1284,7 +1284,7 @@ release-units:
         let updated = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
             .expect("config readable");
         assert!(
-            updated.starts_with("# repository comment"),
+            updated.starts_with("---\n# repository comment"),
             "repository comments survive an executor configuration edit: {updated}"
         );
         assert!(

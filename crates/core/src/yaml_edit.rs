@@ -119,11 +119,11 @@ impl Document {
         };
         match placement {
             Placement::Replace(range) => {
-                let rendered = self.render_entry(&key, value, indent);
+                let rendered = self.render_entry(&key, value, indent)?;
                 self.text.replace_range(range, &rendered);
             }
             Placement::Insert(at, nested) => {
-                let rendered = self.render_entry(&key, &nested, indent);
+                let rendered = self.render_entry(&key, &nested, indent)?;
                 self.text.insert_str(at, &rendered);
             }
         }
@@ -158,8 +158,8 @@ impl Document {
                 "a yaml edit path must name at least one key".to_owned(),
             ));
         }
-        let mut region = 0..self.text.len();
-        let mut indent = root_indent(&self.text);
+        let mut region = root_start(&self.text)..self.text.len();
+        let mut indent = significant_indent(&self.text, region.clone()).unwrap_or(0);
         for (depth, segment) in path.iter().enumerate() {
             let Some(entries) = entries(&self.text, region.clone(), indent) else {
                 if depth == 0 {
@@ -198,10 +198,10 @@ impl Document {
         unreachable!("the loop returns on the final path segment")
     }
 
-    fn render_entry(&self, key: &str, value: &Value, indent: usize) -> String {
+    fn render_entry(&self, key: &str, value: &Value, indent: usize) -> Result<String> {
         let mut rendered = String::new();
-        emit_entry(&mut rendered, key, value, indent, self.newline);
-        rendered
+        emit_entry(&mut rendered, key, value, indent, self.newline)?;
+        Ok(rendered)
     }
 }
 
@@ -254,8 +254,24 @@ impl Entry {
     }
 }
 
-fn root_indent(text: &str) -> usize {
-    significant_indent(text, 0..text.len()).unwrap_or(0)
+/// Offset of the document body, past any directives and document-start marker.
+///
+/// A leading `---` is the default requirement of common YAML linters, so a
+/// document that opens with one is ordinary input, not an exotic case.
+fn root_start(text: &str) -> usize {
+    let mut start = 0;
+    for line in lines(text, 0..text.len()) {
+        let content = text[line.clone()].trim();
+        if content.is_empty() || content.starts_with('#') || content.starts_with('%') {
+            continue;
+        }
+        if content == "---" {
+            start = line.end;
+            continue;
+        }
+        break;
+    }
+    start
 }
 
 /// Indent of the first line in `region` that is neither blank nor a comment.
@@ -305,7 +321,6 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
                 text,
                 previous.key_line_end,
                 pending_comment.unwrap_or(line.start),
-                indent,
             );
         }
         entries.push(Entry {
@@ -319,26 +334,26 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
         });
     }
     if let Some(previous) = entries.last_mut() {
-        previous.end = trimmed_end(text, previous.key_line_end, region.end, indent);
+        previous.end = trimmed_end(text, previous.key_line_end, region.end);
     }
     Some(entries)
 }
 
 /// Pull an entry's end back past trailing lines that belong to its container.
 ///
-/// Blank separators and comments written outside the entry's indentation
-/// introduce or describe what follows, so an edit to the entry must leave them
-/// where the author put them.
-fn trimmed_end(text: &str, floor: usize, mut end: usize, indent: usize) -> usize {
+/// A run of blank or comment lines closing a mapping was written about the
+/// mapping, not about whichever entry happens to sit last in it. Managed jobs
+/// are appended last, so leaving those lines inside the final entry would
+/// destroy a maintainer's closing comment on the next replacement — exactly the
+/// content this module exists to protect.
+fn trimmed_end(text: &str, floor: usize, mut end: usize) -> usize {
     while end > floor {
         let start = line_start(text, end - 1);
         if start < floor {
             break;
         }
-        let line = &text[start..end];
-        let outside = line.trim().is_empty()
-            || (line.trim_start().starts_with('#') && indent_of(line) < indent);
-        if !outside {
+        let line = text[start..end].trim();
+        if !(line.is_empty() || line.starts_with('#') || line == "...") {
             break;
         }
         end = start;
@@ -449,7 +464,13 @@ fn unassign(container: &mut Value, path: &[&str]) -> bool {
         .is_some_and(|nested| unassign(nested, rest))
 }
 
-fn emit_entry(out: &mut String, key: &str, value: &Value, indent: usize, newline: &str) {
+fn emit_entry(
+    out: &mut String,
+    key: &str,
+    value: &Value,
+    indent: usize,
+    newline: &str,
+) -> Result<()> {
     let spaces = " ".repeat(indent);
     let rendered_key = emit_key(key);
     match inline_scalar(value) {
@@ -465,19 +486,26 @@ fn emit_entry(out: &mut String, key: &str, value: &Value, indent: usize, newline
             }
             None => {
                 out.push_str(&format!("{spaces}{rendered_key}:{newline}"));
-                emit_block(out, value, indent + 2, newline);
+                emit_block(out, value, indent + 2, newline)?;
             }
         },
     }
+    Ok(())
 }
 
-fn emit_block(out: &mut String, value: &Value, indent: usize, newline: &str) {
+fn emit_block(out: &mut String, value: &Value, indent: usize, newline: &str) -> Result<()> {
     let spaces = " ".repeat(indent);
     match value {
         Value::Mapping(mapping) => {
             for (key, item) in mapping {
-                let key = key.as_str().unwrap_or_default();
-                emit_entry(out, key, item, indent, newline);
+                // Rendering a non-string key as an empty one would silently
+                // corrupt the container being rebuilt.
+                let key = key.as_str().ok_or_else(|| {
+                    Error::Validation(format!(
+                        "cannot edit a mapping whose key {key:?} is not a string"
+                    ))
+                })?;
+                emit_entry(out, key, item, indent, newline)?;
             }
         }
         Value::Sequence(items) => {
@@ -489,7 +517,7 @@ fn emit_block(out: &mut String, value: &Value, indent: usize, newline: &str) {
                     Some(scalar) => out.push_str(&format!("{spaces}- {scalar}{newline}")),
                     None => {
                         let mut nested = String::new();
-                        emit_block(&mut nested, item, indent + 2, newline);
+                        emit_block(&mut nested, item, indent + 2, newline)?;
                         out.push_str(&format!("{spaces}- {}", &nested[indent + 2..]));
                     }
                 }
@@ -497,6 +525,7 @@ fn emit_block(out: &mut String, value: &Value, indent: usize, newline: &str) {
         }
         _ => unreachable!("scalars are emitted inline"),
     }
+    Ok(())
 }
 
 /// Inline rendering of a value that occupies no additional lines.
@@ -659,6 +688,59 @@ mod tests {
             Some(Value::Mapping(Mapping::new()))
         );
         assert_eq!(document.get(&["jobs", "absent"]).expect("absent"), None);
+    }
+
+    #[test]
+    fn edits_a_document_that_opens_with_a_document_start_marker() {
+        let source = "%YAML 1.2\n---\n# repository header\nname: release\njobs:\n  test:\n    runs-on: ubuntu-latest\n";
+        let mut document = Document::parse(source).expect("parses");
+        document
+            .set(&["jobs", "managed"], &value("runs-on: ubuntu-latest\n"))
+            .expect("edits past the document-start marker");
+        assert_eq!(
+            document.text(),
+            "%YAML 1.2\n---\n# repository header\nname: release\njobs:\n  test:\n    runs-on: ubuntu-latest\n  managed:\n    runs-on: ubuntu-latest\n"
+        );
+    }
+
+    #[test]
+    fn keeps_a_closing_comment_with_its_container_not_the_last_entry() {
+        let source = "jobs:\n  a:\n    runs-on: x\n  # closes the jobs block\n";
+        let mut document = Document::parse(source).expect("parses");
+        document
+            .set(&["jobs", "a"], &value("runs-on: z\n"))
+            .expect("replaces the last entry");
+        assert_eq!(
+            document.text(),
+            "jobs:\n  a:\n    runs-on: z\n  # closes the jobs block\n",
+            "a comment closing the mapping survives replacing its last entry"
+        );
+
+        document
+            .set(&["jobs", "b"], &value("runs-on: y\n"))
+            .expect("inserts a new entry");
+        assert_eq!(
+            document.text(),
+            "jobs:\n  a:\n    runs-on: z\n  b:\n    runs-on: y\n  # closes the jobs block\n",
+            "a new entry lands before the comment that closes the mapping"
+        );
+    }
+
+    #[test]
+    fn refuses_to_rebuild_a_container_holding_a_key_it_cannot_render() {
+        let mut document = Document::parse("settings: { 1: one, true: yes }\n").expect("parses");
+        let error = document
+            .set(&["settings", "added"], &Value::Bool(true))
+            .expect_err("non-string key rejected");
+        assert!(
+            error.to_string().contains("is not a string"),
+            "the error names the unsupported key: {error}"
+        );
+        assert_eq!(
+            document.text(),
+            "settings: { 1: one, true: yes }\n",
+            "a refused edit leaves the document untouched"
+        );
     }
 
     #[test]
