@@ -17,7 +17,8 @@ use crate::plan::ReleasePlan;
 use crate::release::build::build_candidate;
 use crate::release::candidate::{
     digest_bytes, ReleaseCandidate, BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD, CANDIDATE_TREE_DIRECTORY,
-    IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, RELEASE_CANDIDATE_MANIFEST,
+    IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, MAX_CANDIDATE_FILES, MAX_CANDIDATE_FILE_BYTES,
+    RELEASE_CANDIDATE_MANIFEST,
 };
 use crate::release::git::{self, GitCommand};
 use std::collections::BTreeSet;
@@ -126,6 +127,18 @@ fn verify_transported_files(directory: &Path, candidate: &ReleaseCandidate) -> R
     }
     for file in &candidate.files {
         let path = directory.join(&file.path);
+        // Bound the read by what is on disk rather than by what the manifest
+        // declares, so an oversized transported file cannot be read into memory
+        // on the strength of an understated inventory entry.
+        let present = std::fs::metadata(&path)
+            .map_err(|error| Error::io(&path, error))?
+            .len();
+        if present > MAX_CANDIDATE_FILE_BYTES {
+            return Err(Error::Validation(format!(
+                "release handoff file {} is {present} bytes and exceeds the {MAX_CANDIDATE_FILE_BYTES} byte bound",
+                file.path
+            )));
+        }
         let contents = std::fs::read(&path).map_err(|error| Error::io(&path, error))?;
         if contents.len() as u64 != file.size {
             return Err(Error::Validation(format!(
@@ -633,6 +646,11 @@ fn collect(root: &Path, directory: &Path, files: &mut BTreeSet<String>) -> Resul
             continue;
         }
         files.insert(relative);
+        if files.len() > MAX_CANDIDATE_FILES {
+            return Err(Error::Validation(format!(
+                "the release handoff transports more than {MAX_CANDIDATE_FILES} files"
+            )));
+        }
     }
     Ok(())
 }

@@ -154,9 +154,14 @@ fn require_empty_directory(directory: &Path) -> Result<()> {
 
 /// Refuse to prepare a release from a workspace that is not exactly the source commit.
 fn require_clean_worktree(root: &Path, output: &Path) -> Result<()> {
-    let root_canonical = root
-        .canonicalize()
-        .map_err(|error| Error::io(root, error))?;
+    // Porcelain status reports repository-relative paths, so they are resolved
+    // against the repository top level rather than the workspace directory.
+    let top_level = PathBuf::from(
+        GitCommand::new(root)
+            .args(["rev-parse", "--show-toplevel"])
+            .run()?
+            .line()?,
+    );
     let output_canonical = output
         .canonicalize()
         .map_err(|error| Error::io(output, error))?;
@@ -176,7 +181,7 @@ fn require_clean_worktree(root: &Path, output: &Path) -> Result<()> {
         if record.starts_with(['R', 'C']) || record[1..].starts_with(['R', 'C']) {
             records.next();
         }
-        if root_canonical.join(path).starts_with(&output_canonical) {
+        if top_level.join(path).starts_with(&output_canonical) {
             continue;
         }
         dirty.push(path.to_owned());
