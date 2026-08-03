@@ -3156,10 +3156,13 @@ aur:
     }
 
     // The deliverable RPM and APT distribute is the GitHub Release asset itself,
-    // and the design does not state which job uploads it to the draft. Deriving
-    // a publisher job anyway would ship a publication that publishes nothing.
+    // which the managed upload job places on the draft. Deriving a publisher job
+    // before that job exists would ship a publication whose deliverable nothing
+    // uploads, and the refusal has to say that rather than something the design
+    // has since answered: a reader who is told the ownership is unsettled looks
+    // for a decision that was already made.
     #[test]
-    fn refuses_a_publication_whose_deliverable_upload_is_unsettled() {
+    fn refuses_a_publication_whose_deliverable_nothing_uploads() {
         for publisher in ["rpm", "apt"] {
             let workspace = go_workspace("workflow-go-unsettled");
             workspace.write(
@@ -3182,6 +3185,12 @@ aur:
                     .message
                     .contains(&format!("component/{publisher}/primary")),
                 "{}",
+                diagnostic.message
+            );
+            assert!(
+                diagnostic.message.contains("the managed upload job")
+                    && diagnostic.message.contains("not derived yet"),
+                "the refusal names the job that is missing rather than an open question: {}",
                 diagnostic.message
             );
         }
