@@ -7,7 +7,8 @@
 
 use crate::config::{Config, GithubConfig, WorkflowRole, CONFIG_PATH};
 use crate::error::{Error, Result};
-use crate::executor::recipe::resolve_publications;
+use crate::executor::goreleaser;
+use crate::executor::recipe::{resolve_publications, Packager, SelectedPublication};
 use crate::executor::workflow::{compare_configured_workflow, ComparisonStatus};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -48,7 +49,9 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
             .configuration_paths()
             .iter()
             .any(|relative| root.join(&unit.path).join(relative).is_file());
-        if !configured {
+        if configured {
+            findings.extend(native_packager_findings(root, unit, &publication)?);
+        } else {
             findings.push(format!(
                 "{} requires {} configuration in {}; expected one of {}",
                 publication.identity(),
@@ -65,6 +68,61 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
         publications,
         findings,
     })
+}
+
+/// Validate one release unit's native packager configuration against its recipe.
+///
+/// The presence of a packager's configuration file proves the packager is
+/// configured, not that it is configured to produce what the selected recipe
+/// promotes. A GoReleaser release unit that opts into Homebrew without declaring
+/// the `brews` pipe builds a release whose publisher job has no formula to
+/// promote, and the first place that is visible today is a release runner.
+///
+/// Every finding names a member of the packager's own configuration rather than
+/// asking for a value in Intentional configuration. Native packager settings
+/// stay native; conformance only states which of them the recipe depends on.
+fn native_packager_findings(
+    root: &Path,
+    unit: &crate::config::ReleaseUnitConfig,
+    publication: &SelectedPublication,
+) -> Result<Vec<String>> {
+    if publication.packager != Packager::GoReleaser {
+        return Ok(Vec::new());
+    }
+    let directory = root.join(&unit.path);
+    let Some(config) = goreleaser::read(&directory)? else {
+        return Ok(Vec::new());
+    };
+    let identity = publication.identity();
+    let file = unit.path.join(&config.path);
+    let file = file.display();
+    let mut findings = Vec::new();
+    // The sealed subject identity is compared against what a publisher fragment
+    // records, so it has to be the name GoReleaser gave the artifacts rather
+    // than a name derived around it.
+    if config.project_name.is_none() {
+        findings.push(format!(
+            "{identity} requires project_name in {file}; the maintained recipe seals that name as the subject identity every destination resolves"
+        ));
+    }
+    if let Some(pipe) = goreleaser::pipe(publication.publisher) {
+        if !config.pipes.iter().any(|declared| declared == pipe) {
+            findings.push(format!(
+                "{identity} promotes what the {pipe} pipe produces, but {file} declares no {pipe}"
+            ));
+        } else if let Some(format) = goreleaser::nfpm_format(publication.publisher) {
+            if !config
+                .nfpm_formats
+                .iter()
+                .any(|declared| declared == format)
+            {
+                findings.push(format!(
+                    "{identity} distributes the {format} deliverable, but no {pipe} entry in {file} declares the {format} format"
+                ));
+            }
+        }
+    }
+    Ok(findings)
 }
 
 /// Report a tag configuration the release workflow could not publish.
@@ -250,6 +308,126 @@ release-units:
             result.findings[0].contains("requires goreleaser configuration"),
             "{:?}",
             result.findings
+        );
+    }
+
+    /// A Go release unit whose native configuration declares every pipe.
+    const GORELEASER_CONFIG: &str = r#"version: 2
+project_name: example-tool
+builds:
+  - main: ./cmd/example-tool
+brews:
+  - repository: { owner: example-org, name: homebrew-tap }
+nfpms:
+  - formats: [ rpm, deb ]
+aur:
+  - name: example-tool-bin
+"#;
+
+    fn go_workspace(label: &str, publisher: &str) -> Workspace {
+        let workspace = workspace(label, publisher);
+        workspace
+            .write("component/go.mod", "module example.test/example-tool\n")
+            .write(
+                "component/cmd/example-tool/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write("component/.goreleaser.yaml", GORELEASER_CONFIG);
+        workspace
+    }
+
+    /// Findings one workspace's native packager contract produces.
+    fn packager_findings(workspace: &Workspace) -> Vec<String> {
+        check_executor(workspace.root())
+            .expect("check runs")
+            .findings
+            .into_iter()
+            .filter(|finding| finding.starts_with("component/"))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_native_goreleaser_configuration_that_declares_every_promoted_pipe() {
+        let workspace = go_workspace(
+            "check-goreleaser-conforming",
+            "    homebrew: { repository: example-org/homebrew-tap }\n    rpm: {}\n    apt: {}\n    aur: {}\n",
+        );
+        assert!(
+            packager_findings(&workspace).is_empty(),
+            "{:?}",
+            packager_findings(&workspace)
+        );
+    }
+
+    #[test]
+    fn reports_a_configured_publisher_whose_goreleaser_pipe_is_not_declared() {
+        for (publisher, property, expected) in [
+            (
+                "brews",
+                "    homebrew: { repository: example-org/homebrew-tap }\n",
+                "component/homebrew/primary promotes what the brews pipe produces",
+            ),
+            (
+                "nfpms",
+                "    rpm: {}\n",
+                "component/rpm/primary promotes what the nfpms pipe produces",
+            ),
+            (
+                "aur",
+                "    aur: {}\n",
+                "component/aur/primary promotes what the aur pipe produces",
+            ),
+        ] {
+            let workspace = go_workspace("check-goreleaser-pipe", property);
+            workspace.write(
+                "component/.goreleaser.yaml",
+                &GORELEASER_CONFIG.replace(&format!("{publisher}:\n"), "unused:\n"),
+            );
+            let findings = packager_findings(&workspace);
+            assert!(
+                findings.iter().any(|finding| finding.contains(expected)),
+                "an undeclared {publisher} pipe is reported: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_a_system_package_format_no_nfpms_entry_declares() {
+        for (property, format, identity) in [
+            ("    rpm: {}\n", "rpm", "component/rpm/primary"),
+            ("    apt: {}\n", "deb", "component/apt/primary"),
+        ] {
+            let workspace = go_workspace("check-goreleaser-format", property);
+            workspace.write(
+                "component/.goreleaser.yaml",
+                &GORELEASER_CONFIG.replace("formats: [ rpm, deb ]", "formats: [ apk ]"),
+            );
+            let findings = packager_findings(&workspace);
+            assert!(
+                findings.iter().any(|finding| finding
+                    .contains(&format!("{identity} distributes the {format} deliverable"))),
+                "an nfpms declaration without the {format} format is reported: {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reports_native_configuration_that_declares_no_project_name() {
+        let workspace = go_workspace(
+            "check-goreleaser-project",
+            "    homebrew: { repository: example-org/homebrew-tap }\n",
+        );
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace("project_name: example-tool\n", ""),
+        );
+        let findings = packager_findings(&workspace);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding
+                    .contains("requires project_name in component/.goreleaser.yaml")),
+            "{findings:?}"
         );
     }
 
