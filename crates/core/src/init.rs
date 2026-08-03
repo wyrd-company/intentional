@@ -4002,7 +4002,7 @@ fn load_previous_plan(root: &Path) -> Result<Option<InitPlan>> {
     }
 }
 
-fn evidence(root: &Path, relative: &Path, lines: Vec<usize>) -> Result<SourceEvidence> {
+pub(crate) fn evidence(root: &Path, relative: &Path, lines: Vec<usize>) -> Result<SourceEvidence> {
     let path = root.join(relative);
     let bytes = std::fs::read(&path).map_err(|error| Error::io(&path, error))?;
     Ok(SourceEvidence {

@@ -10,6 +10,7 @@ pub mod apply;
 pub mod check;
 pub mod config;
 pub mod error;
+pub mod executor;
 pub mod init;
 pub mod intent;
 pub mod model;
@@ -30,6 +31,9 @@ pub use config::{
     DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
+pub use executor::recipe::{
+    select_publications, Capability, CapabilityEvidence, Packager, Recipe, SelectedPublication,
+};
 pub use init::{
     discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,
     CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate, ExtractionDiagnostic,
