@@ -3681,6 +3681,79 @@ release-units:
         }
     }
 
+    // A recipe reports a destination that has not indexed the release yet, and
+    // one holding bytes this release did not promote, by writing an observation
+    // and succeeding: the command that reads it is what turns the first into a
+    // bounded wait and the second into an immediate failure. Both documents are
+    // written by a shell script, so a misspelled member or a state carrying
+    // detail it may not carry is a defect nothing in a Rust test would see and
+    // that a release runner would surface three jobs later, as a verification
+    // failure naming the destination rather than the recipe. The script is
+    // therefore run, and what it wrote is loaded by the same loader the command
+    // uses.
+    #[test]
+    fn writes_an_unobservable_and_a_disagreeing_state_the_loader_accepts() {
+        for (workspace, publisher) in [
+            (workspace("workflow-observed-states-cargo"), "cargo"),
+            (npm_workspace("workflow-observed-states-npm"), "npm"),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let readback = publisher_steps(workspace.root(), PRIMARY_TARGET)
+                .into_iter()
+                .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+                .expect("the recipe writes an observation");
+            let environment = step_environment(&readback);
+            let body = readback["run"].as_str().expect("a script");
+            // Everything up to the observation helper's closing brace is the
+            // helper and the strict-mode line it sits under. Running more would
+            // reach the registry.
+            let end = body
+                .find("\n}\n")
+                .expect("the observation helper is a shell function");
+            let helper = &body[..end + "\n}\n".len()];
+
+            let temporary = workspace.root().join("runner");
+            std::fs::create_dir_all(&temporary).expect("runner directory");
+            for (state, argument) in [
+                (
+                    crate::publication::observation::ObservationState::Pending,
+                    "",
+                ),
+                (
+                    crate::publication::observation::ObservationState::Conflict,
+                    "another release holds this version",
+                ),
+            ] {
+                let mut command = std::process::Command::new("bash");
+                command.arg("-c").arg(format!(
+                    "{helper}\nINTENTIONAL_observe_state {state} \"{argument}\""
+                ));
+                for (key, value) in &environment {
+                    command.env(
+                        key,
+                        value.replace("${{ runner.temp }}", &temporary.display().to_string()),
+                    );
+                }
+                let status = command.status().expect("the recipe script runs");
+                assert!(status.success(), "{publisher} writes a {state} observation");
+
+                let path = environment["INTENTIONAL_OBSERVATION"]
+                    .replace("${{ runner.temp }}", &temporary.display().to_string());
+                let observed =
+                    crate::publication::observation::PublicationObservation::load(Path::new(&path))
+                        .unwrap_or_else(|error| {
+                            panic!("{publisher} writes a loadable {state} observation: {error}")
+                        });
+                assert_eq!(observed.state, state);
+                assert_eq!(
+                    observed.identity(),
+                    format!("component/{publisher}/{PRIMARY_TARGET}"),
+                    "the observation names the publication its job publishes"
+                );
+            }
+        }
+    }
+
     // Everything the observation says about the release comes from the build
     // job, which derived it from the verified global release tag and from the
     // bytes it emitted. A recipe that read its own package manifest instead
@@ -3767,6 +3840,48 @@ release-units:
                         );
                     }
                 }
+            }
+        }
+    }
+
+    // A published version is immutable, so a rerun after a partial failure has
+    // exactly one safe move: read the destination, and submit only where it can
+    // establish that it did not accept the original operation. A script that
+    // published first would turn every rerun into a terminal conflict at a
+    // destination that already held the right bytes. Ordering inside the script
+    // is where that lives, so it is asserted by relative position.
+    #[test]
+    fn reads_each_destination_before_submitting_anything_to_it() {
+        for (workspace, submission) in [
+            (workspace("workflow-rerun-cargo"), "cargo publish"),
+            (npm_workspace("workflow-rerun-npm"), "npm publish"),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let publishers = managed_steps(workspace.root(), WorkflowRole::Publish)
+                .into_iter()
+                .filter(|(id, _)| id.starts_with("intentional_publish_"))
+                .collect::<Vec<_>>();
+            assert!(!publishers.is_empty(), "the workspace derives publishers");
+            for (target, steps) in publishers {
+                let step = steps
+                    .into_iter()
+                    .find(|step| {
+                        step.get("run")
+                            .and_then(Value::as_str)
+                            .is_some_and(|body| body.contains(submission))
+                    })
+                    .unwrap_or_else(|| panic!("{target} submits its subject with {submission}"));
+                let body = step["run"].as_str().expect("a script");
+                let read = body
+                    .find("the readback decides whether it is this release")
+                    .expect("the script short-circuits on a version the destination already holds");
+                let submit = body
+                    .find(submission)
+                    .expect("the script submits the promoted subject");
+                assert!(
+                    read < submit,
+                    "the {target} publisher reads its destination before submitting to it"
+                );
             }
         }
     }
