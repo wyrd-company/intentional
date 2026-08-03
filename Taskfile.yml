@@ -63,6 +63,7 @@ tasks:
       - scripts/release/test-retry.sh
       - scripts/release/assert-release-workflow-baseline.sh
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
+      - scripts/release/assert-action-paths.sh
       - scripts/release/assert-consumer-contract.sh
       - scripts/release/test-self-hosted-tag.sh
 
