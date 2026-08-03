@@ -178,9 +178,14 @@ proposed-design:
     inserted and an existing reserved job is replaced in full. A repository job
     that uses a reserved identifier or sentinel is replaced. Additional
     triggers, repository-owned jobs, expressions, comments, and unrelated metadata are
-    preserved. Configured gate job identifiers are added to the `needs` list of
-    the corresponding reserved authority or closure job without modifying the
-    gate jobs themselves.
+    preserved. Configured gate job identifiers are added to the `needs` lists of
+    the reserved jobs their authority governs, without modifying the gate jobs
+    themselves. A release gate precedes the reserved authority transition. A
+    publish gate precedes both evidence assembly and closure, so a gate
+    contributor's evidence is assembled and the gate governs the final
+    transition. Release-tag verification precedes every other reserved
+    publication job, so closure can never mint repository authority
+    concurrently with the check that proves the tag it closes.
 
     Read-only comparison emits a unified patch by default and can emit a
     structured JSON result. The result binds the proposed transformation to a
@@ -317,8 +322,13 @@ proposed-design:
     Intentional-owned reusable Actions perform credential-free plumbing and
     preparation. Repository-mutating, secret-bearing, and OpenID
     Connect-enabled commands are materialized in repository-local reserved
-    jobs. Checkout disables persisted credentials. Permissions are set per job
-    and default to read-only. Write authority is minted only after validation,
+    jobs. Checkout disables persisted credentials and states its release-tag
+    requirement explicitly rather than inheriting tags from an unrelated fetch
+    depth, because the commands these jobs run derive version authority and
+    resolve the global release tag from the repository's tags. Permissions are
+    set per job and default to read-only. Reconciliation reports the
+    workflow-level scopes its safe default withdraws, so a repository declares
+    them per job deliberately. Write authority is minted only after validation,
     configured gates, and protected-environment approval. External Actions are
     pinned to complete commit identities.
 
@@ -485,9 +495,12 @@ proposed-design:
     attachment set for repository-local closure steps to upload.
 
     A contributor job named in the configured publish gates is a required
-    dependency of closure. Contributions from other jobs are best-effort:
-    assembly consumes the set available when it starts and does not wait for or
-    diagnose later artifacts. Contributor Actions and the assembly command never
+    dependency of both evidence assembly and closure, so its contribution is
+    present when assembly starts. Contributions from other jobs are
+    best-effort: assembly consumes the set available when it starts and does
+    not wait for or diagnose later artifacts. A configured publish gate
+    therefore contributes evidence to assembly rather than inspecting the
+    assembled result. Contributor Actions and the assembly command never
     create or mutate the draft Release. The repository-local closure job is its
     sole writer, consumes the assembled files once, and never replaces partial
     evidence incrementally.
