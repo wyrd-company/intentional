@@ -1,0 +1,40 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/contribution/v1
+title: Intentional repository evidence contribution
+type: object
+additionalProperties: false
+required: [ $schema, namespace, attachments ]
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/contribution/v1
+  namespace:
+    type: string
+    minLength: 1
+  value: {}
+  attachments:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ name, file, sha256 ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: "^[^/]+$"
+        file:
+          type: string
+          minLength: 1
+          pattern: '^attachments/[^/]+$'
+        sha256:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+anyOf:
+  - required: [ value ]
+  - properties:
+      attachments:
+        minItems: 1

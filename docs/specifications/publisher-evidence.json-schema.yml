@@ -1,0 +1,182 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/publisher-evidence/v1
+title: Intentional publisher evidence fragment
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - release-unit
+  - publisher
+  - target
+  - source-commit
+  - release-commit
+  - global-tag
+  - plan-digest
+  - subject
+  - packager
+  - build-provenance
+  - attached-metadata
+  - destination
+  - clean-client
+  - destination-aliases
+  - phase-tags
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/publisher-evidence/v1
+  contract:
+    const: publisher-evidence-1
+  release-unit:
+    type: string
+    minLength: 1
+  publisher:
+    enum: [ npm, cargo, homebrew, rpm, apt, aur, oci ]
+  target:
+    type: string
+    minLength: 1
+  source-commit:
+    $ref: "#/$defs/git-object"
+  release-commit:
+    $ref: "#/$defs/git-object"
+  global-tag:
+    $ref: "#/$defs/tag-identity"
+  plan-digest:
+    $ref: "#/$defs/sha256"
+  subject:
+    $ref: "#/$defs/subject"
+  packager:
+    type: object
+    additionalProperties: false
+    required: [ id, version ]
+    properties:
+      id:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+  build-provenance:
+    type: array
+    items:
+      $ref: "#/$defs/evidence-reference"
+  attached-metadata:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ kind, digest ]
+      properties:
+        kind:
+          enum: [ sbom, provenance, signature ]
+        digest:
+          type: string
+          minLength: 1
+        reference:
+          type: string
+          minLength: 1
+  destination:
+    type: object
+    additionalProperties: false
+    required: [ identity, version, digest, observed-at ]
+    properties:
+      identity:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      observed-at:
+        type: string
+        format: date-time
+  clean-client:
+    type: object
+    additionalProperties: false
+    required: [ mode, client, version, digest, retrieved-at ]
+    properties:
+      mode:
+        enum: [ public, authenticated-draft ]
+      client:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      retrieved-at:
+        type: string
+        format: date-time
+  destination-aliases:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ name, digest ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        digest:
+          type: string
+          minLength: 1
+  phase-tags:
+    type: array
+    items:
+      $ref: "#/$defs/tag-identity"
+$defs:
+  git-object:
+    type: string
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  tag-identity:
+    type: object
+    additionalProperties: false
+    required: [ name, object, target ]
+    properties:
+      name:
+        type: string
+        minLength: 1
+      object:
+        $ref: "#/$defs/git-object"
+      target:
+        $ref: "#/$defs/git-object"
+  subject:
+    type: object
+    additionalProperties: false
+    required: [ kind, identity, version, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      identity:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        $ref: "#/$defs/sha256"
+  evidence-reference:
+    type: object
+    additionalProperties: false
+    required: [ kind, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      reference:
+        type: string
+        minLength: 1

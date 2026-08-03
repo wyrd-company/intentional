@@ -1,0 +1,452 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  related-to:
+    - intent-driven-polyglot-release
+objective: >-
+  Provide a GitHub Actions executor that derives, reconciles, and verifies an
+  inspectable release and publication protocol from Intentional configuration
+  while keeping repository mutation, publisher credentials, and publication
+  side effects inside repository-owned workflows.
+background:
+  current-design: >-
+    Intentional computes release versions, materializes projections, seals a
+    canonical release plan, and creates annotated Git tags. A surrounding
+    repository harness creates and pushes the release commit, pushes tags,
+    publishes packages, and records destination results. The plan and tag
+    contracts make these operations verifiable, but each repository currently
+    has to design and maintain its own GitHub workflow choreography.
+  problems:
+    - >-
+      Release correctness depends on repository-specific workflow code for
+      branch protection, source validation, release-commit construction,
+      publication ordering, retry recovery, and evidence collection.
+    - >-
+      Package metadata proves that a release unit can be packaged but does not
+      state whether Intentional is authorized to establish publication
+      automation for it.
+    - >-
+      Whole-workflow generation erases repository-owned triggers, jobs,
+      comments, and gates, while unstructured snippets cannot be checked for
+      drift or updated consistently.
+    - >-
+      Remote maintainer-controlled Actions are an unsuitable place for
+      repository-write credentials, publisher secrets, or OpenID Connect
+      identity because their executable contents can change independently of
+      the consuming repository.
+    - >-
+      Publication APIs can accept a package before it becomes observable to
+      normal clients, and independent registries cannot provide an atomic
+      cross-registry transaction.
+    - >-
+      An immutable GitHub Release cannot receive final publication evidence
+      after it is published, although downstream publishers can require its
+      assets before release closure.
+design-challenges:
+  workflow-ownership: >-
+    Intentional must own complete authority-bearing workflow slices without
+    taking ownership of the repository's complete workflow documents.
+  protected-default-branch-mutation: >-
+    A release must preserve the identity of the accepted default-branch commit
+    while deriving and publishing a release commit through an authority that is
+    compatible with branch protection.
+  declarative-publication-intent: >-
+    The executor must distinguish native packaging configuration from an
+    explicit request to create publication automation and must reject
+    publisher combinations for which it has no complete maintained recipe.
+  recipe-selection: >-
+    Generated steps depend jointly on the release unit's capabilities, its
+    applicable packager, the publisher protocol, and the concrete destination,
+    while only publication intent and non-derivable target data belong in
+    repository configuration.
+  privileged-code-visibility: >-
+    Users must be able to inspect and update every secret-bearing,
+    OpenID Connect-enabled, and repository-mutating operation as ordinary code
+    in their repository.
+  resumable-publication: >-
+    The executor must distinguish an accepted but not yet observable
+    publication from an absent publication and must resume without blindly
+    submitting an immutable version twice.
+  immutable-release-closure: >-
+    GitHub Release publication must freeze a complete asset and evidence set,
+    while publishers that consume GitHub-hosted deliverables need access before
+    that final transition.
+  extensible-evidence: >-
+    Repository-owned jobs need to contribute Release attachments and structured
+    evidence values without receiving Release write authority or extending
+    Intentional into the producer's assessment and policy domain.
+proposed-design:
+  high-level-overview: >-
+    Intentional defines a canonical GitHub release state machine and derives
+    managed GitHub Actions slices that execute it. The release workflow proves
+    an accepted source commit S, seals one release plan, deterministically
+    constructs release commit R with S as its sole parent, verifies the
+    candidate, and atomically pushes R with the global annotated release tag.
+    The tag-triggered publication workflow validates that release identity,
+    builds each subject once, publishes the same subject to every configured
+    destination, verifies destination readback and the recipe's consumer
+    retrieval contract,
+    creates phase-dependent tags, assembles affirmative release evidence, and
+    publishes an immutable GitHub Release as the closure transition. Intentional
+    supplies syntax-aware workflow comparison and mutation; the resulting
+    privileged commands remain visible and executable in the repository.
+
+  executor-configuration: |-
+    A top-level `github` property in `.intentional/config.yml` opts the
+    repository into the GitHub executor. It identifies the repository-owned
+    release and publish workflows and the repository-owned jobs that gate each
+    workflow's Intentional authority transition. The configured workflow paths
+    are defaults for executor commands rather than fixed filenames.
+
+    The optional `prefix` reserves Intentional job, step, and environment
+    variable identifiers. A scalar is normalized to lower snake case for jobs
+    and steps and to upper snake case for environment variables. A mapping with
+    `job` and `envvar` members sets the namespaces independently. Intentional
+    appends the required separator and validates the resulting identifier
+    forms. The default reserves `intentional_` for jobs and steps and
+    `INTENTIONAL_` for environment variables. The protected release environment
+    name is the job prefix converted to kebab case with `-release` appended.
+
+    Each release unit opts into managed publication through optional publisher
+    properties placed directly on that release unit. The supported properties
+    are `npm`, `cargo`, `homebrew`, `rpm`, `apt`, `aur`, and `oci`. A publisher
+    property is invalid unless the top-level `github` configuration is present.
+    Package discovery and native publisher settings never create publication
+    intent implicitly.
+
+  publisher-adapter-configuration: |-
+    A package-ecosystem adapter reads identity and compatible settings from its
+    native package files. Its Intentional property contains only the explicit
+    opt-in and data that those files cannot express. An empty `npm` or `cargo`
+    mapping enables the adapter's implicit primary destination. npm's primary
+    destination is npmjs, and its `additional-targets.github` member adds GitHub
+    Package Registry without replacing npmjs.
+
+    Homebrew configuration contains the tap repository. Intentional derives the
+    formula identity and packager from release-unit evidence. RPM, APT, and AUR
+    use their native package configuration together with their explicit empty
+    or target-specific adapter mapping.
+
+    Every concrete publisher target supports a target-scoped `omit` list when
+    its maintained recipe defines attached components. An adapter-level `omit`
+    applies to that adapter's primary target. Each entry under
+    `additional-targets` owns its own `omit`, independently of the primary and
+    its peer additional targets. A recipe defines the finite component names
+    valid for each target; an unsupported name is a semantic configuration
+    error.
+
+    OCI has no implicit destination. Its mapping contains at least one explicit
+    peer target named `dockerhub` or `ghcr`. Each target owns authentication,
+    promotion, readback, retrieval, and evidence. Target order is insignificant.
+    GHCR derives its owner and subject from GitHub and release-unit identity when
+    its mapping is empty. Docker Hub configuration supplies a repository when
+    that identity is not derivable. Each peer target owns its own `omit` list.
+
+  recipe-catalog: >-
+    Intentional maintains publication recipes indexed by release-unit
+    capability, packager, publisher adapter, and target. Native project evidence
+    derives capabilities and the one applicable packager; publisher properties
+    and target mappings express intent and destination data. A Go application
+    selects GoReleaser, a Dockerfile-backed runnable image selects its supported
+    Buildx recipe, and a Dev Container Feature selects the Dev Container CLI.
+    Exactly one maintained recipe must match every configured publication.
+    Missing and ambiguous matches are semantic configuration failures. A recipe
+    fixes generated jobs and steps, permissions, authentication, packaging,
+    promotion, attached metadata, provenance, signing, readback, consumer
+    retrieval, retry policy, and evidence shape.
+
+  native-packager-contract: >-
+    Initialization can propose or create the baseline native configuration
+    required by a derived packager. Intentional check validates that native
+    configuration against the selected recipe. Workflow reconciliation reads
+    compatible native configuration but limits its mutation to the selected
+    GitHub workflow. Packager configuration therefore remains native project
+    state rather than duplicated executor configuration.
+
+  workflow-reconciliation: |-
+    The executor derives the required release or publish workflow contract from
+    `.intentional/config.yml`, native package evidence, and the maintained
+    recipe catalog. It parses the configured workflow as YAML and computes a
+    semantic comparison while preserving its original formatting and comments.
+
+    Intentional owns required entries under `on`, the release concurrency
+    policy, the safe top-level permission default, and every job and step whose
+    identifier begins with the configured job prefix. A missing reserved job is
+    inserted and an existing reserved job is replaced in full. A repository job
+    that uses a reserved identifier is replaced. Additional triggers,
+    repository-owned jobs, expressions, comments, and unrelated metadata are
+    preserved. Configured gate job identifiers are added to the `needs` list of
+    the corresponding reserved authority or closure job without modifying the
+    gate jobs themselves.
+
+    Read-only comparison emits a unified patch by default and can emit a
+    structured JSON result. The result binds the proposed transformation to a
+    digest of the exact workflow input. Explicit apply performs the same
+    syntax-aware transformation and prints the applied diff. Applying a prefix
+    change removes the old reserved slices and inserts the newly prefixed
+    slices as one workflow migration. Routine initialization and checks never
+    apply workflow mutations.
+
+  command-boundaries: |-
+    The `intentional executor` command group manages executor integration only.
+    Its operations are `init`, `diff`, and `check`; applying a workflow patch is
+    the explicit `--apply` mode of `executor diff`. Runtime release jobs use
+    provider-neutral commands: `intentional release prepare`,
+    `intentional evidence contribute`, `intentional evidence assemble`,
+    `intentional verify handoff`, `intentional verify release-tag`,
+    `intentional verify publication`, and `intentional verify release`.
+
+    `verify publication` identifies the expected contract through required
+    `--release-unit` and `--publisher` options and an optional `--target`.
+    Omitting `--target` or passing `primary` selects an adapter's configured
+    primary destination. The npm-specific `npmjs` spelling aliases its primary.
+    `crates.io` aliases Cargo's primary only when the concrete configured
+    primary is crates.io; otherwise selection fails rather than redirecting to
+    a different Cargo registry. OCI has no primary, so its verification always
+    requires `--target dockerhub` or `--target ghcr`. Publisher evidence uses
+    `primary` as the canonical target identity for every selected primary and
+    records the concrete registry or repository destination separately.
+    `verify release` verifies durable recorded evidence by default; `--live`
+    additionally performs fresh destination readback. These portable commands
+    contain no GitHub workflow-discovery or workflow-patching behavior.
+
+    Thin credential-free Actions invoke the portable commands and transfer
+    their files through GitHub workflow artifacts. The prepare Action exposes
+    `candidate-path`, `source-sha`, `release-sha`, `global-tag`, and
+    `plan-digest`. The verify-handoff and verify-release-tag Actions each expose
+    `source-sha`, `release-sha`, `global-tag`, and `plan-digest`. The
+    verify-publication Action exposes `evidence-path`. The contribute and
+    assemble Actions expose no outputs. Schema-backed files are the
+    authoritative handoff and evidence contracts. Downstream operations read
+    and verify those files; GitHub outputs route selected identities and paths
+    through the workflow and never replace file contents.
+
+  release-workflow: |-
+    The release workflow operates on a source commit S whose required
+    continuous-integration checks have succeeded. A preparation job checks out
+    the accepted default branch without persisted credentials and runs
+    `intentional release prepare`. Resolving and verifying S is an invariant of
+    that command: it proves the required checks belong to S and that the remote
+    default branch identifies S before sealing the canonical release plan. The
+    command applies the plan and creates deterministic release commit R and its
+    local annotated global release tag without performing network mutation. R
+    has exactly one parent, S. The candidate handoff contains S, R, the plan and
+    digest, changed-tree evidence, the global tag identity, and the materialized
+    release candidate.
+
+    Repository-owned release gates consume the handoff and run after
+    preparation. The configured protected environment guards the publication
+    job. That job independently runs `intentional verify handoff`, mints a
+    short-lived GitHub App installation token, and uses only the verified
+    handoff Action's `source-sha`, `release-sha`, `global-tag`, and `plan-digest`
+    outputs for the authority transition. It checks immediately before mutation
+    that the remote default branch still equals the verified source SHA and uses
+    `git push --atomic` to update the default branch to the verified release SHA
+    and publish the verified global tag. A branch race, tag mismatch,
+    non-deterministic candidate, or failed gate prevents the mutation. Manual
+    and recovery invocations execute this same protocol.
+
+  publication-workflow: |-
+    The global annotated release tag triggers publication. The initial job
+    runs `intentional verify release-tag` and verifies that the tag targets R,
+    that R has sole parent S, and that the tag, tree, plan digest, projections,
+    changelogs, and consumed intents agree. Intentional derives the publication
+    dependency graph from the selected recipes and configured publish gates.
+
+    Each distinct publishable subject is built once from R and assigned an
+    immutable digest before distribution. Publisher jobs consume or promote
+    that subject; separate destinations never rebuild it. Different package
+    formats are distinct subjects and each is built once. Before-publication
+    package tags are created and atomically pushed only after their configured
+    prerequisites are valid. After-publication tags are created only after the
+    corresponding publisher evidence exists. All tags target R and bind the
+    same release plan.
+
+    Each publisher job runs `intentional verify publication` with explicit
+    release-unit and publisher identity and the target selector required by the
+    adapter after destination readback and its pre-closure consumer checks. The
+    command produces the
+    schema-backed publisher evidence fragment consumed by
+    `intentional evidence assemble`.
+
+  privileged-execution-boundary: >-
+    Intentional-owned reusable Actions perform credential-free plumbing and
+    preparation. Repository-mutating, secret-bearing, and OpenID
+    Connect-enabled commands are materialized in repository-local reserved
+    jobs. Checkout disables persisted credentials. Permissions are set per job
+    and default to read-only. Write authority is minted only after validation,
+    configured gates, and protected-environment approval. External Actions are
+    pinned to complete commit identities.
+
+  github-repository-authentication: >-
+    A repository-installed GitHub App is the sole Git repository-write
+    authority. Its application identifier and private key use prefix-derived
+    conventional GitHub variable and secret names; the default names are
+    `INTENTIONAL_GITHUB_APP_ID` and
+    `INTENTIONAL_GITHUB_APP_PRIVATE_KEY`. Each privileged job mints a
+    short-lived installation token scoped to the exact repository and
+    permission needed for that operation. The App is installed only on source,
+    tap, package-index, or other repositories selected by configuration.
+    `GITHUB_TOKEN` is used for supported package capabilities such as GHCR with
+    `packages: write` and `contents: read`, but never as Git repository-write
+    authority.
+
+  external-publisher-authentication: >-
+    Publisher adapters prefer registry-supported trusted publishing. Each
+    adapter defines semantic credential roles and conventional secret names,
+    and its configuration can override those names without containing secret
+    values. Where a registry requires an existing package before trusted
+    identity can be configured, the recipe exposes a protected bootstrap path.
+    It proves that the target is absent before using the conventional token.
+    Once the package exists, steady-state publication requires the trusted
+    identity and never falls back to the bootstrap token after an identity
+    failure. Docker Hub uses a username variable and personal access token by
+    default, conventionally `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`.
+
+  build-provenance-and-attached-metadata: >-
+    Maintained recipes generate strong intrinsic release evidence when the
+    selected packager and destination support it without unusual account
+    requirements. OCI recipes attach source, revision, version, and created
+    annotations where the format permits. Revision is R, and created derives
+    from R's commit timestamp. OCI packagers generate an SBOM through their
+    native supported mechanism and bind it to the subject digest. OCI
+    destinations receive a keyless signature bound to their published subject
+    by default. The recipe verifies generated provenance, attached metadata,
+    annotations, and signatures and records their positive results. An explicit
+    target omission suppresses the corresponding component for that target
+    without producing a warning or waiver record. Release evidence remains
+    affirmative and records only attached components that were produced.
+
+  oci-distribution: >-
+    OCI subjects can be runnable images, multi-platform image indexes, or
+    non-image artifacts. Every configured destination resolves the exact
+    release version to the same subject digest. Stable runnable-image recipes
+    publish an immutable exact Semantic Version tag and monotonically advance
+    compatible minor, major, and `latest` aliases. Major zero omits the broad
+    `0` alias, prereleases do not advance stable aliases, and backports never
+    move an alias backward. Dev Container Feature recipes maintain their
+    native exact, minor, major, and `latest` aliases. Alias mutation promotes
+    the existing subject and its final digest is read back and recorded.
+    Platform matrices derive from the packager recipe and native packager
+    configuration; platform-independent OCI artifacts have no artificial image
+    platforms.
+
+  destination-verification-and-retry: >-
+    A publisher command is followed by destination readback that verifies the
+    expected identity, version, and observable immutable bytes or digest. A
+    publisher whose consumer path is independent of GitHub draft assets then
+    requires a public clean client to resolve and retrieve the release through
+    the destination's normal client path before closure. Each adapter defines a
+    bounded eventual-consistency policy containing retryable pending responses,
+    intervals, backoff, and a deadline. A missing or not-yet-indexed result
+    remains pending until the deadline, while an observable identity, checksum,
+    or digest conflict fails immediately. A deadline produces a retryable
+    workflow failure. On rerun, the adapter reads before writing, accepts an
+    already visible matching publication, continues observation for a pending
+    publication, and submits only when the destination can establish that it
+    did not accept the original operation.
+
+  immutable-github-release: |-
+    The publication workflow creates a draft GitHub Release for the exact
+    global release tag and uploads every GitHub-hosted deliverable to it.
+    Publisher adapters complete distribution and their available pre-closure
+    verification before Release closure. A publisher whose normal consumer
+    path resolves a GitHub Release asset, notably Homebrew, cannot truthfully
+    perform public clean-client retrieval while the Release is a draft. It
+    receives stable Release and asset identities, obtains a read-only token from
+    its narrowly installed GitHub App, downloads the asset through the
+    authenticated draft Release API, verifies its digest, and performs every
+    package-level resolution and integrity check available before closure. Its
+    evidence records authenticated draft-asset retrieval and those package
+    checks; it does not claim public clean-client retrieval.
+
+    After all required publishers, applicable public clean-client checks,
+    authenticated draft-asset checks, phase tags, configured gates, and evidence
+    assembly succeed, a single closure job verifies the complete draft and
+    publishes it. GitHub Release publication is the final authority transition
+    and freezes its assets and associated tag. A failure before closure leaves a
+    resumable draft. Matching publications already present at external
+    destinations are recovered by destination readback; the executor does not
+    represent cross-registry publication as an atomic rollback transaction.
+
+  release-evidence: >-
+    Every Intentional-owned publisher and verification job writes a
+    schema-valid YAML fragment to a temporary workflow artifact. The fragments
+    bind the release unit, publisher and target, S, R, global tag, plan digest,
+    subject identity and digest, native provenance, destination readback, and
+    the truthful consumer-verification mode and result. The assembly job rejects
+    missing, duplicate, and unexpected publisher identities, verifies fragment
+    bindings and applicable
+    phase-tag evidence, and orders the accepted fragments deterministically.
+    `intentional evidence assemble` creates one human-readable
+    `intentional-evidence.yml` containing the
+    release identity, workflow identity, independently addressable release-unit
+    and publisher evidence, and repository contributions. Evidence is
+    affirmative and contains no omitted-component, warning, or posture fields.
+    It also emits the complete attachment set. Repository-local closure steps
+    upload and artifact-attest those files on the draft Release.
+
+  repository-evidence-contributions: |-
+    A standard credential-free contribution Action wraps
+    `intentional evidence contribute` and accepts a required
+    `namespace`, an optional `value-file`, and an optional newline-separated
+    `attachments` list. At least one content input is present. The value file
+    contains any valid YAML scalar, sequence, mapping, or null. Attachments are
+    exact existing file paths; globs and directory inputs are not part of the
+    contract. Each Release asset name is the attachment basename and the
+    Release asset namespace is flat.
+
+    The Action copies attachments into a temporary bundle, calculates SHA-256
+    digests, and writes an internal YAML manifest identified by
+    `$schema: https://intentional.foo/schemas/contribution/v1`. The manifest
+    contains the namespace, parsed value when supplied, and each attachment's
+    Release asset name, bundle-relative path, and digest. It uploads the bundle
+    as a temporary workflow artifact whose name contains the contribution
+    protocol, a filesystem-safe namespace hash, the GitHub job identifier, and
+    workflow run-attempt number. The Action exposes no GitHub outputs; the
+    manifest and attachment bundle are authoritative.
+
+    `intentional evidence assemble` groups contribution artifacts by namespace
+    and job, selects the
+    highest available attempt for a retried job, and ignores that job's older
+    attempts. A namespace claimed by different jobs after retry resolution, a
+    repeated namespace within one job attempt, or duplicate Release asset
+    basenames is a collision. Assembly verifies that YAML parses, files exist,
+    and attachment digests agree, but does not interpret contributor values or
+    gate their domain meaning. Accepted values are stored under
+    `contributions.<namespace>` and accepted files enter the authoritative
+    attachment set for repository-local closure steps to upload.
+
+    A contributor job named in the configured publish gates is a required
+    dependency of closure. Contributions from other jobs are best-effort:
+    assembly consumes the set available when it starts and does not wait for or
+    diagnose later artifacts. Contributor Actions and the assembly command never
+    create or mutate the draft Release. The repository-local closure job is its
+    sole writer, consumes the assembled files once, and never replaces partial
+    evidence incrementally.
+
+  evidence-consumption: >-
+    `intentional verify release VERSION` resolves the GitHub Release and
+    configured phase tags,
+    downloads `intentional-evidence.yml`, verifies its GitHub artifact
+    attestation and digest, validates its schema and S-to-R-to-tag chain,
+    compares applicable phase-tag evidence, and verifies publisher-native
+    provenance and subject digests. `--live` repeats fresh destination readback
+    and consumer retrieval. For a draft-dependent publisher, this is the first
+    public client check after closure. Its result is reported by verification
+    and never rewrites `intentional-evidence.yml` or another immutable Release
+    asset. The GitHub Release asset is the durable human- and
+    machine-readable evidence record; temporary workflow artifacts are only
+    transport between jobs.
+
+  executor-conformance: >-
+    Executor check uses the same derivation and semantic comparison engine as
+    diff and apply. It reports missing or drifted reserved jobs, weakened
+    permissions, missing configured gate dependencies, unsupported workflow
+    contract revisions, and Action revisions that differ from the maintained
+    recipe. The
+    GitHub executor defines desired conformance when a repository invokes it;
+    repository owners retain authority over their workflows and can remove the
+    executor checks. Airlock consumes the installed contract to audit
+    organizational requirements, GitHub environment protection, repository
+    settings, credential posture, Action policy, and assessment gates without
+    becoming a second authority for release semantics.

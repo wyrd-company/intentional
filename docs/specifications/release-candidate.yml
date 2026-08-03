@@ -1,0 +1,25 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  The release-candidate manifest is the YAML authority written by
+  `intentional release prepare` inside the `release-candidate`
+  workflow-artifact handoff. Preparation resolves source commit S, verifies
+  that the remote default branch identifies S, and binds that accepted source commit
+  S to deterministic release commit R, R's tree and sole parent, the sealed
+  release plan, the local annotated global tag object, changed-tree evidence,
+  and every file transported as the materialized candidate. Repository-owned
+  candidate gates consume this handoff, and the privileged publication job
+  runs `intentional verify handoff` before atomically pushing R and the tag.
+
+  The credential-free preparation Action projects `source-sha` from
+  `source.commit`, `release-sha` from `release.commit`, `global-tag` from
+  `global-tag.name`, and `plan-digest` from `plan.digest`. These outputs route
+  fields already present in this manifest and do not form another authority.
+validation-criteria: >-
+  A candidate conforms when it validates against
+  `release-candidate.json-schema.yml`; every inventoried file, Git object, and
+  digest verifies; R has S as its sole parent; regenerating the plan and
+  candidate from S produces the same identities; and the global tag object
+  targets R and carries the declared plan digest. Action output projections
+  must equal their corresponding manifest fields.

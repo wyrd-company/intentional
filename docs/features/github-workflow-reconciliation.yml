@@ -1,0 +1,225 @@
+$schema: https://refinery.systems/ontology/feature
+relationships: {}
+world-schema:
+  github_configured: boolean
+  publisher_configured: boolean
+  workflow_path: string
+  workflow_exists: boolean
+  reserved_prefix: string
+  repository_job_preserved: boolean
+  reserved_job_replaced: boolean
+  required_fields_present: boolean
+  configured_gate: string
+  gate_is_dependency: boolean
+  envvar_prefix: string
+  input_digest_matches: boolean
+  workflow_changed: boolean
+  diff_available: boolean
+  check_passes: boolean
+  diagnostic: string
+  executor_operation: string
+background:
+  description: >-
+    Intentional configuration and a repository-owned GitHub Actions workflow
+    are available for semantic comparison.
+  steps:
+    - given: The repository contains a valid Intentional workspace
+      world:
+        github_configured: true
+        workflow_exists: true
+        input_digest_matches: true
+rules:
+  - rule: Executor commands manage workflow integration only
+    scenarios:
+      expose-only-integration-operations:
+        addresses: Executor command boundary
+        steps:
+          - given: A repository uses the GitHub executor
+            world:
+              github_configured: true
+          - when: The executor command group is inspected
+          - then: Its operations are init, diff, and check
+            world:
+              executor_operation: init diff check
+
+  - rule: GitHub execution and publication are explicit repository choices
+    scenarios:
+      publisher-requires-github-executor:
+        addresses: Executor configuration validity
+        steps:
+          - given: A release unit declares an npm publisher without GitHub executor configuration
+            world:
+              github_configured: false
+              publisher_configured: true
+          - when: The Intentional configuration is checked
+          - then: Configuration validation fails with a semantic diagnostic
+            world:
+              check_passes: false
+              diagnostic: A configured publisher requires GitHub executor configuration
+      package-metadata-does-not-enable-publication:
+        addresses: Explicit publication opt-in
+        steps:
+          - given: A release unit has native npm package metadata and no npm publisher property
+            world:
+              publisher_configured: false
+          - when: The expected publish workflow is derived
+          - then: No npm publication job is required
+            world:
+              required_fields_present: true
+      configured-workflow-path-is-the-default:
+        addresses: Repository-owned workflow location
+        steps:
+          - given: The GitHub executor identifies a repository-owned release workflow
+            world:
+              workflow_path: .github/workflows/release.yml
+          - when: A release workflow diff is requested without a path override
+          - then: Intentional compares the configured workflow
+            world:
+              workflow_path: .github/workflows/release.yml
+
+  - rule: Intentional owns reserved slices and preserves repository-owned content
+    scenarios:
+      add-missing-reserved-slice:
+        addresses: Managed workflow slice insertion
+        steps:
+          - given: The workflow has no reserved release-preparation job
+            world:
+              reserved_prefix: intentional_
+              reserved_job_replaced: false
+          - when: Intentional derives the release workflow patch
+          - then: The patch adds the complete reserved release-preparation job
+            world:
+              required_fields_present: true
+              diff_available: true
+      replace-stale-reserved-slice:
+        addresses: Managed workflow slice replacement
+        steps:
+          - given: A reserved publication job differs from its maintained recipe
+            world:
+              reserved_prefix: intentional_
+          - when: Intentional derives the publish workflow patch
+          - then: The patch replaces the complete reserved job
+            world:
+              reserved_job_replaced: true
+              diff_available: true
+      preserve-repository-owned-job:
+        addresses: Repository workflow ownership
+        steps:
+          - given: The workflow contains an unrelated repository-owned test job
+            world:
+              repository_job_preserved: true
+          - when: Intentional applies a publish workflow patch
+          - then: The repository-owned job is unchanged
+            world:
+              repository_job_preserved: true
+              workflow_changed: true
+      reconcile-required-top-level-contract:
+        addresses: Workflow-level release invariants
+        steps:
+          - given: The workflow is missing a required tag trigger and release concurrency policy
+            world:
+              required_fields_present: false
+          - when: Intentional derives the workflow patch
+          - then: The patch adds the missing trigger, concurrency, and safe permission default
+            world:
+              required_fields_present: true
+              diff_available: true
+
+  - rule: Configured gates become reproducible critical-path dependencies
+    scenarios:
+      add-configured-release-gate:
+        addresses: Release authority gating
+        steps:
+          - given: The release workflow configuration names a repository-owned gate
+            world:
+              configured_gate: candidate_check
+              gate_is_dependency: false
+          - when: Intentional derives the release workflow
+          - then: The final release mutation job depends on the configured gate
+            world:
+              gate_is_dependency: true
+              repository_job_preserved: true
+      add-configured-publish-gate:
+        addresses: Release closure gating
+        steps:
+          - given: The publish workflow configuration names a repository-owned gate
+            world:
+              configured_gate: artifact_check
+              gate_is_dependency: false
+          - when: Intentional derives the publish workflow
+          - then: The final closure job depends on the configured gate
+            world:
+              gate_is_dependency: true
+              repository_job_preserved: true
+
+  - rule: One prefix configuration reserves both managed identifier namespaces
+    scenarios:
+      derive-prefix-namespaces-from-scalar:
+        addresses: Executor identifier ownership
+        steps:
+          - given: The GitHub executor has a scalar prefix
+            world:
+              reserved_prefix: automation
+          - when: Intentional derives managed workflow identifiers
+          - then: Job IDs use lower snake case and environment variables use upper snake case
+            world:
+              reserved_prefix: automation_
+              envvar_prefix: AUTOMATION_
+      migrate-reserved-slices-after-prefix-change:
+        addresses: Managed identifier migration
+        steps:
+          - given: Existing managed jobs use the previously configured prefix
+            world:
+              reserved_prefix: previous_
+          - when: A workflow patch is derived with a different configured prefix
+          - then: The patch replaces the previous reserved slices with newly prefixed slices
+            world:
+              reserved_prefix: replacement_
+              reserved_job_replaced: true
+  - rule: Workflow mutation is explicit and stale transformations are rejected
+    scenarios:
+      diff-is-read-only:
+        addresses: Reviewable workflow changes
+        steps:
+          - given: A configured workflow differs from the derived contract
+            world:
+              workflow_changed: false
+          - when: A workflow diff is requested without apply
+          - then: Intentional emits a patch without changing the workflow
+            world:
+              diff_available: true
+              workflow_changed: false
+      apply-performs-the-rendered-transformation:
+        addresses: Explicit workflow application
+        steps:
+          - given: A workflow patch is bound to the current input digest
+            world:
+              input_digest_matches: true
+              workflow_changed: false
+          - when: The workflow diff is explicitly applied
+          - then: Intentional changes the workflow and reports the applied diff
+            world:
+              workflow_changed: true
+              diff_available: true
+      reject-stale-input:
+        addresses: Compare-and-apply integrity
+        steps:
+          - given: The workflow changed after a proposed transformation was computed
+            world:
+              input_digest_matches: false
+          - when: The stale transformation is applied
+          - then: Intentional refuses to mutate the workflow
+            world:
+              workflow_changed: false
+              diagnostic: Workflow input digest does not match
+      check-detects-managed-drift:
+        addresses: Continuous workflow conformance
+        steps:
+          - given: A reserved job has weakened permissions or missing required steps
+            world:
+              check_passes: false
+          - when: Executor conformance is checked
+          - then: The check fails and identifies the managed drift
+            world:
+              check_passes: false
+              diagnostic: Reserved workflow slice differs from the derived contract

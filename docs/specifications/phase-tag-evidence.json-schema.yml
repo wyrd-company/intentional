@@ -1,0 +1,101 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/phase-tag-evidence/v1
+title: Intentional phase-tag evidence
+type: object
+additionalProperties: false
+required:
+  - phase
+  - source-commit
+  - release-commit
+  - global-tag
+  - plan-digest
+  - subjects
+properties:
+  phase:
+    enum: [ before-publication, after-publication ]
+  source-commit:
+    $ref: "#/$defs/git-object"
+  release-commit:
+    $ref: "#/$defs/git-object"
+  global-tag:
+    type: string
+    minLength: 1
+  plan-digest:
+    $ref: "#/$defs/sha256"
+  subjects:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ release-unit, identity, version, digest ]
+      properties:
+        release-unit:
+          type: string
+          minLength: 1
+        identity:
+          type: string
+          minLength: 1
+        version:
+          type: string
+          minLength: 1
+        digest:
+          $ref: "#/$defs/sha256"
+        provenance:
+          type: array
+          items:
+            $ref: "#/$defs/evidence-reference"
+  intended-destinations:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ release-unit, publisher, target ]
+      properties:
+        release-unit:
+          type: string
+          minLength: 1
+        publisher:
+          enum: [ npm, cargo, homebrew, rpm, apt, aur, oci ]
+        target:
+          type: string
+          minLength: 1
+  publisher-evidence:
+    type: array
+    items:
+      $ref: "https://intentional.foo/schemas/publisher-evidence/v1"
+oneOf:
+  - properties:
+      phase: { const: before-publication }
+    required: [ intended-destinations ]
+    not:
+      required: [ publisher-evidence ]
+  - properties:
+      phase: { const: after-publication }
+    required: [ publisher-evidence ]
+    not:
+      required: [ intended-destinations ]
+$defs:
+  git-object:
+    type: string
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  evidence-reference:
+    type: object
+    additionalProperties: false
+    required: [ kind, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      reference:
+        type: string
+        minLength: 1

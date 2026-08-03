@@ -8,7 +8,15 @@ set -euo pipefail
 
 rumdl check docs/*.md
 ryl check docs/docs.yml .github/workflows/publish-docs.yml Taskfile.yml
+ryl check \
+  docs/features/*.yml \
+  docs/specifications/*.yml \
+  docs/technical-designs/*.yml \
+  schemas/*.yml
 ryl --markdown docs/*.md
+
+cmp docs/specifications/config.json-schema.yml schemas/config.yml
+cmp docs/specifications/tag-record.json-schema.yml schemas/tag-record.yml
 
 test "$(yq -r '.name' docs/docs.yml)" = "intentional"
 test "$(yq -r '.assets | length' docs/docs.yml)" = "1"

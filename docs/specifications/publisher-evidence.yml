@@ -1,0 +1,40 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  A publisher-evidence fragment is the affirmative YAML result emitted by one
+  `intentional verify publication` invocation. The required `--release-unit`,
+  `--publisher`, and `--output` options name one publication and its fragment
+  path; optional `--target` selects a non-primary configured target. An implicit
+  primary selection serializes as `target: primary`. The concrete registry or
+  repository identity is recorded separately as `destination.identity`. The
+  fragment binds the selected publication
+  and immutable subject to S, R, the global release tag, and the sealed release
+  plan. It records the selected packager, build provenance, attached metadata
+  actually produced, destination identity and readback, closure-time retrieval,
+  verified mutable destination aliases, and applicable phase tags. Each
+  `destination-aliases` entry records the alias name and the digest read back
+  after promotion. CLI target-selector aliases normalize only target selection
+  and do not appear in this field. The fragment contains no waiver,
+  omission, warning, or desired-posture fields.
+
+  `clean-client.mode` identifies what the closure-time retrieval actually
+  proved. `public` means the recipe retrieved the release through the
+  destination's normal unauthenticated consumer path. `authenticated-draft`
+  means the target depended on an asset of the still-draft GitHub Release and
+  retrieved those bytes through the authenticated GitHub API. Draft-dependent
+  publication records `authenticated-draft` and never represents that check as
+  public retrieval.
+
+  The credential-free verification Action projects `evidence-path` as the path
+  of this completed schema-backed fragment. The output is a file location, not
+  a replacement evidence object; downstream jobs read and validate this file.
+validation-criteria: >-
+  A fragment conforms when it validates against
+  `publisher-evidence.json-schema.yml`; its release identities match the
+  verified candidate; the publisher, target, subject, and phase tags are
+  expected by configuration and the selected recipe; and its native
+  provenance, destination readback, and the accurately classified retrieval can be
+  independently verified. The command writes the fragment only after those
+  checks succeed. An Action-projected `evidence-path` must resolve to the exact
+  fragment that passed these checks.

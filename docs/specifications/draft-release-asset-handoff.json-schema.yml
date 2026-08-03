@@ -1,0 +1,80 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/draft-release-asset-handoff/v1
+title: Intentional draft-Release asset handoff
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - repository
+  - release-id
+  - global-tag
+  - source-commit
+  - release-commit
+  - plan-digest
+  - release-unit
+  - publisher
+  - target
+  - assets
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/draft-release-asset-handoff/v1
+  contract:
+    const: draft-release-asset-handoff-1
+  repository:
+    type: string
+    pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+  release-id:
+    type: integer
+    minimum: 1
+  global-tag:
+    type: string
+    minLength: 1
+  source-commit:
+    $ref: "#/$defs/git-object"
+  release-commit:
+    $ref: "#/$defs/git-object"
+  plan-digest:
+    $ref: "#/$defs/sha256"
+  release-unit:
+    type: string
+    minLength: 1
+  publisher:
+    enum: [ homebrew, rpm, apt, aur ]
+  target:
+    type: string
+    minLength: 1
+  assets:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required: [ id, name, size, media-type, sha256 ]
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          pattern: "^[^/]+$"
+        size:
+          type: integer
+          minimum: 0
+        media-type:
+          type: string
+          minLength: 1
+        sha256:
+          $ref: "#/$defs/sha256"
+$defs:
+  git-object:
+    type: string
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"

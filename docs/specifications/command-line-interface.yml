@@ -1,6 +1,9 @@
 $schema: https://commonclischema.org/draft/2026-04/schema
 relationships:
-  specifies: intent-driven-polyglot-release
+  specifies:
+    - intent-driven-polyglot-release
+    - github-release-executor
+  related-to: github-release-executor
 tool:
   name: intentional
   mode: interactive
@@ -377,6 +380,600 @@ commands:
           meaning: Standard output could not be written.
     examples:
       - intentional skill
+  - name: executor
+    summary: Configure and reconcile the repository release protocol.
+    mode: non-interactive
+    subcommands:
+      - name: init
+        summary: Configure the GitHub executor and explicit publication intent.
+        mode: non-interactive
+        options:
+          - name: dry-run
+            flags:
+              - --dry-run
+            kind: flag
+            description: Print planned configuration mutations without changing the workspace.
+            required: false
+            repeatable: false
+        output:
+          modes:
+            - name: human-readable
+              description: >-
+                Prints discovery evidence, unresolved-plan location, and
+                configuration operations.
+              machine-readable: false
+          exit-codes:
+            - code: 0
+              meaning: Executor configuration is complete or its mutations were previewed.
+            - code: 1
+              meaning: Configuration input was invalid or an operational failure occurred.
+            - code: 2
+              meaning: The executor initialization plan requires explicit resolutions.
+        examples:
+          - intentional executor init
+          - intentional executor init --dry-run
+        notes:
+          - >-
+            Unresolved publication choices are written to
+            .intentional/executor-init-plan.yml for an agent or human to edit
+            before rerunning the command.
+      - name: diff
+        summary: Compare a managed workflow with its derived executor contract.
+        mode: non-interactive
+        positional-arguments:
+          - name: workflow-role
+            description: Executor role of the workflow being compared.
+            position: 0
+            required: true
+            repeatable: false
+            value:
+              type: enum
+              values:
+                - release
+                - publish
+              arity:
+                min: 1
+                max: 1
+        options:
+          - name: workflow
+            flags:
+              - --workflow
+            kind: option
+            description: >-
+              Workflow file to compare instead of the path configured for the
+              selected role.
+            required: false
+            repeatable: false
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
+          - name: format
+            flags:
+              - --format
+            kind: option
+            description: Representation of the semantic comparison result.
+            required: false
+            repeatable: false
+            default: patch
+            value:
+              type: enum
+              values:
+                - patch
+                - json
+              arity:
+                min: 1
+                max: 1
+          - name: apply
+            flags:
+              - --apply
+            kind: flag
+            description: >-
+              Apply the syntax-aware transformation to the selected workflow
+              and print the applied comparison.
+            required: false
+            repeatable: false
+        output:
+          modes:
+            - name: patch
+              description: >-
+                Prints a unified patch bound to a digest of the exact workflow
+                input.
+              machine-readable: false
+            - name: json
+              description: >-
+                Prints a structured comparison bound to a digest of the exact
+                workflow input.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: The workflow comparison or requested transformation completed.
+            - code: 1
+              meaning: >-
+                Configuration, recipe derivation, workflow parsing, comparison,
+                stale-input protection, or mutation failed.
+        examples:
+          - intentional executor diff release
+          - intentional executor diff publish --format json
+          - intentional executor diff release --apply
+          - intentional executor diff release --workflow /tmp/candidate.yml
+        notes:
+          - >-
+            A comparison that finds drift still completes successfully and
+            communicates the drift through its selected output mode.
+          - >-
+            Without --apply the command is read-only. With --apply it changes
+            only the selected workflow file.
+      - name: check
+        summary: Check configured workflows against their derived executor contracts.
+        mode: non-interactive
+        output:
+          modes:
+            - name: human-readable
+              description: >-
+                Reports missing or drifted reserved slices, permissions, gate
+                dependencies, contract revisions, and Action revisions.
+              machine-readable: false
+          exit-codes:
+            - code: 0
+              meaning: Every configured executor workflow conforms.
+            - code: 1
+              meaning: >-
+                A configured workflow is nonconforming or executor validation
+                could not complete.
+        examples:
+          - intentional executor check
+  - name: release
+    summary: Construct release protocol artifacts.
+    mode: non-interactive
+    subcommands:
+      - name: prepare
+        summary: Resolve the source and construct its deterministic release candidate.
+        mode: non-interactive
+        options:
+          - name: output
+            flags:
+              - --output
+            kind: option
+            description: Directory in which to write the release-candidate handoff.
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
+        output:
+          modes:
+            - name: release-candidate
+              description: >-
+                Writes a schema-backed release-candidate handoff containing the
+                verified source commit, release commit, global tag, plan,
+                changed-tree evidence, and materialized candidate.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: The deterministic release candidate and handoff were written.
+            - code: 1
+              meaning: >-
+                Source resolution, remote default-branch verification,
+                planning, application, candidate construction, or validation
+                failed.
+        examples:
+          - intentional release prepare --output release-candidate
+        notes:
+          - >-
+            The credential-free prepare-release Action wraps this command. Its
+            outputs are exactly candidate-path, source-sha, release-sha,
+            global-tag, and plan-digest, projected from the authoritative
+            release-candidate handoff.
+          - >-
+            Source resolution and verification that the remote default branch
+            identifies the same source commit are invariants of this command.
+  - name: evidence
+    summary: Construct schema-backed release evidence artifacts.
+    mode: non-interactive
+    subcommands:
+      - name: contribute
+        summary: Construct one repository-owned evidence contribution bundle.
+        mode: non-interactive
+        options:
+          - name: namespace
+            flags:
+              - --namespace
+            kind: option
+            description: Unique namespace assigned to the contribution value.
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+          - name: value-file
+            flags:
+              - --value-file
+            kind: option
+            description: File containing any valid YAML value for the namespace.
+            required: false
+            repeatable: false
+            groups:
+              - contribution-content
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
+          - name: attachment
+            flags:
+              - --attachment
+            kind: option
+            description: Exact file path to include as a GitHub Release attachment.
+            required: false
+            repeatable: true
+            groups:
+              - contribution-content
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
+          - name: output
+            flags:
+              - --output
+            kind: option
+            description: Directory in which to write the contribution bundle.
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
+        groups:
+          - name: contribution-content
+            members:
+              - value-file
+              - attachment
+            rule: at-least-one
+            description: A contribution contains a value, one or more attachments, or both.
+        output:
+          modes:
+            - name: contribution
+              description: >-
+                Writes a schema-backed contribution manifest and its
+                digest-checked attachment bundle.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: The contribution bundle was constructed.
+            - code: 1
+              meaning: >-
+                Contribution inputs, YAML parsing, attachment resolution, or
+                bundle construction failed.
+        examples:
+          - >-
+            intentional evidence contribute --namespace malware-scan
+            --value-file report-summary.yml --attachment malware-report.json
+            --output contribution
+        notes:
+          - >-
+            The credential-free contribution Action maps its newline-separated
+            attachments input to repeated --attachment options, invokes this
+            command, and uploads the resulting bundle as a temporary workflow
+            artifact.
+          - The contribution Action defines no GitHub step outputs.
+      - name: assemble
+        summary: Assemble publisher fragments and contributions into final release evidence.
+        mode: non-interactive
+        options:
+          - name: input
+            flags:
+              - --input
+            kind: option
+            description: >-
+              Directory containing downloaded publisher, phase-tag, and
+              contribution artifacts.
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
+          - name: output
+            flags:
+              - --output
+            kind: option
+            description: >-
+              Directory in which to write the closed final-evidence bundle.
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
+        output:
+          modes:
+            - name: release-evidence
+              description: >-
+                Writes a closed bundle containing intentional-evidence.yml and
+                accepted files under attachments/.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: Final release evidence and accepted attachments were assembled.
+            - code: 1
+              meaning: >-
+                Required evidence was missing, unexpected, conflicting,
+                malformed, incorrectly bound, or failed a mechanical digest
+                check.
+        examples:
+          - >-
+            intentional evidence assemble --input evidence-artifacts --output
+            release-evidence
+        notes:
+          - >-
+            The credential-free assemble-evidence Action wraps this command and
+            defines no GitHub step outputs.
+          - >-
+            The output directory is the complete assembly handoff. Its
+            intentional-evidence.yml is the schema-backed release evidence and
+            each accepted Release attachment is stored at
+            attachments/<asset-basename>.
+  - name: verify
+    summary: Verify release protocol identities, handoffs, and evidence.
+    mode: non-interactive
+    subcommands:
+      - name: handoff
+        summary: Independently verify a prepared release-candidate handoff.
+        mode: non-interactive
+        positional-arguments:
+          - name: handoff
+            description: Release-candidate handoff directory to verify.
+            position: 0
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
+        output:
+          modes:
+            - name: human-readable
+              description: Prints successful handoff verification.
+              machine-readable: false
+          exit-codes:
+            - code: 0
+              meaning: The handoff and deterministic candidate agree.
+            - code: 1
+              meaning: Handoff identity, digest, tree, tag, or candidate validation failed.
+        examples:
+          - intentional verify handoff release-candidate
+        notes:
+          - >-
+            The credential-free verify-handoff Action wraps this command. Its
+            outputs are exactly source-sha, release-sha, global-tag, and
+            plan-digest, projected from the verified handoff.
+          - >-
+            The privileged atomic-push step consumes the verify-handoff Action
+            outputs; it does not consume unverified prepare-release outputs.
+      - name: release-tag
+        summary: Verify the current global release tag before publication.
+        mode: non-interactive
+        output:
+          modes:
+            - name: human-readable
+              description: >-
+                Prints the verified global tag, release commit, source parent,
+                and release-plan identity.
+              machine-readable: false
+          exit-codes:
+            - code: 0
+              meaning: >-
+                The current global tag, release commit, sole source parent,
+                sealed plan, and materialized release state agree.
+            - code: 1
+              meaning: >-
+                Global-tag identity, commit ancestry, plan binding, projection,
+                changelog, or consumed-intent validation failed.
+        examples:
+          - intentional verify release-tag
+        notes:
+          - >-
+            The credential-free verify-release-tag Action wraps this command
+            for the initial job in the generated publication workflow. Its
+            outputs are exactly source-sha, release-sha, global-tag, and
+            plan-digest, projected from the verified release identity.
+      - name: publication
+        summary: Verify one destination publication and write its affirmative evidence.
+        mode: non-interactive
+        options:
+          - name: release-unit
+            flags:
+              - --release-unit
+            kind: option
+            description: Release-unit identifier whose publication is verified.
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+          - name: publisher
+            flags:
+              - --publisher
+            kind: option
+            description: Configured publisher adapter identifier.
+            required: true
+            repeatable: false
+            value:
+              type: enum
+              values:
+                - npm
+                - cargo
+                - homebrew
+                - rpm
+                - apt
+                - aur
+                - oci
+              arity:
+                min: 1
+                max: 1
+          - name: target
+            flags:
+              - --target
+            kind: option
+            description: >-
+              Publisher target selector; a publisher with a primary target
+              accepts omission or primary.
+            required: false
+            repeatable: false
+            examples:
+              - primary
+              - npmjs
+              - crates.io
+              - github
+              - dockerhub
+              - ghcr
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+          - name: output
+            flags:
+              - --output
+            kind: option
+            description: File in which to write schema-backed publisher evidence.
+            required: true
+            repeatable: false
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
+        output:
+          modes:
+            - name: publisher-evidence
+              description: >-
+                Writes a schema-backed publisher evidence fragment after
+                destination readback and the recipe's applicable preclosure
+                retrieval verification succeed.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: >-
+                Destination readback and either normal public client retrieval
+                or authenticated draft-asset retrieval prove the applicable
+                preclosure contract, and its evidence was written.
+            - code: 1
+              meaning: >-
+                Publication is conflicting, could not be verified, or remained
+                unavailable past its bounded observation deadline.
+        examples:
+          - >-
+            intentional verify publication --release-unit sample-library
+            --publisher npm --output publisher-evidence.yml
+          - >-
+            intentional verify publication --release-unit sample-application
+            --publisher oci --target ghcr --output publisher-evidence.yml
+        notes:
+          - >-
+            The credential-free verify-publication Action wraps this command.
+            Its only GitHub step output is evidence-path, which identifies the
+            authoritative publisher-evidence file.
+          - >-
+            A deadline failure is safe to retry at workflow level; a rerun
+            reads the destination before deciding whether publication is
+            already complete, pending, or absent.
+          - >-
+            A target independent of draft GitHub Release assets completes its
+            normal public clean-client retrieval before Release closure and
+            records that result in publisher evidence.
+          - >-
+            When a target's normal client depends on an asset held by the draft
+            GitHub Release, preclosure verification downloads the exact draft
+            asset through authenticated GitHub access, verifies its identity
+            and digest, and records that authenticated retrieval. It does not
+            represent the target as publicly client-retrievable before Release
+            closure.
+          - >-
+            When the selected publisher defines a primary target, omitting
+            --target or passing --target primary selects it. The resulting
+            publisher evidence records target as primary and records the
+            concrete registry or repository under the destination fields.
+          - >-
+            npm accepts npmjs as an alias for its constrained primary target;
+            evidence normalizes the alias to primary. Its GitHub Package
+            Registry target is selected explicitly as github.
+          - >-
+            Cargo accepts crates.io as an alias only when native Cargo
+            configuration makes crates.io the primary registry. The alias
+            fails when a custom registry is primary; omission or primary
+            selects that custom primary without misidentifying it as crates.io.
+          - >-
+            A publisher without a primary target requires --target. OCI accepts
+            only dockerhub or ghcr and fails when --target is omitted or set to
+            primary.
+      - name: release
+        summary: Verify an Intentional GitHub Release and its evidence.
+        mode: non-interactive
+        positional-arguments:
+          - name: version
+            description: Release version whose GitHub Release is verified.
+            position: 0
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+        options:
+          - name: live
+            flags:
+              - --live
+            kind: flag
+            description: >-
+              Perform post-closure destination readback and public client
+              retrieval in addition to verifying recorded evidence.
+            required: false
+            repeatable: false
+        output:
+          modes:
+            - name: human-readable
+              description: >-
+                Reports Release evidence, identity-chain, phase-tag,
+                provenance, subject-digest, and destination verification.
+              machine-readable: false
+          exit-codes:
+            - code: 0
+              meaning: The GitHub Release and all required evidence verify.
+            - code: 1
+              meaning: >-
+                The Release, evidence asset, attestation, identity chain, phase
+                tags, provenance, subject digest, or requested live readback
+                failed verification.
+        examples:
+          - intentional verify release 1.2.3
+          - intentional verify release 1.2.3 --live
+        notes:
+          - >-
+            Without --live, verification uses the durable recorded evidence
+            and does not query publication destinations.
+          - >-
+            With --live, verification performs fresh public client retrieval
+            after immutable Release closure, including the public check that a
+            draft-dependent publisher could not complete before closure.
+          - >-
+            Live verification reports its current result and never replaces,
+            appends to, or otherwise rewrites intentional-evidence.yml or any
+            immutable GitHub Release asset.
 notes:
   - >-
     The root invocation accepts --help and --version; every command accepts

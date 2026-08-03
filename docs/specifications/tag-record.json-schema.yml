@@ -1,6 +1,8 @@
 # ---
 # relationships:
-#   implements: intent-driven-polyglot-release
+#   implements:
+#     - intent-driven-polyglot-release
+#     - github-release-executor
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://intentional.foo/schemas/tag-record.yml
@@ -23,3 +25,8 @@ properties:
   tag-id: { type: string }
   version: { type: string }
   baseline: { type: boolean }
+  phase-evidence:
+    description: >-
+      Logical object encoded after `phase-evidence: ` as deterministic
+      single-line canonical JSON in the annotated tag message.
+    $ref: https://intentional.foo/schemas/phase-tag-evidence/v1

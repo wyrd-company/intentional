@@ -1,0 +1,19 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  An executor initialization plan is the durable YAML resolution document at
+  `.intentional/executor-init-plan.yml` written and resumed by
+  `intentional executor init`. It binds executor discovery to the
+  exact source state, carries the proposed GitHub configuration, and presents
+  finite publication-intent and packager choices derived from configured
+  release units and native project evidence. Each candidate records its
+  evidence and one selected choice or an unresolved null value. Applying a
+  ready plan through the same command updates Intentional configuration and any explicitly proposed
+  native packager files; workflow integration remains a separate executor diff.
+validation-criteria: >-
+  A plan conforms when it validates against
+  `executor-init-plan.json-schema.yml`, every evidence digest still matches the
+  workspace, every resolution names one declared choice, all candidates are
+  resolved in the ready state, and the resulting configuration and selected
+  publication recipes pass Intentional semantic validation.

@@ -1,0 +1,621 @@
+$schema: https://refinery.systems/ontology/feature
+relationships: {}
+world-schema:
+  source_sha: string
+  remote_default_sha: string
+  release_sha: string
+  release_parent_sha: string
+  release_tag_target: string
+  plan_digest_matches: boolean
+  recipe_supported: boolean
+  subject_build_count: number
+  destination_count: number
+  destination_digest_matches: boolean
+  publication_visible: boolean
+  clean_client_retrieval: boolean
+  authenticated_draft_retrieval: boolean
+  public_client_retrieval: boolean
+  evidence_rewritten: boolean
+  publication_resubmitted: boolean
+  draft_release_exists: boolean
+  release_published: boolean
+  release_immutable: boolean
+  evidence_complete: boolean
+  alias_advanced: boolean
+  tag_created: boolean
+  target_exists: boolean
+  authentication_method: string
+  sbom_present: boolean
+  provenance_present: boolean
+  signature_present: boolean
+  omission_recorded: boolean
+  primary_signature_present: boolean
+  additional_signature_present: boolean
+  configuration_valid: boolean
+  omitted_component: string
+  required_fragment_count: number
+  supplied_fragment_count: number
+  evidence_verifies: boolean
+  network_mutation: boolean
+  local_release_created: boolean
+  release_unit_option: string
+  publisher_option: string
+  target_option: string
+  primary_destination: string
+  canonical_evidence_target: string
+  live_readback: boolean
+  schema_file_authoritative: boolean
+  github_output_exposed: boolean
+  candidate_path: string
+  global_tag: string
+  plan_digest: string
+  evidence_path: string
+  diagnostic: string
+background:
+  description: >-
+    A configured GitHub executor operates on one sealed Intentional release
+    plan and repository-local privileged workflow jobs.
+  steps:
+    - given: The release plan identifies accepted source commit S and deterministic release commit R
+      world:
+        source_sha: source-commit
+        release_sha: release-commit
+        release_parent_sha: source-commit
+        plan_digest_matches: true
+rules:
+  - rule: Release publication preserves the accepted source and deterministic release identities
+    scenarios:
+      prepare-release-locally:
+        addresses: Portable release preparation
+        steps:
+          - given: Accepted source commit S and its sealed release inputs are available locally
+            world:
+              network_mutation: false
+          - when: Intentional release prepare runs
+          - then: It creates local R, the local annotated tag, and authoritative candidate files
+            world:
+              local_release_created: true
+              network_mutation: false
+              schema_file_authoritative: true
+          - and: The Action exposes candidate-path, source-sha, and release-sha
+            world:
+              candidate_path: release-candidate
+              source_sha: source-commit
+              release_sha: release-commit
+          - and: The Action exposes global-tag and plan-digest
+            world:
+              global_tag: 1.2.3
+              plan_digest: plan-digest
+              release_tag_target: release-commit
+              plan_digest_matches: true
+      atomically-publish-release-commit-and-tag:
+        addresses: Protected default-branch release mutation
+        steps:
+          - given: The remote default branch still identifies accepted source commit S
+            world:
+              remote_default_sha: source-commit
+              release_tag_target: release-commit
+          - when: The protected release job verifies the handoff and uses its outputs
+          - then: The verified release SHA and global annotated tag are pushed atomically
+            world:
+              source_sha: source-commit
+              release_sha: release-commit
+              global_tag: 1.2.3
+              plan_digest: plan-digest
+              release_parent_sha: source-commit
+              release_tag_target: release-commit
+              plan_digest_matches: true
+              tag_created: true
+      verify-handoff-action-outputs:
+        addresses: Verified release authority outputs
+        steps:
+          - given: A prepared schema-backed candidate handoff is available
+            world:
+              candidate_path: release-candidate
+          - when: The verify-handoff Action validates the candidate
+          - then: It exposes source-sha, release-sha, global-tag, and plan-digest
+            world:
+              source_sha: source-commit
+              release_sha: release-commit
+              global_tag: 1.2.3
+              plan_digest: plan-digest
+              release_tag_target: release-commit
+              plan_digest_matches: true
+      reject-default-branch-race:
+        addresses: Source compare-and-swap protection
+        steps:
+          - given: The remote default branch advanced after candidate preparation
+            world:
+              remote_default_sha: different-commit
+          - when: The protected release job performs its final source check
+          - then: Neither release commit R nor its global tag is published
+            world:
+              tag_created: false
+              diagnostic: Remote default branch no longer identifies accepted source commit S
+      reject-release-identity-disagreement:
+        addresses: Release handoff verification
+        steps:
+          - given: The candidate tree does not reproduce the sealed plan digest
+            world:
+              plan_digest_matches: false
+          - when: The release handoff is verified
+          - then: The release mutation is refused
+            world:
+              tag_created: false
+              diagnostic: Release candidate disagrees with sealed plan
+      verify-tag-trigger-before-publication:
+        addresses: Portable release-tag verification
+        steps:
+          - given: The publication workflow was triggered by the global annotated release tag
+            world:
+              release_tag_target: release-commit
+              plan_digest_matches: true
+          - when: Intentional verify release-tag runs
+          - then: It verifies the tag, R, S, materialized tree, and sealed plan agree
+            world:
+              evidence_verifies: true
+          - and: The Action exposes source-sha, release-sha, global-tag, and plan-digest
+            world:
+              source_sha: source-commit
+              release_sha: release-commit
+              global_tag: 1.2.3
+              plan_digest: plan-digest
+              release_tag_target: release-commit
+              plan_digest_matches: true
+
+  - rule: Every configured publication resolves to one maintained recipe
+    scenarios:
+      derive-supported-recipe:
+        addresses: Capability and packager recipe selection
+        steps:
+          - given: Native evidence derives one packager compatible with the publisher and target
+            world:
+              recipe_supported: true
+          - when: The publication workflow is derived
+          - then: Intentional supplies the complete maintained publication recipe
+            world:
+              recipe_supported: true
+      reject-unsupported-combination:
+        addresses: Maintained publication recipe boundary
+        steps:
+          - given: No maintained recipe matches the capability, packager, publisher, and target
+            world:
+              recipe_supported: false
+          - when: The publication configuration is validated
+          - then: Validation fails with the unsupported combination identified
+            world:
+              diagnostic: No maintained publication recipe matches the configured target
+      build-once-and-promote-many:
+        addresses: Immutable subject promotion
+        steps:
+          - given: One subject is configured for two destinations
+            world:
+              destination_count: 2
+          - when: The publication workflow distributes the subject
+          - then: The subject is built once and every destination resolves the same digest
+            world:
+              subject_build_count: 1
+              destination_digest_matches: true
+
+  - rule: Publication completes after the strongest truthful pre-closure consumer check
+    scenarios:
+      identify-publication-with-named-options:
+        addresses: Portable publication verification
+        steps:
+          - given: One release unit publishes through an adapter with an explicit target
+            world:
+              release_unit_option: example-component
+              publisher_option: oci
+              target_option: ghcr
+          - when: Intentional verify publication runs with the named identity options
+          - then: Verification selects exactly that release unit, publisher, and target contract
+            world:
+              evidence_verifies: true
+      identify-implicit-primary-target-canonically:
+        addresses: Primary publication target alias
+        steps:
+          - given: An npm publisher uses its implicit primary destination
+            world:
+              release_unit_option: example-component
+              publisher_option: npm
+              target_option: npmjs
+          - when: Intentional verify publication runs with all three named identity options
+          - then: Verification selects the primary and records its canonical target identity
+            world:
+              evidence_verifies: true
+              canonical_evidence_target: primary
+      select-primary-when-target-is-omitted:
+        addresses: Default primary target selection
+        steps:
+          - given: A publisher adapter has a configured primary destination
+            world:
+              publisher_option: npm
+              primary_destination: npmjs
+              target_option: omitted
+          - when: Intentional verify publication runs without the target option
+          - then: Verification selects the primary and records its concrete destination separately
+            world:
+              canonical_evidence_target: primary
+              primary_destination: npmjs
+              evidence_verifies: true
+      select-primary-with-canonical-selector:
+        addresses: Explicit primary target selection
+        steps:
+          - given: A publisher adapter has a configured primary destination
+            world:
+              publisher_option: cargo
+              primary_destination: configured-registry
+              target_option: primary
+          - when: Intentional verify publication selects target primary
+          - then: Verification records primary and the configured destination separately
+            world:
+              canonical_evidence_target: primary
+              primary_destination: configured-registry
+              evidence_verifies: true
+      alias-crates-io-only-for-matching-cargo-primary:
+        addresses: Cargo primary target alias
+        steps:
+          - given: The concrete Cargo primary destination is crates.io
+            world:
+              publisher_option: cargo
+              primary_destination: crates.io
+              target_option: crates.io
+          - when: Intentional verify publication selects the crates.io alias
+          - then: Verification records canonical target primary and concrete destination crates.io
+            world:
+              canonical_evidence_target: primary
+              primary_destination: crates.io
+              evidence_verifies: true
+      reject-crates-io-alias-for-different-cargo-primary:
+        addresses: Cargo primary destination integrity
+        steps:
+          - given: The concrete Cargo primary destination is another compatible registry
+            world:
+              publisher_option: cargo
+              primary_destination: configured-registry
+              target_option: crates.io
+          - when: Intentional verify publication selects the crates.io alias
+          - then: Target selection fails instead of selecting the configured primary
+            world:
+              evidence_verifies: false
+              diagnostic: crates.io is not the configured Cargo primary destination
+      require-explicit-oci-peer-target:
+        addresses: OCI target selection
+        steps:
+          - given: An OCI publisher has Docker Hub and GHCR peer targets and no primary
+            world:
+              publisher_option: oci
+              target_option: omitted
+          - when: Intentional verify publication runs without the target option
+          - then: Target selection fails and requires dockerhub or ghcr
+            world:
+              evidence_verifies: false
+              diagnostic: OCI publication verification requires target dockerhub or ghcr
+      observe-eventually-consistent-publication:
+        addresses: Bounded destination observation
+        steps:
+          - given: A publisher accepted the subject but normal clients cannot resolve it yet
+            world:
+              publication_visible: false
+              clean_client_retrieval: false
+          - when: The adapter applies its bounded observation policy
+          - then: Publication remains pending and is not submitted again
+            world:
+              publication_resubmitted: false
+              release_published: false
+      complete-after-clean-retrieval:
+        addresses: Consumer-path publication verification
+        steps:
+          - given: Destination readback identifies the expected version and digest
+            world:
+              publication_visible: true
+              destination_digest_matches: true
+          - when: A public clean client resolves and retrieves the exact subject
+          - then: The publisher evidence records successful readback and retrieval
+            world:
+              clean_client_retrieval: true
+              public_client_retrieval: true
+              evidence_complete: true
+      verify-draft-dependent-publisher-authentically:
+        addresses: Pre-closure draft-dependent consumer verification
+        steps:
+          - given: A Homebrew consumer resolves an asset on the draft GitHub Release
+            world:
+              draft_release_exists: true
+              public_client_retrieval: false
+          - when: The publisher retrieves the draft asset through the authenticated API
+          - then: Evidence records authenticated retrieval and available package-level checks
+            world:
+              authenticated_draft_retrieval: true
+              public_client_retrieval: false
+              evidence_complete: true
+      block-closure-when-authenticated-draft-retrieval-fails:
+        addresses: Draft-dependent pre-closure failure
+        steps:
+          - given: A publisher requires an asset from the draft GitHub Release
+            world:
+              draft_release_exists: true
+              authenticated_draft_retrieval: false
+          - when: Authenticated draft asset retrieval or package-level verification fails
+          - then: Publication evidence is incomplete and Release closure remains blocked
+            world:
+              evidence_complete: false
+              release_published: false
+              diagnostic: Authenticated draft asset verification failed
+      resume-visible-publication-without-resubmission:
+        addresses: Idempotent publication recovery
+        steps:
+          - given: A rerun observes the expected version and matching digest at the destination
+            world:
+              publication_visible: true
+              destination_digest_matches: true
+          - when: The publisher job resumes
+          - then: It continues after publication without submitting the immutable version again
+            world:
+              publication_resubmitted: false
+      fail-on-observable-conflict:
+        addresses: Immutable publication conflict detection
+        steps:
+          - given: The configured version exists with a different immutable digest
+            world:
+              publication_visible: true
+              destination_digest_matches: false
+          - when: The adapter reads the destination
+          - then: Publication fails immediately as a terminal conflict
+            world:
+              release_published: false
+              diagnostic: Published subject digest conflicts with the release subject
+
+  - rule: Publisher authentication follows the maintained target protocol
+    scenarios:
+      bootstrap-trusted-publisher-with-token:
+        addresses: Trusted-publisher bootstrap
+        steps:
+          - given: The registry requires an existing package before trusted publishing setup
+            world:
+              target_exists: false
+              authentication_method: token
+          - when: The protected bootstrap publication runs
+          - then: The token is used only after the adapter proves the target is absent
+            world:
+              target_exists: false
+              authentication_method: token
+      require-trusted-identity-after-bootstrap:
+        addresses: Trusted-publisher steady state
+        steps:
+          - given: The package already exists at a trusted-publishing registry
+            world:
+              target_exists: true
+          - when: The steady-state publication runs
+          - then: Publication requires the configured trusted identity without token fallback
+            world:
+              authentication_method: oidc
+              publication_resubmitted: false
+
+  - rule: Attached publisher components are recipe-defined and omitted per target
+    scenarios:
+      publish-default-oci-evidence:
+        addresses: OCI intrinsic release evidence
+        steps:
+          - given: A supported OCI target has no attached-component omissions
+            world:
+              omission_recorded: false
+          - when: The maintained OCI recipe publishes the subject
+          - then: The subject has digest-bound SBOM, provenance, and keyless signature evidence
+            world:
+              sbom_present: true
+              provenance_present: true
+              signature_present: true
+      omit-selected-oci-component:
+        addresses: Explicit OCI evidence degradation
+        steps:
+          - given: The OCI target explicitly omits its signature component
+            world:
+              signature_present: false
+          - when: The maintained OCI recipe publishes the subject
+          - then: The evidence records produced components without recording the omission
+            world:
+              sbom_present: true
+              provenance_present: true
+              signature_present: false
+              omission_recorded: false
+      apply-adapter-omit-to-primary-only:
+        addresses: Primary target component omission
+        steps:
+          - given: A publisher adapter omits a component supported by its primary recipe
+            world:
+              omitted_component: signature
+              primary_signature_present: false
+              additional_signature_present: true
+          - when: The primary and additional targets are published
+          - then: The omission applies to the primary without changing the additional target
+            world:
+              primary_signature_present: false
+              additional_signature_present: true
+              omission_recorded: false
+      apply-additional-target-omit-independently:
+        addresses: Additional target component omission
+        steps:
+          - given: One additional target omits a component supported by its recipe
+            world:
+              omitted_component: signature
+              primary_signature_present: true
+              additional_signature_present: false
+          - when: The primary and additional targets are published
+          - then: The omission applies only to that additional target
+            world:
+              primary_signature_present: true
+              additional_signature_present: false
+              omission_recorded: false
+      reject-component-name-unsupported-by-recipe:
+        addresses: Recipe-specific omission validation
+        steps:
+          - given: A target omit list names a component absent from its maintained recipe
+            world:
+              omitted_component: unsupported-component
+              configuration_valid: false
+          - when: Intentional validates publication configuration
+          - then: Configuration fails with the target and unsupported component identified
+            world:
+              configuration_valid: false
+              diagnostic: Omitted component is not supported by the target recipe
+
+  - rule: Tags and OCI aliases express truthful publication state
+    scenarios:
+      create-after-publication-tag-after-evidence:
+        addresses: Publication-phase tag ordering
+        steps:
+          - given: Required publisher evidence and tag prerequisites are complete
+            world:
+              evidence_complete: true
+          - when: The after-publication tag operation runs
+          - then: The tag targets R and embeds the completed publisher evidence
+            world:
+              tag_created: true
+              release_tag_target: release-commit
+      do-not-advance-stable-alias-for-prerelease:
+        addresses: OCI alias safety
+        steps:
+          - given: The published subject has a prerelease Semantic Version
+            world:
+              alias_advanced: false
+          - when: The OCI recipe applies aliases
+          - then: Stable major, minor, and latest aliases remain unchanged
+            world:
+              alias_advanced: false
+      prevent-backward-alias-movement:
+        addresses: Monotonic OCI aliases
+        steps:
+          - given: A stable backport is older than a compatible mutable alias
+            world:
+              alias_advanced: false
+          - when: The OCI recipe applies aliases
+          - then: The existing alias is not moved backward
+            world:
+              alias_advanced: false
+
+  - rule: The immutable GitHub Release is the final closure record
+    scenarios:
+      prepare-draft-before-external-publication:
+        addresses: Draft Release asset preparation
+        steps:
+          - given: The global release tag has been validated
+            world:
+              tag_created: true
+              draft_release_exists: false
+          - when: The publication workflow prepares GitHub-hosted deliverables
+          - then: A draft Release for that exact tag holds the built assets
+            world:
+              draft_release_exists: true
+              release_published: false
+      retrieve-draft-asset-for-downstream-publisher:
+        addresses: Authenticated pre-closure asset handoff
+        steps:
+          - given: A downstream package repository requires an asset from the draft Release
+            world:
+              draft_release_exists: true
+          - when: Its GitHub App retrieves the identified asset with read-only repository permission
+          - then: The downloaded bytes match the release subject digest
+            world:
+              destination_digest_matches: true
+      close-only-with-complete-evidence:
+        addresses: Immutable Release closure
+        steps:
+          - given: All required publications, retrievals, tags, gates, and evidence are complete
+            world:
+              draft_release_exists: true
+              evidence_complete: true
+          - when: The closure job verifies and publishes the draft
+          - then: The GitHub Release and associated tag are immutable
+            world:
+              release_published: true
+              release_immutable: true
+      preserve-resumable-draft-on-failure:
+        addresses: Release recovery before closure
+        steps:
+          - given: An external publication succeeded but a later verification failed
+            world:
+              draft_release_exists: true
+              evidence_complete: false
+          - when: The publication workflow stops
+          - then: The incomplete Release remains an unpublished resumable draft
+            world:
+              draft_release_exists: true
+              release_published: false
+              release_immutable: false
+
+  - rule: Release evidence is complete, affirmative, and bound to release identity
+    scenarios:
+      reject-missing-publisher-fragment:
+        addresses: Complete release evidence assembly
+        steps:
+          - given: Fewer publisher fragments are available than the release configuration requires
+            world:
+              required_fragment_count: 2
+              supplied_fragment_count: 1
+          - when: Final release evidence is assembled
+          - then: Assembly fails and the draft Release remains unpublished
+            world:
+              evidence_complete: false
+              release_published: false
+              diagnostic: Required publisher evidence fragment is missing
+      verify-durable-release-evidence:
+        addresses: Release evidence consumption
+        steps:
+          - given: The immutable Release contains an attested Intentional evidence asset
+            world:
+              release_immutable: true
+              evidence_complete: true
+          - when: The release is verified against its plan, tags, and publisher-native provenance
+          - then: The evidence proves the release chain and published subject digests
+            world:
+              evidence_verifies: true
+      repeat-fresh-readback-only-when-requested:
+        addresses: First public check for a draft-dependent publisher
+        steps:
+          - given: An immutable Release has authenticated draft retrieval evidence
+            world:
+              release_published: true
+              release_immutable: true
+              evidence_verifies: true
+              live_readback: false
+              public_client_retrieval: false
+              evidence_rewritten: false
+          - when: Intentional verify release runs with the live option
+          - then: Verification performs the first public client retrieval without rewriting evidence
+            world:
+              evidence_verifies: true
+              live_readback: true
+              public_client_retrieval: true
+              evidence_rewritten: false
+      report-live-public-client-failure-without-mutating-release:
+        addresses: Post-closure public retrieval failure
+        steps:
+          - given: A draft-dependent publisher has an immutable completed Release
+            world:
+              release_published: true
+              release_immutable: true
+              evidence_rewritten: false
+          - when: Live release verification cannot retrieve the asset through the public client
+          - then: Verification fails without changing the Release or its evidence
+            world:
+              evidence_verifies: false
+              release_published: true
+              release_immutable: true
+              evidence_rewritten: false
+              diagnostic: Public client retrieval failed
+
+  - rule: Thin Actions expose exact convenience outputs without replacing protocol files
+    scenarios:
+      expose-publication-evidence-path:
+        addresses: Publication verification Action output
+        steps:
+          - given: A credential-free Action invokes publication verification
+            world:
+              schema_file_authoritative: true
+          - when: Publication verification writes its evidence fragment
+          - then: The Action exposes evidence-path and the evidence file remains authoritative
+            world:
+              github_output_exposed: true
+              schema_file_authoritative: true
+              evidence_path: publisher-evidence.yml

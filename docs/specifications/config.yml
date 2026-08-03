@@ -6,7 +6,8 @@ description: >-
   `.intentional/config.yml`. The adjacent JSON Schema asset defines the
   `contract-1` interpretation contract, global versioning settings, fixed and
   linked release-unit groups, workspace tags, discovery dispositions, release
-  units, version projections, dependency edges, and annotated-tag declarations.
+  units, version projections, dependency edges, annotated-tag declarations,
+  GitHub workflow integration, and explicit publisher opt-ins.
   The schema retains the published runtime identifier
   `https://intentional.foo/schemas/config.yml`.
 
@@ -17,10 +18,29 @@ description: >-
   their version field by pointer. Intentional applies semantic validation after
   deserialization for graph references, tag templates and ordering, projection
   requirements, path ownership, and release-unit relationships that JSON Schema
-  cannot express in isolation.
+  cannot express in isolation. Publisher properties are valid only when the
+  top-level `github` property exists. Recipe selection also validates each
+  configured publisher against derived release-unit capabilities, native
+  packager configuration, and compatible primary destinations.
+
+  npm and Cargo use trusted publishing where available and their conventional
+  bootstrap token-secret names otherwise. Each adapter accepts an optional
+  direct `token-secret` override. Docker Hub accepts direct `username-var` and
+  `token-secret` overrides. Omitting these fields selects the maintained
+  recipe's conventional names and trusted-publishing-first behavior; configuration
+  contains identifiers for GitHub variables and secrets, never credential values.
+
+  Every concrete publisher target owns an optional `omit` list. An implicit
+  primary destination uses the publisher mapping's list; each additional or
+  peer target uses its own list. The allowed component names come from that
+  target's maintained recipe. OCI targets currently define `sbom`,
+  `provenance`, and `signature`; the other initial adapters define no omittable
+  component names. Unknown or recipe-inapplicable names fail validation.
+  Release evidence records only components that were produced.
 validation-criteria: >-
   A document conforms when it validates against `config.json-schema.yml` and
   Intentional's configuration loader accepts it. Core tests deserialize the
   adjacent schema, exercise closed-field and enum constraints, and verify the
-  semantic invariants enforced by the loader. `intentional check` loads this
-  contract as part of workspace validation.
+  semantic invariants enforced by the loader. `intentional check` validates the
+  base workspace contract, and `intentional executor check` validates its
+  GitHub executor and publication extensions.

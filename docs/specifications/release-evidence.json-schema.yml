@@ -1,0 +1,112 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/release-evidence/v1
+title: Intentional release evidence
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - release
+  - workflow
+  - release-units
+  - contributions
+  - contribution-attachments
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/release-evidence/v1
+  contract:
+    const: release-evidence-1
+  release:
+    type: object
+    additionalProperties: false
+    required:
+      - source-commit
+      - release-commit
+      - global-tag
+      - plan-digest
+    properties:
+      source-commit:
+        $ref: "#/$defs/git-object"
+      release-commit:
+        $ref: "#/$defs/git-object"
+      global-tag:
+        type: object
+        additionalProperties: false
+        required: [ name, object, target ]
+        properties:
+          name:
+            type: string
+            minLength: 1
+          object:
+            $ref: "#/$defs/git-object"
+          target:
+            $ref: "#/$defs/git-object"
+      plan-digest:
+        $ref: "#/$defs/sha256"
+  workflow:
+    type: object
+    additionalProperties: false
+    required: [ repository, workflow, run-id, run-attempt, commit ]
+    properties:
+      repository:
+        type: string
+        pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      workflow:
+        type: string
+        minLength: 1
+      run-id:
+        type: integer
+        minimum: 1
+      run-attempt:
+        type: integer
+        minimum: 1
+      commit:
+        $ref: "#/$defs/git-object"
+  release-units:
+    type: object
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      required: [ publishers ]
+      properties:
+        publishers:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [ targets ]
+            properties:
+              targets:
+                type: object
+                additionalProperties:
+                  $ref: "https://intentional.foo/schemas/publisher-evidence/v1"
+  contributions:
+    type: object
+    additionalProperties: true
+  contribution-attachments:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ namespace, name, sha256 ]
+      properties:
+        namespace:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+          pattern: "^[^/]+$"
+        sha256:
+          $ref: "#/$defs/sha256"
+$defs:
+  git-object:
+    type: string
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"

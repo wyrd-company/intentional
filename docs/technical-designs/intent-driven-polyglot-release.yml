@@ -2,6 +2,8 @@ $schema: https://refinery.systems/ontology/technical-design
 relationships:
   contextualized-by:
     - build-linux-gnu-release-on-pinned-cross-baseline
+  related-to:
+    - github-release-executor
 objective: >-
   Provide a single, fast, dependency-free CLI that manages change intents,
   version computation, manifest projection, changelogs, tags, and a verifiable
@@ -44,8 +46,9 @@ design-challenges:
   choreography-diversity: >-
     Release choreography varies legitimately per repository: local
     commit-and-push, bot-authored version PRs, and deterministic
-    source-to-release commit pipelines. The tool must compose with all of them
-    without owning any of them.
+    source-to-release commit pipelines. The core release model must remain
+    independent of an executor while an explicitly configured executor can
+    standardize one complete choreography.
   format-preserving-writes: >-
     Projecting versions into manifests must not destroy comments or formatting
     in YAML, TOML, or JSON files that humans also edit.
@@ -79,9 +82,13 @@ proposed-design:
     build time, or none (Go's degenerate case). Between releases the two
     models compose: the next version from intents plus tag height from tagver
     yields deterministic ephemeral build versions with no stored state. The
-    tool's boundary is git state plus a canonical, digest-bound release plan
-    that CD executes; it never speaks a registry protocol, and it never
-    commits, pushes, or opens pull requests.
+    core tool's boundary is git state plus a canonical, digest-bound release
+    plan that an executor consumes. Base versioning commands do not speak
+    registry protocols or perform network mutations. The portable release
+    preparation command constructs the deterministic local release commit and
+    tag without publishing them. The separately defined GitHub release executor
+    derives repository-local workflow slices that perform authority-bearing
+    network operations visibly.
   core-model: >-
     A workspace declares an inventory of release units under `release-units` in
     .intentional/config.yml. Each release unit has a path, one or more projections,
@@ -169,15 +176,15 @@ proposed-design:
     an existing stream requires an explicit baseline version. A tag can declare
     require-phase as before-publication or after-publication; creating it
     requires an equal --phase value. The phase is an executor declaration bound
-    to the plan. Publication state and registry evidence belong to the external
-    release executor.
+    to the plan. Publication state and registry evidence belong to the selected
+    executor contract.
   tag-ordering: >-
     Tags express observable prerequisites with tag-after. Before creating a
     tag, Intentional resolves every prerequisite tag expected by the plan and
     verifies its target commit, expected version, interpretation contract, and
     plan digest. Missing or conflicting prerequisites block that tag. The
-    release plan contains tag order only; external CD determines how tag
-    creation relates to publication and other side effects.
+    release plan contains tag order only; the selected executor determines how
+    tag creation relates to publication and other side effects.
   initialization-discovery: >-
     Init recursively discovers every supported manifest admitted by repository
     Git ignore rules and hard exclusions. Package-manager workspace membership
@@ -339,16 +346,17 @@ proposed-design:
     authority. Tag is the only git-writing command. check is the CI gate for
     config, schema, intent validity, tag-record consistency, baseline presence,
     and plan determinism. Every writing verb supports --dry-run and reports the
-    exact operation set. Commit, push, and forge choreography belong to the
-    harness.
+    exact operation set. Without an executor, commit, push, and forge
+    choreography belong to the harness. A configured executor defines those
+    operations through separately specified repository-local workflow slices.
   release-plan: >-
     Plan emits canonical JSON listing release units, old and new versions,
     contributing intent ids, primary, projection, and workspace tags, tag-after
     prerequisites, required phase declarations, and rendered release notes per
     release unit. The interpretation contract and generator record are part of the
     canonical payload sealed by its digest. CD consumes the plan as release
-    input and owns all publication and forge operations. The plan's only
-    ordering edges are tag-after prerequisites.
+    input and performs publication and forge operations under its own contract.
+    The plan's only ordering edges are tag-after prerequisites.
   changelog-model: >-
     apply writes each affected release unit's CHANGELOG.md from the consumed intent
     bodies; a multi-release-unit intent's body lands in each affected release unit's
@@ -453,10 +461,12 @@ proposed-design:
     native archives and portable checksums on immutable, attested GitHub
     Releases, the
     @wyrd-company/intentional npm launcher, the wyrd-company/tools Homebrew tap,
-    and a plumbing GitHub Action that runs the binary. The npm launcher selects
-    only release-matrix platforms and installs the matching archive after
-    checksum verification. A higher-level orchestration action (version-PR
-    choreography) is future scope. MSRV and CI conventions follow tagver.
+    and credential-free GitHub Actions that invoke the binary or stage release
+    contributions. The npm launcher selects only release-matrix platforms and
+    installs the matching archive after checksum verification. GitHub
+    orchestration is defined by the related GitHub release executor design and
+    materialized as repository-local workflow slices. MSRV and CI conventions
+    follow tagver.
   linux-gnu-compatibility-baseline: >-
     Linux x86_64 and ARM64 release archives are dynamically linked GNU
     position-independent executables built through cross-rs 0.2.5 with
@@ -488,7 +498,8 @@ proposed-design:
     the refresh policy must address explicitly. Alpine and musl-only environments
     are outside this GNU contract.
   out-of-scope: >-
-    Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
-    committing, pushing, or opening pull requests permanently; language
-    parsing and API surface scanning permanently (delegated to per-release-unit
-    commands); forge API calls for changelog enrichment.
+    Registry publication mutations inside Intentional CLI commands; pushing
+    Git refs or opening pull requests from Intentional CLI commands; generic
+    user-defined publisher adapters; language parsing and API surface scanning
+    (delegated to per-release-unit commands); forge API calls for changelog
+    enrichment.

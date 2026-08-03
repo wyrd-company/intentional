@@ -1,0 +1,110 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/release-candidate/v1
+title: Intentional release-candidate handoff
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - source
+  - release
+  - plan
+  - global-tag
+  - changed-tree
+  - files
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/release-candidate/v1
+  contract:
+    const: github-release-candidate-1
+  source:
+    type: object
+    additionalProperties: false
+    required: [ commit ]
+    properties:
+      commit:
+        $ref: "#/$defs/git-object"
+  release:
+    type: object
+    additionalProperties: false
+    required: [ commit, parent, tree ]
+    properties:
+      commit:
+        $ref: "#/$defs/git-object"
+      parent:
+        $ref: "#/$defs/git-object"
+      tree:
+        $ref: "#/$defs/git-object"
+  plan:
+    type: object
+    additionalProperties: false
+    required: [ file, digest, sha256 ]
+    properties:
+      file:
+        $ref: "#/$defs/path"
+      digest:
+        $ref: "#/$defs/digest"
+      sha256:
+        $ref: "#/$defs/digest"
+  global-tag:
+    type: object
+    additionalProperties: false
+    required: [ id, name, object, target ]
+    properties:
+      id:
+        type: string
+        minLength: 1
+      name:
+        type: string
+        minLength: 1
+      object:
+        $ref: "#/$defs/git-object"
+      target:
+        $ref: "#/$defs/git-object"
+  changed-tree:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ path, status, digest ]
+      properties:
+        path:
+          $ref: "#/$defs/path"
+        status:
+          enum: [ added, modified, deleted ]
+        digest:
+          oneOf:
+            - $ref: "#/$defs/digest"
+            - type: "null"
+  files:
+    type: array
+    minItems: 1
+    items:
+      $ref: "#/$defs/file"
+$defs:
+  git-object:
+    type: string
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+  digest:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  path:
+    type: string
+    minLength: 1
+    pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)[^/]+(?:/[^/]+)*$'
+  file:
+    type: object
+    additionalProperties: false
+    required: [ path, sha256, size ]
+    properties:
+      path:
+        $ref: "#/$defs/path"
+      sha256:
+        $ref: "#/$defs/digest"
+      size:
+        type: integer
+        minimum: 0

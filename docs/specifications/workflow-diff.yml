@@ -1,0 +1,17 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  The structured executor workflow-diff result is canonical JSON emitted by
+  `intentional executor diff release|publish --format json`. It identifies the
+  workflow kind and path, binds the comparison to the SHA-256 digest of the
+  exact input bytes. A conformant or different result records the digest of the
+  proposed output bytes, carries the same unified patch shown by patch output,
+  and reports whether the requested transformation was applied. A blocked
+  result carries diagnostics instead of a proposed transformation.
+validation-criteria: >-
+  A result conforms when it validates against `workflow-diff.json-schema.yml`,
+  the input digest matches the compared workflow bytes, applying the unified
+  patch to those bytes produces the declared output digest, and status, changed,
+  and applied agree with the transformation and command mode. A blocked result
+  has at least one diagnostic and no output claim.

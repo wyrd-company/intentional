@@ -1,0 +1,84 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/workflow-diff/v1
+title: Intentional workflow diff result
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - workflow
+  - input-digest
+  - status
+  - diagnostics
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/workflow-diff/v1
+  contract:
+    const: github-workflow-1
+  workflow:
+    type: object
+    additionalProperties: false
+    required: [ kind, path ]
+    properties:
+      kind:
+        enum: [ release, publish ]
+      path:
+        type: string
+        minLength: 1
+  input-digest:
+    $ref: "#/$defs/digest"
+  status:
+    enum: [ conformant, different, blocked ]
+  output-digest:
+    $ref: "#/$defs/digest"
+  changed:
+    type: boolean
+  applied:
+    type: boolean
+  patch:
+    type: string
+  diagnostics:
+    type: array
+    items:
+      $ref: "#/$defs/diagnostic"
+allOf:
+  - if:
+      properties:
+        status: { const: blocked }
+    then:
+      properties:
+        diagnostics:
+          minItems: 1
+      not:
+        anyOf:
+          - required: [ output-digest ]
+          - required: [ changed ]
+          - required: [ applied ]
+          - required: [ patch ]
+    else:
+      required: [ output-digest, changed, applied, patch ]
+      properties:
+        diagnostics:
+          maxItems: 0
+$defs:
+  digest:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  diagnostic:
+    type: object
+    additionalProperties: false
+    required: [ code, message ]
+    properties:
+      code:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9-]*$"
+      message:
+        type: string
+        minLength: 1
+      path:
+        type: string
+        minLength: 1

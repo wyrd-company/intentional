@@ -1,0 +1,230 @@
+$schema: https://refinery.systems/ontology/feature
+relationships: {}
+world-schema:
+  namespace: string
+  value_kind: string
+  attachment_path: string
+  attachment_name: string
+  attachment_digest_matches: boolean
+  manifest_valid: boolean
+  artifact_uploaded: boolean
+  artifact_attempt: number
+  selected_attempt: number
+  namespace_collision: boolean
+  attachment_collision: boolean
+  contributor_is_gate: boolean
+  contribution_available_at_assembly: boolean
+  contribution_included: boolean
+  release_write_permission: boolean
+  evidence_written_count: number
+  content_interpreted: boolean
+  diagnostic: string
+  github_output_exposed: boolean
+  manifest_authoritative: boolean
+background:
+  description: >-
+    A repository-owned GitHub Actions job can stage release evidence through the
+    standard Intentional contribution Action.
+  steps:
+    - given: The contribution Action runs without GitHub Release write authority
+      world:
+        release_write_permission: false
+        namespace_collision: false
+        attachment_collision: false
+rules:
+  - rule: A contribution stages namespaced YAML and exact attachment files
+    scenarios:
+      stage-value-and-attachment:
+        addresses: Evidence contribution staging
+        steps:
+          - given: A contributor supplies a namespace, YAML value file, and exact attachment path
+            world:
+              namespace: assessment
+              value_kind: object
+              attachment_path: output/report.json
+          - when: The Action runs Intentional evidence contribute
+          - then: It uploads one valid temporary contribution artifact
+            world:
+              manifest_valid: true
+              artifact_uploaded: true
+              attachment_name: report.json
+              github_output_exposed: false
+              manifest_authoritative: true
+      accept-any-yaml-value-kind:
+        addresses: Opaque contributor value transport
+        steps:
+          - given: A contributor value file contains a valid YAML sequence
+            world:
+              namespace: observations
+              value_kind: array
+          - when: The contribution Action parses the value
+          - then: The value is staged without semantic interpretation
+            world:
+              manifest_valid: true
+              content_interpreted: false
+      require-contribution-content:
+        addresses: Contribution input validity
+        steps:
+          - given: A contributor supplies a namespace without a value file or attachments
+            world:
+              namespace: empty
+          - when: The contribution Action validates its inputs
+          - then: The step fails without uploading an artifact
+            world:
+              artifact_uploaded: false
+              diagnostic: At least one value file or attachment is required
+      reject-non-file-attachment-input:
+        addresses: Exact attachment transport
+        steps:
+          - given: An attachment input names a glob or directory instead of an exact file
+            world:
+              attachment_path: output/*
+          - when: The contribution Action validates its attachments
+          - then: The step fails without uploading an artifact
+            world:
+              artifact_uploaded: false
+              diagnostic: Attachments must be exact file paths
+
+  - rule: The transport manifest preserves mechanical integrity without assigning meaning
+    scenarios:
+      write-versioned-contribution-manifest:
+        addresses: Contribution transport contract
+        steps:
+          - given: The supplied value and attachment are valid
+            world:
+              namespace: assessment
+              attachment_path: output/report.json
+          - when: The Action constructs the contribution bundle
+          - then: The manifest records the namespace, value, asset name, relative path, and digest
+            world:
+              manifest_valid: true
+              attachment_name: report.json
+              attachment_digest_matches: true
+      reject-corrupted-attachment:
+        addresses: Contribution bundle integrity
+        steps:
+          - given: An attachment no longer matches the digest in its transport manifest
+            world:
+              attachment_digest_matches: false
+          - when: Intentional evidence assemble verifies the contribution bundle
+          - then: Assembly rejects the contribution
+            world:
+              contribution_included: false
+              diagnostic: Contribution attachment digest does not match
+      do-not-interpret-contributed-content:
+        addresses: Contributor semantic ownership
+        steps:
+          - given: A mechanically valid contribution contains a producer-defined result value
+            world:
+              manifest_valid: true
+              content_interpreted: false
+          - when: Intentional evidence assemble consumes the contribution
+          - then: Intentional includes the value without evaluating its meaning or policy
+            world:
+              contribution_included: true
+              content_interpreted: false
+
+  - rule: Retry resolution and collisions produce one unambiguous contribution set
+    scenarios:
+      select-highest-retried-job-attempt:
+        addresses: Contribution retry identity
+        steps:
+          - given: One contributor job staged the same namespace in workflow attempts one and two
+            world:
+              namespace: assessment
+              artifact_attempt: 2
+          - when: Intentional evidence assemble groups artifacts by namespace and job
+          - then: It selects attempt two and ignores attempt one
+            world:
+              selected_attempt: 2
+              namespace_collision: false
+      reject-namespace-from-different-jobs:
+        addresses: Contributor namespace ownership
+        steps:
+          - given: Two different jobs stage the same namespace after retry resolution
+            world:
+              namespace: assessment
+              namespace_collision: true
+          - when: Intentional evidence assemble resolves contributor namespaces
+          - then: Assembly fails before publishing the Release
+            world:
+              contribution_included: false
+              diagnostic: Contributor namespace collision
+      reject-flat-asset-name-collision:
+        addresses: GitHub Release attachment identity
+        steps:
+          - given: Two contributions contain attachments with the same basename
+            world:
+              attachment_name: report.json
+              attachment_collision: true
+          - when: Intentional evidence assemble derives flat Release asset names
+          - then: Assembly fails before uploading either conflicting asset
+            world:
+              contribution_included: false
+              diagnostic: GitHub Release attachment name collision
+
+  - rule: Configured gates guarantee inclusion and other contributors remain best-effort
+    scenarios:
+      wait-for-configured-contributor-gate:
+        addresses: Guaranteed contribution ordering
+        steps:
+          - given: The contributor job is named as a publish gate
+            world:
+              contributor_is_gate: true
+              contribution_available_at_assembly: true
+          - when: Final evidence assembly becomes eligible to run
+          - then: The completed contribution is included in the Release and evidence document
+            world:
+              contribution_included: true
+      include-available-unconfigured-contribution:
+        addresses: Best-effort contribution collection
+        steps:
+          - given: An unconfigured contributor artifact exists when assembly starts
+            world:
+              contributor_is_gate: false
+              contribution_available_at_assembly: true
+          - when: Intentional evidence assemble snapshots available contributions
+          - then: The contribution is included and checked for collisions
+            world:
+              contribution_included: true
+              namespace_collision: false
+      ignore-late-unconfigured-contribution:
+        addresses: Best-effort contribution cutoff
+        steps:
+          - given: An unconfigured contributor finishes after assembly starts
+            world:
+              contributor_is_gate: false
+              contribution_available_at_assembly: false
+          - when: Intentional evidence assemble snapshots available contributions
+          - then: Finalization does not wait for or include the late contribution
+            world:
+              contribution_included: false
+
+  - rule: One Intentional-owned writer finalizes the draft Release exactly once
+    scenarios:
+      contributor-does-not-mutate-draft-release:
+        addresses: Draft Release write isolation
+        steps:
+          - given: A repository-owned contributor stages files and values
+            world:
+              release_write_permission: false
+          - when: The contribution Action completes
+          - then: It uploads only a temporary workflow artifact and exposes no outputs
+            world:
+              artifact_uploaded: true
+              release_write_permission: false
+              github_output_exposed: false
+              manifest_authoritative: true
+      assemble-and-upload-once:
+        addresses: Atomic evidence assembly
+        steps:
+          - given: All required publisher fragments and available contributions are complete
+            world:
+              contribution_available_at_assembly: true
+              evidence_written_count: 0
+          - when: The final job runs Intentional evidence assemble
+          - then: It writes the evidence document once and uploads accepted attachments once
+            world:
+              evidence_written_count: 1
+              contribution_included: true
+              github_output_exposed: false

@@ -1,6 +1,8 @@
 # ---
 # relationships:
-#   implements: intent-driven-polyglot-release
+#   implements:
+#     - intent-driven-polyglot-release
+#     - github-release-executor
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://intentional.foo/schemas/config.yml
@@ -34,6 +36,8 @@ properties:
       $ref: "#/$defs/workspace-tag"
   discovery:
     $ref: "#/$defs/discovery"
+  github:
+    $ref: "#/$defs/github"
   release-units:
     type: object
     minProperties: 1
@@ -52,6 +56,47 @@ $defs:
         type: string
   phase:
     enum: [ before-publication, after-publication ]
+  github:
+    type: object
+    additionalProperties: false
+    required: [ workflows ]
+    properties:
+      workflows:
+        type: object
+        additionalProperties: false
+        required: [ release, publish ]
+        properties:
+          release:
+            $ref: "#/$defs/github-workflow"
+          publish:
+            $ref: "#/$defs/github-workflow"
+      prefix:
+        oneOf:
+          - type: string
+            minLength: 1
+          - type: object
+            additionalProperties: false
+            required: [ job, envvar ]
+            properties:
+              job:
+                type: string
+                pattern: "^[A-Za-z_][A-Za-z0-9_-]*$"
+              envvar:
+                type: string
+                pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  github-workflow:
+    type: object
+    additionalProperties: false
+    required: [ path ]
+    properties:
+      path:
+        $ref: "#/$defs/exact-path"
+      gates:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          pattern: "^[A-Za-z_][A-Za-z0-9_-]*$"
   detector-id:
     type: string
     pattern: "^[a-z0-9][a-z0-9._-]*$"
@@ -119,6 +164,113 @@ $defs:
         minProperties: 1
         additionalProperties:
           $ref: "#/$defs/release-unit-tag"
+      npm:
+        $ref: "#/$defs/npm-publisher"
+      cargo:
+        $ref: "#/$defs/cargo-publisher"
+      homebrew:
+        $ref: "#/$defs/homebrew-publisher"
+      rpm:
+        $ref: "#/$defs/system-package-publisher"
+      apt:
+        $ref: "#/$defs/system-package-publisher"
+      aur:
+        $ref: "#/$defs/system-package-publisher"
+      oci:
+        $ref: "#/$defs/oci-publisher"
+  secret-name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  variable-name:
+    type: string
+    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+  npm-publisher:
+    type: object
+    additionalProperties: false
+    properties:
+      token-secret:
+        $ref: "#/$defs/secret-name"
+      omit:
+        $ref: "#/$defs/no-omissions"
+      additional-targets:
+        type: object
+        additionalProperties: false
+        minProperties: 1
+        properties:
+          github:
+            type: object
+            additionalProperties: false
+            properties:
+              omit:
+                $ref: "#/$defs/no-omissions"
+  cargo-publisher:
+    type: object
+    additionalProperties: false
+    properties:
+      token-secret:
+        $ref: "#/$defs/secret-name"
+      omit:
+        $ref: "#/$defs/no-omissions"
+  homebrew-publisher:
+    type: object
+    additionalProperties: false
+    required: [ repository ]
+    properties:
+      repository:
+        $ref: "#/$defs/github-repository"
+      omit:
+        $ref: "#/$defs/no-omissions"
+  system-package-publisher:
+    type: object
+    additionalProperties: false
+    properties:
+      omit:
+        $ref: "#/$defs/no-omissions"
+  github-repository:
+    type: string
+    pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+  oci-publisher:
+    type: object
+    additionalProperties: false
+    minProperties: 1
+    properties:
+      dockerhub:
+        $ref: "#/$defs/dockerhub-target"
+      ghcr:
+        $ref: "#/$defs/ghcr-target"
+  attached-component:
+    enum: [ sbom, provenance, signature ]
+  no-omissions:
+    type: array
+    maxItems: 0
+  dockerhub-target:
+    type: object
+    additionalProperties: false
+    properties:
+      repository:
+        type: string
+        pattern: "^[a-z0-9]+(?:[._-][a-z0-9]+)*/[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+      username-var:
+        $ref: "#/$defs/variable-name"
+      token-secret:
+        $ref: "#/$defs/secret-name"
+      omit:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/attached-component"
+  ghcr-target:
+    type: object
+    additionalProperties: false
+    properties:
+      repository:
+        type: string
+        pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      omit:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/attached-component"
   projection:
     type: object
     additionalProperties: false

@@ -1,0 +1,20 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  A draft-Release asset handoff is the cross-repository YAML document supplied
+  to a downstream publisher that must consume GitHub-hosted deliverables before
+  immutable Release closure. It binds the source repository, draft Release,
+  global tag, S, R, and release-plan digest to one configured publisher target
+  and inventories each required asset by stable GitHub asset identifier, flat
+  name, size, media type, and SHA-256 digest. The receiving publisher uses a
+  narrowly scoped GitHub App token to download each asset through the
+  authenticated API and records that closure-time retrieval as
+  `clean-client.mode: authenticated-draft` in its publisher evidence.
+validation-criteria: >-
+  A handoff conforms when it validates against
+  `draft-release-asset-handoff.json-schema.yml`; the source repository's draft
+  Release and tag still match the declared release identity; every GitHub asset
+  identifier resolves within that draft; downloaded bytes match size and
+  digest; and the publisher and target are expected by the release
+  configuration at R.
