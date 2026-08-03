@@ -15,7 +15,6 @@ use crate::evidence::assemble::{
 use crate::evidence::phase::{decode, PHASE_EVIDENCE_FIELD};
 use crate::executor::recipe::{resolve_publications, SelectedPublication, PRIMARY_TARGET};
 use crate::model::PublisherKind;
-use crate::publication::draft::is_draft_dependent;
 use crate::publication::observation::{observe, Clock, ConsistencyPolicy, PublicationObservation};
 use crate::release::git;
 use crate::release::tag::verify_release_tag;
@@ -454,6 +453,26 @@ fn canonical_target(
     }
 }
 
+/// Wire spelling of one retrieval mode, as evidence and diagnostics name it.
+const fn mode_name(mode: CleanClientMode) -> &'static str {
+    match mode {
+        CleanClientMode::Public => "public",
+        CleanClientMode::AuthenticatedDraft => "authenticated-draft",
+        CleanClientMode::AuthenticatedRegistry => "authenticated-registry",
+    }
+}
+
+/// Consumer path one retrieval mode names, for a diagnostic that says why.
+const fn retrieval_path(mode: CleanClientMode) -> &'static str {
+    match mode {
+        CleanClientMode::Public => "the public consumer path",
+        CleanClientMode::AuthenticatedDraft => "a draft GitHub Release asset",
+        CleanClientMode::AuthenticatedRegistry => {
+            "its normal client path, which admits no anonymous read"
+        }
+    }
+}
+
 /// Bind one present observation to the publication it claims to describe.
 fn accept_observation<'a>(
     observation: &'a PublicationObservation,
@@ -505,23 +524,19 @@ fn accept_observation<'a>(
             )));
         }
     }
-    match (retrieval.mode, is_draft_dependent(selected.publisher)) {
-        (CleanClientMode::AuthenticatedDraft, false) => {
-            return Err(Error::Validation(format!(
-                "publication {identity} claims authenticated-draft retrieval; the {} publisher resolves its release through the public consumer path and records mode public",
-                selected.publisher
-            )));
-        }
-        // Verification runs before closure, so the Release the consumer path of
-        // a draft-dependent publisher resolves is still a draft and a public
-        // claim is one that cannot be true.
-        (CleanClientMode::Public, true) => {
-            return Err(Error::Validation(format!(
-                "publication {identity} claims public retrieval; the {} publisher resolves its release through a draft GitHub Release asset and records mode authenticated-draft",
-                selected.publisher
-            )));
-        }
-        _ => {}
+    // The recipe fixes consumer retrieval, so the mode a destination admits is
+    // the recipe's and not the observation's to choose. Verification runs before
+    // closure, so a draft-dependent publisher claiming public retrieval claims
+    // something that cannot be true yet; a destination that serves no anonymous
+    // client cannot be retrieved publicly at all; and a public destination
+    // claiming either authenticated mode claims a check it did not perform.
+    if retrieval.mode != selected.retrieval {
+        return Err(Error::Validation(format!(
+            "publication {identity} claims {} retrieval; the maintained recipe for this destination retrieves it through {} and records mode {}",
+            mode_name(retrieval.mode),
+            retrieval_path(selected.retrieval),
+            mode_name(selected.retrieval)
+        )));
     }
     Ok(ObservedPublication {
         subject,
@@ -1149,6 +1164,93 @@ destination-aliases:
             verified.evidence.clean_client.mode,
             CleanClientMode::AuthenticatedDraft,
             "the recorded mode is exactly the one observed"
+        );
+    }
+
+    // GitHub Package Registry serves no anonymous client, so its recipe fixes
+    // authenticated-registry retrieval while the same npm publisher's npmjs
+    // primary fixes public. A check keyed on the publisher would accept either
+    // claim at either destination, which is how a destination ends up with
+    // affirmative evidence of a retrieval nobody could have performed.
+    #[test]
+    fn each_npm_destination_records_the_retrieval_its_own_recipe_fixes() {
+        let workspace = workspace(
+            "verify-npm-github-retrieval",
+            "    npm: { additional-targets: { github: {} } }\n",
+            &[(
+                "component/package.json",
+                r#"{"name":"sample-library","version":"1.2.3"}"#,
+            )],
+        );
+        let context = TestContext::new();
+        let clock = clock();
+
+        workspace.write(
+            "observation.yml",
+            &present_document()
+                .replace("target: primary", "target: github")
+                .replace("identity: npmjs", "identity: npm.pkg.github.com")
+                .replace("mode: public", "mode: authenticated-registry"),
+        );
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            Some("github"),
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect("the GitHub Package Registry target verifies");
+        assert_eq!(
+            verified.evidence.clean_client.mode,
+            CleanClientMode::AuthenticatedRegistry
+        );
+
+        workspace.write(
+            "observation.yml",
+            &present_document()
+                .replace("target: primary", "target: github")
+                .replace("identity: npmjs", "identity: npm.pkg.github.com"),
+        );
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            Some("github"),
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a public claim from a registry that serves no anonymous client is reported");
+        assert!(
+            error.to_string().contains("claims public retrieval")
+                && error
+                    .to_string()
+                    .contains("records mode authenticated-registry"),
+            "{error}"
+        );
+
+        workspace.write(
+            "observation.yml",
+            &present_document().replace("mode: public", "mode: authenticated-registry"),
+        );
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("an authenticated-registry claim from the public npmjs primary is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("claims authenticated-registry retrieval")
+                && error.to_string().contains("records mode public"),
+            "{error}"
         );
     }
 

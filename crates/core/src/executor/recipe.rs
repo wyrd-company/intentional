@@ -7,6 +7,7 @@
 
 use crate::config::{Config, ReleaseUnitConfig};
 use crate::error::{Error, Result};
+use crate::evidence::assemble::CleanClientMode;
 use crate::init::{evidence, SourceEvidence};
 use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,15 @@ pub struct Recipe {
     pub target: &'static str,
     /// Attached components the recipe can produce and therefore omit.
     pub components: &'static [AttachedComponent],
+    /// Consumer retrieval this recipe's destination admits.
+    ///
+    /// The design gives the recipe authority over consumer retrieval, and the
+    /// mode belongs to the destination rather than to the adapter: one npm
+    /// publisher reaches npmjs, which serves anonymous clients, and GitHub
+    /// Package Registry, which serves none. Deriving the required mode from the
+    /// publisher alone would force one of those two destinations to record a
+    /// retrieval that did not happen the way it says it did.
+    pub retrieval: CleanClientMode,
 }
 
 const OCI_COMPONENTS: &[AttachedComponent] = &[
@@ -133,6 +143,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Npm,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::NodePackage,
@@ -140,6 +151,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Npm,
         target: "github",
         components: &[],
+        retrieval: CleanClientMode::AuthenticatedRegistry,
     },
     Recipe {
         capability: Capability::RustCrate,
@@ -147,6 +159,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Cargo,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -154,6 +167,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Homebrew,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -161,6 +175,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Rpm,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -168,6 +183,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Apt,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -175,6 +191,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Aur,
         target: PRIMARY_TARGET,
         components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
         capability: Capability::RunnableImage,
@@ -182,6 +199,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Oci,
         target: "dockerhub",
         components: OCI_COMPONENTS,
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::RunnableImage,
@@ -189,6 +207,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Oci,
         target: "ghcr",
         components: OCI_COMPONENTS,
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::DevContainerFeature,
@@ -196,6 +215,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Oci,
         target: "ghcr",
         components: SIGNATURE_ONLY,
+        retrieval: CleanClientMode::Public,
     },
 ];
 
@@ -239,6 +259,8 @@ pub struct SelectedPublication {
     pub packager: Packager,
     /// Components the recipe produces for this target.
     pub components: Vec<AttachedComponent>,
+    /// Consumer retrieval the selected recipe's destination admits.
+    pub retrieval: CleanClientMode,
 }
 
 impl SelectedPublication {
@@ -452,6 +474,7 @@ fn select_one(
             .copied()
             .filter(|component| !configured.omit.contains(component))
             .collect(),
+        retrieval: recipe.retrieval,
     })
 }
 
@@ -939,6 +962,26 @@ release-units:
             selected[0].destination.as_deref(),
             Some("example-org/example-image")
         );
+    }
+
+    // Two tables now state which destinations resolve a GitHub Release asset:
+    // the catalog's retrieval mode and the draft handoff's publisher list. The
+    // handoff builds an asset inventory for the publishers in its list, and the
+    // recipe that consumes one is the recipe whose retrieval is
+    // authenticated-draft, so a destination in one table and not the other is
+    // either handed assets no recipe retrieves or asked for a retrieval no
+    // handoff supplies.
+    #[test]
+    fn agrees_with_the_draft_handoff_about_which_destinations_read_a_draft_asset() {
+        for recipe in catalog() {
+            assert_eq!(
+                recipe.retrieval == CleanClientMode::AuthenticatedDraft,
+                crate::publication::draft::is_draft_dependent(recipe.publisher),
+                "{}/{} disagrees with the draft handoff about draft-asset retrieval",
+                recipe.publisher,
+                recipe.target
+            );
+        }
     }
 
     #[test]

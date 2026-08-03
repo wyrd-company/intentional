@@ -85,7 +85,12 @@ properties:
     required: [ mode, client, version, digest ]
     properties:
       mode:
-        enum: [ public, authenticated-draft ]
+        description: >-
+          Consumer path the retrieval actually used. The maintained recipe for
+          the destination fixes which one is admissible, so a recipe never
+          chooses between describing its retrieval faithfully and passing
+          verification.
+        enum: [ public, authenticated-draft, authenticated-registry ]
       client:
         description: >-
           Consumer tool the recipe drove to retrieve the release.

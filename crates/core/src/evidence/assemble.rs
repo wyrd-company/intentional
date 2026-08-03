@@ -114,6 +114,16 @@ pub enum CleanClientMode {
     Public,
     /// Authenticated retrieval of a draft-dependent asset before closure.
     AuthenticatedDraft,
+    /// Normal consumer retrieval from a destination that admits no anonymous read.
+    ///
+    /// A destination whose ordinary client path requires a credential — GitHub
+    /// Package Registry is the maintained one — cannot be retrieved publicly at
+    /// any point, before or after closure. Recording that retrieval as `public`
+    /// would be an untrue claim in affirmative evidence, and omitting it would
+    /// leave the destination with no consumer check at all, so it is named for
+    /// what it is: the destination's normal client path, driven with the
+    /// credential that path always requires.
+    AuthenticatedRegistry,
 }
 
 /// Consumer verification a publisher truthfully performed.

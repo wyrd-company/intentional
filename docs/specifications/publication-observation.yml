@@ -34,9 +34,13 @@ description: >-
   means the recipe retrieved the release through the destination's normal
   unauthenticated consumer path. `authenticated-draft` means the target
   depended on an asset of the still-draft GitHub Release and retrieved those
-  bytes through the authenticated GitHub API. The verification command records
-  the observed mode unchanged and refuses a draft claim from a publisher whose
-  consumer path is independent of GitHub Release assets.
+  bytes through the authenticated GitHub API. `authenticated-registry` means the
+  destination admits no anonymous read at all, so its normal client path is an
+  authenticated one and the recipe drove that path with the credential it always
+  requires. The verification command records the observed mode unchanged and
+  refuses any mode but the one the destination's maintained recipe fixes, so a
+  public destination cannot claim an authenticated check it did not perform and
+  a destination that serves no anonymous client cannot claim a public one.
 
   `retrieval.client` and `retrieval.version` describe the client that performed
   the retrieval, not the release it retrieved: the consumer tool the recipe
@@ -82,6 +86,7 @@ validation-criteria: >-
   observation after a completed publish attempt fails, and reaching the
   deadline is a distinct retryable failure. The command writes its
   publisher-evidence fragment only after a `present` observation passes every
-  check. An `authenticated-draft` retrieval spells its digest in the canonical
-  `sha256:` form the draft-asset inventory uses; every other mode spells it in
-  the retrieving client's own form.
+  check, including that `retrieval.mode` is the mode the destination's
+  maintained recipe fixes. An `authenticated-draft` retrieval spells its digest
+  in the canonical `sha256:` form the draft-asset inventory uses; every other
+  mode spells it in the retrieving client's own form.
