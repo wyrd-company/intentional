@@ -55,6 +55,15 @@ const UPLOAD_ARTIFACT_ACTION: &str =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
 const DOWNLOAD_ARTIFACT_ACTION: &str =
     "actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0";
+/// Published ED25519 host key fingerprint of the Arch User Repository.
+///
+/// Pinned rather than accepted on first use. The recipe scopes its SSH authority
+/// to one destination, and trusting whatever key answers on a runner would hand
+/// that authority to an unauthenticated peer. A host whose key does not match
+/// this pin fails the job, so a stale pin is a loud failure rather than a silent
+/// downgrade.
+const AUR_HOST_FINGERPRINT: &str = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4";
+
 const APP_TOKEN_ACTION: &str =
     "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349";
 
@@ -1533,6 +1542,11 @@ fn goreleaser_promotion(
                 "      {}AUR_KEY: ${{{{ secrets.{}AUR_KEY }}}}\n",
                 namespaces.envvar, namespaces.envvar
             ));
+            environment.push_str(&format!(
+                "      {}AUR_HOST_FINGERPRINT: {}\n",
+                namespaces.envvar,
+                scalar(AUR_HOST_FINGERPRINT)
+            ));
             Ok(vec![
                 ("@CREDENTIAL_STEPS@", String::new()),
                 ("@PROMOTE_ENV@", environment),
@@ -2038,20 +2052,37 @@ const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
       repositories: @DESTINATION_NAME@
 "#;
 
-/// Promote the generated Homebrew formula into the configured tap repository.
+/// Promote the generated Homebrew formulas into the configured tap repository.
 ///
-/// A rerun that finds the tap already carrying this formula commits nothing and
+/// The packager writes each formula to `homebrew/<directory>/<name>.rb` inside
+/// the distribution tree, where the directory and the name are the ones the
+/// release unit's own `brews` entry declares, and publishes it to that same
+/// relative path in the tap. Promotion therefore preserves the path rather than
+/// choosing one: a tap whose formulas do not live under `Formula` is stating
+/// where they live, and this recipe's premise is that the native configuration
+/// is the authority on that.
+///
+/// Every generated formula is promoted. A release unit with two `brews` entries
+/// publishes both, and scoping the search to the packager's `homebrew` output
+/// keeps a cask or any other generated Ruby file from being promoted as one.
+///
+/// A rerun that finds the tap already carrying this release commits nothing and
 /// still succeeds, because the destination readback that follows is what decides
 /// whether the publication is present rather than whether this step wrote.
-const HOMEBREW_PROMOTE_COMMAND: &str = r#"      formula="$(find "${@ENVVAR@SUBJECT}" -type f -name '*.rb' -print | sort | head -n 1)"
-      test -n "${formula}"
+const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/homebrew"
+      test -d "${generated}"
+      mapfile -t -d '' formulas < <(find "${generated}" -type f -name '*.rb' -print0 | sort -z)
+      test "${#formulas[@]}" -gt 0
+      rm -rf "${RUNNER_TEMP}/@JOB@tap"
       git clone --quiet --depth 1 \
         "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
         "${RUNNER_TEMP}/@JOB@tap"
-      install -D "${formula}" \
-        "${RUNNER_TEMP}/@JOB@tap/Formula/$(basename "${formula}")"
-      git -C "${RUNNER_TEMP}/@JOB@tap" add Formula
-      if ! git -C "${RUNNER_TEMP}/@JOB@tap" diff --cached --quiet; then
+      for formula in "${formulas[@]}"; do
+        install -D -m 644 "${formula}" \
+          "${RUNNER_TEMP}/@JOB@tap/${formula#"${generated}/"}"
+      done
+      git -C "${RUNNER_TEMP}/@JOB@tap" add --all
+      if [ -n "$(git -C "${RUNNER_TEMP}/@JOB@tap" status --porcelain)" ]; then
         git -C "${RUNNER_TEMP}/@JOB@tap" \
           -c user.name="${@ENVVAR@COMMITTER_NAME}" \
           -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
@@ -2062,27 +2093,54 @@ const HOMEBREW_PROMOTE_COMMAND: &str = r#"      formula="$(find "${@ENVVAR@SUBJE
 /// Promote the generated Arch package sources into the Arch User Repository.
 ///
 /// The Arch User Repository is a Git host of its own rather than a GitHub
-/// repository, so its authority is an SSH key under a conventional secret name
-/// instead of an App installation token. The key never reaches Intentional
-/// configuration; the recipe names the secret and the repository supplies it.
-const AUR_PROMOTE_COMMAND: &str = r#"      sources="$(find "${@ENVVAR@SUBJECT}" -type f -name 'PKGBUILD' -print | sort | head -n 1)"
-      test -n "${sources}"
+/// repository, so its authority is an SSH key under the conventional secret
+/// name the recipe states. The key never reaches Intentional configuration; the
+/// recipe names the secret and the repository supplies it.
+///
+/// The packager writes this package's sources as `aur/<package>.pkgbuild` and
+/// `aur/<package>.srcinfo`, and the names `PKGBUILD` and `.SRCINFO` are the ones
+/// the Arch User Repository requires at the destination. Both sides are named
+/// exactly: reading the package's own two files keeps a release unit with more
+/// than one `aur` entry from sweeping its sibling's sources into this package,
+/// and installing them under their required names is what makes the result a
+/// package `makepkg` can read at all.
+///
+/// The host key is pinned rather than accepted from whatever answers on the
+/// runner. The recipe is careful to scope this SSH authority to one destination,
+/// and trusting the host on first use would hand that authority to an
+/// unauthenticated peer. A host whose key does not match the pin fails the job.
+///
+/// A package the Arch User Repository does not yet carry cannot be cloned, so an
+/// absent package is initialized locally and created by the initial push, which
+/// is how the Arch User Repository registers one.
+const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@ENVVAR@DESTINATION}.pkgbuild"
+      srcinfo="${@ENVVAR@SUBJECT}/aur/${@ENVVAR@DESTINATION}.srcinfo"
+      test -f "${pkgbuild}"
+      test -f "${srcinfo}"
       install -d -m 700 "${HOME}/.ssh"
       printf '%s\n' "${@ENVVAR@AUR_KEY}" > "${HOME}/.ssh/@JOB@aur"
       chmod 600 "${HOME}/.ssh/@JOB@aur"
-      ssh-keyscan aur.archlinux.org >> "${HOME}/.ssh/known_hosts"
-      GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes" \
-        git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
-        "${RUNNER_TEMP}/@JOB@aur"
-      cp -R "$(dirname "${sources}")"/. "${RUNNER_TEMP}/@JOB@aur/"
+      ssh-keyscan -t ed25519 aur.archlinux.org > "${RUNNER_TEMP}/@JOB@aur-host-key"
+      test "$(ssh-keygen -l -f "${RUNNER_TEMP}/@JOB@aur-host-key" | cut -d' ' -f2)" \
+        = "${@ENVVAR@AUR_HOST_FINGERPRINT}"
+      cat "${RUNNER_TEMP}/@JOB@aur-host-key" >> "${HOME}/.ssh/known_hosts"
+      export GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes"
+      rm -rf "${RUNNER_TEMP}/@JOB@aur"
+      if ! git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
+        "${RUNNER_TEMP}/@JOB@aur"; then
+        git init --quiet --initial-branch=master "${RUNNER_TEMP}/@JOB@aur"
+        git -C "${RUNNER_TEMP}/@JOB@aur" remote add origin \
+          "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git"
+      fi
+      install -m 644 "${pkgbuild}" "${RUNNER_TEMP}/@JOB@aur/PKGBUILD"
+      install -m 644 "${srcinfo}" "${RUNNER_TEMP}/@JOB@aur/.SRCINFO"
       git -C "${RUNNER_TEMP}/@JOB@aur" add --all
-      if ! git -C "${RUNNER_TEMP}/@JOB@aur" diff --cached --quiet; then
+      if [ -n "$(git -C "${RUNNER_TEMP}/@JOB@aur" status --porcelain)" ]; then
         git -C "${RUNNER_TEMP}/@JOB@aur" \
           -c user.name="${@ENVVAR@COMMITTER_NAME}" \
           -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
           commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
-        GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes" \
-          git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD
+        git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD:master
       fi"#;
 
 const PUBLISH_ASSEMBLE_JOB: &str = r#"
