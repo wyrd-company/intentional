@@ -1066,8 +1066,21 @@ fn generated_handoff_command(runner_temp: &Path) -> Vec<String> {
         commands.next().is_none(),
         "exactly one managed step verifies the handoff"
     );
+    // A template that appends anything after the positional would otherwise be
+    // read as though the last token were still the handoff directory.
+    assert_eq!(
+        command.len(),
+        HANDOFF_COMMAND_TOKENS,
+        "the derived command is `intentional verify handoff <handoff>`: {command:?}"
+    );
     command
 }
+
+/// Tokens in `intentional verify handoff <handoff>`, whose last one is the directory.
+const HANDOFF_COMMAND_TOKENS: usize = 4;
+
+/// Position of the handoff directory in that command.
+const HANDOFF_DIRECTORY_TOKEN: usize = 3;
 
 #[test]
 fn runs_the_generated_authority_transition_command_against_a_prepared_handoff() {
@@ -1075,7 +1088,7 @@ fn runs_the_generated_authority_transition_command_against_a_prepared_handoff() 
     fixture.author_release();
     let runner_temp = tempfile::tempdir().expect("runner temporary directory");
     let command = generated_handoff_command(runner_temp.path());
-    let candidate = PathBuf::from(command.last().expect("the command names a handoff"));
+    let candidate = PathBuf::from(&command[HANDOFF_DIRECTORY_TOKEN]);
 
     // The prepare job writes the candidate to the location the artifact download
     // restores it to, which is the location this command reads.

@@ -691,6 +691,11 @@ fn prompt(label: &str) -> Result<String> {
 /// when a release runner executes it. These tests derive the workflows the
 /// executor produces and parse each generated invocation with the real parser,
 /// so this binary is the authority on what a template may say.
+///
+/// The coverage is the `run:` bodies of derived workflows and nothing else. The
+/// composite Actions this repository publishes under `actions/` invoke the same
+/// portable commands from their own `run:` bodies and are not read here, so
+/// those invocations agree with the parser by inspection rather than by gate.
 #[cfg(test)]
 mod generated_invocations {
     use super::*;
@@ -709,6 +714,20 @@ mod generated_invocations {
     /// these commands must therefore validate the invocation the workflow
     /// generates for it instead of inheriting an unchecked one.
     const PENDING_COMMANDS: &[&[&str]] = &[&["verify", "publication"], &["verify", "release-tag"]];
+
+    /// Invocations the managed job templates generate for the fixture workspace.
+    ///
+    /// The release role generates `intentional release prepare` and
+    /// `intentional verify handoff`. The publish role generates
+    /// `intentional verify release-tag`, one `intentional verify publication`
+    /// per selected publication, and `intentional evidence assemble`; the
+    /// fixture configures exactly one publication.
+    ///
+    /// Parsing what was extracted proves nothing about what was missed, so the
+    /// count is asserted rather than assumed. A template that stops generating a
+    /// command, and a recognizer that stops seeing one, both fail here and force
+    /// a deliberate update instead of quietly binding a smaller surface.
+    const GENERATED_INVOCATIONS: usize = 5;
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
@@ -776,24 +795,84 @@ release-units:
             serde_yaml::from_str(workflow).expect("derived workflow parses");
         let mut bodies = Vec::new();
         collect_run_bodies(&document, &mut bodies);
+        bodies
+            .iter()
+            .flat_map(|body| body_invocations(body))
+            .collect()
+    }
+
+    /// Every `intentional` invocation one `run:` body executes.
+    ///
+    /// Recognition is conservative rather than permissive. Each command line is
+    /// counted for mentions of the executable first, and a line whose mentions
+    /// are not all classified as invocations fails instead of passing quietly.
+    /// A step that wraps the command in a substitution, names it by an absolute
+    /// path, or quotes it in a way this cannot tokenize is therefore reported,
+    /// because a recognizer that shrugs at a shape it does not understand is a
+    /// hole in exactly the gate this module exists to be.
+    fn body_invocations(body: &str) -> Vec<Vec<String>> {
         let mut invocations = Vec::new();
-        for body in bodies {
-            for line in shell_lines(&body) {
-                if !line.split_whitespace().any(|word| word == "intentional") {
-                    continue;
-                }
-                let tokens = shell_words::split(&line)
-                    .unwrap_or_else(|error| panic!("`{line}` must tokenize as a command: {error}"));
-                let start = tokens
-                    .iter()
-                    .position(|token| token == "intentional")
-                    .unwrap_or_else(|| {
-                        panic!("`{line}` names intentional but runs something else")
-                    });
-                invocations.push(tokens[start..].to_vec());
+        for line in shell_lines(body) {
+            let mentions = executable_mentions(&line);
+            if mentions == 0 {
+                continue;
             }
+            let classified = line_invocations(&line);
+            assert_eq!(
+                classified.len(),
+                mentions,
+                "`{line}` names the intentional executable {mentions} time(s) but {} of them could be read as a command; an unclassifiable invocation must fail rather than pass",
+                classified.len()
+            );
+            invocations.extend(classified);
         }
         invocations
+    }
+
+    /// The `intentional` invocations one command line runs in command position.
+    fn line_invocations(line: &str) -> Vec<Vec<String>> {
+        simple_commands(line)
+            .iter()
+            .filter_map(|fragment| shell_words::split(fragment).ok())
+            .filter(|tokens| tokens.first().is_some_and(|token| is_executable(token)))
+            .collect()
+    }
+
+    /// Whether a command word runs this binary, bare or named by a path.
+    fn is_executable(word: &str) -> bool {
+        word.rsplit('/').next() == Some("intentional")
+    }
+
+    /// Count every mention of the executable in a command line, wherever it sits.
+    ///
+    /// Splitting on shell punctuation but not on `/` keeps a path-qualified
+    /// mention whole and leaves a mention inside a command substitution or an
+    /// assignment visible, while `intentional_candidate` and
+    /// `INTENTIONAL_GLOBAL_TAG` stay distinct words that are not this binary.
+    fn executable_mentions(line: &str) -> usize {
+        line.split(|character: char| {
+            character.is_whitespace() || "\"'`$(){}[]<>;&|=,".contains(character)
+        })
+        .filter(|word| is_executable(word))
+        .count()
+    }
+
+    /// Split a command line into the simple commands a shell would run.
+    ///
+    /// Command substitution delimiters separate commands like any operator does,
+    /// because the substituted command is itself executed. That is the shape a
+    /// `run:` step takes when it projects a command's output into
+    /// `$GITHUB_OUTPUT`, so it has to be read rather than stepped over.
+    fn simple_commands(line: &str) -> Vec<String> {
+        let mut work = line.to_owned();
+        for separator in ["$(", "&&", "||", "`", ")", "|", ";", "&"] {
+            work = work.replace(separator, "\u{0}");
+        }
+        work.split('\u{0}')
+            .map(str::trim)
+            .filter(|fragment| !fragment.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
     }
 
     /// Collect the body of every `run:` step anywhere in a workflow document.
@@ -905,15 +984,50 @@ release-units:
                 reached.insert(path);
             }
         }
-        assert!(
-            total > 0,
-            "the derived workflows must run portable commands for this test to bind anything"
+        assert_eq!(
+            total, GENERATED_INVOCATIONS,
+            "the managed job templates generate a known number of invocations; a template that stopped generating one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
         );
         assert_eq!(
             reached,
             declared_pending(),
             "every pending command must still be reached by a generated invocation"
         );
+    }
+
+    #[test]
+    fn reads_the_invocation_however_a_step_body_spells_it() {
+        for body in [
+            "intentional release prepare --output /tmp/candidate",
+            "/usr/local/bin/intentional release prepare --output /tmp/candidate",
+            "echo \"sha=$(intentional release prepare --output /tmp/candidate)\" >> $GITHUB_OUTPUT",
+            "intentional release prepare --output /tmp/candidate | tee /tmp/log",
+            "set -euo pipefail\nintentional release prepare \\\n  --output /tmp/candidate",
+        ] {
+            let invocations = body_invocations(body);
+            assert_eq!(
+                invocations.len(),
+                1,
+                "`{body}` runs one command: {invocations:?}"
+            );
+            assert_eq!(
+                invocations[0][1..],
+                ["release", "prepare", "--output", "/tmp/candidate"],
+                "`{body}`"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_a_name_that_only_begins_with_the_executable() {
+        let body = "gh release upload \"${INTENTIONAL_GLOBAL_TAG}\" \"${{ runner.temp }}/intentional_release\"/* --clobber";
+        assert!(body_invocations(body).is_empty(), "{body}");
+    }
+
+    #[test]
+    #[should_panic(expected = "unclassifiable invocation must fail rather than pass")]
+    fn refuses_a_command_line_it_cannot_read() {
+        body_invocations("intentional release prepare --output \"/tmp/unterminated");
     }
 
     #[test]
