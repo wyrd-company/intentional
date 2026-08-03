@@ -222,6 +222,13 @@ Each concrete OCI target owns an `omit` list drawn from `sbom`, `provenance`,
 and `signature`. A component absent from the target's maintained recipe fails
 validation. Release evidence records only the components that were produced.
 
+Applying a ready plan re-serializes `.intentional/config.yml` from the parsed
+model, so comments, key order, and formatting in that file are replaced with
+Intentional's canonical form. The command reports this as a planned operation,
+and `--dry-run` shows it before anything is written. Keep durable prose about
+release policy in repository documentation rather than in configuration
+comments.
+
 `intentional executor init` offers only the decisions it can apply on its own.
 A target that needs repository data no evidence supplies, such as a Homebrew tap
 or a Docker Hub repository, and a target that more than one derived capability

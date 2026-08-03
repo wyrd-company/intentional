@@ -271,7 +271,8 @@ impl ExecutorInitResult {
 /// Create or resume the executor initialization plan and apply it when it is ready.
 pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
     let mut config = Config::load(root)?;
-    let existing = load_plan(root)?;
+    let recorded = read_plan(root)?;
+    let existing = recorded.as_ref().map(|text| parse_plan(text)).transpose()?;
     let inferred_github = match (&config.github, existing.as_ref()) {
         (Some(github), _) => github.clone(),
         (None, Some(plan)) => plan.inferred_github.clone(),
@@ -304,7 +305,10 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
 
     let original = config.clone();
     let mut writes = Vec::new();
+    // `operations` reports what this run does; `outstanding` is persisted into
+    // the plan and describes what applying that plan still performs.
     let mut operations = Vec::new();
+    let mut outstanding = Vec::new();
     if state == ExecutorInitState::Ready {
         let github_added = config.github.is_none();
         config.github = Some(inferred_github.clone());
@@ -321,29 +325,51 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
         config.validate()?;
         select_publications(root, &config)?;
         if config != original {
+            // Configuration is re-serialized from the parsed model, so the
+            // rewrite normalizes the whole document. Say so before applying it
+            // rather than letting the user discover it in the diff.
+            operations.push(format!(
+                "rewrite {CONFIG_PATH} in canonical form; comments, key order, and formatting in that file are not preserved"
+            ));
             writes.push((PathBuf::from(CONFIG_PATH), config.to_yaml()?));
         }
     } else {
-        operations.push(format!(
+        let unresolved = format!(
             "resolve {} executor candidate(s) in {EXECUTOR_INIT_PLAN_PATH} and rerun intentional executor init",
             candidates
                 .iter()
                 .filter(|candidate| candidate.resolution.is_none())
                 .count()
-        ));
+        );
+        operations.push(unresolved.clone());
+        outstanding.push(unresolved);
     }
-    operations.extend(prerequisites(&inferred_github)?);
+
+    let source_fingerprint = fingerprint(&candidates)?;
+    if let Some(previous) = &existing {
+        for report in drift_reports(previous, &candidates, &source_fingerprint) {
+            operations.push(report.clone());
+            outstanding.push(report);
+        }
+    }
+    for prerequisite in prerequisites(&inferred_github)? {
+        operations.push(prerequisite.clone());
+        outstanding.push(prerequisite);
+    }
 
     let plan = ExecutorInitPlan {
         schema: EXECUTOR_INIT_PLAN_SCHEMA.to_owned(),
         state,
-        source_fingerprint: fingerprint(&candidates)?,
+        source_fingerprint,
         inferred_github,
         candidates,
-        planned_operations: operations.clone(),
+        planned_operations: outstanding,
     };
     plan.validate()?;
-    writes.push((PathBuf::from(EXECUTOR_INIT_PLAN_PATH), plan.to_yaml()?));
+    let rendered = plan.to_yaml()?;
+    if recorded.as_deref() != Some(rendered.as_str()) {
+        writes.push((PathBuf::from(EXECUTOR_INIT_PLAN_PATH), rendered));
+    }
     Ok(ExecutorInitResult {
         state,
         path: PathBuf::from(EXECUTOR_INIT_PLAN_PATH),
@@ -809,17 +835,69 @@ fn fingerprint(candidates: &[ExecutorCandidate]) -> Result<String> {
     ))
 }
 
-fn load_plan(root: &Path) -> Result<Option<ExecutorInitPlan>> {
+fn read_plan(root: &Path) -> Result<Option<String>> {
     let path = root.join(EXECUTOR_INIT_PLAN_PATH);
     match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let plan: ExecutorInitPlan = serde_yaml::from_str(&text)?;
-            plan.validate()?;
-            Ok(Some(plan))
-        }
+        Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(Error::io(path, error)),
     }
+}
+
+fn parse_plan(text: &str) -> Result<ExecutorInitPlan> {
+    let plan: ExecutorInitPlan = serde_yaml::from_str(text)?;
+    plan.validate()?;
+    Ok(plan)
+}
+
+/// Report evidence that changed since the recorded plan was written.
+///
+/// Resolutions survive the change because they answer a question about the
+/// capability, not about the file's exact bytes. The drift is still reported so
+/// a decision taken against different evidence is visible rather than silent.
+fn drift_reports(
+    previous: &ExecutorInitPlan,
+    candidates: &[ExecutorCandidate],
+    source_fingerprint: &str,
+) -> Vec<String> {
+    if previous.source_fingerprint == source_fingerprint {
+        return Vec::new();
+    }
+    let recorded = evidence_digests(&previous.candidates);
+    let current = evidence_digests(candidates);
+    let mut changed = Vec::new();
+    for (path, digest) in &current {
+        match recorded.get(path) {
+            Some(previous) if previous == digest => {}
+            Some(_) => changed.push(format!("{path} changed")),
+            None => changed.push(format!("{path} is new evidence")),
+        }
+    }
+    for path in recorded.keys() {
+        if !current.contains_key(path) {
+            changed.push(format!("{path} is no longer evidence"));
+        }
+    }
+    if changed.is_empty() {
+        return Vec::new();
+    }
+    vec![format!(
+        "report: source evidence changed since the recorded plan ({}); recorded resolutions are retained because they decide publication intent, not file contents",
+        changed.join(", ")
+    )]
+}
+
+fn evidence_digests(candidates: &[ExecutorCandidate]) -> BTreeMap<String, String> {
+    let mut digests = BTreeMap::new();
+    for candidate in candidates {
+        for evidence in &candidate.evidence {
+            digests.insert(
+                evidence.path.to_string_lossy().to_string(),
+                evidence.digest.clone(),
+            );
+        }
+    }
+    digests
 }
 
 #[cfg(test)]
@@ -1014,6 +1092,133 @@ release-units:
             .release_units["component"]
             .rpm
             .is_some());
+    }
+
+    #[test]
+    fn reports_evidence_drift_on_resume_without_dropping_resolutions() {
+        let workspace = Workspace::new("init-drift");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let first = run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            DECLINE_CHOICE,
+        );
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"2.0.0"}"#,
+        );
+
+        let result = initialize_executor(workspace.root()).expect("executor init runs");
+        assert_ne!(
+            result.plan.source_fingerprint, first.plan.source_fingerprint,
+            "the fingerprint follows the evidence"
+        );
+        assert!(
+            result
+                .operations
+                .iter()
+                .any(|operation| operation.contains("component/package.json changed")),
+            "drift is reported: {:?}",
+            result.operations
+        );
+        assert_eq!(
+            result.plan.candidates[0].resolution.as_deref(),
+            Some(DECLINE_CHOICE),
+            "a decision about publication intent survives a content change"
+        );
+    }
+
+    #[test]
+    fn persists_only_outstanding_operations_in_the_plan() {
+        let workspace = Workspace::new("init-operations");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            ACCEPT_CHOICE,
+        );
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/github",
+            DECLINE_CHOICE,
+        );
+
+        let result = run(&workspace);
+        assert_eq!(result.state, ExecutorInitState::Ready);
+        assert!(
+            result
+                .operations
+                .iter()
+                .any(|operation| operation.contains("configure the npm primary publisher")),
+            "the command reports what it configured"
+        );
+        assert!(
+            result
+                .plan
+                .planned_operations
+                .iter()
+                .all(|operation| operation.starts_with("report: ")),
+            "the persisted plan carries only outstanding work and standing prerequisites: {:?}",
+            result.plan.planned_operations
+        );
+
+        // The applying run drops the now-configured candidate from the plan, so
+        // the run after it is the first that can be a true no-op.
+        run(&workspace);
+        let repeated = run(&workspace);
+        assert!(
+            repeated.planned_writes().is_empty(),
+            "a converged rerun writes nothing"
+        );
+    }
+
+    #[test]
+    fn reports_the_canonical_configuration_rewrite_before_applying_it() {
+        let workspace = Workspace::new("init-rewrite");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &format!("# repository comment\n{CONFIG}"),
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            DECLINE_CHOICE,
+        );
+
+        let result = initialize_executor(workspace.root()).expect("executor init runs");
+        assert!(
+            result
+                .operations
+                .iter()
+                .any(|operation| operation.contains("comments, key order, and formatting")),
+            "the canonical rewrite is reported before it happens: {:?}",
+            result.operations
+        );
+        assert!(
+            std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+                .expect("config readable")
+                .starts_with("# repository comment"),
+            "the report precedes any write"
+        );
     }
 
     #[test]
