@@ -143,6 +143,16 @@ fn sealed_tags(root: &Path, release_commit: &str) -> Result<Vec<SealedTag>> {
 }
 
 impl PublicationContext for CheckoutContext {
+    /// Prove the release from the repository, then take the unit's version from it.
+    ///
+    /// Reproduction is not cheap: it clones the repository in isolation and
+    /// rebuilds the whole candidate from the accepted source commit, and the
+    /// publish workflow runs one invocation per selected publication on top of
+    /// the dedicated release-tag job, so a release of N publications performs
+    /// N+1 reproductions. Repeating it per publication is deliberate: each
+    /// publisher job is an independent verifier, and a verifier that inherited
+    /// another job's conclusion would be asserting the version rather than
+    /// proving it.
     fn planned_release(&self, root: &Path, release_unit: &str) -> Result<PlannedRelease> {
         let verified = verify_release_tag(root)?;
         let version = verified
@@ -478,6 +488,12 @@ fn accept_observation<'a>(
     // An observation left at the conventional path by an earlier release of the
     // same publication is identical in identity and destination, so the version
     // this release plans is the only thing that separates them.
+    //
+    // Both versions are compared verbatim, which is the contract the
+    // publication-observation specification states: a recipe reports the plan's
+    // spelling here and records an ecosystem's own spelling of the same release
+    // as a destination alias, so reporting the destination faithfully never
+    // costs it the binding check.
     for (claim, observed) in [
         ("subject version", &subject.version),
         ("destination version", &destination.version),
@@ -775,7 +791,7 @@ release-units:
         observation: &'a Path,
         output: &'a Path,
         clock: &'a StillClock,
-        context: &'a TestContext,
+        context: &'a dyn PublicationContext,
     ) -> VerifyPublicationRequest<'a> {
         VerifyPublicationRequest {
             root: workspace.root(),
@@ -1216,6 +1232,149 @@ destination-aliases:
                 && error.to_string().contains("\"1.2.3\""),
             "{error}"
         );
+    }
+
+    /// A workspace whose sole release unit projects its version and publishes it.
+    const RELEASED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    npm: {}
+    projections:
+      - adapter: json
+        file: package.json
+        pointer: /version
+        mode: committed
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+    /// Version the fixture's first release recorded for its release unit.
+    const PREVIOUS_VERSION: &str = "1.0.0";
+    /// Version the fixture's second release plans for the same release unit.
+    const CURRENT_VERSION: &str = "1.1.0";
+
+    /// A repository carrying a released commit over an earlier tagged release.
+    ///
+    /// The version binding is only observable when the two releases of the same
+    /// publication disagree, so the fixture tags a first version and then
+    /// releases a second one over it.
+    struct ReleasedWorkspace {
+        workspace: Workspace,
+    }
+
+    /// Run one git command in the fixture repository.
+    fn git(root: &Path, arguments: &[&str]) -> String {
+        crate::release::git::GitCommand::new(root)
+            .args(arguments)
+            .run()
+            .unwrap_or_else(|error| panic!("git {arguments:?} failed: {error}"))
+            .line()
+            .expect("git output")
+    }
+
+    impl ReleasedWorkspace {
+        /// Tag a first release, then build and publish a second one over it.
+        fn new(label: &str) -> Self {
+            let workspace = Workspace::new(label);
+            workspace
+                .write(".intentional/config.yml", RELEASED_CONFIG)
+                .write(".intentional/intents/.keep", "")
+                .write(
+                    "component/package.json",
+                    &format!("{{\n  \"name\": \"sample-library\",\n  \"version\": \"{PREVIOUS_VERSION}\"\n}}\n"),
+                );
+            let root = workspace.root().to_path_buf();
+            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["config", "user.name", "Fixture Author"]);
+            git(&root, &["config", "user.email", "fixture@example.invalid"]);
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
+            crate::tag::TagResult::build_baseline(&root, &BTreeMap::new())
+                .expect("baseline tag set")
+                .apply(&root, false)
+                .expect("record baseline tags");
+
+            workspace.write(
+                ".intentional/intents/quiet-otter-0001.md",
+                "---\ncomponent: minor\n---\n\nAdd a component capability\n",
+            );
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Record release intent"]);
+            let source = git(&root, &["rev-parse", "HEAD^{commit}"]);
+            let built =
+                crate::release::build::build_candidate(&root, &source).expect("release candidate");
+            git(
+                &root,
+                &[
+                    "update-ref",
+                    &format!("refs/tags/{}", built.tag_name),
+                    &built.tag_object,
+                ],
+            );
+            git(
+                &root,
+                &["checkout", "--quiet", "--detach", &built.release_commit],
+            );
+            Self { workspace }
+        }
+
+        /// Write the readback an npm publication of `version` would leave behind.
+        fn observe(&self, version: &str) -> PathBuf {
+            let path = self.workspace.root().join("observation.yml");
+            std::fs::write(&path, present_document().replace("1.2.3", version))
+                .expect("write observation");
+            path
+        }
+    }
+
+    #[test]
+    fn an_observation_carrying_the_previous_releases_version_is_rejected() {
+        let released = ReleasedWorkspace::new("verify-previous-release-version");
+        let observation = released.observe(PREVIOUS_VERSION);
+        let clock = clock();
+        let output = released.workspace.root().join("evidence.yml");
+        let error = verify_publication(&request(
+            &released.workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &output,
+            &clock,
+            &CheckoutContext::new(),
+        ))
+        .expect_err("the previous release's observation is reported");
+        assert!(
+            error.to_string().contains(&format!("{PREVIOUS_VERSION:?}"))
+                && error.to_string().contains(&format!("{CURRENT_VERSION:?}")),
+            "{error}"
+        );
+        assert!(!output.exists(), "a refused verification writes nothing");
+    }
+
+    #[test]
+    fn an_observation_carrying_the_reproduced_release_version_is_accepted() {
+        let released = ReleasedWorkspace::new("verify-current-release-version");
+        let observation = released.observe(CURRENT_VERSION);
+        let clock = clock();
+        let output = released.workspace.root().join("evidence.yml");
+        let verified = verify_publication(&request(
+            &released.workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &output,
+            &clock,
+            &CheckoutContext::new(),
+        ))
+        .expect("the released version verifies");
+        assert_eq!(verified.evidence.subject.version, CURRENT_VERSION);
+        assert_eq!(verified.evidence.destination.version, CURRENT_VERSION);
     }
 
     /// A sealed fragment agreeing with the release the tests resolve.

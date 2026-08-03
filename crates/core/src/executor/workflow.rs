@@ -1527,6 +1527,73 @@ jobs:
         );
     }
 
+    /// The shell of the derived closure job, in the order a runner executes it.
+    fn closure_script(root: &Path) -> String {
+        let document: Value =
+            serde_yaml::from_str(&workflow(root, WorkflowRole::Publish)).expect("result parses");
+        document["jobs"]["intentional_close_release"]["steps"]
+            .as_sequence()
+            .expect("the closure job carries steps")
+            .iter()
+            .filter_map(|step| step["run"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn offset_within(script: &str, fragment: &str) -> usize {
+        script
+            .find(fragment)
+            .unwrap_or_else(|| panic!("`{fragment}` is part of the closure job: {script}"))
+    }
+
+    // Closure is the only point where a release becomes public, so the checks
+    // that make it safe have to run while it is still reversible: a draft
+    // release can be discarded, a published one cannot. Order is asserted
+    // rather than presence because a rewrite that keeps every command but
+    // moves one past the upload reintroduces exactly the failure the check
+    // exists to prevent. Any later form of these managed jobs -- including
+    // collapsing them into a composite action -- has to carry the ordering
+    // forward, and this test is what refuses the alternative.
+    #[test]
+    fn asserts_the_release_is_a_draft_for_the_released_tag_before_uploading_assets() {
+        let workspace = workspace("workflow-closure-draft-order");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let script = closure_script(workspace.root());
+
+        let upload = offset_within(&script, "gh release upload");
+        assert!(
+            offset_within(&script, "--json isDraft") < upload,
+            "the release is proven undrafted before any asset reaches it: {script}"
+        );
+        assert!(
+            offset_within(&script, "--json tagName") < upload,
+            "the release is proven to belong to the released tag before any asset \
+             reaches it: {script}"
+        );
+    }
+
+    // Undrafting is irreversible, so the uploaded bytes have to be proven equal
+    // to the assembled bytes while the release is still private. Order is
+    // asserted rather than presence because a comparison that happens after the
+    // release is public can only report the corruption, not prevent it.
+    #[test]
+    fn compares_every_uploaded_asset_against_its_local_digest_before_undrafting() {
+        let workspace = workspace("workflow-closure-digest-order");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let script = closure_script(workspace.root());
+
+        let undraft = offset_within(&script, "--draft=false");
+        assert!(
+            offset_within(&script, "gh release download") < undraft,
+            "each uploaded asset is fetched back before the release is published: {script}"
+        );
+        assert!(
+            offset_within(&script, "sha256sum --check") < undraft,
+            "each uploaded asset is compared against its local digest before the \
+             release is published: {script}"
+        );
+    }
+
     #[test]
     fn proves_shorthand_triggers_survive_their_expansion() {
         let workspace = workspace("workflow-shorthand-proof");

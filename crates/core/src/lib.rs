@@ -81,7 +81,7 @@ pub use plan::{
     ReleasePlan,
 };
 pub use publication::draft::{
-    is_draft_dependent, retrieve_assets, verify_handoff as verify_draft_handoff, write_handoff,
+    is_draft_dependent, retrieve_assets, verify_draft_handoff, write_handoff,
     AuthenticatedDraftRetrieval, DraftReleaseAssetHandoff, HandoffAsset, HandoffRequest,
     RetrievedAsset, VerifiedDraftHandoff, DRAFT_DEPENDENT_PUBLISHERS, DRAFT_HANDOFF_CONTRACT,
     DRAFT_HANDOFF_FILE, DRAFT_HANDOFF_SCHEMA,

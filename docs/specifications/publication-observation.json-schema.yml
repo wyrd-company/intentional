@@ -70,6 +70,10 @@ properties:
         type: string
         minLength: 1
       version:
+        description: >-
+          Release version the destination reports, carried verbatim as the
+          release plan spells it. An ecosystem's own spelling of that version
+          belongs in destination-aliases.
         type: string
         minLength: 1
       digest:

@@ -463,7 +463,7 @@ fn verify_release_identity(root: &Path, handoff: &DraftReleaseAssetHandoff) -> R
 /// release does not select is refused before any byte is downloaded, and the
 /// release identity the document declares is proved against the repository
 /// before its inventory is trusted.
-pub fn verify_handoff(
+pub fn verify_draft_handoff(
     root: &Path,
     handoff: &DraftReleaseAssetHandoff,
     source: &dyn ReleaseSource,
@@ -816,7 +816,7 @@ release-units:
     fn verifies_a_handoff_the_release_configuration_selects() {
         let workspace = ReleasedWorkspace::new();
         let bytes = b"deliverable bytes";
-        let verified = verify_handoff(
+        let verified = verify_draft_handoff(
             &workspace.root,
             &workspace.handoff(bytes),
             &workspace.source(bytes),
@@ -835,7 +835,7 @@ release-units:
         let bytes = b"deliverable bytes";
         let mut document = workspace.handoff(bytes);
         document.target = "sample-library".to_owned();
-        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
+        let error = verify_draft_handoff(&workspace.root, &document, &workspace.source(bytes))
             .expect_err("the publication is refused");
         assert!(
             error
@@ -851,7 +851,7 @@ release-units:
         let bytes = b"deliverable bytes";
         let mut document = workspace.handoff(bytes);
         document.repository = "other-owner/other-repository".to_owned();
-        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
+        let error = verify_draft_handoff(&workspace.root, &document, &workspace.source(bytes))
             .expect_err("the repository is refused");
         assert!(
             error.to_string().contains("other-owner/other-repository"),
@@ -872,7 +872,7 @@ release-units:
         let mut document = workspace.handoff(bytes);
         document.source_commit = RELEASE.to_owned();
         document.plan_digest = PLAN_DIGEST.to_owned();
-        let error = verify_handoff(&workspace.root, &document, &workspace.source(bytes))
+        let error = verify_draft_handoff(&workspace.root, &document, &workspace.source(bytes))
             .expect_err("the release identity is refused");
         assert!(error.to_string().contains("source-commit"), "{error}");
         assert!(error.to_string().contains("plan-digest"), "{error}");

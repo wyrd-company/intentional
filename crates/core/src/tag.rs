@@ -1280,14 +1280,25 @@ fn sealed_phase_evidence(
                 })
                 .collect::<Vec<_>>();
             let subjects = phase::load_built_subjects(config, input)?;
-            // A before-publication tag records the subjects this release built,
-            // and that sealed set is what later binds a publisher fragment to
-            // this release rather than to some other one. Sealing none would
-            // record the tag while silently disabling the check it exists for.
-            if subjects.is_empty() && !destinations.is_empty() {
-                return Err(Error::Validation(
-                    "a before-publication tag records the subjects the release built, but no built-subject document was staged".to_owned(),
-                ));
+            // Both later subject cross-checks iterate the sealed subjects, so a
+            // publication whose release unit sealed nothing is compared against
+            // nothing and its fragment could describe any subject at all. The
+            // completeness rule is therefore per release unit that publishes,
+            // not a floor on the set as a whole.
+            let sealed = subjects
+                .iter()
+                .map(|subject| subject.release_unit.clone())
+                .collect::<BTreeSet<_>>();
+            let publishing = destinations
+                .iter()
+                .map(|destination| destination.release_unit.clone())
+                .collect::<BTreeSet<_>>();
+            let unsealed = publishing.difference(&sealed).cloned().collect::<Vec<_>>();
+            if !unsealed.is_empty() {
+                return Err(Error::Validation(format!(
+                    "a before-publication tag records the subjects the release built, but no built-subject document was staged for {}",
+                    unsealed.join(", ")
+                )));
             }
             phase::build_before_publication(bindings, &subjects, &destinations)?
         }
@@ -1575,6 +1586,49 @@ phase-tags: []
         let evidence = phase::decode(&record.fields[PHASE_EVIDENCE_FIELD])
             .expect("phase evidence decodes from the record");
         assert_eq!(evidence.subjects[0].identity, "sample-library: staged");
+    }
+
+    #[test]
+    fn refuses_a_before_publication_tag_that_seals_only_part_of_the_release() {
+        let workspace = phase_workspace("tag-phase-partial-seal");
+        // A second publishing release unit whose subject is never staged. Both
+        // later subject cross-checks iterate the sealed subjects, so its
+        // fragment would be compared against nothing at all.
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &PHASE_CONFIG.replace(
+                    "release-units:\n",
+                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                ),
+            )
+            .write(
+                "library/package.json",
+                r#"{"name":"sample-application","version":"1.0.0"}"#,
+            )
+            .write("library/CHANGELOG.md", "# Changelog\n\n## 1.0.0\n");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let config = Config::load(workspace.root()).expect("configuration");
+        let versions = BTreeMap::from([
+            ("component".to_owned(), "1.0.0".to_owned()),
+            ("library".to_owned(), "1.0.0".to_owned()),
+        ]);
+        let error = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            Some(TagPhase::BeforePublication),
+            false,
+            Some(PLAN_DIGEST),
+            Some(&input),
+        )
+        .expect_err("a partial seal is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("no built-subject document was staged for library"),
+            "{error}"
+        );
     }
 
     #[test]
