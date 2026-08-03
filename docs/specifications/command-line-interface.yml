@@ -550,7 +550,8 @@ commands:
               description: >-
                 Writes a schema-backed release-candidate handoff containing the
                 verified source commit, release commit, global tag, plan,
-                changed-tree evidence, and materialized candidate.
+                changed-tree evidence, materialized candidate, and a verified
+                Git bundle carrying the release commit and annotated tag objects.
               machine-readable: true
           exit-codes:
             - code: 0
@@ -571,6 +572,10 @@ commands:
           - >-
             Source resolution and verification that the remote default branch
             identifies the same source commit are invariants of this command.
+          - >-
+            The handoff inventories a Git bundle so a later fresh privileged
+            job can verify and materialize the exact unpushed commit and tag
+            objects without trusting GitHub step outputs as object transport.
   - name: evidence
     summary: Construct schema-backed release evidence artifacts.
     mode: non-interactive
@@ -759,8 +764,11 @@ commands:
             outputs are exactly source-sha, release-sha, global-tag, and
             plan-digest, projected from the verified handoff.
           - >-
-            The privileged atomic-push step consumes the verify-handoff Action
-            outputs; it does not consume unverified prepare-release outputs.
+            Before exposing outputs, verification validates and imports the
+            handoff's Git bundle and proves its release commit and annotated tag
+            objects match the candidate. The privileged atomic-push step consumes
+            those verified outputs; it does not consume unverified prepare-release
+            outputs.
       - name: release-tag
         summary: Verify the current global release tag before publication.
         mode: non-interactive

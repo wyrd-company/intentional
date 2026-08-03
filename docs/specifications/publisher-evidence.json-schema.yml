@@ -81,7 +81,7 @@ properties:
   destination:
     type: object
     additionalProperties: false
-    required: [ identity, version, digest, observed-at ]
+    required: [ identity, version, digest ]
     properties:
       identity:
         type: string
@@ -92,13 +92,10 @@ properties:
       digest:
         type: string
         minLength: 1
-      observed-at:
-        type: string
-        format: date-time
   clean-client:
     type: object
     additionalProperties: false
-    required: [ mode, client, version, digest, retrieved-at ]
+    required: [ mode, client, version, digest ]
     properties:
       mode:
         enum: [ public, authenticated-draft ]
@@ -111,9 +108,6 @@ properties:
       digest:
         type: string
         minLength: 1
-      retrieved-at:
-        type: string
-        format: date-time
   destination-aliases:
     type: array
     items:

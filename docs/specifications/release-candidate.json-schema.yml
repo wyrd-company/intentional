@@ -15,6 +15,7 @@ required:
   - plan
   - global-tag
   - changed-tree
+  - git-bundle
   - files
 properties:
   $schema:
@@ -80,6 +81,23 @@ properties:
           oneOf:
             - $ref: "#/$defs/digest"
             - type: "null"
+  git-bundle:
+    type: object
+    additionalProperties: false
+    required: [ file, sha256, heads ]
+    properties:
+      file:
+        $ref: "#/$defs/path"
+      sha256:
+        $ref: "#/$defs/digest"
+      heads:
+        type: array
+        minItems: 2
+        uniqueItems: true
+        contains:
+          const: refs/heads/intentional-release
+        items:
+          enum: [ refs/heads/intentional-release, refs/tags/intentional-global-release ]
   files:
     type: array
     minItems: 1

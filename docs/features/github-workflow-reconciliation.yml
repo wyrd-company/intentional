@@ -8,6 +8,7 @@ world-schema:
   reserved_prefix: string
   repository_job_preserved: boolean
   reserved_job_replaced: boolean
+  ownership_sentinel_present: boolean
   required_fields_present: boolean
   configured_gate: string
   gate_is_dependency: boolean
@@ -171,11 +172,26 @@ rules:
           - given: Existing managed jobs use the previously configured prefix
             world:
               reserved_prefix: previous_
+              ownership_sentinel_present: true
           - when: A workflow patch is derived with a different configured prefix
           - then: The patch replaces the previous reserved slices with newly prefixed slices
             world:
               reserved_prefix: replacement_
               reserved_job_replaced: true
+              ownership_sentinel_present: true
+      preserve-unsentinelized-old-prefix-job:
+        addresses: Safe managed identifier migration
+        steps:
+          - given: A repository-owned job uses an old prefix without the stable ownership sentinel
+            world:
+              reserved_prefix: previous_
+              ownership_sentinel_present: false
+              repository_job_preserved: true
+          - when: A workflow patch is derived with a different configured prefix
+          - then: The old unsentinelized job is preserved as repository-owned content
+            world:
+              reserved_prefix: replacement_
+              repository_job_preserved: true
   - rule: Workflow mutation is explicit and stale transformations are rejected
     scenarios:
       diff-is-read-only:

@@ -18,6 +18,12 @@ description: >-
   and do not appear in this field. The fragment contains no waiver,
   omission, warning, or desired-posture fields.
 
+  The fragment contains no observation timestamps or other wall-clock values.
+  Its successful claims are retry-stable: repeating readback and retrieval for
+  the same immutable subject produces the same evidence, so an existing
+  after-publication tag can be compared with regenerated evidence after a
+  closure retry.
+
   `clean-client.mode` identifies what the closure-time retrieval actually
   proved. `public` means the recipe retrieved the release through the
   destination's normal unauthenticated consumer path. `authenticated-draft`

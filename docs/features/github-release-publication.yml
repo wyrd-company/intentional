@@ -47,6 +47,9 @@ world-schema:
   schema_file_authoritative: boolean
   github_output_exposed: boolean
   candidate_path: string
+  git_bundle_verified: boolean
+  git_objects_materialized: boolean
+  evidence_retry_stable: boolean
   global_tag: string
   plan_digest: string
   evidence_path: string
@@ -77,6 +80,7 @@ rules:
               local_release_created: true
               network_mutation: false
               schema_file_authoritative: true
+              git_objects_materialized: true
           - and: The Action exposes candidate-path, source-sha, and release-sha
             world:
               candidate_path: release-candidate
@@ -96,6 +100,10 @@ rules:
               remote_default_sha: source-commit
               release_tag_target: release-commit
           - when: The protected release job verifies the handoff and uses its outputs
+          - and: The verified Git bundle materializes R and the annotated tag in the fresh clone
+            world:
+              git_bundle_verified: true
+              git_objects_materialized: true
           - then: The verified release SHA and global annotated tag are pushed atomically
             world:
               source_sha: source-commit
@@ -473,6 +481,20 @@ rules:
             world:
               tag_created: true
               release_tag_target: release-commit
+      recover-after-tag-before-closure:
+        addresses: Retry-stable publication-phase evidence
+        steps:
+          - given: An after-publication tag exists and immutable Release closure previously failed
+            world:
+              tag_created: true
+              release_published: false
+              evidence_retry_stable: true
+          - when: Publication verification repeats readback for the same immutable subject
+          - then: It reproduces evidence equal to the fragment embedded by the existing tag
+            world:
+              evidence_retry_stable: true
+              publication_resubmitted: false
+              evidence_verifies: true
       do-not-advance-stable-alias-for-prerelease:
         addresses: OCI alias safety
         steps:

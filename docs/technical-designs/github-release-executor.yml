@@ -169,11 +169,15 @@ proposed-design:
     semantic comparison while preserving its original formatting and comments.
 
     Intentional owns required entries under `on`, the release concurrency
-    policy, the safe top-level permission default, and every job and step whose
-    identifier begins with the configured job prefix. A missing reserved job is
+    policy, the safe top-level permission default, and every job whose
+    identifier begins with the configured job prefix, plus every prefixed step
+    inside those jobs. Every managed job also
+    contains the stable sentinel step ID `intentional_executor_contract`, which
+    is reserved independently of the configurable prefix and identifies
+    Intentional ownership across prefix changes. A missing reserved job is
     inserted and an existing reserved job is replaced in full. A repository job
-    that uses a reserved identifier is replaced. Additional triggers,
-    repository-owned jobs, expressions, comments, and unrelated metadata are
+    that uses a reserved identifier or sentinel is replaced. Additional
+    triggers, repository-owned jobs, expressions, comments, and unrelated metadata are
     preserved. Configured gate job identifiers are added to the `needs` list of
     the corresponding reserved authority or closure job without modifying the
     gate jobs themselves.
@@ -182,8 +186,10 @@ proposed-design:
     structured JSON result. The result binds the proposed transformation to a
     digest of the exact workflow input. Explicit apply performs the same
     syntax-aware transformation and prints the applied diff. Applying a prefix
-    change removes the old reserved slices and inserts the newly prefixed
-    slices as one workflow migration. Routine initialization and checks never
+    change removes jobs carrying the stable ownership sentinel and inserts the
+    newly prefixed slices as one workflow migration. Jobs under an old prefix
+    without the sentinel remain repository-owned and are never inferred as
+    stale managed slices. Routine initialization and checks never
     apply workflow mutations.
 
   command-boundaries: |-
@@ -230,13 +236,17 @@ proposed-design:
     command applies the plan and creates deterministic release commit R and its
     local annotated global release tag without performing network mutation. R
     has exactly one parent, S. The candidate handoff contains S, R, the plan and
-    digest, changed-tree evidence, the global tag identity, and the materialized
-    release candidate.
+    digest, changed-tree evidence, the global tag identity, the materialized
+    release candidate, and a digest-inventoried Git bundle carrying the exact R
+    commit and annotated tag objects.
 
     Repository-owned release gates consume the handoff and run after
     preparation. The configured protected environment guards the publication
-    job. That job independently runs `intentional verify handoff`, mints a
-    short-lived GitHub App installation token, and uses only the verified
+    job. That job independently runs `intentional verify handoff`, which first
+    verifies the bundle as untrusted input, imports it into the fresh clone,
+    proves the imported commit and tag objects reproduce every candidate
+    identity and invariant, and only then exposes their pushable identities. It
+    mints a short-lived GitHub App installation token and uses only the verified
     handoff Action's `source-sha`, `release-sha`, `global-tag`, and `plan-digest`
     outputs for the authority transition. It checks immediately before mutation
     that the remote default branch still equals the verified source SHA and uses
@@ -344,6 +354,12 @@ proposed-design:
     already visible matching publication, continues observation for a pending
     publication, and submits only when the destination can establish that it
     did not accept the original operation.
+
+    Publisher evidence contains only retry-stable facts and digests. It does
+    not include observation timestamps or other wall-clock values. Therefore a
+    successful readback of the same immutable publication regenerates the same
+    fragment, and an existing after-publication tag can be compared directly
+    with regenerated evidence after a later closure failure.
 
   immutable-github-release: |-
     The publication workflow creates a draft GitHub Release for the exact
