@@ -21,6 +21,7 @@ pub mod stamp;
 pub mod status;
 pub mod tag;
 pub mod version;
+pub mod yaml_edit;
 
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
