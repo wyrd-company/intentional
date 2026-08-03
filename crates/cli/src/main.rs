@@ -6,9 +6,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
-    check_executor, check_workspace, initialize, initialize_executor, ApplyResult, Bump, Config,
-    ExecutorInitState, InitState, IntentDraft, ReleasePlan, StampResult, TagPhase, TagResult,
-    WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    check_executor, check_workspace, contribute, initialize, initialize_executor, ApplyResult,
+    Bump, Config, ContributionRequest, ExecutorInitState, InitState, IntentDraft, ReleasePlan,
+    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, LOCAL_JOB,
+    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -53,6 +54,9 @@ enum Command {
     /// Configure and reconcile the repository release protocol.
     #[command(subcommand)]
     Executor(ExecutorCommand),
+    /// Construct schema-backed release evidence artifacts.
+    #[command(subcommand)]
+    Evidence(EvidenceCommand),
     /// Print the agent-facing Intentional workflow skill.
     Skill,
 }
@@ -63,6 +67,31 @@ enum ExecutorCommand {
     Init(DryRun),
     /// Check configured workflows against their derived executor contracts.
     Check,
+}
+
+#[derive(Debug, Subcommand)]
+enum EvidenceCommand {
+    /// Construct one repository-owned evidence contribution bundle.
+    Contribute(ContributeArgs),
+}
+
+#[derive(Debug, Args)]
+struct ContributeArgs {
+    /// Unique namespace assigned to the contribution value.
+    #[arg(long)]
+    namespace: String,
+
+    /// File containing any valid YAML value for the namespace.
+    #[arg(long, value_name = "PATH")]
+    value_file: Option<PathBuf>,
+
+    /// Exact file path to include as a GitHub Release attachment.
+    #[arg(long = "attachment", value_name = "PATH")]
+    attachments: Vec<PathBuf>,
+
+    /// Directory in which to write the contribution bundle.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -183,6 +212,9 @@ fn run() -> Result<u8> {
             return executor_init(&cli.directory, args.dry_run)
         }
         Command::Executor(ExecutorCommand::Check) => return executor_check(&cli.directory),
+        Command::Evidence(EvidenceCommand::Contribute(args)) => {
+            evidence_contribute(&cli.directory, args)
+        }
         Command::Skill => skill(),
     }?;
     Ok(0)
@@ -231,6 +263,48 @@ fn executor_check(root: &std::path::Path) -> Result<u8> {
         return Ok(0);
     }
     Ok(1)
+}
+
+fn evidence_contribute(root: &std::path::Path, args: ContributeArgs) -> Result<()> {
+    let value_file = args.value_file.map(|path| resolve(root, path));
+    let attachments = args
+        .attachments
+        .into_iter()
+        .map(|path| resolve(root, path))
+        .collect::<Vec<_>>();
+    let output = resolve(root, args.output);
+    let bundle = contribute(&ContributionRequest {
+        namespace: &args.namespace,
+        value_file: value_file.as_deref(),
+        attachments: &attachments,
+        output: &output,
+        job: &std::env::var("GITHUB_JOB").unwrap_or_else(|_| LOCAL_JOB.to_owned()),
+        run_attempt: numeric_environment("GITHUB_RUN_ATTEMPT", 1),
+    })?;
+    println!("bundle: {}", bundle.path.display());
+    println!("manifest: {}", bundle.manifest_path.display());
+    for attachment in &bundle.manifest.attachments {
+        println!("attachment: {} {}", attachment.name, attachment.sha256);
+    }
+    // The contribution Action uploads the bundle under this name; it is the
+    // only value the Action needs and it is never exposed as an Action output.
+    println!("artifact-name: {}", bundle.artifact_name);
+    Ok(())
+}
+
+fn resolve(root: &std::path::Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    }
+}
+
+fn numeric_environment(name: &str, fallback: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(fallback)
 }
 
 fn check(root: &std::path::Path) -> Result<()> {

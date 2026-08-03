@@ -2284,3 +2284,64 @@ release-units:
         "a dry run never writes the plan it previews"
     );
 }
+
+#[test]
+fn evidence_contribute_writes_a_bundle_and_names_its_transport_artifact() {
+    let repo = TestRepo::new();
+    repo.write("value.yml", "outcome: clean\n");
+    repo.write("report.json", "{\"ok\":true}");
+
+    repo.cli_with_env(&[("GITHUB_JOB", "scan"), ("GITHUB_RUN_ATTEMPT", "3")])
+        .args([
+            "evidence",
+            "contribute",
+            "--namespace",
+            "assessment",
+            "--value-file",
+            "value.yml",
+            "--attachment",
+            "report.json",
+            "--output",
+            "contribution",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("attachment: report.json sha256:"))
+        .stdout(predicate::str::contains(
+            "artifact-name: intentional-contribution-",
+        ))
+        .stdout(predicate::str::contains("-scan-3"));
+
+    let manifest = fs::read_to_string(repo.root.join("contribution/contribution.yml"))
+        .expect("contribution manifest");
+    assert!(manifest.contains("namespace: assessment"), "{manifest}");
+    assert!(
+        manifest.contains("file: attachments/report.json"),
+        "{manifest}"
+    );
+    assert!(
+        repo.root
+            .join("contribution/attachments/report.json")
+            .is_file(),
+        "the bundle transports the exact contributed file"
+    );
+}
+
+#[test]
+fn evidence_contribute_requires_content() {
+    let repo = TestRepo::new();
+    repo.cli()
+        .args([
+            "evidence",
+            "contribute",
+            "--namespace",
+            "assessment",
+            "--output",
+            "contribution",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "at least one value file or attachment is required",
+        ));
+}

@@ -10,6 +10,7 @@ pub mod apply;
 pub mod check;
 pub mod config;
 pub mod error;
+pub mod evidence;
 pub mod executor;
 pub mod init;
 pub mod intent;
@@ -31,6 +32,11 @@ pub use config::{
     DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
+pub use evidence::contribution::{
+    artifact_name, contribute, ContributionAttachment, ContributionBundle, ContributionManifest,
+    ContributionRequest, ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX,
+    CONTRIBUTION_MANIFEST, CONTRIBUTION_SCHEMA, LOCAL_JOB,
+};
 pub use executor::check::{check_executor, ExecutorCheck};
 pub use executor::init::{
     initialize_executor, ExecutorInitPlan, ExecutorInitResult, ExecutorInitState,
