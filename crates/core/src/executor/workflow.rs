@@ -1353,6 +1353,7 @@ fn publisher_job(
     };
     let identity = publication.identity();
     let slug = identifier(&identity);
+    let subject_identity = subject.identity.clone();
     // Publisher credentials stay in the repository-owned recipe steps, so the
     // destination readback they perform reaches the portable command as a
     // schema-backed observation rather than as a second verification path.
@@ -1385,38 +1386,148 @@ fn publisher_job(
             &format!("release-units.{}", publication.release_unit),
         )
     })?;
+    let mut substitutions = vec![
+        ("@NEEDS@", render_list(needs)),
+        ("@SLUG@", slug.clone()),
+        ("@SUBJECT_SLUG@", subject.slug.clone()),
+        ("@SUBJECT_IDENTITY@", scalar(&subject_identity)),
+    ];
+    let template = if publication.packager == Packager::GoReleaser {
+        substitutions.extend(goreleaser_promotion(namespaces, publication)?);
+        PUBLISH_GORELEASER_JOB
+    } else {
+        substitutions.push(("@RECIPE_STEPS@", recipe));
+        substitutions.push((
+            "@WORKING_DIRECTORY@",
+            scalar(&unit.path.display().to_string()),
+        ));
+        PUBLISH_PUBLISHER_JOB
+    };
+    substitutions.extend([
+        (
+            "@SUBJECT_NAME@",
+            scalar(&format!("Download the built {} subject", subject.identity)),
+        ),
+        ("@PUBLISH_NAME@", scalar(&format!("Publish {identity}"))),
+        (
+            "@VERIFY_NAME@",
+            scalar(&format!("Verify the {identity} publication")),
+        ),
+        (
+            "@FRAGMENT_NAME@",
+            scalar(&format!("Upload the {identity} evidence fragment")),
+        ),
+        ("@RELEASE_UNIT@", scalar(&publication.release_unit)),
+        ("@PUBLISHER@", scalar(publication.publisher.as_str())),
+        ("@TARGET@", scalar(&target)),
+        ("@OBSERVATION@", scalar(&observation)),
+        ("@OUTPUT@", scalar(&evidence)),
+        ("@PERMISSIONS@", publisher_permissions(publication)),
+    ]);
     job(
-        PUBLISH_PUBLISHER_JOB,
+        template,
         namespaces,
-        &[
-            ("@NEEDS@", &render_list(needs)),
-            ("@SLUG@", &slug),
-            ("@SUBJECT_SLUG@", &subject.slug),
-            (
-                "@SUBJECT_NAME@",
-                &scalar(&format!("Download the built {} subject", subject.identity)),
-            ),
-            (
-                "@VERIFY_NAME@",
-                &scalar(&format!("Verify the {identity} publication")),
-            ),
-            (
-                "@FRAGMENT_NAME@",
-                &scalar(&format!("Upload the {identity} evidence fragment")),
-            ),
-            ("@RELEASE_UNIT@", &scalar(&publication.release_unit)),
-            ("@PUBLISHER@", &scalar(publication.publisher.as_str())),
-            ("@TARGET@", &scalar(&target)),
-            ("@OBSERVATION@", &scalar(&observation)),
-            ("@OUTPUT@", &scalar(&evidence)),
-            (
-                "@WORKING_DIRECTORY@",
-                &scalar(&unit.path.display().to_string()),
-            ),
-            ("@RECIPE_STEPS@", &recipe),
-            ("@PERMISSIONS@", &publisher_permissions(publication)),
-        ],
+        &substitutions
+            .iter()
+            .map(|(placeholder, value)| (*placeholder, value.as_str()))
+            .collect::<Vec<_>>(),
     )
+}
+
+/// Credential and promotion steps one GoReleaser destination requires.
+///
+/// Each maintained Go recipe promotes a file the build already produced into the
+/// destination's own repository, so what varies between them is which repository
+/// receives it and which authority reaches that repository. Both are stated here
+/// rather than inside the template, because the template is the part every Go
+/// destination shares.
+fn goreleaser_promotion(
+    namespaces: &PrefixNamespaces,
+    publication: &SelectedPublication,
+) -> std::result::Result<Vec<(&'static str, String)>, WorkflowDiagnostic> {
+    // RPM and APT distribute the deliverable itself rather than a descriptor
+    // that points at one, so their consumer path is the GitHub Release asset and
+    // their promotion is the upload of that asset to the draft. Which job
+    // performs that upload is not settled: the design requires every
+    // GitHub-hosted deliverable to be on the draft before a draft-dependent
+    // publisher reads it, and in the same document reserves creation and
+    // finalization of the draft to two repository-local jobs that are not this
+    // one. Deriving a promotion step here would claim an authority the protocol
+    // has not granted, and deriving a job with no promotion step at all would
+    // ship a publication that publishes nothing.
+    if !matches!(
+        publication.publisher,
+        PublisherKind::Homebrew | PublisherKind::Aur
+    ) {
+        return Err(WorkflowDiagnostic::new(
+            "deliverable-upload-unsettled",
+            format!(
+                "publication {} distributes a GitHub-hosted deliverable, and the design does not yet state which job uploads it to the draft Release; the {} recipe cannot derive a promotion step without claiming an authority the protocol has not granted",
+                publication.identity(),
+                publication.publisher
+            ),
+        ));
+    }
+    let destination = publication.destination.clone().ok_or_else(|| {
+        WorkflowDiagnostic::new(
+            "destination-underived",
+            format!(
+                "publication {} promotes into a destination repository, but none is configured or derivable",
+                publication.identity()
+            ),
+        )
+    })?;
+    let identity =
+        |name: &str, value: &str| format!("      {}{name}: {}\n", namespaces.envvar, scalar(value));
+    let mut environment = format!(
+        "      {}DESTINATION: {}\n",
+        namespaces.envvar,
+        scalar(&destination)
+    );
+    environment.push_str(&identity(
+        "COMMITTER_NAME",
+        crate::release::build::RELEASE_IDENTITY_NAME,
+    ));
+    environment.push_str(&identity(
+        "COMMITTER_EMAIL",
+        crate::release::build::RELEASE_IDENTITY_EMAIL,
+    ));
+    match publication.publisher {
+        PublisherKind::Homebrew => {
+            let (owner, name) = destination.split_once('/').ok_or_else(|| {
+                WorkflowDiagnostic::new(
+                    "destination-malformed",
+                    format!(
+                        "publication {} names tap repository {destination:?}, which is not owner/name",
+                        publication.identity()
+                    ),
+                )
+            })?;
+            environment.push_str(&format!(
+                "      GITHUB_TOKEN: ${{{{ steps.{}destination_token.outputs.token }}}}\n",
+                namespaces.job
+            ));
+            Ok(vec![
+                ("@CREDENTIAL_STEPS@", DESTINATION_TOKEN_STEPS.to_owned()),
+                ("@DESTINATION_OWNER@", scalar(owner)),
+                ("@DESTINATION_NAME@", scalar(name)),
+                ("@PROMOTE_ENV@", environment),
+                ("@PROMOTE_COMMAND@", HOMEBREW_PROMOTE_COMMAND.to_owned()),
+            ])
+        }
+        PublisherKind::Aur => {
+            environment.push_str(&format!(
+                "      {}AUR_KEY: ${{{{ secrets.{}AUR_KEY }}}}\n",
+                namespaces.envvar, namespaces.envvar
+            ));
+            Ok(vec![
+                ("@CREDENTIAL_STEPS@", String::new()),
+                ("@PROMOTE_ENV@", environment),
+                ("@PROMOTE_COMMAND@", AUR_PROMOTE_COMMAND.to_owned()),
+            ])
+        }
+        publisher => unreachable!("{publisher} is refused above"),
+    }
 }
 
 /// Native command that produces one subject's bytes without distributing them.
@@ -1482,10 +1593,14 @@ fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
         // any, so the maintained recipe authenticates it with a configured
         // token. Only crates.io performs the identity exchange.
         (PublisherKind::Cargo, _) => publication.destination.as_deref() == Some("crates.io"),
-        (PublisherKind::Homebrew, _) => true,
-        (PublisherKind::Rpm, _) => true,
-        (PublisherKind::Apt, _) => true,
-        (PublisherKind::Aur, _) => true,
+        // A tap, a package index, and the Arch User Repository accept no
+        // workflow identity: they are repositories, reached with a narrowly
+        // scoped installation token or an SSH key. Granting the scope anyway
+        // would widen every one of these jobs for nothing.
+        (PublisherKind::Homebrew, _) => false,
+        (PublisherKind::Rpm, _) => false,
+        (PublisherKind::Apt, _) => false,
+        (PublisherKind::Aur, _) => false,
         (PublisherKind::Oci, _) => true,
     }
 }
@@ -1833,6 +1948,128 @@ steps:
       path: ${{ runner.temp }}/@JOB@evidence/@SLUG@.yml
       retention-days: 1
 "#;
+
+/// Publisher job for a subject GoReleaser produced.
+///
+/// GoReleaser's open-source distribution has no command that publishes a `dist/`
+/// tree a previous invocation built, so a maintained Go recipe cannot reach its
+/// destination by running the packager again: a second `goreleaser release`
+/// rebuilds from source and produces a subject whose digest cannot equal the one
+/// the release sealed. The publisher job therefore promotes the file the build
+/// already produced, and the promotion is an ordinary repository-local step
+/// against the destination's own repository.
+///
+/// The credential is minted for that destination alone rather than for the
+/// source repository. A tap or package index is a different repository from the
+/// one being released, and the App is installed on it narrowly, so the token
+/// this job holds can write to the tap and to nothing else.
+const PUBLISH_GORELEASER_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+permissions:
+@PERMISSIONS@
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: @SUBJECT_NAME@
+    uses: @DOWNLOAD@
+    with:
+      name: @JOB@subject-@SUBJECT_SLUG@
+      path: ${{ runner.temp }}/@JOB@subject
+@CREDENTIAL_STEPS@  - name: @PUBLISH_NAME@
+    env:
+      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/bytes
+      @ENVVAR@SUBJECT_IDENTITY: @SUBJECT_IDENTITY@
+      @ENVVAR@GLOBAL_TAG: ${{ github.ref_name }}
+@PROMOTE_ENV@    run: |
+      set -euo pipefail
+@PROMOTE_COMMAND@
+  - name: @VERIFY_NAME@
+    uses: @VERIFY_PUBLICATION_ACTION@
+    with:
+      release-unit: @RELEASE_UNIT@
+      publisher: @PUBLISHER@
+      target: @TARGET@
+      observation: @OBSERVATION@
+      output: @OUTPUT@
+      intentional-version: @VERSION@
+  - name: @FRAGMENT_NAME@
+    uses: @UPLOAD@
+    with:
+      name: @JOB@evidence-@SLUG@
+      path: ${{ runner.temp }}/@JOB@evidence/@SLUG@.yml
+      retention-days: 1
+"#;
+
+/// Steps minting a short-lived token for one destination repository.
+///
+/// The App is installed narrowly on the tap or index repository, and the token
+/// names that repository explicitly, so a job that promotes into one destination
+/// cannot write to another repository the App happens to be installed on.
+const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
+    name: Mint a short-lived token for the destination repository
+    uses: @APP_TOKEN@
+    with:
+      app-id: ${{ vars.@ENVVAR@GITHUB_APP_ID }}
+      private-key: ${{ secrets.@ENVVAR@GITHUB_APP_PRIVATE_KEY }}
+      owner: @DESTINATION_OWNER@
+      repositories: @DESTINATION_NAME@
+"#;
+
+/// Promote the generated Homebrew formula into the configured tap repository.
+///
+/// A rerun that finds the tap already carrying this formula commits nothing and
+/// still succeeds, because the destination readback that follows is what decides
+/// whether the publication is present rather than whether this step wrote.
+const HOMEBREW_PROMOTE_COMMAND: &str = r#"      formula="$(find "${@ENVVAR@SUBJECT}" -type f -name '*.rb' -print | sort | head -n 1)"
+      test -n "${formula}"
+      git clone --quiet --depth 1 \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
+        "${RUNNER_TEMP}/@JOB@tap"
+      install -D "${formula}" \
+        "${RUNNER_TEMP}/@JOB@tap/Formula/$(basename "${formula}")"
+      git -C "${RUNNER_TEMP}/@JOB@tap" add Formula
+      if ! git -C "${RUNNER_TEMP}/@JOB@tap" diff --cached --quiet; then
+        git -C "${RUNNER_TEMP}/@JOB@tap" \
+          -c user.name="${@ENVVAR@COMMITTER_NAME}" \
+          -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
+          commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
+        git -C "${RUNNER_TEMP}/@JOB@tap" push --quiet origin HEAD
+      fi"#;
+
+/// Promote the generated Arch package sources into the Arch User Repository.
+///
+/// The Arch User Repository is a Git host of its own rather than a GitHub
+/// repository, so its authority is an SSH key under a conventional secret name
+/// instead of an App installation token. The key never reaches Intentional
+/// configuration; the recipe names the secret and the repository supplies it.
+const AUR_PROMOTE_COMMAND: &str = r#"      sources="$(find "${@ENVVAR@SUBJECT}" -type f -name 'PKGBUILD' -print | sort | head -n 1)"
+      test -n "${sources}"
+      install -d -m 700 "${HOME}/.ssh"
+      printf '%s\n' "${@ENVVAR@AUR_KEY}" > "${HOME}/.ssh/@JOB@aur"
+      chmod 600 "${HOME}/.ssh/@JOB@aur"
+      ssh-keyscan aur.archlinux.org >> "${HOME}/.ssh/known_hosts"
+      GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes" \
+        git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
+        "${RUNNER_TEMP}/@JOB@aur"
+      cp -R "$(dirname "${sources}")"/. "${RUNNER_TEMP}/@JOB@aur/"
+      git -C "${RUNNER_TEMP}/@JOB@aur" add --all
+      if ! git -C "${RUNNER_TEMP}/@JOB@aur" diff --cached --quiet; then
+        git -C "${RUNNER_TEMP}/@JOB@aur" \
+          -c user.name="${@ENVVAR@COMMITTER_NAME}" \
+          -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
+          commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
+        GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes" \
+          git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD
+      fi"#;
 
 const PUBLISH_ASSEMBLE_JOB: &str = r#"
 needs:
@@ -2482,11 +2719,13 @@ release-units:
         require-phase: after-publication
 "#;
 
-    /// A workspace whose one Go release unit publishes every GoReleaser destination.
+    /// A workspace whose one Go release unit publishes to two GoReleaser destinations.
     ///
-    /// One packager, four publishers: exactly the shape the maintained Go
-    /// recipes exist for, and the shape that proves one build is promoted to
-    /// four destinations rather than rebuilt four times.
+    /// One packager, two publishers: the shape that proves one build is promoted
+    /// to both destinations rather than rebuilt for each. RPM and APT are absent
+    /// because the job that uploads their deliverable to the draft Release is
+    /// not settled, and the derivation refuses them rather than deriving a
+    /// publisher job that publishes nothing.
     const GO_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
 workspace-tags:
@@ -2500,8 +2739,6 @@ release-units:
   component:
     path: component
     homebrew: { repository: example-org/homebrew-tap }
-    rpm: {}
-    apt: {}
     aur: {}
     tags:
       staged:
@@ -2581,6 +2818,202 @@ aur:
             .find_map(|step| step["with"]["identity"].as_str())
             .expect("the build job records a subject identity");
         assert_eq!(identity, "example-module");
+    }
+
+    /// Steps of one derived job, as name-and-body pairs.
+    fn job_steps(jobs: &serde_yaml::Mapping, id: &str) -> Vec<Value> {
+        jobs[&Value::String(id.to_owned())]["steps"]
+            .as_sequence()
+            .expect("steps")
+            .clone()
+    }
+
+    /// Every `run:` body one derived job executes, concatenated.
+    fn job_run_bodies(jobs: &serde_yaml::Mapping, id: &str) -> String {
+        job_steps(jobs, id)
+            .iter()
+            .filter_map(|step| step["run"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    // GoReleaser's open-source distribution cannot publish a dist tree a
+    // previous invocation built, so a recipe that reached its destination by
+    // running the packager again would rebuild from source and produce a
+    // subject whose digest cannot equal the one the release sealed. This is the
+    // rule the whole build-once graph rests on for Go.
+    #[test]
+    fn promotes_what_the_go_build_produced_rather_than_running_the_packager_again() {
+        let workspace = go_workspace("workflow-go-promote");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let builds = job_ids(&jobs, "intentional_build_");
+        assert_eq!(
+            builds,
+            vec!["intentional_build_component_goreleaser".to_owned()],
+            "two destinations of one packager derive one build job: {builds:?}"
+        );
+        assert!(
+            job_run_bodies(&jobs, &builds[0]).contains("goreleaser release"),
+            "the build job is where the packager runs"
+        );
+
+        let publishers = job_ids(&jobs, "intentional_publish_");
+        assert_eq!(publishers.len(), 2, "{publishers:?}");
+        for publisher in &publishers {
+            let body = job_run_bodies(&jobs, publisher);
+            assert!(
+                !body.contains("goreleaser"),
+                "{publisher} promotes what the build produced rather than rebuilding it: {body}"
+            );
+            let downloads = job_steps(&jobs, publisher)
+                .iter()
+                .filter_map(|step| step["with"]["name"].as_str())
+                .filter(|name| name.starts_with("intentional_subject-"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                downloads,
+                vec!["intentional_subject-component_goreleaser".to_owned()],
+                "{publisher} consumes the one built subject"
+            );
+        }
+    }
+
+    // A tap is a different repository from the one being released, and the App
+    // is installed on it narrowly. A token minted without naming that repository
+    // would carry every permission the App holds everywhere it is installed.
+    #[test]
+    fn mints_the_tap_token_for_the_configured_repository_alone() {
+        let workspace = go_workspace("workflow-go-token");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let homebrew = "intentional_publish_component_homebrew_primary";
+
+        let token = job_steps(&jobs, homebrew)
+            .into_iter()
+            .find(|step| step["id"].as_str() == Some("intentional_destination_token"))
+            .expect("the homebrew job mints a destination token");
+        assert_eq!(token["with"]["owner"].as_str(), Some("example-org"));
+        assert_eq!(token["with"]["repository"].as_str(), None);
+        assert_eq!(token["with"]["repositories"].as_str(), Some("homebrew-tap"));
+
+        // The promotion reads the token through the environment and writes to
+        // the configured tap, and both values reach the shell as variables
+        // rather than as text spliced into the body.
+        let body = job_run_bodies(&jobs, homebrew);
+        assert!(
+            body.contains("${INTENTIONAL_DESTINATION}") && body.contains("${GITHUB_TOKEN}"),
+            "{body}"
+        );
+        assert!(
+            !body.contains("example-org/homebrew-tap"),
+            "the destination reaches the shell as a variable: {body}"
+        );
+    }
+
+    // The Arch User Repository is a Git host of its own rather than a GitHub
+    // repository, so an installation token reaches nothing there.
+    #[test]
+    fn reaches_the_arch_user_repository_through_its_own_authority() {
+        let workspace = go_workspace("workflow-go-aur");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let aur = "intentional_publish_component_aur_primary";
+
+        assert!(
+            !job_steps(&jobs, aur)
+                .iter()
+                .any(|step| step["id"].as_str() == Some("intentional_destination_token")),
+            "no installation token is minted for a destination GitHub does not host"
+        );
+        let body = job_run_bodies(&jobs, aur);
+        assert!(body.contains("ssh://aur@aur.archlinux.org/"), "{body}");
+        assert!(body.contains("${INTENTIONAL_AUR_KEY}"), "{body}");
+        let environment = job_steps(&jobs, aur)
+            .into_iter()
+            .find_map(|step| {
+                step["env"]["INTENTIONAL_AUR_KEY"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .expect("the promotion reads the key from the environment");
+        assert_eq!(
+            environment, "${{ secrets.INTENTIONAL_AUR_KEY }}",
+            "the recipe names a conventional secret and never carries its value"
+        );
+    }
+
+    // A tap, a package index, and the Arch User Repository accept no workflow
+    // identity token. Granting the scope anyway widens the job for nothing.
+    #[test]
+    fn withholds_the_workflow_identity_scope_from_repository_destinations() {
+        let workspace = go_workspace("workflow-go-permissions");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        for publisher in job_ids(&jobs, "intentional_publish_") {
+            let permissions = jobs[&Value::String(publisher.clone())]["permissions"]
+                .as_mapping()
+                .expect("permissions")
+                .clone();
+            assert_eq!(
+                permissions.get(Value::String("contents".to_owned())),
+                Some(&Value::String("read".to_owned())),
+                "{publisher}"
+            );
+            assert!(
+                permissions
+                    .get(Value::String("id-token".to_owned()))
+                    .is_none(),
+                "{publisher} needs no workflow identity token: {permissions:?}"
+            );
+        }
+
+        // The scope survives where a registry actually accepts it, so this is a
+        // recipe distinction rather than a blanket withdrawal.
+        let workspace = two_destination_workspace("workflow-oci-permissions");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        for publisher in job_ids(&jobs, "intentional_publish_") {
+            assert_eq!(
+                jobs[&Value::String(publisher.clone())]["permissions"]["id-token"].as_str(),
+                Some("write"),
+                "{publisher}"
+            );
+        }
+    }
+
+    // The deliverable RPM and APT distribute is the GitHub Release asset itself,
+    // and the design does not state which job uploads it to the draft. Deriving
+    // a publisher job anyway would ship a publication that publishes nothing.
+    #[test]
+    fn refuses_a_publication_whose_deliverable_upload_is_unsettled() {
+        for publisher in ["rpm", "apt"] {
+            let workspace = go_workspace("workflow-go-unsettled");
+            workspace.write(
+                ".intentional/config.yml",
+                &GO_CONFIG.replace(
+                    "    aur: {}\n",
+                    &format!("    aur: {{}}\n    {publisher}: {{}}\n"),
+                ),
+            );
+            let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+                .expect("comparison runs");
+            assert_eq!(comparison.status, ComparisonStatus::Blocked);
+            let diagnostic = comparison
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "deliverable-upload-unsettled")
+                .unwrap_or_else(|| panic!("{publisher} is refused: {:?}", comparison.diagnostics));
+            assert!(
+                diagnostic
+                    .message
+                    .contains(&format!("component/{publisher}/primary")),
+                "{}",
+                diagnostic.message
+            );
+        }
     }
 
     fn two_destination_workspace(label: &str) -> Workspace {

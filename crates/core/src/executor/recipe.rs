@@ -463,6 +463,10 @@ fn select_one(
     let destination = match (&configured.destination, publisher) {
         (Some(destination), _) => Some(destination.clone()),
         (None, PublisherKind::Cargo) => Some(cargo_registry(root, release_unit)?),
+        // The Arch User Repository resolves a package by name, and GoReleaser's
+        // own configuration is where that name lives: explicitly under `aur`,
+        // and otherwise as the binary package of the declared project.
+        (None, PublisherKind::Aur) => aur_package(root, release_unit)?,
         (None, _) if configured.destination_required => {
             return Err(Error::Validation(format!(
                 "configured target {id}/{publisher}/{target} requires an explicit repository; its destination identity is not derivable"
@@ -686,6 +690,22 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
         registries,
         permitted,
     }))
+}
+
+/// Arch User Repository package one release unit publishes, from native evidence.
+///
+/// GoReleaser's default for an Arch package built from released binaries is the
+/// project name with a `-bin` suffix, which is also the Arch convention for a
+/// package that installs prebuilt binaries rather than compiling from source.
+fn aur_package(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Option<String>> {
+    let directory = root.join(&release_unit.path);
+    if let Some(config) = crate::executor::goreleaser::read(&directory)? {
+        if let Some(name) = config.aur_names.first() {
+            return Ok(Some(name.clone()));
+        }
+    }
+    Ok(crate::executor::goreleaser::subject_identity(&directory)?
+        .map(|project| format!("{project}-bin")))
 }
 
 fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {

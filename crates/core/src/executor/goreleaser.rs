@@ -62,6 +62,8 @@ pub struct GoReleaserConfig {
     pub pipes: Vec<String>,
     /// Formats `nfpms` declares across every entry.
     pub nfpm_formats: Vec<String>,
+    /// Arch package names `aur` declares, in declaration order.
+    pub aur_names: Vec<String>,
 }
 
 /// Read one release unit's native GoReleaser configuration.
@@ -117,6 +119,11 @@ fn parse(name: &Path, document: &serde_yaml::Value) -> GoReleaserConfig {
                     .filter_map(serde_yaml::Value::as_str)
                     .map(str::to_owned)
             })
+            .collect(),
+        aur_names: sequence(document, "aur")
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(serde_yaml::Value::as_str))
+            .map(str::to_owned)
             .collect(),
     }
 }
