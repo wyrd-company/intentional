@@ -694,18 +694,23 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
 
 /// Arch User Repository package one release unit publishes, from native evidence.
 ///
-/// GoReleaser's default for an Arch package built from released binaries is the
-/// project name with a `-bin` suffix, which is also the Arch convention for a
-/// package that installs prebuilt binaries rather than compiling from source.
+/// The destination is whatever the packager wrote and registered, which is not
+/// what the repository declared: the packager resolves an unnamed entry to the
+/// project name and then suffixes every name with `-bin` unless it already ends
+/// that way. Reading the declaration verbatim would name a package that does not
+/// exist, so the same rule the packager applies is applied here.
 fn aur_package(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Option<String>> {
     let directory = root.join(&release_unit.path);
-    if let Some(config) = crate::executor::goreleaser::read(&directory)? {
-        if let Some(name) = config.aur_names.first() {
-            return Ok(Some(name.clone()));
-        }
-    }
-    Ok(crate::executor::goreleaser::subject_identity(&directory)?
-        .map(|project| format!("{project}-bin")))
+    let Some(project) = crate::executor::goreleaser::subject_identity(&directory)? else {
+        return Ok(None);
+    };
+    let declared = crate::executor::goreleaser::read(&directory)?
+        .and_then(|config| config.aur_names.into_iter().next())
+        .flatten();
+    Ok(Some(crate::executor::goreleaser::arch_package_name(
+        declared.as_deref(),
+        &project,
+    )))
 }
 
 fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {
@@ -1309,6 +1314,42 @@ release-units:
             !error.to_string().contains("no discoverable main package"),
             "{error}"
         );
+    }
+
+    // The destination the recipe is handed has to be the package the packager
+    // wrote and the Arch User Repository carries, not the one the repository
+    // declared. Reading the declaration verbatim names a package that does not
+    // exist, and would push one project's sources to another project's package.
+    #[test]
+    fn derives_the_arch_package_the_packager_registers() {
+        for (declaration, expected) in [
+            ("aur:\n  - name: example-tool\n", "example-tool-bin"),
+            ("aur:\n  - name: example-tool-bin\n", "example-tool-bin"),
+            // An unnamed entry takes the project name, and it must keep its
+            // position: the sibling below names itself and must not be read as
+            // this publication's destination.
+            (
+                "aur:\n  - {}\n  - name: example-other\n",
+                "example-tool-bin",
+            ),
+            ("", "example-tool-bin"),
+        ] {
+            let workspace = Workspace::new("aur-destination");
+            workspace
+                .write("component/go.mod", "module example.test/example-tool\n")
+                .write("component/main.go", "package main\n\nfunc main() {}\n")
+                .write(
+                    "component/.goreleaser.yaml",
+                    &format!("version: 2\nproject_name: example-tool\n{declaration}"),
+                );
+            let selected = select_publications(workspace.root(), &config("    aur: {}\n"))
+                .expect("the publication selects");
+            assert_eq!(
+                selected[0].destination.as_deref(),
+                Some(expected),
+                "{declaration:?} derives the package the packager registers"
+            );
+        }
     }
 
     #[test]

@@ -62,8 +62,14 @@ pub struct GoReleaserConfig {
     pub pipes: Vec<String>,
     /// Formats `nfpms` declares across every entry.
     pub nfpm_formats: Vec<String>,
-    /// Arch package names `aur` declares, in declaration order.
-    pub aur_names: Vec<String>,
+    /// What each `aur` entry declares as its name, in declaration order.
+    ///
+    /// An entry that declares none is `None` rather than absent, because the
+    /// position is the identity: dropping the unnamed entries would make the
+    /// first element "the first entry that happens to name itself", and a
+    /// release unit whose first entry takes the packager's default would then
+    /// derive its sibling's package as its own destination.
+    pub aur_names: Vec<Option<String>>,
 }
 
 /// Read one release unit's native GoReleaser configuration.
@@ -122,8 +128,13 @@ fn parse(name: &Path, document: &serde_yaml::Value) -> GoReleaserConfig {
             .collect(),
         aur_names: sequence(document, "aur")
             .iter()
-            .filter_map(|entry| entry.get("name").and_then(serde_yaml::Value::as_str))
-            .map(str::to_owned)
+            .map(|entry| {
+                entry
+                    .get("name")
+                    .and_then(serde_yaml::Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .map(str::to_owned)
+            })
             .collect(),
     }
 }
@@ -171,6 +182,36 @@ fn main_directories(document: &serde_yaml::Value) -> Vec<PathBuf> {
     directories
 }
 
+/// Arch package identity one `aur` entry resolves to.
+///
+/// The packager decides this name, not the repository, and it decides it twice.
+/// An entry that declares no name takes the project name, and every name is
+/// then given a `-bin` suffix unless it already carries one, because an Arch
+/// package built from released binaries rather than from source is named that
+/// way by convention. The packager applies the rule before it writes anything,
+/// so `aur: [ { name: example-tool } ]` produces `example-tool-bin.pkgbuild` and
+/// registers `example-tool-bin`.
+///
+/// Deriving the destination without that rule hands the recipe a name the
+/// packager never wrote and the Arch User Repository never carried, which fails
+/// at the file it looks for and would otherwise push one project's sources to
+/// another project's package. The rule therefore lives here, once, and both the
+/// declared-name and project-name paths go through it.
+pub fn arch_package_name(declared: Option<&str>, project: &str) -> String {
+    let name = declared
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(project);
+    if name.ends_with(ARCH_BINARY_SUFFIX) {
+        name.to_owned()
+    } else {
+        format!("{name}{ARCH_BINARY_SUFFIX}")
+    }
+}
+
+/// Suffix the packager gives every Arch package it builds from released binaries.
+const ARCH_BINARY_SUFFIX: &str = "-bin";
+
 /// Module path one release unit's `go.mod` declares.
 pub fn module_path(directory: &Path) -> Result<Option<String>> {
     let path = directory.join("go.mod");
@@ -216,6 +257,44 @@ pub fn subject_identity(directory: &Path) -> Result<Option<String>> {
 mod tests {
     use super::*;
     use crate::executor::fixture::Workspace;
+
+    // The packager applies both halves of this rule before it writes anything,
+    // so a derivation that skipped either would name a package the packager
+    // never wrote and the Arch User Repository never carried.
+    #[test]
+    fn resolves_the_arch_package_the_packager_writes() {
+        for (declared, expected) in [
+            (Some("example-tool"), "example-tool-bin"),
+            (Some("example-tool-bin"), "example-tool-bin"),
+            (Some("  "), "example-project-bin"),
+            (None, "example-project-bin"),
+        ] {
+            assert_eq!(
+                arch_package_name(declared, "example-project"),
+                expected,
+                "{declared:?} resolves the package the packager writes"
+            );
+        }
+    }
+
+    // Position is the identity. An entry that names itself is not necessarily
+    // the entry a publication belongs to.
+    #[test]
+    fn keeps_an_unnamed_arch_entry_in_its_own_position() {
+        let workspace = Workspace::new("goreleaser-aur-position");
+        workspace.write(
+            "component/.goreleaser.yaml",
+            "version: 2\nproject_name: example-tool\naur:\n  - {}\n  - name: example-other\n",
+        );
+        let config = read(&workspace.root().join("component"))
+            .expect("configuration reads")
+            .expect("configuration is present");
+        assert_eq!(
+            config.aur_names,
+            vec![None, Some("example-other".to_owned())],
+            "the unnamed entry holds index 0 rather than being dropped"
+        );
+    }
 
     #[test]
     fn reads_the_members_the_derivation_depends_on() {

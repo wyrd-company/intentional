@@ -6629,6 +6629,12 @@ release-units:
         /// exists to be left alone: its files share one directory with this
         /// publication's, and promoting them would publish another package's
         /// sources under this package's name.
+        ///
+        /// The `aur` names are declared the way a repository declares them,
+        /// without the suffix the packager adds. Pre-normalising them here
+        /// would make the identity the derivation produces and the file the
+        /// packager writes agree by construction, and no scenario could then
+        /// observe them disagreeing -- which is the shape a real defect took.
         const NATIVE_CONFIG: &str = r#"version: 2
 project_name: example-tool
 builds:
@@ -6640,8 +6646,22 @@ brews:
 nfpms:
   - formats: [ rpm, deb ]
 aur:
-  - name: example-tool-bin
-  - name: example-other-bin
+  - name: example-tool
+  - name: example-other
+"#;
+
+        /// The same release unit, with its first Arch entry unnamed.
+        ///
+        /// The packager resolves an unnamed entry to the project name, so this
+        /// declares the same destination a different way, and it is the shape
+        /// in which a dropped entry would silently promote the sibling.
+        const UNNAMED_ARCH_CONFIG: &str = r#"version: 2
+project_name: example-tool
+builds:
+  - main: ./cmd/example-tool
+aur:
+  - {}
+  - name: example-other
 "#;
 
         /// One derived promotion body and the destinations it can reach.
@@ -6676,8 +6696,12 @@ aur:
 
         impl Recipe {
             fn new(label: &str, job: &str) -> Self {
+                Self::declaring(label, job, NATIVE_CONFIG)
+            }
+
+            fn declaring(label: &str, job: &str, native: &str) -> Self {
                 let workspace = go_workspace(label);
-                workspace.write("component/.goreleaser.yaml", NATIVE_CONFIG);
+                workspace.write("component/.goreleaser.yaml", native);
                 converge(workspace.root(), WorkflowRole::Publish);
                 let root = workspace.root().to_path_buf();
                 let remotes = root.join("remotes");
@@ -7108,6 +7132,24 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             assert!(
                 recipe.destination_files(AUR_PACKAGE).is_empty(),
                 "nothing reached the destination"
+            );
+        }
+
+        // An unnamed entry takes the project name and the same suffix, so it
+        // names the same destination. Dropping it while reading would make the
+        // sibling entry index 0 and promote this package's sources under the
+        // sibling's name.
+        #[test]
+        fn resolves_an_unnamed_arch_entry_to_this_publications_package() {
+            let recipe = Recipe::declaring("recipe-aur-unnamed", AUR_JOB, UNNAMED_ARCH_CONFIG)
+                .with_destination(AUR_PACKAGE)
+                .with_distribution();
+            recipe.run().expect_success();
+            let files = recipe.destination_files(AUR_PACKAGE);
+            assert_eq!(files["PKGBUILD"], "pkgname=example-tool-bin\n");
+            assert!(
+                !recipe.destination_exists("example-other-bin"),
+                "the sibling package was never reached"
             );
         }
 
