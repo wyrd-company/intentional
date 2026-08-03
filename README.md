@@ -76,8 +76,10 @@ and whose ignore rules bound discovery. It recursively discovers every
 supported manifest in that boundary. Package-manager workspace membership is
 evidence for recommendations, dependency analysis, and Changesets parity, not
 an inclusion boundary. Discovery always skips version-control metadata,
-Intentional state, and ecosystem caches; ordinary names such as `build`,
-`dist`, `bin`, and `vendor` are scanned unless the repository ignores them.
+Intentional state, ecosystem caches, and tool-owned directories that describe
+how to work on a repository rather than what it releases, currently
+`.devcontainer` and `.terraform`; ordinary names such as `build`, `dist`,
+`bin`, and `vendor` are scanned unless the repository ignores them.
 
 Every newly discovered npm, Cargo, Go, Python, MSBuild, Dart, Dev Container
 Feature, Dev Container Template, GitHub Action, Terraform module, Terraform
@@ -171,9 +173,8 @@ do not inspect companion files such as `install.sh` or `devcontainer.json`, nor
 do they inspect workflows, OCI registries, publication state, or overall
 artifact correctness.
 
-Tag-only detectors recognize artifact formats that carry no version in their
-own files, so a canonical Git tag is their only version authority. They suggest
-a primary `{id}@{version}` tag and never a projection or raw version:
+Tag-only detectors recognize artifact formats whose version authority is a
+canonical Git tag. Each suggests a primary `{id}@{version}` tag:
 
 | Detector             | Evidence                                                                           | Suggested identity                                    |
 | -------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -181,6 +182,12 @@ a primary `{id}@{version}` tag and never a projection or raw version:
 | `terraform-module`   | every non-ignored directory holding `.tf` files                                    | directory name                                        |
 | `terraform-provider` | `go.mod` directly requiring `terraform-plugin-framework` or `terraform-plugin-sdk` | Go module path                                        |
 | `docker-image`       | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile`                                    | filename variant, otherwise containing directory name |
+
+`github-action`, `terraform-module`, and `docker-image` carry no version in
+their own files, so they suggest no projection and no raw version.
+`terraform-provider` is a Go module: it keeps the `go` projection at mode
+`none`, which writes no version but lets a major bump rewrite the module path
+suffix.
 
 One Terraform module candidate covers one directory. The directory is the
 candidate path, and its evidence digest covers every `.tf` file it holds, so
@@ -200,7 +207,9 @@ and a candidate makes no claim that the image is built or published. Rolling
 tags, `latest` aliases, and registry retention stay publisher policy. A
 `Dockerfile.<variant>` suffix reads as a file extension, so companion documents
 and copies such as `Dockerfile.md`, `Dockerfile.example`, and `Dockerfile.bak`
-are not build definitions.
+are not build definitions. A `.devcontainer/Dockerfile` builds a development
+environment rather than a released image, and `.devcontainer` is hard-excluded
+from the walk, so it produces no candidate.
 
 A path that yields no usable id still produces a candidate with a tag
 suggestion, plus an `identity-not-path-derivable` extraction diagnostic; name

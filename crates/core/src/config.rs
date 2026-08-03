@@ -1159,10 +1159,10 @@ fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
 /// its own normal components so no receipt can carry a glob or a `./` prefix.
 pub(crate) fn validate_exact_discovery_path(path: &Path, description: &str) -> Result<()> {
     validate_relative_path(path, description)?;
-    if path == Path::new(".") {
+    let rendered = path.to_string_lossy();
+    if rendered == "." {
         return Ok(());
     }
-    let rendered = path.to_string_lossy();
     let normalized = path
         .components()
         .filter_map(|component| match component {
@@ -1278,6 +1278,30 @@ release-units:
             .expect_err("non-canonical exact path rejected")
             .to_string()
             .contains("one exact workspace-relative path"));
+
+        // The workspace root is the one directory-scoped path, spelled exactly.
+        let root = receipts.replace("path: examples/package.json", "path: \".\"");
+        assert_eq!(
+            Config::from_yaml(&root)
+                .expect("workspace-root exclusion accepted")
+                .discovery
+                .excluded_paths[0]
+                .path,
+            Path::new(".")
+        );
+        for spelling in ["./", ".//", "././.", "./."] {
+            let rendered = receipts.replace(
+                "path: examples/package.json",
+                &format!("path: \"{spelling}\""),
+            );
+            assert!(
+                Config::from_yaml(&rendered)
+                    .expect_err("non-canonical workspace-root spelling rejected")
+                    .to_string()
+                    .contains("one exact workspace-relative path"),
+                "{spelling} was accepted"
+            );
+        }
 
         let stale_shape = receipts.replace(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",

@@ -994,6 +994,12 @@ fn terraform_plugin_go_modules_present_as_providers() {
         Some("github.com/example/terraform-provider-sample")
     );
     assert!(provider.raw_version.is_none());
+    // A provider is a Go module, so it keeps the Go projection at mode none:
+    // no version is written, but a major bump can rewrite the path suffix.
+    let projection = provider.projection.as_ref().expect("Go projection");
+    assert_eq!(projection.adapter, Adapter::Go);
+    assert_eq!(projection.path, Path::new("go.mod"));
+    assert_eq!(projection.mode, ProjectionMode::None);
 
     let single = plan
         .discovery_candidates
@@ -1485,6 +1491,7 @@ fn discovery_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         ("bin", "sample-bin"),
         ("tests/fixtures", "sample-fixture"),
         ("vendor", "sample-vendor"),
+        (".devcontainer", "cached-devcontainer"),
     ] {
         repo.write(
             &format!("{directory}/package.json"),
@@ -1516,9 +1523,42 @@ fn discovery_honors_gitignore_and_hard_caches_but_not_broad_directory_names() {
         "cached-rust",
         "cached-python",
         "cached-dotnet",
+        "cached-devcontainer",
     ] {
         assert!(!names.contains(excluded), "unexpected candidate {excluded}");
     }
+}
+
+#[test]
+fn development_environment_directories_produce_no_release_candidates() {
+    let repo = TestRepo::new();
+    repo.write(".devcontainer/Dockerfile", "FROM scratch\n");
+    repo.write(
+        ".devcontainer/devcontainer.json",
+        "{ \"name\": \"sample\" }\n",
+    );
+    repo.write(
+        ".devcontainer/action.yml",
+        "name: Sample\nruns:\n  using: composite\n",
+    );
+    repo.write(
+        ".devcontainer/main.tf",
+        "resource \"null_resource\" \"sample\" {}\n",
+    );
+    repo.write("images/Dockerfile.runtime", "FROM scratch\n");
+    repo.commit("add development environment fixtures");
+
+    let plan = initialize(&repo.root, false)
+        .expect("development environment plan")
+        .plan
+        .expect("unresolved candidates");
+    assert_eq!(
+        plan.discovery_candidates
+            .iter()
+            .map(|candidate| candidate.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["images/Dockerfile.runtime".to_owned()]
+    );
 }
 
 #[test]

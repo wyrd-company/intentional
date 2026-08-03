@@ -1133,14 +1133,12 @@ fn apply_candidate_resolutions(
         else {
             continue;
         };
+        let path = candidate_directory(candidate);
         let projection = candidate
             .projection
             .as_ref()
-            .map(|_| {
-                candidate_projection(candidate, candidate.path.parent().unwrap_or(Path::new("")))
-            })
+            .map(|_| candidate_projection(candidate, &path))
             .transpose()?;
-        let path = candidate_directory(candidate);
         let tag = candidate.tag.as_ref().ok_or_else(|| Error::Validation(format!(
             "discovery candidate {} cannot create an independent release unit without a tag suggestion",
             candidate.id
@@ -2420,6 +2418,13 @@ fn all_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     Ok(paths)
 }
 
+/// Report whether a path sits inside a directory discovery never walks.
+///
+/// The set covers version-control metadata, Intentional state, ecosystem
+/// caches, and tool-owned directories that describe how to work on a repository
+/// rather than what it releases, such as `.devcontainer`. Broad names like
+/// `build`, `dist`, `bin`, and `vendor` carry no built-in meaning and are
+/// controlled only by repository ignore rules.
 fn hard_excluded(root: &Path, path: &Path) -> bool {
     path.strip_prefix(root)
         .unwrap_or(path)
@@ -2433,6 +2438,7 @@ fn hard_excluded(root: &Path, path: &Path) -> bool {
                 component,
                 ".git"
                     | ".intentional"
+                    | ".devcontainer"
                     | "node_modules"
                     | "target"
                     | ".pnpm-store"

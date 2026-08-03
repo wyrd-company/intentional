@@ -199,10 +199,11 @@ proposed-design:
     evidence digests, optional native identity and raw version evidence,
     conditional projection and tag suggestions, and narrow extraction
     diagnostics. Detector evidence does not infer publication.
-    Walking hard-excludes version-control metadata, Intentional state, and
-    ecosystem cache directories. Broad names such as build, dist, bin, and
-    vendor have no built-in meaning and are controlled only by repository ignore
-    rules.
+    Walking hard-excludes version-control metadata, Intentional state,
+    ecosystem cache directories, and tool-owned directories that describe how to
+    work on a repository rather than what it releases. Broad names such as
+    build, dist, bin, and vendor have no built-in meaning and are controlled
+    only by repository ignore rules.
   initialization-plan: |-
     Init writes canonical config only when the complete configuration is
     proven. Otherwise it writes one transient `.intentional/init-plan.yml`.
