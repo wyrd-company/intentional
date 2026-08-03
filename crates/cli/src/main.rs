@@ -808,20 +808,7 @@ fn prompt(label: &str) -> Result<String> {
 mod generated_invocations {
     use super::*;
     use clap::CommandFactory;
-    use std::collections::BTreeSet;
     use std::path::Path;
-
-    /// Commands the release protocol specifies that this runtime has not implemented.
-    ///
-    /// A generated invocation of one of these cannot be parsed yet, so it passes
-    /// by declaration rather than by treating an unrecognized command as a skip.
-    /// The allowance retires itself from both directions: an entry the parser now
-    /// accepts fails `every_pending_command_is_still_absent`, and an entry no
-    /// generated workflow reaches fails
-    /// `the_parser_accepts_every_generated_invocation`. Whoever implements one of
-    /// these commands must therefore validate the invocation the workflow
-    /// generates for it instead of inheriting an unchecked one.
-    const PENDING_COMMANDS: &[&[&str]] = &[&["verify", "publication"], &["verify", "release-tag"]];
 
     /// Invocations the managed job templates generate for the fixture workspace.
     ///
@@ -1054,52 +1041,27 @@ release-units:
         (path, true)
     }
 
-    fn names(command: &[&str], path: &[String]) -> bool {
-        command.len() == path.len()
-            && command
-                .iter()
-                .zip(path)
-                .all(|(declared, observed)| *declared == observed.as_str())
-    }
-
-    fn declared_pending() -> BTreeSet<Vec<String>> {
-        PENDING_COMMANDS
-            .iter()
-            .map(|command| command.iter().map(|&part| part.to_owned()).collect())
-            .collect()
-    }
-
     #[test]
     fn the_parser_accepts_every_generated_invocation() {
-        let mut reached = BTreeSet::new();
         let mut total = 0usize;
         for (role, workflow) in derived_workflows() {
             for tokens in invocations(&workflow) {
                 total += 1;
                 let rendered = shell_words::join(&tokens);
                 let (path, complete) = command_path(&tokens);
-                if complete {
-                    Cli::try_parse_from(&tokens).unwrap_or_else(|error| {
-                        panic!("the derived {role} workflow runs `{rendered}`, which this binary rejects:\n{error}")
-                    });
-                    continue;
-                }
                 assert!(
-                    PENDING_COMMANDS.iter().any(|command| names(command, &path)),
-                    "the derived {role} workflow runs `{rendered}`, but `intentional {}` is not a command and is not declared pending",
+                    complete,
+                    "the derived {role} workflow runs `{rendered}`, but `intentional {}` is not a command",
                     path.join(" ")
                 );
-                reached.insert(path);
+                Cli::try_parse_from(&tokens).unwrap_or_else(|error| {
+                    panic!("the derived {role} workflow runs `{rendered}`, which this binary rejects:\n{error}")
+                });
             }
         }
         assert_eq!(
             total, GENERATED_INVOCATIONS,
             "the managed job templates generate a known number of invocations; a template that stopped generating one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
-        );
-        assert_eq!(
-            reached,
-            declared_pending(),
-            "every pending command must still be reached by a generated invocation"
         );
     }
 
@@ -1136,21 +1098,5 @@ release-units:
     #[should_panic(expected = "unclassifiable invocation must fail rather than pass")]
     fn refuses_a_command_line_it_cannot_read() {
         body_invocations("intentional release prepare --output \"/tmp/unterminated");
-    }
-
-    #[test]
-    fn every_pending_command_is_still_absent() {
-        let root = Cli::command();
-        for command in PENDING_COMMANDS {
-            let mut node = Some(&root);
-            for segment in *command {
-                node = node.and_then(|current| current.find_subcommand(*segment));
-            }
-            assert!(
-                node.is_none(),
-                "`intentional {}` is now a command; validate the invocation the workflow generates for it and remove it from PENDING_COMMANDS",
-                command.join(" ")
-            );
-        }
     }
 }
