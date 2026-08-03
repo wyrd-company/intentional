@@ -8,6 +8,7 @@
 pub mod check;
 pub mod init;
 pub mod recipe;
+mod steps;
 pub mod workflow;
 
 pub use check::{check_executor, ExecutorCheck};

@@ -1104,7 +1104,7 @@ fn render_list(values: &[String]) -> String {
 }
 
 /// Render one value as a YAML scalar that cannot alter the template's shape.
-fn scalar(value: &str) -> String {
+pub(super) fn scalar(value: &str) -> String {
     serde_yaml::to_string(&Value::String(value.to_owned()))
         .unwrap_or_else(|_| format!("{value:?}"))
         .trim_end()
@@ -1289,6 +1289,26 @@ fn publisher_job(
         "${{{{ runner.temp }}}}/{}evidence/{slug}.yml",
         namespaces.job
     );
+    // The recipe's own steps are written by the module that owns each
+    // destination, and they read the sealed subject from the build job's
+    // outputs rather than from a value they assert, so the observation they
+    // produce is bound to the subject the phase tag sealed.
+    let recipe = crate::executor::steps::recipe_steps(&crate::executor::steps::RecipeContext {
+        publication,
+        unit,
+        subject_identity: &subject.identity,
+        build_job: &format!("{}build_{}", namespaces.job, subject.slug),
+        working_directory: &unit.path.display().to_string(),
+        observation: &observation,
+        work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
+    })
+    .map_err(|message| {
+        WorkflowDiagnostic::at(
+            "recipe-underivable",
+            format!("publication {identity} derives no maintained recipe steps: {message}"),
+            &format!("release-units.{}", publication.release_unit),
+        )
+    })?;
     job(
         PUBLISH_PUBLISHER_JOB,
         namespaces,
@@ -1300,7 +1320,6 @@ fn publisher_job(
                 "@SUBJECT_NAME@",
                 &scalar(&format!("Download the built {} subject", subject.identity)),
             ),
-            ("@PUBLISH_NAME@", &scalar(&format!("Publish {identity}"))),
             (
                 "@VERIFY_NAME@",
                 &scalar(&format!("Verify the {identity} publication")),
@@ -1318,7 +1337,7 @@ fn publisher_job(
                 "@WORKING_DIRECTORY@",
                 &scalar(&unit.path.display().to_string()),
             ),
-            ("@PACKAGE_COMMAND@", package_command(publication)),
+            ("@RECIPE_STEPS@", &recipe),
             ("@PERMISSIONS@", &publisher_permissions(publication)),
         ],
     )
@@ -1348,20 +1367,14 @@ const fn build_command(packager: Packager) -> &'static str {
     }
 }
 
-/// Native command the selected recipe drives for one publication.
-const fn package_command(publication: &SelectedPublication) -> &'static str {
-    match publication.packager {
-        Packager::Npm => "npm publish --provenance --access public",
-        Packager::Cargo => "cargo publish --locked",
-        Packager::GoReleaser => "goreleaser release --clean",
-        Packager::Buildx => "docker buildx build --push --provenance true --sbom true .",
-        Packager::DevContainerCli => {
-            "devcontainer features publish --namespace \"${GITHUB_REPOSITORY}\" ."
-        }
-    }
-}
-
 /// Least privilege one publication's destination requires.
+///
+/// The workflow-identity scope is granted to the destinations whose recipes
+/// exchange that identity for something: a registry trusted-publishing token,
+/// or a provenance attestation bound to the run. A destination that
+/// authenticates with a repository-scoped or configured token exchanges nothing
+/// and is derived without it, because a job that holds a workflow identity it
+/// never presents is a credential sitting in reach of every step in it.
 fn publisher_permissions(publication: &SelectedPublication) -> String {
     let mut scopes = vec!["  contents: read\n".to_owned()];
     let packages = matches!(
@@ -1371,8 +1384,24 @@ fn publisher_permissions(publication: &SelectedPublication) -> String {
     if packages {
         scopes.push("  packages: write\n".to_owned());
     }
-    scopes.push("  id-token: write\n".to_owned());
+    if presents_a_workflow_identity(publication) {
+        scopes.push("  id-token: write\n".to_owned());
+    }
     scopes.concat()
+}
+
+/// Whether one publication's recipe presents the run's workflow identity.
+fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
+    match (publication.publisher, publication.target.as_str()) {
+        // GitHub Package Registry implements neither trusted publishing nor
+        // provenance attestation; its recipe presents the workflow token.
+        (PublisherKind::Npm, "github") => false,
+        // An alternate Cargo registry defines its own trusted publishing, if
+        // any, so the maintained recipe authenticates it with a configured
+        // token. Only crates.io performs the identity exchange.
+        (PublisherKind::Cargo, _) => publication.destination.as_deref() == Some("crates.io"),
+        _ => true,
+    }
 }
 
 /// Managed job templates.
@@ -1549,12 +1578,22 @@ steps:
 /// the tag job reads the document and the publisher jobs promote the bytes, and
 /// a transport that separated them would let a publisher receive bytes no
 /// phase tag ever sealed.
+///
+/// The version and digest the recording step derived are projected as job
+/// outputs because a publisher recipe writes both into its observation and
+/// assembly compares them against what the phase tag sealed. Routing them
+/// through the graph is what makes them the build's values: a recipe that read
+/// a version out of its own package manifest could publish under a version the
+/// release plan never assigned and still agree with itself.
 const PUBLISH_BUILD_JOB: &str = r#"
 needs:
 @NEEDS@
 runs-on: ubuntu-latest
 permissions:
   contents: read
+outputs:
+  version: ${{ steps.@JOB@record.outputs.version }}
+  digest: ${{ steps.@JOB@record.outputs.digest }}
 env:
   @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
 steps:
@@ -1573,7 +1612,8 @@ steps:
       set -euo pipefail
       mkdir -p "${@ENVVAR@SUBJECT}"
 @BUILD_COMMAND@
-  - name: @RECORD_NAME@
+  - id: @JOB@record
+    name: @RECORD_NAME@
     uses: @BUILT_SUBJECT_ACTION@
     with:
       release-unit: @RELEASE_UNIT@
@@ -1691,12 +1731,7 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-  - name: @PUBLISH_NAME@
-    working-directory: @WORKING_DIRECTORY@
-    env:
-      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/bytes
-    run: @PACKAGE_COMMAND@
-  - name: @VERIFY_NAME@
+@RECIPE_STEPS@  - name: @VERIFY_NAME@
     uses: @VERIFY_PUBLICATION_ACTION@
     with:
       release-unit: @RELEASE_UNIT@
