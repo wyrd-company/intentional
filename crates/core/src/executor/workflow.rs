@@ -3043,6 +3043,62 @@ aur:
         );
     }
 
+    // A build job that cannot run its packager produces nothing, and this job
+    // is the sole producer of every Go deliverable the publisher jobs promote.
+    // A stock runner does not carry GoReleaser.
+    #[test]
+    fn installs_the_packager_the_go_build_job_runs() {
+        let workspace = go_workspace("workflow-go-toolchain");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let build = "intentional_build_component_goreleaser";
+        let steps = job_steps(&jobs, build);
+        let installer = steps
+            .iter()
+            .position(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("goreleaser/goreleaser-action@"))
+            })
+            .expect("the build job installs the packager");
+        assert_eq!(
+            steps[installer]["uses"].as_str(),
+            Some("goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"),
+            "the installer is pinned to a complete commit identity"
+        );
+        assert_eq!(
+            steps[installer]["with"]["install-only"].as_bool(),
+            Some(true),
+            "the installer installs the command; the build step runs it"
+        );
+        let build_step = steps
+            .iter()
+            .position(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|run| run.contains("goreleaser"))
+            })
+            .expect("the build job runs the packager");
+        assert!(
+            installer < build_step,
+            "the packager is installed before it is run"
+        );
+
+        // A packager a runner already carries derives no installer, so this is
+        // a per-packager statement rather than a step every build job gained.
+        let workspace = two_destination_workspace("workflow-buildx-toolchain");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        assert!(
+            !job_steps(&jobs, "intentional_build_component_buildx")
+                .iter()
+                .any(|step| step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.contains("goreleaser"))),
+            "an unrelated packager derives no GoReleaser installer"
+        );
+    }
+
     // A tap, a package index, and the Arch User Repository accept no workflow
     // identity token. Granting the scope anyway widens the job for nothing.
     #[test]
