@@ -679,7 +679,47 @@ fn accept_publisher_evidence(
     for identity in expected.difference(&seen) {
         findings.push(format!("publisher evidence for {identity} is missing"));
     }
+    findings.extend(subject_disagreements(fragments));
     accepted
+}
+
+/// Report any subject that two destinations describe differently.
+///
+/// A distinct subject is built once and promoted, so two destinations that
+/// resolve one subject must resolve the same immutable bytes. Two fragments
+/// naming one subject at different versions or digests describe a rebuild,
+/// which the protocol does not permit and evidence must not record.
+fn subject_disagreements(fragments: &[(PathBuf, PublisherEvidence)]) -> Vec<String> {
+    let mut built: BTreeMap<(String, String), (&Path, &Subject)> = BTreeMap::new();
+    let mut findings = Vec::new();
+    for (path, fragment) in fragments {
+        let key = (
+            fragment.release_unit.clone(),
+            fragment.subject.identity.clone(),
+        );
+        match built.get(&key) {
+            None => {
+                built.insert(key, (path, &fragment.subject));
+            }
+            Some((first, subject))
+                if subject.digest != fragment.subject.digest
+                    || subject.version != fragment.subject.version =>
+            {
+                findings.push(format!(
+                    "{} and {} record subject {} as {}@{} and {}@{}; one subject is built once and promoted",
+                    first.display(),
+                    path.display(),
+                    fragment.subject.identity,
+                    subject.version,
+                    subject.digest,
+                    fragment.subject.version,
+                    fragment.subject.digest
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    findings
 }
 
 /// Report every mechanical problem in one publisher fragment.
@@ -1517,6 +1557,39 @@ phase-tags: []
             error.to_string().contains("was supplied more than once"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn rejects_two_destinations_that_describe_one_subject_differently() {
+        let workspace = workspace("assemble-rebuilt-subject");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("primary.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        // The same subject promoted to a second destination cannot carry a
+        // different digest; a second digest is a rebuild rather than a
+        // promotion.
+        std::fs::write(
+            input.join("github.yml"),
+            fragment("component", "npm", "github").replace(
+                SUBJECT_DIGEST,
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            ),
+        )
+        .expect("fragment");
+        let output = workspace.root().join("release-evidence");
+        let error =
+            assemble(&request(&workspace, &input, &output)).expect_err("a rebuild is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("one subject is built once and promoted"),
+            "{error}"
+        );
+        assert!(!output.exists(), "a rejected assembly writes nothing");
     }
 
     #[test]

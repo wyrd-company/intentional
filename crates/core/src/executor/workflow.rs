@@ -1222,10 +1222,17 @@ steps:
     env:
       GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
       @ENVVAR@GLOBAL_TAG: ${{ github.ref_name }}
+      @ENVVAR@RELEASE: ${{ runner.temp }}/@JOB@release
     run: |
       set -euo pipefail
       gh release upload "${@ENVVAR@GLOBAL_TAG}" \
-        "${{ runner.temp }}/@JOB@release"/* --clobber
+        "${@ENVVAR@RELEASE}"/* --clobber
+      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json isDraft --jq '.isDraft')" = "true"
+      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json targetCommitish --jq '.targetCommitish')" = "${GITHUB_SHA}"
+      for asset in "${@ENVVAR@RELEASE}"/*; do
+        gh release view "${@ENVVAR@GLOBAL_TAG}" --json assets \
+          --jq '.assets[].name' | grep -Fxq "$(basename "${asset}")"
+      done
       gh release edit "${@ENVVAR@GLOBAL_TAG}" --draft=false
 "#;
 
