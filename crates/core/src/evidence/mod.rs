@@ -7,6 +7,7 @@
 
 pub mod assemble;
 pub mod contribution;
+pub mod phase;
 
 use crate::error::{Error, Result};
 use sha2::{Digest, Sha256};

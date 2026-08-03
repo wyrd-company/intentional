@@ -9,4 +9,5 @@ pub mod build;
 pub mod candidate;
 pub(crate) mod git;
 pub mod prepare;
+pub mod tag;
 pub mod verify;
