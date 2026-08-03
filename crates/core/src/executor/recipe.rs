@@ -741,60 +741,20 @@ fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
 
 /// Every directory the main package could be discovered in, in priority order.
 fn command_search_roots(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut roots = goreleaser_main_directories(directory)?;
+    let mut roots = crate::executor::goreleaser::read(directory)?
+        .map(|config| {
+            config
+                .main_directories
+                .into_iter()
+                .map(|relative| directory.join(relative))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     roots.push(directory.to_owned());
     collect_command_directories(&directory.join("cmd"), COMMAND_SEARCH_DEPTH, &mut roots)?;
     let mut seen = BTreeSet::new();
     roots.retain(|root| root.is_dir() && seen.insert(root.clone()));
     Ok(roots)
-}
-
-/// Main package directories the native GoReleaser configuration names.
-///
-/// GoReleaser resolves `builds[].main` relative to its own working directory,
-/// which the derived build job sets to the release unit, so the same relative
-/// resolution is applied here. A path escaping the release unit is ignored
-/// rather than followed: capability derivation reads the unit it is deriving.
-fn goreleaser_main_directories(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut directories = Vec::new();
-    for name in Packager::GoReleaser.configuration_paths() {
-        let path = directory.join(name);
-        if !path.is_file() {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-        let document = serde_yaml::from_str::<serde_yaml::Value>(&text)
-            .map_err(|error| Error::Validation(format!("{name} is not valid YAML: {error}")))?;
-        let builds = document
-            .get("builds")
-            .and_then(serde_yaml::Value::as_sequence)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        for build in builds {
-            let Some(main) = build.get("main").and_then(serde_yaml::Value::as_str) else {
-                continue;
-            };
-            // `main` names either a package directory or a single file within
-            // one, and both forms mean the same package.
-            let relative = Path::new(main.trim_start_matches("./"));
-            let relative = if relative
-                .extension()
-                .is_some_and(|extension| extension == "go")
-            {
-                relative.parent().unwrap_or(Path::new("")).to_owned()
-            } else {
-                relative.to_owned()
-            };
-            if relative.components().any(|component| {
-                matches!(component, std::path::Component::ParentDir)
-                    || component.as_os_str().to_string_lossy().starts_with('/')
-            }) {
-                continue;
-            }
-            directories.push(directory.join(relative));
-        }
-    }
-    Ok(directories)
 }
 
 /// Collect `cmd` subdirectories to a bounded depth.

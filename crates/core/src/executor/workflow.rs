@@ -1120,7 +1120,15 @@ fn subject_identity(
                 value: &name,
             })
         }
-        Packager::GoReleaser | Packager::Buildx | Packager::DevContainerCli => fallback,
+        // GoReleaser names the Homebrew formula, the system packages, and the
+        // Arch package from one project name, so that name is what every
+        // destination of a Go release unit resolves and it is read from the
+        // packager's own configuration.
+        Packager::GoReleaser => crate::executor::goreleaser::subject_identity(&directory)
+            .ok()
+            .flatten()
+            .map_or(fallback, Ok),
+        Packager::Buildx | Packager::DevContainerCli => fallback,
     }
 }
 
@@ -2473,6 +2481,107 @@ release-units:
         template: '{id}/published@{version}'
         require-phase: after-publication
 "#;
+
+    /// A workspace whose one Go release unit publishes every GoReleaser destination.
+    ///
+    /// One packager, four publishers: exactly the shape the maintained Go
+    /// recipes exist for, and the shape that proves one build is promoted to
+    /// four destinations rather than rebuilt four times.
+    const GO_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml, gates: [ artifact_check ] }
+release-units:
+  component:
+    path: component
+    homebrew: { repository: example-org/homebrew-tap }
+    rpm: {}
+    apt: {}
+    aur: {}
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+      published:
+        role: projection
+        template: '{id}/published@{version}'
+        require-phase: after-publication
+"#;
+
+    /// Native GoReleaser configuration declaring every pipe the recipes promote.
+    const GORELEASER_CONFIG: &str = r#"version: 2
+project_name: example-tool
+builds:
+  - main: ./cmd/example-tool
+brews:
+  - repository: { owner: example-org, name: homebrew-tap }
+nfpms:
+  - formats: [ rpm, deb ]
+aur:
+  - name: example-tool-bin
+"#;
+
+    fn go_workspace(label: &str) -> Workspace {
+        let workspace = workspace(label);
+        workspace
+            .write(".intentional/config.yml", GO_CONFIG)
+            // The module's last element is deliberately not the release-unit
+            // id, so a derivation that fell back to the id is distinguishable
+            // from one that read the module.
+            .write("component/go.mod", "module example.test/example-module\n")
+            .write(
+                "component/cmd/example-tool/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write("component/.goreleaser.yaml", GORELEASER_CONFIG);
+        workspace
+    }
+
+    // The sealed subject identity is what a publisher fragment is compared
+    // against, so a Go release unit that named the release-unit id would agree
+    // with the seal by making both sides wrong. GoReleaser names the formula,
+    // the system packages, and the Arch package from the project name, so that
+    // is the one identity every destination resolves.
+    #[test]
+    fn names_the_native_goreleaser_project_as_the_subject_identity() {
+        let workspace = go_workspace("workflow-go-identity");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let build = "intentional_build_component_goreleaser";
+        let identity = jobs[&Value::String(build.to_owned())]["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find_map(|step| step["with"]["identity"].as_str())
+            .expect("the build job records a subject identity");
+        assert_eq!(
+            identity, "example-tool",
+            "the subject identity is the native project name, not the release-unit id"
+        );
+
+        // Without an explicit project name the module path's last element is
+        // what Go names the command, and it is still native evidence rather
+        // than the release-unit id.
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace("project_name: example-tool\n", ""),
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let identity = jobs[&Value::String(build.to_owned())]["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find_map(|step| step["with"]["identity"].as_str())
+            .expect("the build job records a subject identity");
+        assert_eq!(identity, "example-module");
+    }
 
     fn two_destination_workspace(label: &str) -> Workspace {
         let workspace = workspace(label);

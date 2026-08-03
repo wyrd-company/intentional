@@ -6,6 +6,7 @@
 //! GitHub executor configuration, recipe selection, initialization, and conformance.
 
 pub mod check;
+pub mod goreleaser;
 pub mod init;
 mod names;
 pub mod recipe;
