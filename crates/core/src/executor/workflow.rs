@@ -1475,14 +1475,11 @@ fn goreleaser_promotion(
 ) -> std::result::Result<Vec<(&'static str, String)>, WorkflowDiagnostic> {
     // RPM and APT distribute the deliverable itself rather than a descriptor
     // that points at one, so their consumer path is the GitHub Release asset and
-    // their promotion is the upload of that asset to the draft. Which job
-    // performs that upload is not settled: the design requires every
-    // GitHub-hosted deliverable to be on the draft before a draft-dependent
-    // publisher reads it, and in the same document reserves creation and
-    // finalization of the draft to two repository-local jobs that are not this
-    // one. Deriving a promotion step here would claim an authority the protocol
-    // has not granted, and deriving a job with no promotion step at all would
-    // ship a publication that publishes nothing.
+    // what places it there is the managed upload job. Who performs that upload
+    // is settled; the job is not derived yet. Until it is, deriving a publisher
+    // job for these adapters would ship a publication whose deliverable nothing
+    // uploads, and giving this job the upload would take an authority the design
+    // reserves to a repository-local job inside the protected environment.
     if !matches!(
         publication.publisher,
         PublisherKind::Homebrew | PublisherKind::Aur
@@ -1490,7 +1487,7 @@ fn goreleaser_promotion(
         return Err(WorkflowDiagnostic::new(
             "deliverable-upload-unsettled",
             format!(
-                "publication {} distributes a GitHub-hosted deliverable, and the design does not yet state which job uploads it to the draft Release; the {} recipe cannot derive a promotion step without claiming an authority the protocol has not granted",
+                "publication {} distributes a GitHub-hosted deliverable, which the managed upload job places on the draft Release; that job is not derived yet, so the {} recipe would publish a deliverable nothing uploads",
                 publication.identity(),
                 publication.publisher
             ),
