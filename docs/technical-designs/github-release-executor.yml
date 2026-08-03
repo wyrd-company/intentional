@@ -526,16 +526,30 @@ proposed-design:
     resolve them there.
 
     The packager decides the layout on both sides and the recipes read it
-    rather than choosing one. A formula is written to
+    rather than choosing one, so the build job installs a pinned GoReleaser
+    rather than whatever the installer would resolve on the day a release runs.
+    Every path and name below is a claim about that release: the recipes are
+    written against one packager version, and moving it is a change to this
+    contract rather than an upgrade beneath it. It is also what lets the same
+    source build the same subject twice.
+
+    A formula is written to
     `homebrew/<directory>/<name>.rb` and published at that same relative path in
     the tap, so a tap whose formulas do not live under `Formula` is stating
     where they live. Every generated formula is promoted, because a release unit
     with two `brews` entries publishes two. An Arch package's sources are
     written as `aur/<package>.pkgbuild` and `aur/<package>.srcinfo` and are
     required at the destination as `PKGBUILD` and `.SRCINFO`, so both sides are
-    named exactly: reading one package's own two files keeps a sibling entry's
-    sources out, and installing them under their required names is what makes
-    the result a package `makepkg` can read.
+    named exactly. That package identity is the packager's rather than the
+    repository's: an entry naming no package takes the project name, and every
+    name is given a `-bin` suffix unless it already carries one, because an Arch
+    package built from released binaries is named that way. The derivation
+    applies the same rule, because a destination derived from the declaration
+    alone names a package the packager never wrote and the Arch User Repository
+    never carried. Naming both sides exactly is also what keeps a sibling entry
+    out: reading one package's own two files leaves the other's alone, and
+    installing them under their required names is what makes the result a
+    package `makepkg` can read.
 
     Authority follows the destination. Homebrew's tap is a GitHub repository, so
     its recipe mints an installation token naming that repository alone. The

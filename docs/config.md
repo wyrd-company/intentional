@@ -210,7 +210,7 @@ release-units:
 | `npm` | npmjs | An empty mapping selects the primary; `additional-targets.github` adds GitHub Packages. |
 | `cargo` | Native registry | Defaults to crates.io unless the manifest names one registry. |
 | `homebrew` | Tap repository | `repository` is required, so this publisher is configured directly. |
-| `aur` | Arch User Repository | Package name comes from native packager configuration. |
+| `aur` | Arch User Repository | Package name comes from native packager configuration; GoReleaser resolves an unnamed entry to the project name and suffixes every name with `-bin`. |
 | `rpm`, `apt` | Native packager | Configuration stays in native packager files. Publication is reported until the managed job that uploads GitHub-hosted deliverables to the draft Release exists. |
 | `oci` | `dockerhub`, `ghcr` | At least one peer target; there is no implicit primary. Docker Hub requires `repository`. |
 
@@ -255,6 +255,11 @@ distribution pipe each configured publisher promotes, `brews` for Homebrew,
 `nfpms` format each system-package publisher distributes. The command package
 is discovered from the same file's `builds[].main`, from the release-unit root,
 or from the conventional `cmd` directories beneath it.
+
+The build job installs a pinned GoReleaser rather than the newest release. These
+recipes read what the packager wrote, at paths and under names it decides, so
+every one of those is a claim about a particular version and moving it is a
+change to the recipe contract.
 
 ## Intent files
 

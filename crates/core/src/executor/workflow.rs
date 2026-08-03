@@ -68,6 +68,20 @@ const AUR_HOST_FINGERPRINT: &str = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip
 const GORELEASER_INSTALL_ACTION: &str =
     "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94";
 
+/// GoReleaser release the maintained Go recipes are written against.
+///
+/// The packager is pinned for the reason every external Action is pinned, and
+/// then one more. These recipes do not merely run the packager; they read what
+/// it wrote, at paths and under names the packager decides: `homebrew/
+/// <directory>/<name>.rb`, `aur/<package>.pkgbuild`, the `-bin` suffix the Arch
+/// pipe adds, the `nfpms` formats. Every one of those is a claim about a
+/// particular GoReleaser, so leaving the installer's default floating would let
+/// a layout change reach a release runner as a promotion that finds nothing.
+///
+/// A floating version also costs reproducibility: the same source would not
+/// build the same subject twice once the packager moved underneath it.
+const GORELEASER_VERSION: &str = "2.17.1";
+
 const APP_TOKEN_ACTION: &str =
     "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349";
 
@@ -1228,6 +1242,7 @@ fn job(
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
         .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
+        .replace("@GORELEASER_VERSION@", &scalar(GORELEASER_VERSION))
         .replace("@VERSION@", &scalar(crate::VERSION))
         .replace("@PREPARE_ACTION@", &action_reference("prepare-release"))
         .replace(
@@ -1574,7 +1589,7 @@ fn goreleaser_promotion(
 const fn toolchain_steps(packager: Packager) -> &'static str {
     match packager {
         Packager::GoReleaser => {
-            "  - name: Install the GoReleaser packager\n    uses: @GORELEASER_INSTALL@\n    with:\n      install-only: true\n"
+            "  - name: Install the GoReleaser packager\n    uses: @GORELEASER_INSTALL@\n    with:\n      install-only: true\n      version: @GORELEASER_VERSION@\n"
         }
         Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => "",
     }
@@ -3067,6 +3082,11 @@ aur:
             steps[installer]["with"]["install-only"].as_bool(),
             Some(true),
             "the installer installs the command; the build step runs it"
+        );
+        assert_eq!(
+            steps[installer]["with"]["version"].as_str(),
+            Some("2.17.1"),
+            "the packager whose output layout these recipes read is pinned too"
         );
         let build_step = steps
             .iter()
