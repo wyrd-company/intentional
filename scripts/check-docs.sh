@@ -16,6 +16,8 @@ ryl check \
 ryl --markdown docs/*.md
 
 cmp docs/specifications/config.json-schema.yml schemas/config.yml
+cmp docs/specifications/init-plan.json-schema.yml schemas/init-plan.yml
+cmp docs/specifications/release-plan.json-schema.yml schemas/release-plan.yml
 cmp docs/specifications/tag-record.json-schema.yml schemas/tag-record.yml
 
 test "$(yq -r '.name' docs/docs.yml)" = "intentional"

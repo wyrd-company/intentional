@@ -19,10 +19,12 @@ description: >-
   omission, warning, or desired-posture fields.
 
   The fragment contains no observation timestamps or other wall-clock values.
-  Its successful claims are retry-stable: repeating readback and retrieval for
-  the same immutable subject produces the same evidence, so an existing
-  after-publication tag can be compared with regenerated evidence after a
-  closure retry.
+  Before an after-publication tag exists, the recipe deterministically selects
+  and orders its evidence references. Once that tag embeds the fragment, a
+  closure retry reuses the sealed fragment instead of regenerating it. The
+  retry revalidates its immutable subject, destination, and evidence references;
+  later mutable-alias state and the retry runner's tool versions do not rewrite
+  the historical claim.
 
   `clean-client.mode` identifies what the closure-time retrieval actually
   proved. `public` means the recipe retrieved the release through the

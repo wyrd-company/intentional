@@ -227,12 +227,11 @@ proposed-design:
     through the workflow and never replace file contents.
 
   release-workflow: |-
-    The release workflow operates on a source commit S whose required
-    continuous-integration checks have succeeded. A preparation job checks out
-    the accepted default branch without persisted credentials and runs
-    `intentional release prepare`. Resolving and verifying S is an invariant of
-    that command: it proves the required checks belong to S and that the remote
-    default branch identifies S before sealing the canonical release plan. The
+    The release workflow selects source commit S from the current remote
+    default branch. A preparation job checks out S without persisted
+    credentials and runs `intentional release prepare`. Resolving and verifying S is an invariant of
+    that command: it proves that the remote default branch identifies S before
+    sealing the canonical release plan. The
     command applies the plan and creates deterministic release commit R and its
     local annotated global release tag without performing network mutation. R
     has exactly one parent, S. The candidate handoff contains S, R, the plan and
@@ -240,8 +239,9 @@ proposed-design:
     release candidate, and a digest-inventoried Git bundle carrying the exact R
     commit and annotated tag objects.
 
-    Repository-owned release gates consume the handoff and run after
-    preparation. The configured protected environment guards the publication
+    Repository-owned release gates consume the handoff and decide whether S is
+    accepted after preparation but before any authority transition. The
+    configured protected environment guards the publication
     job. That job independently runs `intentional verify handoff`, which first
     verifies the bundle as untrusted input, imports it into the fresh clone,
     proves the imported commit and tag objects reproduce every candidate
@@ -289,13 +289,18 @@ proposed-design:
 
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write
-    authority. Its application identifier and private key use prefix-derived
+    authority. It is explicitly configured as a bypass actor for the default
+    branch ruleset and for rules protecting every Intentional-managed release
+    tag namespace; repository contents permission alone is insufficient. Its
+    application identifier and private key use prefix-derived
     conventional GitHub variable and secret names; the default names are
     `INTENTIONAL_GITHUB_APP_ID` and
     `INTENTIONAL_GITHUB_APP_PRIVATE_KEY`. Each privileged job mints a
     short-lived installation token scoped to the exact repository and
     permission needed for that operation. The App is installed only on source,
     tap, package-index, or other repositories selected by configuration.
+    Executor initialization reports this ruleset prerequisite, and Airlock can
+    audit the installed App, bypass scope, and repository settings.
     `GITHUB_TOKEN` is used for supported package capabilities such as GHCR with
     `packages: write` and `contents: read`, but never as Git repository-write
     authority.
@@ -355,11 +360,16 @@ proposed-design:
     publication, and submits only when the destination can establish that it
     did not accept the original operation.
 
-    Publisher evidence contains only retry-stable facts and digests. It does
-    not include observation timestamps or other wall-clock values. Therefore a
-    successful readback of the same immutable publication regenerates the same
-    fragment, and an existing after-publication tag can be compared directly
-    with regenerated evidence after a later closure failure.
+    Publisher evidence contains no observation timestamps or other wall-clock
+    values. Before an after-publication tag exists, each recipe deterministically
+    selects and orders evidence references before embedding the complete
+    fragment in that tag. Once the tag exists, its embedded fragment is the
+    sealed historical observation and is reused rather than regenerated. A
+    retry revalidates the fragment's release bindings, immutable subject,
+    immutable destination identity, and referenced evidence. It does not
+    compare mutable aliases or the retry runner's packager and client versions
+    with current observations. Fresh mutable state is reported only by live
+    verification and never replaces the sealed fragment.
 
   immutable-github-release: |-
     The publication workflow creates a draft GitHub Release for the exact

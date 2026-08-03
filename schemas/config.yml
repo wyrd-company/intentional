@@ -190,8 +190,6 @@ $defs:
     properties:
       token-secret:
         $ref: "#/$defs/secret-name"
-      omit:
-        $ref: "#/$defs/no-omissions"
       additional-targets:
         type: object
         additionalProperties: false
@@ -200,17 +198,12 @@ $defs:
           github:
             type: object
             additionalProperties: false
-            properties:
-              omit:
-                $ref: "#/$defs/no-omissions"
   cargo-publisher:
     type: object
     additionalProperties: false
     properties:
       token-secret:
         $ref: "#/$defs/secret-name"
-      omit:
-        $ref: "#/$defs/no-omissions"
   homebrew-publisher:
     type: object
     additionalProperties: false
@@ -218,14 +211,9 @@ $defs:
     properties:
       repository:
         $ref: "#/$defs/github-repository"
-      omit:
-        $ref: "#/$defs/no-omissions"
   system-package-publisher:
     type: object
     additionalProperties: false
-    properties:
-      omit:
-        $ref: "#/$defs/no-omissions"
   github-repository:
     type: string
     pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
@@ -240,9 +228,6 @@ $defs:
         $ref: "#/$defs/ghcr-target"
   attached-component:
     enum: [ sbom, provenance, signature ]
-  no-omissions:
-    type: array
-    maxItems: 0
   dockerhub-target:
     type: object
     additionalProperties: false

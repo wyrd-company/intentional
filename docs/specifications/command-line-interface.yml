@@ -417,6 +417,11 @@ commands:
             Unresolved publication choices are written to
             .intentional/executor-init-plan.yml for an agent or human to edit
             before rerunning the command.
+          - >-
+            Planned operations report that the repository GitHub App must be a
+            ruleset bypass actor for the protected default branch and every
+            Intentional-managed release tag namespace. The command does not
+            mutate repository settings.
       - name: diff
         summary: Compare a managed workflow with its derived executor contract.
         mode: non-interactive

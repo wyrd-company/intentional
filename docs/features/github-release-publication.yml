@@ -50,6 +50,9 @@ world-schema:
   git_bundle_verified: boolean
   git_objects_materialized: boolean
   evidence_retry_stable: boolean
+  sealed_evidence_reused: boolean
+  mutable_alias_advanced_after_tag: boolean
+  toolchain_changed_after_tag: boolean
   global_tag: string
   plan_digest: string
   evidence_path: string
@@ -489,10 +492,13 @@ rules:
               tag_created: true
               release_published: false
               evidence_retry_stable: true
-          - when: Publication verification repeats readback for the same immutable subject
-          - then: It reproduces evidence equal to the fragment embedded by the existing tag
+              mutable_alias_advanced_after_tag: true
+              toolchain_changed_after_tag: true
+          - when: Closure retries after revalidating the sealed fragment's immutable claims
+          - then: It reuses the fragment embedded by the existing tag
             world:
               evidence_retry_stable: true
+              sealed_evidence_reused: true
               publication_resubmitted: false
               evidence_verifies: true
       do-not-advance-stable-alias-for-prerelease:

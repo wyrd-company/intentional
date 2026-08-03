@@ -11,6 +11,9 @@ description: >-
   evidence and one selected choice or an unresolved null value. Applying a
   ready plan through the same command updates Intentional configuration and any explicitly proposed
   native packager files; workflow integration remains a separate executor diff.
+  Planned operations also report repository settings that Intentional does not
+  mutate, including the requirement that the repository GitHub App be a ruleset
+  bypass actor for the protected default branch and managed release tags.
 validation-criteria: >-
   A plan conforms when it validates against
   `executor-init-plan.json-schema.yml`, every evidence digest still matches the

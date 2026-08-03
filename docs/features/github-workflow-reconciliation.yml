@@ -19,6 +19,9 @@ world-schema:
   check_passes: boolean
   diagnostic: string
   executor_operation: string
+  app_is_ruleset_bypass_actor: boolean
+  managed_tag_rules_allow_app: boolean
+  prerequisite_reported: boolean
 background:
   description: >-
     Intentional configuration and a repository-owned GitHub Actions workflow
@@ -140,6 +143,21 @@ rules:
             world:
               gate_is_dependency: true
               repository_job_preserved: true
+
+  - rule: Executor initialization exposes protected-ref authority prerequisites
+    scenarios:
+      require-app-bypass-for-managed-refs:
+        addresses: Protected branch and tag mutation authority
+        steps:
+          - given: The GitHub App is not a bypass actor for every managed ref ruleset
+            world:
+              app_is_ruleset_bypass_actor: false
+              managed_tag_rules_allow_app: false
+          - when: Intentional initializes the GitHub executor
+          - then: The initialization plan reports the required repository setting
+            world:
+              prerequisite_reported: true
+              diagnostic: GitHub App must bypass rules for the default branch and managed tags
       add-configured-publish-gate:
         addresses: Release closure gating
         steps:

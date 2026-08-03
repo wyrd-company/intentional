@@ -30,12 +30,13 @@ description: >-
   recipe's conventional names and trusted-publishing-first behavior; configuration
   contains identifiers for GitHub variables and secrets, never credential values.
 
-  Every concrete publisher target owns an optional `omit` list. An implicit
-  primary destination uses the publisher mapping's list; each additional or
-  peer target uses its own list. The allowed component names come from that
-  target's maintained recipe. OCI targets currently define `sbom`,
-  `provenance`, and `signature`; the other initial adapters define no omittable
-  component names. Unknown or recipe-inapplicable names fail validation.
+  Every concrete publisher target whose maintained recipe defines omittable
+  attached components owns an optional `omit` list. An implicit primary
+  destination uses the publisher mapping's list; each additional or peer target
+  uses its own list. The allowed component names come from that target's
+  maintained recipe. OCI targets currently define `sbom`, `provenance`, and
+  `signature`; adapters with no omittable components do not expose the property.
+  Unknown or recipe-inapplicable names fail validation.
   Release evidence records only components that were produced.
 validation-criteria: >-
   A document conforms when it validates against `config.json-schema.yml` and
