@@ -381,7 +381,6 @@ fn reconcile(
     contract: &WorkflowContract,
 ) -> std::result::Result<(String, Vec<WorkflowDiagnostic>), WorkflowDiagnostic> {
     let mut advisories = Vec::new();
-    let input = document.value().map_err(unparsable)?;
     // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
     // Expanding them first means adding a required trigger never discards the
     // repository's own.
@@ -390,6 +389,10 @@ fn reconcile(
             document.set(&["on"], &expanded).map_err(unparsable)?;
         }
     }
+    // Preservation is proved against the expanded form, so the shorthand path
+    // is covered by the same check as every other trigger rather than skipped
+    // for not being a mapping.
+    let input = document.value().map_err(unparsable)?;
     for (path, required) in &contract.triggers {
         let path = path.iter().map(String::as_str).collect::<Vec<_>>();
         let current = document.get(&path).map_err(unparsable)?;
@@ -473,7 +476,7 @@ fn carries_contract(
     let invalid = |location: &str| {
         WorkflowDiagnostic::at(
             "transformation-invalid",
-            format!("the derived transformation does not carry the contract at {location}"),
+            "the derived transformation does not carry the contract".to_owned(),
             location,
         )
     };
@@ -515,7 +518,7 @@ fn preserves_repository_content(
     let discarded = |location: &str| {
         WorkflowDiagnostic::at(
             "transformation-invalid",
-            format!("the derived transformation discards repository-owned content at {location}"),
+            "the derived transformation discards repository-owned content".to_owned(),
             location,
         )
     };
@@ -1497,6 +1500,43 @@ jobs:
             2,
             "the global release tag joins the repository's own: {tags:?}"
         );
+    }
+
+    #[test]
+    fn proves_shorthand_triggers_survive_their_expansion() {
+        let workspace = workspace("workflow-shorthand-proof");
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non: [ push, issues ]\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        let config = Config::load(workspace.root()).expect("config loads");
+        let namespaces = config
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("namespaces");
+        let contract = release_contract(&namespaces, &[]).expect("contract derives");
+        let text = std::fs::read_to_string(workspace.root().join(".github/workflows/release.yml"))
+            .expect("workflow readable");
+        let (output, _) =
+            reconcile(Document::parse(&text).expect("parses"), &contract).expect("reconciles");
+        let parsed: Value = serde_yaml::from_str(&output).expect("output parses");
+
+        // The comparison runs against the expanded form, so a defect that drops
+        // a shorthand trigger is refused rather than passing unnoticed.
+        let expanded: Value =
+            serde_yaml::from_str("on:\n  push:\n  issues:\n").expect("expanded input");
+        preserves_repository_content(&expanded, &parsed, &contract)
+            .expect("every shorthand trigger survives expansion");
+        let mut damaged = parsed.clone();
+        damaged["on"]
+            .as_mapping_mut()
+            .expect("triggers")
+            .remove(Value::String("issues".to_owned()));
+        let diagnostic = preserves_repository_content(&expanded, &damaged, &contract)
+            .expect_err("a dropped shorthand trigger is refused");
+        assert_eq!(diagnostic.path.as_deref(), Some("on.issues"));
     }
 
     #[test]
