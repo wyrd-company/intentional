@@ -411,6 +411,13 @@ proposed-design:
     It also emits the complete attachment set. Repository-local closure steps
     upload and artifact-attest those files on the draft Release.
 
+    Assembly recognizes publisher and phase-tag evidence by document identity
+    rather than by artifact name, so the derived workflow graph is what bounds
+    which jobs can contribute it. Closure depends on every publisher job, and a
+    publisher job that did not complete prevents closure. Removing that
+    dependency would let any repository-owned job supply a fragment for a
+    publication that never ran.
+
   repository-evidence-contributions: |-
     A standard credential-free contribution Action wraps
     `intentional evidence contribute` and accepts a required
