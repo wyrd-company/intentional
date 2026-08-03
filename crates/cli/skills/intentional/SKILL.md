@@ -274,7 +274,26 @@ intentional executor check
 
 The check resolves every configured publication to exactly one maintained
 recipe and reports missing native packager configuration, missing workflows,
-and gate jobs that do not exist. Exit code `1` means nonconformance.
+gate jobs that do not exist, and managed workflow drift. Exit code `1` means
+nonconformance.
+
+## Reconcile managed workflow slices
+
+Intentional owns reserved slices of the configured release and publish
+workflows and preserves everything else in those files.
+
+```bash
+intentional executor diff release
+intentional executor diff publish --format json
+intentional executor diff release --apply
+```
+
+Without `--apply` the command is read-only and prints a unified patch bound to
+a digest of the exact workflow bytes it read. Show that patch to the user
+before applying it. `--apply` re-reads the workflow and refuses a
+transformation computed from bytes that have since changed; recompute rather
+than forcing the write. Never hand-edit a managed job to silence drift; change
+configuration and reconcile.
 
 ## Diagnose failures
 

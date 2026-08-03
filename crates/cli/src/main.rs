@@ -6,10 +6,11 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
-    assemble, check_executor, check_workspace, contribute, initialize, initialize_executor,
-    prepare_release, verify_handoff, ApplyResult, AssembleRequest, Bump, Config,
-    ContributionRequest, ExecutorInitState, InitState, IntentDraft, ReleasePlan, StampResult,
-    TagPhase, TagResult, WorkflowIdentity, WorkspaceStatus, CONFIG_PATH, LOCAL_JOB,
+    assemble, check_executor, check_workspace, compare_workflow, contribute, initialize,
+    initialize_executor, prepare_release, verify_handoff, ApplyResult, AssembleRequest, Bump,
+    ComparisonStatus, Config, ContributionRequest, ExecutorInitState, InitState, IntentDraft,
+    ReleasePlan, StampResult, TagPhase, TagResult, WorkflowIdentity, WorkflowRole, WorkspaceStatus,
+    CONFIG_PATH, LOCAL_JOB,
     MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
@@ -72,6 +73,8 @@ enum Command {
 enum ExecutorCommand {
     /// Configure the GitHub executor and explicit publication intent.
     Init(DryRun),
+    /// Compare a managed workflow with its derived executor contract.
+    Diff(DiffArgs),
     /// Check configured workflows against their derived executor contracts.
     Check,
 }
@@ -138,6 +141,25 @@ struct HandoffArgs {
     /// Release-candidate handoff directory to verify.
     #[arg(value_name = "HANDOFF")]
     handoff: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct DiffArgs {
+    /// Executor role of the workflow being compared.
+    #[arg(value_name = "WORKFLOW-ROLE")]
+    role: String,
+
+    /// Workflow file to compare instead of the path configured for the role.
+    #[arg(long, value_name = "PATH")]
+    workflow: Option<PathBuf>,
+
+    /// Representation of the semantic comparison result.
+    #[arg(long, default_value = "patch", value_parser = ["patch", "json"])]
+    format: String,
+
+    /// Apply the syntax-aware transformation and print the applied comparison.
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(Debug, Args)]
@@ -257,6 +279,9 @@ fn run() -> Result<u8> {
         Command::Executor(ExecutorCommand::Init(args)) => {
             return executor_init(&cli.directory, args.dry_run)
         }
+        Command::Executor(ExecutorCommand::Diff(args)) => {
+            return executor_diff(&cli.directory, args)
+        }
         Command::Executor(ExecutorCommand::Check) => return executor_check(&cli.directory),
         Command::Release(ReleaseCommand::Prepare(args)) => prepare(&cli.directory, args),
         Command::Evidence(EvidenceCommand::Contribute(args)) => {
@@ -316,6 +341,48 @@ fn executor_init(root: &std::path::Path, dry_run: bool) -> Result<u8> {
     } else {
         0
     })
+}
+
+fn executor_diff(root: &std::path::Path, args: DiffArgs) -> Result<u8> {
+    let role = args
+        .role
+        .parse::<WorkflowRole>()
+        .map_err(anyhow::Error::msg)?;
+    let comparison = compare_workflow(root, role, args.workflow.as_deref())?;
+    let comparison = if args.apply && comparison.changed() {
+        comparison.apply(root)?
+    } else {
+        comparison
+    };
+    if args.format == "json" {
+        println!("{}", comparison.to_json()?);
+    } else {
+        print_patch(&comparison);
+    }
+    if comparison.status == ComparisonStatus::Blocked {
+        bail!("the {role} workflow comparison is blocked; resolve the reported diagnostics",);
+    }
+    Ok(0)
+}
+
+fn print_patch(comparison: &intentional_core::WorkflowComparison) {
+    println!(
+        "{} workflow {} ({})",
+        comparison.role,
+        comparison.path.display(),
+        comparison.status
+    );
+    println!("input digest: {}", comparison.input_digest);
+    for diagnostic in &comparison.diagnostics {
+        match &diagnostic.path {
+            Some(path) => println!("[{}] {} at {path}", diagnostic.code, diagnostic.message),
+            None => println!("[{}] {}", diagnostic.code, diagnostic.message),
+        }
+    }
+    if comparison.applied {
+        println!("applied the transformation");
+    }
+    print!("{}", comparison.patch);
 }
 
 fn executor_check(root: &std::path::Path) -> Result<u8> {

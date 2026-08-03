@@ -20,6 +20,7 @@ pub mod release;
 pub mod stamp;
 pub mod status;
 pub mod tag;
+pub mod textdiff;
 pub mod version;
 pub mod yaml_edit;
 
@@ -53,6 +54,10 @@ pub use executor::init::{
 pub use executor::recipe::{
     resolve_publications, select_publications, Capability, CapabilityEvidence, Packager,
     PublicationSelection, Recipe, SelectedPublication,
+};
+pub use executor::workflow::{
+    compare_configured_workflow, compare_workflow, ComparisonStatus, WorkflowComparison,
+    OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
 };
 pub use init::{
     discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,

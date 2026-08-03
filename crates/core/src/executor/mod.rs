@@ -8,6 +8,7 @@
 pub mod check;
 pub mod init;
 pub mod recipe;
+pub mod workflow;
 
 pub use check::{check_executor, ExecutorCheck};
 pub use init::{
@@ -15,6 +16,11 @@ pub use init::{
     ExecutorInitResult, ExecutorInitState, ACCEPT_CHOICE, DECLINE_CHOICE, EXECUTOR_INIT_PLAN_PATH,
     EXECUTOR_INIT_PLAN_SCHEMA,
 };
+pub use workflow::{
+    compare_configured_workflow, compare_workflow, ComparisonStatus, Diagnostic,
+    WorkflowComparison, OWNERSHIP_SENTINEL, WORKFLOW_CONTRACT, WORKFLOW_DIFF_SCHEMA,
+};
+
 pub use recipe::{
     capability_set, catalog, derive_capabilities, recipes_for, resolve_publications,
     select_publications, Capability, CapabilityEvidence, Packager, PublicationSelection, Recipe,

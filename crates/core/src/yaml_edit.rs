@@ -84,7 +84,19 @@ impl Document {
 
     /// Set a mapping path to a value, creating intermediate mappings as needed.
     pub fn set(&mut self, path: &[&str], value: &Value) -> Result<()> {
-        let (key, indent, placement) = match self.locate(path)? {
+        self.set_at(path, value, None)
+    }
+
+    /// Set a mapping path, inserting a new key before `anchor` when it exists.
+    ///
+    /// Placement only matters for keys a reader expects in a conventional
+    /// position; an absent anchor appends, as an ordinary set does.
+    pub fn set_before(&mut self, path: &[&str], value: &Value, anchor: &str) -> Result<()> {
+        self.set_at(path, value, Some(anchor))
+    }
+
+    fn set_at(&mut self, path: &[&str], value: &Value, anchor: Option<&str>) -> Result<()> {
+        let (key, indent, placement) = match self.locate(path, anchor)? {
             Located::Entry(entry) => (
                 path[path.len() - 1].to_owned(),
                 entry.indent,
@@ -102,7 +114,7 @@ impl Document {
             Located::Unsupported { depth } => {
                 let mut container = self.get(&path[..=depth])?.unwrap_or(Value::Null);
                 assign(&mut container, &path[depth + 1..], value.clone());
-                return self.set(&path[..=depth], &container);
+                return self.set_at(&path[..=depth], &container, anchor);
             }
         };
         match placement {
@@ -120,7 +132,7 @@ impl Document {
 
     /// Remove a mapping path with its attached comments; reports whether it existed.
     pub fn remove(&mut self, path: &[&str]) -> Result<bool> {
-        match self.locate(path)? {
+        match self.locate(path, None)? {
             Located::Entry(entry) => {
                 let end = with_trailing_blanks(&self.text, entry.end);
                 self.text.replace_range(entry.lead..end, "");
@@ -140,7 +152,7 @@ impl Document {
         }
     }
 
-    fn locate(&self, path: &[&str]) -> Result<Located> {
+    fn locate(&self, path: &[&str], anchor: Option<&str>) -> Result<Located> {
         if path.is_empty() {
             return Err(Error::Validation(
                 "a yaml edit path must name at least one key".to_owned(),
@@ -158,9 +170,16 @@ impl Document {
                 return Ok(Located::Unsupported { depth: depth - 1 });
             };
             let Some(entry) = entries.iter().find(|entry| entry.key == **segment) else {
-                let at = entries
-                    .last()
-                    .map_or(region.start, |entry| entry.end.min(region.end));
+                let at = anchor
+                    .and_then(|anchor| entries.iter().find(|entry| entry.key == anchor))
+                    .map_or_else(
+                        || {
+                            entries
+                                .last()
+                                .map_or(region.start, |entry| entry.end.min(region.end))
+                        },
+                        |entry| entry.lead,
+                    );
                 return Ok(Located::Missing {
                     depth,
                     region: at,

@@ -246,4 +246,37 @@ intentional executor check
 
 The check resolves every configured publication to exactly one maintained
 recipe, verifies the native packager configuration that recipe requires, and
-reports missing workflows and gate jobs.
+reports missing workflows, gate jobs, and managed workflow drift. It uses the
+same comparison engine as the diff below, so what the check reports is exactly
+what a diff would change.
+
+## Reconcile the managed workflow slices
+
+Intentional owns complete authority-bearing slices of your release and publish
+workflows without owning the documents. Compare a workflow with the contract
+derived from your configuration:
+
+```console
+intentional executor diff release
+```
+
+The comparison is read-only. It prints a unified patch bound to a digest of the
+exact workflow bytes it read, and `--format json` prints the same result as a
+structured document. Apply it when you are satisfied with what it proposes:
+
+```console
+intentional executor diff release --apply
+```
+
+Apply re-reads the workflow and refuses the transformation if the file changed
+after the patch was computed, so a stale patch never overwrites newer content.
+Use `--workflow PATH` to compare a candidate file instead of the configured one.
+
+Reconciliation adds the required triggers, the release concurrency policy, a
+safe top-level permission default, and the complete managed jobs, and wires each
+configured gate into the job it governs. Your own triggers, jobs, comments, and
+formatting are preserved. Every managed job carries the reserved step id
+`intentional_executor_contract`, which is how Intentional recognizes its own
+slices after you change the configured prefix: sentinel-bearing jobs under the
+old prefix are replaced, and a job that merely happens to share the old prefix
+stays yours.

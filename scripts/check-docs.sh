@@ -20,6 +20,7 @@ cmp docs/specifications/executor-init-plan.json-schema.yml schemas/executor-init
 cmp docs/specifications/init-plan.json-schema.yml schemas/init-plan.yml
 cmp docs/specifications/release-plan.json-schema.yml schemas/release-plan.yml
 cmp docs/specifications/tag-record.json-schema.yml schemas/tag-record.yml
+cmp docs/specifications/workflow-diff.json-schema.yml schemas/workflow-diff.yml
 
 test "$(yq -r '.name' docs/docs.yml)" = "intentional"
 test "$(yq -r '.assets | length' docs/docs.yml)" = "1"

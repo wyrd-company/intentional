@@ -2179,11 +2179,53 @@ release-units:
 
 #[test]
 fn executor_check_reports_locally_observable_nonconformance() {
+    let repo = executor_repository();
+    let workflow = "name: sample\non: { workflow_dispatch: {} }\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";
+    repo.write(".github/workflows/publish.yml", workflow);
+
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "publication: component/npm/primary",
+        ))
+        .stdout(predicate::str::contains(
+            "release workflow: .github/workflows/release.yml does not exist",
+        ));
+
+    repo.write(".github/workflows/release.yml", workflow);
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "Reserved workflow slice differs from the derived contract",
+        ));
+
+    for role in ["release", "publish"] {
+        repo.cli()
+            .args(["executor", "diff", role, "--apply"])
+            .assert()
+            .success();
+    }
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("executor check passed"));
+}
+
+/// Workspace with a configured GitHub executor and one resolvable publication.
+fn executor_repository() -> TestRepo {
     let repo = TestRepo::new();
     repo.write(
         ".intentional/config.yml",
         r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
 github:
   workflows:
     release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
@@ -2200,26 +2242,78 @@ release-units:
         "component/package.json",
         r#"{"name":"example-component","version":"1.0.0"}"#,
     );
-    let workflow = "name: sample\non: { workflow_dispatch: {} }\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";
-    repo.write(".github/workflows/publish.yml", workflow);
+    repo
+}
+
+#[test]
+fn executor_diff_reports_a_patch_applies_it_and_refuses_stale_input() {
+    let repo = executor_repository();
+    let source = "# repository owned\nname: release\n\non:\n  workflow_dispatch:\n\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
+    repo.write(".github/workflows/release.yml", source);
 
     repo.cli()
-        .args(["executor", "check"])
-        .assert()
-        .code(1)
-        .stdout(predicate::str::contains(
-            "publication: component/npm/primary",
-        ))
-        .stdout(predicate::str::contains(
-            "release workflow .github/workflows/release.yml does not exist",
-        ));
-
-    repo.write(".github/workflows/release.yml", workflow);
-    repo.cli()
-        .args(["executor", "check"])
+        .args(["executor", "diff", "release"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("executor check passed"));
+        .stdout(predicate::str::contains(
+            "--- a/.github/workflows/release.yml",
+        ))
+        .stdout(predicate::str::contains("+  intentional_prepare:"));
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join(".github/workflows/release.yml"))
+            .expect("workflow readable"),
+        source,
+        "a comparison without --apply never writes"
+    );
+
+    let json = repo
+        .cli()
+        .args(["executor", "diff", "release", "--format", "json"])
+        .output()
+        .expect("diff runs");
+    let result: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("structured result parses");
+    assert_eq!(result["status"], "different");
+    assert_eq!(result["applied"], false);
+    assert_eq!(result["workflow"]["path"], ".github/workflows/release.yml");
+
+    repo.cli()
+        .args(["executor", "diff", "release", "--apply"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied the transformation"));
+    let applied = std::fs::read_to_string(repo.root.join(".github/workflows/release.yml"))
+        .expect("workflow readable");
+    assert!(
+        applied.starts_with("# repository owned"),
+        "repository content survives the applied transformation: {applied}"
+    );
+
+    repo.cli()
+        .args(["executor", "diff", "release"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("(conformant)"));
+}
+
+#[test]
+fn executor_diff_compares_an_explicit_workflow_and_blocks_on_a_missing_one() {
+    let repo = executor_repository();
+    repo.write(
+        "candidate.yml",
+        "name: candidate\non:\n  workflow_dispatch:\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+    );
+    repo.cli()
+        .args(["executor", "diff", "release", "--workflow", "candidate.yml"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--- a/candidate.yml"));
+
+    repo.cli()
+        .args(["executor", "diff", "publish"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("[workflow-missing]"));
 }
 
 #[test]

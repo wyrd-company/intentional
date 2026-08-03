@@ -8,6 +8,7 @@
 use crate::config::{Config, GithubConfig, WorkflowRole, CONFIG_PATH};
 use crate::error::{Error, Result};
 use crate::executor::recipe::resolve_publications;
+use crate::executor::workflow::{compare_configured_workflow, ComparisonStatus};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -59,7 +60,7 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
         publications.push(publication.identity());
     }
     findings.extend(global_tag_findings(&config));
-    findings.extend(workflow_findings(root, github)?);
+    findings.extend(workflow_findings(root, &config, github)?);
     Ok(ExecutorCheck {
         publications,
         findings,
@@ -102,54 +103,64 @@ fn global_tag_findings(config: &Config) -> Vec<String> {
     }
 }
 
-fn workflow_findings(root: &Path, github: &GithubConfig) -> Result<Vec<String>> {
+/// Locally observable workflow conformance, using the same engine as diff and apply.
+fn workflow_findings(root: &Path, config: &Config, github: &GithubConfig) -> Result<Vec<String>> {
     let mut findings = Vec::new();
     for role in WorkflowRole::ALL {
         let workflow = github.workflow(role);
-        let path = root.join(&workflow.path);
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            findings.push(format!(
-                "configured {role} workflow {} does not exist",
+        let comparison = compare_configured_workflow(root, config, role, None)?;
+        match comparison.status {
+            ComparisonStatus::Conformant => {}
+            ComparisonStatus::Different => findings.push(format!(
+                "Reserved workflow slice differs from the derived contract in {}; run intentional executor diff {role}",
                 workflow.path.display()
-            ));
-            continue;
-        };
-        let document = match serde_yaml::from_str::<serde_yaml::Value>(&text) {
-            Ok(document) => document,
-            Err(error) => {
-                findings.push(format!(
-                    "configured {role} workflow {} is not valid YAML: {error}",
-                    workflow.path.display()
-                ));
-                continue;
-            }
-        };
-        let jobs = document
-            .get("jobs")
-            .and_then(serde_yaml::Value::as_mapping)
-            .map(|jobs| {
-                jobs.keys()
-                    .filter_map(serde_yaml::Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<BTreeSet<_>>()
-            });
-        let Some(jobs) = jobs else {
-            findings.push(format!(
-                "configured {role} workflow {} declares no jobs",
-                workflow.path.display()
-            ));
-            continue;
-        };
-        for gate in &workflow.gates {
-            if !jobs.contains(gate) {
-                findings.push(format!(
-                    "configured {role} workflow gate {gate} is not a job in {}",
-                    workflow.path.display()
-                ));
-            }
+            )),
+            // Unresolved publications are already reported from recipe
+            // selection, so the comparison does not repeat them.
+            ComparisonStatus::Blocked => findings.extend(
+                comparison
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.code != "publication-unresolved")
+                    .map(|diagnostic| format!("configured {role} workflow: {}", diagnostic.message)),
+            ),
         }
+        findings.extend(gate_findings(root, github, role)?);
     }
     Ok(findings)
+}
+
+/// Configured gates must name jobs the repository actually declares.
+fn gate_findings(root: &Path, github: &GithubConfig, role: WorkflowRole) -> Result<Vec<String>> {
+    let workflow = github.workflow(role);
+    if workflow.gates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Ok(text) = std::fs::read_to_string(root.join(&workflow.path)) else {
+        return Ok(Vec::new());
+    };
+    let jobs = serde_yaml::from_str::<serde_yaml::Value>(&text)
+        .ok()
+        .and_then(|document| document.get("jobs").cloned())
+        .and_then(|jobs| jobs.as_mapping().cloned())
+        .map(|jobs| {
+            jobs.keys()
+                .filter_map(serde_yaml::Value::as_str)
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    Ok(workflow
+        .gates
+        .iter()
+        .filter(|gate| !jobs.contains(*gate))
+        .map(|gate| {
+            format!(
+                "configured {role} workflow gate {gate} is not a job in {}",
+                workflow.path.display()
+            )
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -159,6 +170,9 @@ mod tests {
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
 github:
   workflows:
     release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
@@ -190,6 +204,17 @@ release-units:
         workspace
     }
 
+    /// Bring both configured workflows up to their derived contract.
+    fn converge(root: &Path) {
+        for role in WorkflowRole::ALL {
+            let comparison = crate::executor::workflow::compare_workflow(root, role, None)
+                .expect("comparison runs");
+            if comparison.changed() {
+                comparison.apply(root).expect("transformation applies");
+            }
+        }
+    }
+
     #[test]
     fn requires_github_executor_configuration() {
         let workspace = Workspace::new("check-unconfigured");
@@ -215,6 +240,7 @@ release-units:
             "component/package.json",
             r#"{"name":"example-component","version":"1.0.0"}"#,
         );
+        converge(workspace.root());
         let result = check_executor(workspace.root()).expect("check runs");
         assert_eq!(
             result.publications,
@@ -283,7 +309,11 @@ release-units:
             "{findings}"
         );
         assert!(
-            findings.contains("publish workflow .github/workflows/publish.yml does not exist"),
+            findings.contains("Reserved workflow slice differs from the derived contract"),
+            "check reports managed drift through the comparison engine: {findings}"
+        );
+        assert!(
+            findings.contains("publish workflow: .github/workflows/publish.yml does not exist"),
             "{findings}"
         );
     }
