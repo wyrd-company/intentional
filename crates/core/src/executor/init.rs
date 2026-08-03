@@ -16,7 +16,7 @@ use crate::executor::recipe::{
     CapabilityEvidence, Packager, PRIMARY_TARGET,
 };
 use crate::init::SourceEvidence;
-use crate::model::PublisherKind;
+use crate::model::{PublisherKind, ReleaseUnitDisposition};
 use crate::plan::canonical_json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -368,6 +368,11 @@ fn derive_candidates(
 ) -> Result<Vec<ExecutorCandidate>> {
     let mut candidates = Vec::new();
     for (id, release_unit) in &config.release_units {
+        // A suspended release unit does not release, so it is never offered
+        // publication intent.
+        if release_unit.disposition != ReleaseUnitDisposition::Managed {
+            continue;
+        }
         let derived = derive_capabilities(root, release_unit)?;
         let capabilities = capability_set(&derived);
         for evidence in &derived {
@@ -983,6 +988,29 @@ release-units:
             .release_units["component"]
             .rpm
             .is_some());
+    }
+
+    #[test]
+    fn withholds_decisions_from_suspended_release_units() {
+        let workspace = Workspace::new("init-suspended");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    path: component\n",
+                    "    path: component\n    disposition: suspended\n",
+                ),
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
+        let result = run(&workspace);
+        assert_eq!(result.state, ExecutorInitState::Ready);
+        assert!(
+            result.plan.candidates.is_empty(),
+            "a suspended release unit is never offered publication intent"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use crate::config::{Config, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::init::{evidence, SourceEvidence};
-use crate::model::{AttachedComponent, PublisherKind};
+use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
@@ -252,7 +252,10 @@ impl SelectedPublication {
 pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedPublication>> {
     let mut selected = Vec::new();
     for (id, release_unit) in &config.release_units {
-        if release_unit.publishers().is_empty() {
+        // A suspended release unit does not release, so it cannot publish.
+        if release_unit.disposition != ReleaseUnitDisposition::Managed
+            || release_unit.publishers().is_empty()
+        {
             continue;
         }
         let capabilities = capability_set(&derive_capabilities(root, release_unit)?);
@@ -452,7 +455,9 @@ pub fn derive_capabilities(
             unit.join("package.json"),
         )?);
     }
-    if cargo_manifest_is_package(root, &unit.join("Cargo.toml"))? {
+    if cargo_manifest(root, &unit.join("Cargo.toml"))?
+        .is_some_and(|manifest| manifest.publishable())
+    {
         derived.push(capability_evidence(
             root,
             Capability::RustCrate,
@@ -494,15 +499,18 @@ fn capability_evidence(
     })
 }
 
+/// Default Cargo registry when a manifest states no explicit destination.
+const CRATES_IO: &str = "crates.io";
+
 fn node_package_is_publishable(root: &Path, relative: &Path) -> Result<bool> {
     let path = root.join(relative);
     if !path.is_file() {
         return Ok(false);
     }
     let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return Ok(false);
-    };
+    let value = serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
+        Error::Validation(format!("{} is not valid JSON: {error}", relative.display()))
+    })?;
     Ok(value
         .get("name")
         .and_then(serde_json::Value::as_str)
@@ -510,32 +518,40 @@ fn node_package_is_publishable(root: &Path, relative: &Path) -> Result<bool> {
         && value.get("private").and_then(serde_json::Value::as_bool) != Some(true))
 }
 
-fn cargo_manifest_is_package(root: &Path, relative: &Path) -> Result<bool> {
-    let path = root.join(relative);
-    if !path.is_file() {
-        return Ok(false);
-    }
-    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
-        return Ok(false);
-    };
-    Ok(document
-        .get("package")
-        .and_then(|package| package.get("name"))
-        .is_some())
+/// Publication-relevant contents of one Cargo package manifest.
+struct CargoManifest {
+    /// Registries named by `package.publish`, empty when it selects the default.
+    registries: Vec<String>,
+    /// Whether `package.publish` permits publication at all.
+    permitted: bool,
 }
 
-fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {
-    let path = root.join(&release_unit.path).join("Cargo.toml");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok("crates.io".to_owned());
+impl CargoManifest {
+    fn publishable(&self) -> bool {
+        self.permitted
+    }
+}
+
+/// Read one Cargo package manifest, or `None` when it declares no package.
+fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>> {
+    let path = root.join(relative);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
+        Error::Validation(format!("{} is not valid TOML: {error}", relative.display()))
+    })?;
+    let Some(package) = document.get("package") else {
+        return Ok(None);
     };
-    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
-        return Ok("crates.io".to_owned());
-    };
-    let registries = document
-        .get("package")
-        .and_then(|package| package.get("publish"))
+    if package.get("name").is_none() {
+        return Ok(None);
+    }
+    // Cargo's `publish` accepts false, true, and a registry array. false and an
+    // empty array both mean the crate must never be published.
+    let publish = package.get("publish");
+    let registries = publish
         .and_then(toml_edit::Item::as_array)
         .map(|array| {
             array
@@ -545,8 +561,26 @@ fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Strin
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    match registries.as_slice() {
-        [] => Ok("crates.io".to_owned()),
+    let permitted = match publish {
+        None => true,
+        Some(item) => match item.as_bool() {
+            Some(permitted) => permitted,
+            None => !registries.is_empty(),
+        },
+    };
+    Ok(Some(CargoManifest {
+        registries,
+        permitted,
+    }))
+}
+
+fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {
+    let relative = release_unit.path.join("Cargo.toml");
+    let Some(manifest) = cargo_manifest(root, &relative)? else {
+        return Ok(CRATES_IO.to_owned());
+    };
+    match manifest.registries.as_slice() {
+        [] => Ok(CRATES_IO.to_owned()),
         [registry] => Ok(registry.clone()),
         many => Err(Error::Validation(format!(
             "release unit {} publishes to {} Cargo registries ({}); Cargo publication requires exactly one primary destination",
@@ -667,6 +701,61 @@ release-units:
     }
 
     #[test]
+    fn honors_cargo_publish_restrictions() {
+        let workspace = Workspace::new("cargo-publish");
+        for restriction in ["publish = false", "publish = []"] {
+            workspace.write(
+                "component/Cargo.toml",
+                &format!("[package]\nname = \"component\"\n{restriction}\n"),
+            );
+            let derived =
+                derive_capabilities(workspace.root(), &config("").release_units["component"])
+                    .expect("capabilities derive");
+            assert!(
+                capability_set(&derived).is_empty(),
+                "{restriction} withholds the rust-crate capability"
+            );
+            let error = select_publications(workspace.root(), &config("    cargo: {}\n"))
+                .expect_err("unpublishable crate rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("no maintained publication recipe matches the configured target"),
+                "{error}"
+            );
+        }
+
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"component\"\npublish = true\n",
+        );
+        let selected = select_publications(workspace.root(), &config("    cargo: {}\n"))
+            .expect("publishable crate selects");
+        assert_eq!(selected[0].destination.as_deref(), Some("crates.io"));
+    }
+
+    #[test]
+    fn reports_manifests_that_cannot_be_parsed() {
+        let workspace = Workspace::new("malformed");
+        workspace.write("component/package.json", "{ not json");
+        let error = derive_capabilities(workspace.root(), &config("").release_units["component"])
+            .expect_err("malformed manifest reported");
+        assert!(
+            error.to_string().contains("package.json is not valid JSON"),
+            "{error}"
+        );
+
+        let workspace = Workspace::new("malformed-toml");
+        workspace.write("component/Cargo.toml", "[package\nname =");
+        let error = derive_capabilities(workspace.root(), &config("").release_units["component"])
+            .expect_err("malformed manifest reported");
+        assert!(
+            error.to_string().contains("Cargo.toml is not valid TOML"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn selects_one_recipe_for_each_configured_target() {
         let workspace = Workspace::new("selection");
         workspace
@@ -699,6 +788,30 @@ release-units:
         assert_eq!(
             selected[2].components,
             vec![AttachedComponent::Sbom, AttachedComponent::Provenance]
+        );
+    }
+
+    #[test]
+    fn withholds_publication_from_suspended_release_units() {
+        let workspace = Workspace::new("suspended");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let suspended = config("    disposition: suspended\n    npm: {}\n");
+        assert!(
+            select_publications(workspace.root(), &suspended)
+                .expect("suspended selection runs")
+                .is_empty(),
+            "a release unit that does not release cannot publish"
+        );
+
+        let managed = config("    npm: {}\n");
+        assert_eq!(
+            select_publications(workspace.root(), &managed)
+                .expect("managed selection runs")
+                .len(),
+            1
         );
     }
 
