@@ -210,7 +210,8 @@ release-units:
 | `npm` | npmjs | An empty mapping selects the primary; `additional-targets.github` adds GitHub Packages. |
 | `cargo` | Native registry | Defaults to crates.io unless the manifest names one registry. |
 | `homebrew` | Tap repository | `repository` is required, so this publisher is configured directly. |
-| `rpm`, `apt`, `aur` | Native packager | Configuration stays in native packager files. |
+| `aur` | Arch User Repository | Package name comes from native packager configuration. |
+| `rpm`, `apt` | Native packager | Configuration stays in native packager files. Publication is reported until the managed job that uploads GitHub-hosted deliverables to the draft Release exists. |
 | `oci` | `dockerhub`, `ghcr` | At least one peer target; there is no implicit primary. Docker Hub requires `repository`. |
 
 Configuration stores GitHub variable and secret **names** through
@@ -237,6 +238,13 @@ Intentional derives each release unit's publishable capabilities from native
 project evidence and selects exactly one maintained recipe per configured
 target. A combination with no maintained recipe, or one that matches more than
 one, is a configuration error.
+
+An `rpm` or `apt` deliverable is the released package itself, which consumers
+resolve from the GitHub Release. The managed job that uploads GitHub-hosted
+deliverables to the draft is not derived yet, so configuring either publisher is
+reported by `intentional executor diff` and `intentional executor check` rather
+than deriving a publisher job that would publish nothing. Homebrew and AUR
+publish descriptors into their own repositories and are derived today.
 
 A Go release unit publishes through GoReleaser, and its native
 `.goreleaser.yaml` is where the rest of the contract lives. `intentional

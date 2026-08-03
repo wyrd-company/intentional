@@ -511,24 +511,47 @@ proposed-design:
     A Go release unit's Homebrew, RPM, APT, and AUR deliverables are one
     subject: one packager builds them together and one build job produces them.
     The packager offers no way to publish a distribution tree a previous
-    invocation built, so a publisher job that ran the packager again would
-    rebuild from source and produce a subject whose digest cannot equal the one
-    the release sealed. Each publisher job therefore promotes the file the build
-    already produced.
+    invocation built, so a job that ran the packager again would rebuild from
+    source and produce a subject whose digest cannot equal the one the release
+    sealed. Everything downstream of the build therefore promotes what that
+    build produced. The build job installs the packager, because a stock runner
+    does not carry it and this job is the sole producer of every Go deliverable.
 
-    What promotion means is a property of the destination. Homebrew's
-    deliverable is a formula, and its destination is the configured tap
-    repository, so the recipe commits the generated formula there through a
-    token minted for that repository alone. The Arch User Repository is a Git
-    host of its own rather than a GitHub repository, so its recipe pushes the
-    generated package sources with an SSH key held under a conventional secret
-    name. A rerun that finds the destination already carrying this release
-    commits nothing and still succeeds, because destination readback decides
-    whether the publication is present rather than whether the step wrote.
+    The deliverables come in two shapes, and the shape decides who distributes
+    them. A Homebrew formula and an Arch package's sources are descriptors that
+    point at a release; their destination is a repository, and their publisher
+    job promotes the generated files into it. An RPM and a Debian package are
+    the released bytes themselves; they are GitHub-hosted deliverables, so the
+    managed upload job places them on the draft Release and their consumers
+    resolve them there.
 
-    None of these destinations accepts a workflow identity token, so none of
-    their jobs requests one. Trusted publishing is a registry capability, and a
-    tap, a package index, and the Arch User Repository are repositories.
+    The packager decides the layout on both sides and the recipes read it
+    rather than choosing one. A formula is written to
+    `homebrew/<directory>/<name>.rb` and published at that same relative path in
+    the tap, so a tap whose formulas do not live under `Formula` is stating
+    where they live. Every generated formula is promoted, because a release unit
+    with two `brews` entries publishes two. An Arch package's sources are
+    written as `aur/<package>.pkgbuild` and `aur/<package>.srcinfo` and are
+    required at the destination as `PKGBUILD` and `.SRCINFO`, so both sides are
+    named exactly: reading one package's own two files keeps a sibling entry's
+    sources out, and installing them under their required names is what makes
+    the result a package `makepkg` can read.
+
+    Authority follows the destination. Homebrew's tap is a GitHub repository, so
+    its recipe mints an installation token naming that repository alone. The
+    Arch User Repository is a Git host of its own, so its recipe uses an SSH key
+    the repository supplies under the conventional secret name
+    `INTENTIONAL_AUR_KEY`, and pins the host key rather than accepting whatever
+    answers on the runner: an authority scoped this narrowly must not be handed
+    to an unauthenticated peer. A package the Arch User Repository does not yet
+    carry is created by its initial push, which is how that repository registers
+    one. None of these destinations accepts a workflow identity token, so none
+    of their jobs requests one; trusted publishing is a registry capability, and
+    a tap and the Arch User Repository are repositories.
+
+    A rerun that finds a destination already carrying this release commits
+    nothing and still succeeds, because destination readback decides whether a
+    publication is present rather than whether a step wrote.
 
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write
@@ -857,11 +880,18 @@ proposed-design:
     itself, so that check reaches it the way a preclosure readback does: a
     public consumer client resolves and retrieves the release and writes a
     publication-observation document, and live verification reads each
-    publication's document from the file its own identity names. A publication
-    no supplied observation covers is reported rather than passed, and with no
-    observations at all the only available read is the closed Release asset,
-    which proves the recorded bytes are unchanged and claims nothing about what
-    an unauthenticated consumer resolves. Its result is reported by verification
+    publication's document from the file its own identity names: that name is
+    the identity with every character outside `A-Za-z0-9._-` written as `%` and
+    its two uppercase hexadecimal digits, followed by `.yml`, so
+    `component/homebrew/primary` is read from
+    `component%2Fhomebrew%2Fprimary.yml`. The encoding is reversible so that no
+    two publications can resolve to one document, which is the property the
+    observer exists for. A publication no supplied observation covers is
+    reported rather than passed. The closed Release asset is read back whichever
+    way the command is invoked, because it proves the recorded bytes are
+    unchanged and claims nothing about what an unauthenticated consumer
+    resolves; observations add the consumer claim rather than replacing that
+    one. Its result is reported by verification
     and never rewrites `intentional-evidence.yml` or another immutable Release
     asset. The GitHub Release asset is the durable human- and
     machine-readable evidence record; temporary workflow artifacts are only

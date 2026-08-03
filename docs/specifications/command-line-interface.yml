@@ -1182,8 +1182,12 @@ commands:
             kind: option
             description: >-
               Directory of post-closure publication-observation documents a
-              public consumer client produced. Each publication is read from
-              the file its own identity names. Requires --live.
+              public consumer client produced. Requires --live. Each
+              publication is read from one file whose name is its publication
+              identity with every character outside A-Za-z0-9._- written as %
+              and its two uppercase hexadecimal digits, followed by .yml, so
+              component/homebrew/primary is read from
+              component%2Fhomebrew%2Fprimary.yml.
             required: false
             repeatable: false
             value:
@@ -1235,6 +1239,14 @@ commands:
             before closure it could not truthfully claim public retrieval. A
             publication no supplied observation covers is reported rather than
             passed.
+          - >-
+            --observations adds the consumer check to the closed-Release
+            readback rather than replacing it. A draft-dependent publication is
+            read back from the Release asset whether or not observations are
+            supplied, because that read and a consumer client's retrieval prove
+            different claims and the richer invocation must not prove less.
+            The file-name encoding is reversible, so no two publications can
+            resolve to one document.
           - >-
             Live verification reports its current result and never replaces,
             appends to, or otherwise rewrites intentional-evidence.yml or any
