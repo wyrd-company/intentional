@@ -23,6 +23,10 @@ intentional-core = { path = "../core", version = "0.1.6" }
 semver.workspace = true
 
 [dev-dependencies]
+# The workflow-derivation fixture the invocation gate and the end-to-end
+# release-handoff test both derive from lives in the core crate, so both read
+# one representative workspace rather than two transcriptions of it.
+intentional-core = { path = "../core", version = "0.1.6", features = [ "test-support" ] }
 assert_cmd = "2.0"
 predicates = "3.1"
 serde.workspace = true

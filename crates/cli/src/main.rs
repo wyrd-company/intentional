@@ -802,7 +802,7 @@ fn prompt(label: &str) -> Result<String> {
 mod generated_invocations {
     use super::*;
     use clap::CommandFactory;
-    use std::path::Path;
+    use intentional_core::executor::fixture::derived_workflows;
 
     /// Invocations the managed job templates generate for the fixture workspace.
     ///
@@ -817,66 +817,6 @@ mod generated_invocations {
     /// command, and a recognizer that stops seeing one, both fail here and force
     /// a deliberate update instead of quietly binding a smaller surface.
     const GENERATED_INVOCATIONS: usize = 5;
-
-    const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
-workspace-tags:
-  release:
-    template: '{version}'
-github:
-  workflows:
-    release: { path: .github/workflows/release.yml }
-    publish: { path: .github/workflows/publish.yml }
-release-units:
-  component:
-    path: component
-    cargo: {}
-    tags:
-      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
-"#;
-
-    const COMPONENT_MANIFEST: &str =
-        "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n";
-
-    const RELEASE_WORKFLOW: &str =
-        "name: release\n\non:\n  workflow_dispatch:\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
-
-    const PUBLISH_WORKFLOW: &str =
-        "name: publish\n\non:\n  push:\n    tags:\n      - 'legacy-*'\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
-
-    /// Reconcile a representative workspace and return what each role's workflow became.
-    fn derived_workflows() -> Vec<(WorkflowRole, String)> {
-        let workspace = tempfile::tempdir().expect("temporary workspace");
-        let root = workspace.path();
-        write(root, ".intentional/config.yml", CONFIG);
-        write(root, "component/Cargo.toml", COMPONENT_MANIFEST);
-        write(root, ".github/workflows/release.yml", RELEASE_WORKFLOW);
-        write(root, ".github/workflows/publish.yml", PUBLISH_WORKFLOW);
-
-        WorkflowRole::ALL
-            .into_iter()
-            .map(|role| {
-                let comparison = compare_workflow(root, role, None).expect("comparison runs");
-                assert_eq!(
-                    comparison.status,
-                    ComparisonStatus::Different,
-                    "the {role} contract must derive: {:?}",
-                    comparison.diagnostics
-                );
-                let applied = comparison.apply().expect("transformation applies");
-                assert!(applied.applied);
-                let derived =
-                    std::fs::read_to_string(root.join(&applied.path)).expect("derived workflow");
-                (role, derived)
-            })
-            .collect()
-    }
-
-    fn write(root: &Path, relative: &str, contents: &str) {
-        let path = root.join(relative);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("fixture directory");
-        std::fs::write(path, contents).expect("fixture file");
-    }
 
     /// Every `intentional` invocation any step of one workflow runs.
     fn invocations(workflow: &str) -> Vec<Vec<String>> {
@@ -1038,7 +978,7 @@ release-units:
     #[test]
     fn the_parser_accepts_every_generated_invocation() {
         let mut total = 0usize;
-        for (role, workflow) in derived_workflows() {
+        for (role, workflow) in derived_workflows("cli-invocation-gate") {
             for tokens in invocations(&workflow) {
                 total += 1;
                 let rendered = shell_words::join(&tokens);

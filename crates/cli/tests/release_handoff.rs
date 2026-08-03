@@ -998,25 +998,15 @@ fn refuses_a_manifest_that_moves_the_source_to_a_different_real_commit() {
         .stderr(predicates::str::contains("sole parent"));
 }
 
-/// Executor configuration whose only purpose is to derive the release workflow.
-const EXECUTOR_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
-workspace-tags:
-  release:
-    template: '{version}'
-github:
-  workflows:
-    release: { path: .github/workflows/release.yml }
-    publish: { path: .github/workflows/publish.yml }
-release-units:
-  component:
-    path: component
-    tags:
-      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
-"#;
-
-const STUB_WORKFLOW: &str =
-    "name: managed\n\non:\n  workflow_dispatch:\n\njobs:\n  repository_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n";
+/// The derived release workflow, as a repository would receive it today.
+fn derived_release_workflow(label: &str) -> serde_yaml::Value {
+    let derived = intentional_core::executor::fixture::derived_workflows(label)
+        .into_iter()
+        .find(|(role, _)| *role == intentional_core::WorkflowRole::Release)
+        .map(|(_, workflow)| workflow)
+        .expect("the release role derives a workflow");
+    serde_yaml::from_str(&derived).expect("derived workflow parses")
+}
 
 /// The exact command the derived authority-transition job runs to verify a handoff.
 ///
@@ -1024,29 +1014,7 @@ const STUB_WORKFLOW: &str =
 /// whatever a repository would actually receive today, with the runner
 /// temporary directory resolved the way GitHub Actions resolves it.
 fn generated_handoff_command(runner_temp: &Path) -> Vec<String> {
-    let workspace = tempfile::tempdir().expect("temporary workspace");
-    let root = workspace.path();
-    for (relative, contents) in [
-        (".intentional/config.yml", EXECUTOR_CONFIG),
-        (
-            "component/Cargo.toml",
-            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
-        ),
-        (".github/workflows/release.yml", STUB_WORKFLOW),
-        (".github/workflows/publish.yml", STUB_WORKFLOW),
-    ] {
-        let path = root.join(relative);
-        fs::create_dir_all(path.parent().expect("parent")).expect("fixture directory");
-        fs::write(path, contents).expect("fixture file");
-    }
-
-    let comparison =
-        intentional_core::compare_workflow(root, intentional_core::WorkflowRole::Release, None)
-            .expect("comparison runs");
-    let applied = comparison.apply().expect("transformation applies");
-    let derived = fs::read_to_string(root.join(&applied.path)).expect("derived workflow");
-    let document: serde_yaml::Value =
-        serde_yaml::from_str(&derived).expect("derived workflow parses");
+    let document = derived_release_workflow("cli-handoff-command");
 
     let jobs = document["jobs"]
         .as_mapping()

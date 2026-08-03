@@ -12,6 +12,9 @@ readme.workspace = true
 repository.workspace = true
 description = "Core model and release planning for intentional"
 
+[features]
+test-support = []
+
 [dependencies]
 gix.workspace = true
 glob.workspace = true
