@@ -276,6 +276,7 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
         ExecutorInitState::Ready
     };
 
+    let original = config.clone();
     let mut writes = Vec::new();
     let mut operations = Vec::new();
     if state == ExecutorInitState::Ready {
@@ -293,7 +294,9 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
         }
         config.validate()?;
         select_publications(root, &config)?;
-        writes.push((PathBuf::from(CONFIG_PATH), config.to_yaml()?));
+        if config != original {
+            writes.push((PathBuf::from(CONFIG_PATH), config.to_yaml()?));
+        }
     } else {
         operations.push(format!(
             "resolve {} executor candidate(s) in {EXECUTOR_INIT_PLAN_PATH} and rerun intentional executor init",
@@ -389,6 +392,10 @@ fn derive_candidates(
 }
 
 /// Publisher targets a capability can offer, ordered by publisher then target.
+///
+/// Initialization offers only decisions it can apply on its own. A target that
+/// needs repository data no evidence supplies, or that more than one derived
+/// capability could publish, is configured directly instead of guessed here.
 fn offered_targets(
     capability: Capability,
     capabilities: &BTreeSet<Capability>,
@@ -403,13 +410,34 @@ fn offered_targets(
         PublisherKind::Aur,
         PublisherKind::Oci,
     ] {
-        for recipe in recipes_for(capabilities, publisher) {
-            if recipe.capability == capability {
+        let matching = recipes_for(capabilities, publisher);
+        for recipe in matching
+            .iter()
+            .filter(|recipe| recipe.capability == capability)
+        {
+            if required_configuration(publisher, recipe.target).is_some() {
+                continue;
+            }
+            let unambiguous = matching
+                .iter()
+                .filter(|peer| peer.target == recipe.target)
+                .count()
+                == 1;
+            if unambiguous {
                 offered.push((publisher, recipe.target.to_owned()));
             }
         }
     }
     offered
+}
+
+/// Configuration a publisher target requires that no native evidence supplies.
+fn required_configuration(publisher: PublisherKind, target: &str) -> Option<&'static str> {
+    match (publisher, target) {
+        (PublisherKind::Homebrew, _) => Some("a tap repository"),
+        (PublisherKind::Oci, "dockerhub") => Some("a Docker Hub repository"),
+        _ => None,
+    }
 }
 
 /// npm's additional GitHub target is offered only after its primary is accepted.
@@ -700,11 +728,7 @@ fn enable_publisher(
             release_unit.aur.get_or_insert_with(Default::default);
         }
         (PublisherKind::Oci, "dockerhub") => {
-            release_unit
-                .oci
-                .get_or_insert_with(OciPublisher::default)
-                .dockerhub
-                .get_or_insert_with(Default::default);
+            return Err(explicit_configuration_error(publisher, target))
         }
         (PublisherKind::Oci, _) => {
             release_unit
@@ -714,12 +738,17 @@ fn enable_publisher(
                 .get_or_insert_with(Default::default);
         }
         (PublisherKind::Homebrew, _) => {
-            return Err(Error::Validation(format!(
-                "the homebrew publisher requires an explicit tap repository; add it to {CONFIG_PATH} directly"
-            )))
+            return Err(explicit_configuration_error(publisher, target))
         }
     }
     Ok(())
+}
+
+fn explicit_configuration_error(publisher: PublisherKind, target: &str) -> Error {
+    Error::Validation(format!(
+        "the {publisher} {target} publisher requires {}; add it to {CONFIG_PATH} directly",
+        required_configuration(publisher, target).unwrap_or("explicit configuration")
+    ))
 }
 
 fn baseline(packager: Packager, release_unit: &str) -> String {
@@ -931,18 +960,19 @@ release-units:
         resolve(
             workspace.root(),
             "go-application",
-            "homebrew/primary",
-            DECLINE_CHOICE,
-        );
-        resolve(
-            workspace.root(),
-            "go-application",
             "goreleaser",
             ACCEPT_CHOICE,
         );
 
         let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::Ready);
+        assert!(
+            !result.plan.candidates.iter().any(|candidate| candidate
+                .choices
+                .iter()
+                .any(|choice| choice.publisher == Some(PublisherKind::Homebrew))),
+            "a publisher needing a tap repository is configured directly"
+        );
         let baseline = workspace.root().join("component/.goreleaser.yaml");
         assert!(baseline.is_file(), "the packager baseline is created");
         assert!(std::fs::read_to_string(&baseline)
@@ -953,6 +983,57 @@ release-units:
             .release_units["component"]
             .rpm
             .is_some());
+    }
+
+    #[test]
+    fn withholds_decisions_it_cannot_apply_on_its_own() {
+        let workspace = Workspace::new("init-withheld");
+        workspace
+            .write(".intentional/config.yml", CONFIG)
+            .write("component/Dockerfile", "FROM scratch\n")
+            .write(
+                "component/devcontainer-feature.json",
+                r#"{"id":"example","version":"1.0.0"}"#,
+            );
+        let result = run(&workspace);
+        assert_eq!(
+            result.state,
+            ExecutorInitState::Ready,
+            "no candidate is offered when every target is ambiguous or needs explicit data"
+        );
+        assert!(
+            result.plan.candidates.is_empty(),
+            "two capabilities publishing one OCI target are resolved in configuration, not guessed"
+        );
+    }
+
+    #[test]
+    fn leaves_an_unchanged_configuration_file_untouched() {
+        let workspace = Workspace::new("init-unchanged");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            DECLINE_CHOICE,
+        );
+        assert_eq!(run(&workspace).state, ExecutorInitState::Ready);
+        let path = workspace.root().join(".intentional/config.yml");
+        let converged = std::fs::read_to_string(&path).expect("config readable");
+        std::fs::write(&path, format!("# repository comment\n{converged}"))
+            .expect("annotate config");
+
+        assert_eq!(run(&workspace).state, ExecutorInitState::Ready);
+        assert!(
+            std::fs::read_to_string(&path)
+                .expect("config readable")
+                .starts_with("# repository comment"),
+            "a converged plan never rewrites an unchanged configuration file"
+        );
     }
 
     #[test]

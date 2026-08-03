@@ -209,9 +209,9 @@ release-units:
 | --- | --- | --- |
 | `npm` | npmjs | An empty mapping selects the primary; `additional-targets.github` adds GitHub Packages. |
 | `cargo` | Native registry | Defaults to crates.io unless the manifest names one registry. |
-| `homebrew` | Tap repository | `repository` is required. |
+| `homebrew` | Tap repository | `repository` is required, so this publisher is configured directly. |
 | `rpm`, `apt`, `aur` | Native packager | Configuration stays in native packager files. |
-| `oci` | `dockerhub`, `ghcr` | At least one peer target; there is no implicit primary. |
+| `oci` | `dockerhub`, `ghcr` | At least one peer target; there is no implicit primary. Docker Hub requires `repository`. |
 
 Configuration stores GitHub variable and secret **names** through
 `token-secret` and `username-var`; it never stores credential values. Omitting
@@ -221,6 +221,11 @@ trusted-publishing-first behavior.
 Each concrete OCI target owns an `omit` list drawn from `sbom`, `provenance`,
 and `signature`. A component absent from the target's maintained recipe fails
 validation. Release evidence records only the components that were produced.
+
+`intentional executor init` offers only the decisions it can apply on its own.
+A target that needs repository data no evidence supplies, such as a Homebrew tap
+or a Docker Hub repository, and a target that more than one derived capability
+could publish, are configured directly instead.
 
 Intentional derives each release unit's publishable capabilities from native
 project evidence and selects exactly one maintained recipe per configured

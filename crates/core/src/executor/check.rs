@@ -35,8 +35,6 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
             "{CONFIG_PATH} has no github executor configuration; run intentional executor init"
         )));
     };
-    github.namespaces()?;
-
     let mut findings = Vec::new();
     let mut publications = Vec::new();
     match select_publications(root, &config) {
