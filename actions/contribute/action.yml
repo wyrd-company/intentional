@@ -1,0 +1,90 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional contribute"
+description: "Stage one repository-owned release evidence contribution"
+author: "wyrd-company"
+branding:
+  icon: "upload-cloud"
+  color: "orange"
+
+inputs:
+  namespace:
+    description: "Unique namespace assigned to the contribution"
+    required: true
+  value-file:
+    description: "File containing any valid YAML value for the namespace"
+    required: false
+  attachments:
+    description: "Newline-separated exact file paths to contribute as Release attachments"
+    required: false
+  working-directory:
+    description: "Workspace directory to process"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+# This action stages evidence and exposes no outputs. The uploaded contribution
+# manifest and attachment bundle are the authoritative contribution record.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../install.sh" "${{ inputs.intentional-version }}"
+
+    - name: Construct contribution
+      id: contribution
+      shell: bash
+      env:
+        INPUT_NAMESPACE: ${{ inputs.namespace }}
+        INPUT_VALUE_FILE: ${{ inputs.value-file }}
+        INPUT_ATTACHMENTS: ${{ inputs.attachments }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        BUNDLE="$RUNNER_TEMP/intentional-contribution/$GITHUB_JOB-$GITHUB_RUN_ATTEMPT"
+        rm -rf "$BUNDLE"
+
+        ARGS=(--directory "$INPUT_WORKING_DIRECTORY" evidence contribute
+          --namespace "$INPUT_NAMESPACE" --output "$BUNDLE")
+
+        if [[ -n "$INPUT_VALUE_FILE" ]]; then
+          ARGS+=(--value-file "$INPUT_VALUE_FILE")
+        fi
+
+        while IFS= read -r attachment; do
+          attachment="${attachment%$'\r'}"
+          if [[ -n "$attachment" ]]; then
+            ARGS+=(--attachment "$attachment")
+          fi
+        done <<< "$INPUT_ATTACHMENTS"
+
+        RESULT="$(intentional "${ARGS[@]}")"
+        echo "$RESULT"
+
+        ARTIFACT="$(printf '%s\n' "$RESULT" | sed -n 's/^artifact-name: //p')"
+        if [[ -z "$ARTIFACT" ]]; then
+          echo "::error::intentional evidence contribute did not name its transport artifact."
+          exit 1
+        fi
+        # A step output routes the transport name to the upload step only; the
+        # action itself exposes nothing to the calling workflow.
+        {
+          echo "artifact=$ARTIFACT"
+          echo "bundle=$BUNDLE"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Upload contribution
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ steps.contribution.outputs.artifact }}
+        path: ${{ steps.contribution.outputs.bundle }}
+        if-no-files-found: error
+        retention-days: 1

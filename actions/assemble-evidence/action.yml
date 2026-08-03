@@ -1,0 +1,49 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional assemble evidence"
+description: "Assemble publisher fragments and contributions into final release evidence"
+author: "wyrd-company"
+branding:
+  icon: "file-text"
+  color: "orange"
+
+inputs:
+  input:
+    description: "Directory containing downloaded publisher, phase-tag, and contribution artifacts"
+    required: true
+  output:
+    description: "Directory in which to write the closed final-evidence bundle"
+    required: true
+  working-directory:
+    description: "Workspace directory to process"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+# This action exposes no outputs. The assembled intentional-evidence.yml and the
+# accepted files beneath its attachments directory are the complete handoff to
+# the repository-local closure job.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/../install.sh" "${{ inputs.intentional-version }}"
+
+    - name: Assemble release evidence
+      shell: bash
+      env:
+        INPUT_INPUT: ${{ inputs.input }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        intentional --directory "$INPUT_WORKING_DIRECTORY" evidence assemble \
+          --input "$INPUT_INPUT" --output "$INPUT_OUTPUT"
