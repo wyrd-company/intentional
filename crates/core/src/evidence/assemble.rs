@@ -466,6 +466,7 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         &accepted_by_identity(&release_units),
         &mut findings,
     );
+    require_declared_phases(&config, &scan, &mut findings);
     let accepted = accept_contributions(&scan.contributions, &mut findings)?;
 
     if !findings.is_empty() {
@@ -863,6 +864,29 @@ fn accepted_by_identity(
         .collect()
 }
 
+/// Require the sealed phase evidence the configuration declares to be present.
+///
+/// Every phase comparison assembly performs iterates the phase documents it
+/// was given, so a run that supplies none agrees with everything. A release
+/// that declares phased tags therefore has to hand assembly what those tags
+/// sealed, or the check that binds a publisher fragment to its release passes
+/// by omission rather than by agreement.
+fn require_declared_phases(config: &Config, scan: &ScannedInput, findings: &mut Vec<String>) {
+    // Phase evidence is executor-scoped. Without exactly one unphased global
+    // release tag no phase seals anything at all, so requiring a document here
+    // would refuse a release the protocol never asked to phase.
+    if config.unphased_tags().len() != 1 {
+        return;
+    }
+    for phase in config.declared_phases() {
+        if !scan.phases.iter().any(|(_, sealed)| sealed.phase == phase) {
+            findings.push(format!(
+                "the configuration declares {phase} release tags but no sealed {phase} evidence reached assembly"
+            ));
+        }
+    }
+}
+
 fn compare_phase_evidence(
     scan: &ScannedInput,
     release: Option<&ReleaseIdentity>,
@@ -919,6 +943,31 @@ fn compare_phase_evidence(
                     )),
                     Some(_) => {}
                 }
+            }
+        }
+        // A fragment whose subject identity no sealed subject of its release
+        // unit names is compared against nothing by the loop below. That is the
+        // same silence as supplying no phase evidence at all, so it is reported
+        // here rather than left to look like agreement.
+        for (fragment_path, fragment) in &scan.publishers {
+            let sealed_for_unit = phase
+                .subjects
+                .iter()
+                .filter(|subject| subject.release_unit == fragment.release_unit)
+                .collect::<Vec<_>>();
+            if sealed_for_unit.is_empty() {
+                continue;
+            }
+            if !sealed_for_unit
+                .iter()
+                .any(|subject| subject.identity == fragment.subject.identity)
+            {
+                findings.push(format!(
+                    "{} records subject {} for release unit {}, which {label} did not seal",
+                    fragment_path.display(),
+                    fragment.subject.identity,
+                    fragment.release_unit
+                ));
             }
         }
         for subject in &phase.subjects {
@@ -1629,6 +1678,86 @@ intended-destinations:
             assemble(&request(&workspace, &input, &output)).expect_err("disagreement rejected");
         assert!(
             error.to_string().contains("while") && error.to_string().contains("sealed"),
+            "{error}"
+        );
+    }
+
+    /// Configuration that declares a before-publication tag as well as the global one.
+    const PHASED_CONFIG_TAGS: &str = "      primary: { role: primary, template: \'{id}@{version}\' }\n      staged: { role: projection, template: \'{id}/staged@{version}\', require-phase: before-publication }\n";
+
+    // Every phase comparison assembly performs iterates the documents it was
+    // given, so a run that supplies none agrees with everything. A release that
+    // declares phased tags has to hand assembly what they sealed.
+    #[test]
+    fn refuses_assembly_when_a_declared_phase_sealed_nothing() {
+        let workspace = workspace("assemble-phase-absent");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "      primary: { role: primary, template: \'{id}@{version}\' }\n",
+                PHASED_CONFIG_TAGS,
+            ),
+        );
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a declared phase that sealed nothing is refused");
+        assert!(
+            error.to_string().contains(
+                "declares before-publication release tags but no sealed before-publication evidence"
+            ),
+            "{error}"
+        );
+
+        // The same run passes once the phase it declares actually reaches it.
+        std::fs::write(
+            input.join("before.yml"),
+            before_publication_evidence(
+                "1.0.0",
+                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+            ),
+        )
+        .expect("phase evidence");
+        assemble(&request(&workspace, &input, &output)).expect("the sealed phase completes it");
+    }
+
+    // A fragment whose subject identity the phase never sealed is compared
+    // against nothing, which reads exactly like agreement. It is the silent
+    // form of supplying no phase evidence at all.
+    #[test]
+    fn refuses_a_fragment_naming_a_subject_the_phase_did_not_seal() {
+        let workspace = workspace("assemble-phase-unsealed-subject");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        std::fs::write(
+            input.join("before.yml"),
+            before_publication_evidence(
+                "1.0.0",
+                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+            )
+            .replace("identity: example-component", "identity: other-component"),
+        )
+        .expect("phase evidence");
+
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("an unsealed subject identity is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("records subject example-component for release unit component"),
             "{error}"
         );
     }
