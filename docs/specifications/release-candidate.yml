@@ -16,6 +16,23 @@ description: >-
   heads, imports it into the fresh clone, and proves the imported objects match
   the manifest before exposing their pushable identities.
 
+  The handoff directory holds `release-candidate.yml`, the sealed
+  `release-plan.json`, the thin `release.bundle`, and the materialized release
+  content of every added or modified path under `candidate/`. The manifest
+  inventories every one of those files except itself, so the directory contains
+  nothing the manifest does not account for. The bundle declares exactly
+  `refs/heads/intentional-release` for R and
+  `refs/tags/intentional-global-release` for the annotated tag object; those
+  transport names are fixed and independent of the rendered tag name.
+
+  R is a pure function of S. Preparation builds R's tree from S's tree and the
+  applied release without touching the workspace, records the fixed protocol
+  identity `Intentional <releases@intentional.foo>` as both author and
+  committer, and takes both timestamps from S's commit time at zero offset. The
+  global release tag is the single release tag the plan seals without a required
+  publication phase; a plan with no such tag, or with more than one, is a
+  configuration error rather than a release candidate.
+
   The credential-free preparation Action projects `source-sha` from
   `source.commit`, `release-sha` from `release.commit`, `global-tag` from
   `global-tag.name`, and `plan-digest` from `plan.digest`. These outputs route
@@ -23,8 +40,12 @@ description: >-
 validation-criteria: >-
   A candidate conforms when it validates against
   `release-candidate.json-schema.yml`; every inventoried file, Git object, and
-  digest verifies; the Git bundle verifies and materializes the declared R and
-  tag objects; R has S as its sole parent; regenerating the plan and
-  candidate from S produces the same identities; and the global tag object
+  digest verifies; the transported file set is exactly the inventoried set; the
+  Git bundle stays within its transport bound, verifies, and materializes the
+  declared R and tag objects; R has S as its sole parent; regenerating the plan
+  and candidate from S produces the same identities; and the global tag object
   targets R and carries the declared plan digest. Action output projections
-  must equal their corresponding manifest fields.
+  must equal their corresponding manifest fields. Tests cover deterministic
+  reproduction, fresh-job import, idempotent recovery, default-branch races,
+  tampered candidates and inventories, rewritten plans, forged identities,
+  smuggled files, traversal paths, and malformed or oversized bundles.

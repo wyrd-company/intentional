@@ -578,6 +578,14 @@ commands:
             Source resolution and verification that the remote default branch
             identifies the same source commit are invariants of this command.
           - >-
+            The command requires a workspace that still matches the accepted
+            source commit and constructs the release commit as Git objects
+            without writing release content into that workspace.
+          - >-
+            The output directory must be absent or empty. It receives the
+            manifest, the sealed plan, the Git bundle, and the materialized
+            release content of every added or modified path.
+          - >-
             The handoff inventories a Git bundle so a later fresh privileged
             job can verify and materialize the exact unpushed commit and tag
             objects without trusting GitHub step outputs as object transport.
@@ -774,6 +782,15 @@ commands:
             objects match the candidate. The privileged atomic-push step consumes
             those verified outputs; it does not consume unverified prepare-release
             outputs.
+          - >-
+            Verification rebuilds the candidate from the accepted source commit
+            in an isolated clone, so the verifying repository must carry the
+            release tags that hold version authority.
+          - >-
+            Successful verification imports the verified release commit and
+            annotated global tag into the repository the privileged job pushes
+            from. An identical existing record is accepted so a retry recovers,
+            and a conflicting one is refused.
       - name: release-tag
         summary: Verify the current global release tag before publication.
         mode: non-interactive

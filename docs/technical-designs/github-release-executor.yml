@@ -216,7 +216,10 @@ proposed-design:
     contain no GitHub workflow-discovery or workflow-patching behavior.
 
     Thin credential-free Actions invoke the portable commands and transfer
-    their files through GitHub workflow artifacts. The prepare Action exposes
+    their files through GitHub workflow artifacts. Each one is published from
+    the Intentional repository at `actions/<action-name>`, installs a checksum-
+    verified released binary, and projects step outputs only from validated
+    identity lines the command printed after it succeeded. The prepare Action exposes
     `candidate-path`, `source-sha`, `release-sha`, `global-tag`, and
     `plan-digest`. The verify-handoff and verify-release-tag Actions each expose
     `source-sha`, `release-sha`, `global-tag`, and `plan-digest`. The
@@ -239,13 +242,31 @@ proposed-design:
     release candidate, and a digest-inventoried Git bundle carrying the exact R
     commit and annotated tag objects.
 
+    R is a pure function of S. Preparation requires a workspace that still
+    matches S, derives R's tree from S's tree and the applied release without
+    writing into the workspace, and records a fixed protocol Git identity with
+    S's commit time as both the author and committer timestamp. The global
+    release tag is the single release tag the sealed plan carries without a
+    required publication phase; every other configured tag is created later by
+    the publication workflow. The bundle is thin: it declares S as its
+    prerequisite, carries only the objects R and its tag introduce, and is
+    bounded so an untrusted handoff cannot become an unbounded object-ingestion
+    surface.
+
     Repository-owned release gates consume the handoff and decide whether S is
     accepted after preparation but before any authority transition. The
     configured protected environment guards the publication
     job. That job independently runs `intentional verify handoff`, which first
     verifies the bundle as untrusted input, imports it into the fresh clone,
     proves the imported commit and tag objects reproduce every candidate
-    identity and invariant, and only then exposes their pushable identities. It
+    identity and invariant, and only then exposes their pushable identities.
+    Verification proves the transported file set is exactly the inventoried set,
+    validates the bundle and its declared heads before import, imports objects
+    with Git object checking enabled, and rebuilds the candidate from S alone in
+    a separate isolated clone so a forged manifest cannot describe its own
+    verification. It imports the verified release commit and annotated tag into
+    the privileged clone, accepting an identical existing record so a retry
+    recovers rather than conflicts. It
     mints a short-lived GitHub App installation token and uses only the verified
     handoff Action's `source-sha`, `release-sha`, `global-tag`, and `plan-digest`
     outputs for the authority transition. It checks immediately before mutation
