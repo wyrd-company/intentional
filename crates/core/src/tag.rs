@@ -1632,6 +1632,58 @@ phase-tags: []
     }
 
     #[test]
+    fn refuses_an_after_publication_tag_that_seals_fewer_publications_than_configured() {
+        let workspace = phase_workspace("tag-phase-partial-publication");
+        // A second publishing release unit whose fragment is never staged. An
+        // after-publication tag claims every configured publication completed,
+        // so sealing one of two would record a claim the release cannot
+        // support and closure would proceed on it.
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &PHASE_CONFIG.replace(
+                    "release-units:\n",
+                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                ),
+            )
+            .write(
+                "library/package.json",
+                r#"{"name":"sample-application","version":"1.0.0"}"#,
+            )
+            .write("library/CHANGELOG.md", "# Changelog\n\n## 1.0.0\n");
+        let input =
+            stage_publisher_evidence(&workspace, "6666666666666666666666666666666666666666");
+        let config = Config::load(workspace.root()).expect("configuration");
+        let versions = BTreeMap::from([
+            ("component".to_owned(), "1.0.0".to_owned()),
+            ("library".to_owned(), "1.0.0".to_owned()),
+        ]);
+        let error = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            Some(TagPhase::AfterPublication),
+            false,
+            Some(PLAN_DIGEST),
+            Some(&input),
+        )
+        .expect_err("an after-publication tag missing a configured publication is rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("no evidence was staged for"),
+            "the refusal names the completeness rule: {message}"
+        );
+        assert!(
+            message.contains("library/npm/primary"),
+            "the refusal names the publication whose evidence is absent: {message}"
+        );
+        assert!(
+            !message.contains("component/npm/primary"),
+            "the publication whose evidence was staged is not named as missing: {message}"
+        );
+    }
+
+    #[test]
     fn refuses_to_discard_staged_evidence_a_workspace_cannot_bind() {
         let workspace = phase_workspace("tag-phase-unbindable");
         // Every configured tag declares a phase, so no global release tag
