@@ -48,7 +48,7 @@ tasks:
     desc: Validate release automation and cross-channel version agreement
     cmds:
       - actionlint .github/workflows/*.yml
-      - shellcheck scripts/release/*.sh
+      - shellcheck scripts/action/*.sh scripts/release/*.sh
       - ryl check .github/workflows/*.yml Taskfile.yml .intentional/config.yml
       - python3 scripts/release/verify-versions.py
       - >-

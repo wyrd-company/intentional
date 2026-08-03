@@ -28,8 +28,8 @@ for asset in intentional-linux-x86_64.tar.gz intentional-linux-arm64.tar.gz; do
     echo "npm/install.js is missing asset $asset" >&2
     exit 1
   fi
-  if ! grep -Fq "$asset" "$root/action.yml"; then
-    echo "action.yml is missing asset $asset" >&2
+  if ! grep -Fq "$asset" "$root/scripts/action/install-intentional.sh"; then
+    echo "install-intentional.sh is missing asset $asset" >&2
     exit 1
   fi
   if ! grep -Fq "$asset" "$root/scripts/release/render-homebrew-formula.sh"; then
