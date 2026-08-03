@@ -19,6 +19,8 @@ Treat these as Intentional-owned state:
 - `.intentional/config.yml` defines release units, projections, dependency
   propagation, tags, and version interpretation.
 - `.intentional/intents/*.md` declare pending user-visible changes and bumps.
+- `.intentional/executor-init-plan.yml` records durable GitHub executor and
+  publication decisions.
 - annotated Git tags record released versions and bind them to the
   interpretation contract and release-plan digest.
 - manifests and changelogs are projections of that state, not competing
@@ -240,6 +242,40 @@ A channel apply retains intents. A later channel-less apply consolidates the
 prerelease changelog into the final release. Do not manually consume the intents
 between those operations.
 
+## Configure the GitHub executor
+
+Publication is always an explicit repository choice. Never infer registries,
+publication order, or credentials from discovered manifests.
+
+```bash
+intentional executor init
+intentional executor init --dry-run
+```
+
+The command creates or resumes `.intentional/executor-init-plan.yml` and exits
+with code `2` while any candidate is unresolved. Set each candidate
+`resolution` to a declared choice id, normally `accept` or `decline`, and rerun
+the same command. Accepting a publication can offer dependent targets and a
+native packager baseline on the next run.
+
+Applying a ready plan writes the top-level `github` property and the explicit
+publisher properties on each release unit. It never mutates workflow files and
+never changes repository settings; the reported GitHub App ruleset-bypass,
+credential, and protected-environment prerequisites are the user's to satisfy.
+
+Configuration holds GitHub variable and secret names only. Never write a
+credential value into `.intentional/config.yml`.
+
+Validate the executor after changing configuration or native packager files:
+
+```bash
+intentional executor check
+```
+
+The check resolves every configured publication to exactly one maintained
+recipe and reports missing native packager configuration, missing workflows,
+and gate jobs that do not exist. Exit code `1` means nonconformance.
+
 ## Diagnose failures
 
 - Run the failing command with the same `-C`, channel, plan, and phase inputs;
@@ -252,8 +288,9 @@ between those operations.
 - Treat a plan-digest mismatch as stale or modified release evidence. Generate
   and approve a new plan rather than editing the old plan or bypassing
   verification.
-- Treat exit code `2` from `init` as unresolved input or repository edits. Treat
-  exit code `1` as invalid input or operational failure.
+- Treat exit code `2` from `init` or `executor init` as unresolved input or
+  repository edits. Treat exit code `1` as invalid input, nonconformance, or an
+  operational failure.
 - If a command would require committing, pushing, publishing, or forge access,
   stop at the Intentional boundary unless that external action is explicitly in
   scope.

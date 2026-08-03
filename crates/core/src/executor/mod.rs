@@ -5,8 +5,16 @@
 
 //! GitHub executor configuration, recipe selection, initialization, and conformance.
 
+pub mod check;
+pub mod init;
 pub mod recipe;
 
+pub use check::{check_executor, ExecutorCheck};
+pub use init::{
+    initialize_executor, CandidateKind, Choice, ExecutorCandidate, ExecutorInitPlan,
+    ExecutorInitResult, ExecutorInitState, ACCEPT_CHOICE, DECLINE_CHOICE, EXECUTOR_INIT_PLAN_PATH,
+    EXECUTOR_INIT_PLAN_SCHEMA,
+};
 pub use recipe::{
     capability_set, catalog, derive_capabilities, recipes_for, select_publications, Capability,
     CapabilityEvidence, Packager, Recipe, SelectedPublication, PRIMARY_TARGET,

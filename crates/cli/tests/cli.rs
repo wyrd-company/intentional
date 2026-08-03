@@ -1532,3 +1532,126 @@ fn rejects_supplied_plan_digest_mismatch() {
         .failure()
         .stderr(predicate::str::contains("digest mismatch"));
 }
+
+#[test]
+fn executor_init_requires_resolutions_then_configures_publication() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+release-units:
+  component:
+    path: component
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+    );
+    repo.write(
+        "component/package.json",
+        r#"{"name":"example-component","version":"1.0.0"}"#,
+    );
+
+    repo.cli()
+        .args(["executor", "init"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("ruleset bypass actor"))
+        .stdout(predicate::str::contains(
+            ".intentional/executor-init-plan.yml",
+        ));
+
+    let plan_path = repo.root.join(".intentional/executor-init-plan.yml");
+    let plan = fs::read_to_string(&plan_path).expect("plan written");
+    fs::write(
+        &plan_path,
+        plan.replace("resolution: null", "resolution: accept"),
+    )
+    .expect("resolve plan");
+
+    repo.cli().args(["executor", "init"]).assert().code(2);
+    let plan = fs::read_to_string(&plan_path).expect("plan written");
+    fs::write(
+        &plan_path,
+        plan.replace("resolution: null", "resolution: decline"),
+    )
+    .expect("resolve additional target");
+
+    repo.cli()
+        .args(["executor", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "configure the npm primary publisher",
+        ));
+
+    let config = fs::read_to_string(repo.root.join(".intentional/config.yml")).expect("config");
+    assert!(config.contains("github:"), "{config}");
+    assert!(config.contains("npm:"), "{config}");
+}
+
+#[test]
+fn executor_check_reports_locally_observable_nonconformance() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+    );
+    repo.write(
+        "component/package.json",
+        r#"{"name":"example-component","version":"1.0.0"}"#,
+    );
+    let workflow = "name: sample\non: { workflow_dispatch: {} }\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";
+    repo.write(".github/workflows/publish.yml", workflow);
+
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains(
+            "publication: component/npm/primary",
+        ))
+        .stdout(predicate::str::contains(
+            "release workflow .github/workflows/release.yml does not exist",
+        ));
+
+    repo.write(".github/workflows/release.yml", workflow);
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("executor check passed"));
+}
+
+#[test]
+fn executor_check_requires_the_github_executor() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+release-units:
+  component:
+    path: component
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+    );
+    repo.cli()
+        .args(["executor", "check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no github executor configuration"));
+}

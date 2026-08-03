@@ -6,9 +6,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
-    check_workspace, initialize, ApplyResult, Bump, Config, InitState, IntentDraft, ReleasePlan,
-    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE,
-    MISSING_BASELINE_NEXT_ACTION,
+    check_executor, check_workspace, initialize, initialize_executor, ApplyResult, Bump, Config,
+    ExecutorInitState, InitState, IntentDraft, ReleasePlan, StampResult, TagPhase, TagResult,
+    WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -50,8 +50,19 @@ enum Command {
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,
+    /// Configure and reconcile the repository release protocol.
+    #[command(subcommand)]
+    Executor(ExecutorCommand),
     /// Print the agent-facing Intentional workflow skill.
     Skill,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExecutorCommand {
+    /// Configure the GitHub executor and explicit publication intent.
+    Init(DryRun),
+    /// Check configured workflows against their derived executor contracts.
+    Check,
 }
 
 #[derive(Debug, Args)]
@@ -168,6 +179,10 @@ fn run() -> Result<u8> {
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
         Command::Tag(args) => tag(&cli.directory, args),
         Command::Check => check(&cli.directory),
+        Command::Executor(ExecutorCommand::Init(args)) => {
+            return executor_init(&cli.directory, args.dry_run)
+        }
+        Command::Executor(ExecutorCommand::Check) => return executor_check(&cli.directory),
         Command::Skill => skill(),
     }?;
     Ok(0)
@@ -176,6 +191,36 @@ fn run() -> Result<u8> {
 fn skill() -> Result<()> {
     print!("{SKILL_DOCUMENT}");
     Ok(())
+}
+
+fn executor_init(root: &std::path::Path, dry_run: bool) -> Result<u8> {
+    let result = initialize_executor(root)?;
+    println!("executor initialization state: {:?}", result.state);
+    for operation in &result.operations {
+        println!("{operation}");
+    }
+    println!("plan: {}", result.path.display());
+    result.apply(root, dry_run)?;
+    Ok(if result.state == ExecutorInitState::NeedsInput {
+        2
+    } else {
+        0
+    })
+}
+
+fn executor_check(root: &std::path::Path) -> Result<u8> {
+    let result = check_executor(root)?;
+    for publication in &result.publications {
+        println!("publication: {publication}");
+    }
+    for finding in &result.findings {
+        println!("finding: {finding}");
+    }
+    if result.conforms() {
+        println!("executor check passed");
+        return Ok(0);
+    }
+    Ok(1)
 }
 
 fn check(root: &std::path::Path) -> Result<()> {

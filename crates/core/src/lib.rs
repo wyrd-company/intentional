@@ -31,6 +31,11 @@ pub use config::{
     DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
+pub use executor::check::{check_executor, ExecutorCheck};
+pub use executor::init::{
+    initialize_executor, ExecutorInitPlan, ExecutorInitResult, ExecutorInitState,
+    EXECUTOR_INIT_PLAN_PATH,
+};
 pub use executor::recipe::{
     select_publications, Capability, CapabilityEvidence, Packager, Recipe, SelectedPublication,
 };
