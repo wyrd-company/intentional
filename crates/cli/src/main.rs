@@ -6,10 +6,10 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
-    check_executor, check_workspace, contribute, initialize, initialize_executor, ApplyResult,
-    Bump, Config, ContributionRequest, ExecutorInitState, InitState, IntentDraft, ReleasePlan,
-    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, LOCAL_JOB,
-    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    assemble, check_executor, check_workspace, contribute, initialize, initialize_executor,
+    ApplyResult, AssembleRequest, Bump, Config, ContributionRequest, ExecutorInitState, InitState,
+    IntentDraft, ReleasePlan, StampResult, TagPhase, TagResult, WorkflowIdentity, WorkspaceStatus,
+    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -73,6 +73,8 @@ enum ExecutorCommand {
 enum EvidenceCommand {
     /// Construct one repository-owned evidence contribution bundle.
     Contribute(ContributeArgs),
+    /// Assemble publisher fragments and contributions into final release evidence.
+    Assemble(AssembleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -90,6 +92,17 @@ struct ContributeArgs {
     attachments: Vec<PathBuf>,
 
     /// Directory in which to write the contribution bundle.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct AssembleArgs {
+    /// Directory containing downloaded publisher, phase-tag, and contribution artifacts.
+    #[arg(long, value_name = "PATH")]
+    input: PathBuf,
+
+    /// Directory in which to write the closed final-evidence bundle.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
 }
@@ -215,6 +228,9 @@ fn run() -> Result<u8> {
         Command::Evidence(EvidenceCommand::Contribute(args)) => {
             evidence_contribute(&cli.directory, args)
         }
+        Command::Evidence(EvidenceCommand::Assemble(args)) => {
+            evidence_assemble(&cli.directory, args)
+        }
         Command::Skill => skill(),
     }?;
     Ok(0)
@@ -292,12 +308,42 @@ fn evidence_contribute(root: &std::path::Path, args: ContributeArgs) -> Result<(
     Ok(())
 }
 
+fn evidence_assemble(root: &std::path::Path, args: AssembleArgs) -> Result<()> {
+    let input = resolve(root, args.input);
+    let output = resolve(root, args.output);
+    let assembly = assemble(&AssembleRequest {
+        root,
+        input: &input,
+        output: &output,
+        workflow: WorkflowIdentity {
+            repository: environment("GITHUB_REPOSITORY")?,
+            workflow: environment("GITHUB_WORKFLOW")?,
+            run_id: environment("GITHUB_RUN_ID")?.parse().unwrap_or_default(),
+            run_attempt: environment("GITHUB_RUN_ATTEMPT")?
+                .parse()
+                .unwrap_or_default(),
+            commit: environment("GITHUB_SHA")?,
+        },
+    })?;
+    println!("evidence: {}", assembly.evidence_path.display());
+    for attachment in &assembly.attachments {
+        println!("attachment: {attachment}");
+    }
+    Ok(())
+}
+
 fn resolve(root: &std::path::Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path
     } else {
         root.join(path)
     }
+}
+
+fn environment(name: &str) -> Result<String> {
+    std::env::var(name).map_err(|_| {
+        anyhow::anyhow!("{name} identifies the assembling workflow run and must be set")
+    })
 }
 
 fn numeric_environment(name: &str, fallback: u32) -> u32 {

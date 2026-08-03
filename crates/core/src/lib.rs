@@ -32,6 +32,12 @@ pub use config::{
     DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
+pub use evidence::assemble::{
+    assemble, AssembleRequest, Assembly, ContributionAttachmentRecord, PhaseTagEvidence,
+    PublisherEvidence, ReleaseEvidence, ReleaseIdentity, WorkflowIdentity,
+    PUBLISHER_EVIDENCE_SCHEMA, RELEASE_EVIDENCE_CONTRACT, RELEASE_EVIDENCE_FILE,
+    RELEASE_EVIDENCE_SCHEMA,
+};
 pub use evidence::contribution::{
     artifact_name, contribute, ContributionAttachment, ContributionBundle, ContributionManifest,
     ContributionRequest, ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX,

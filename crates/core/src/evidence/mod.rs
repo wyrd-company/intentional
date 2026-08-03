@@ -3,13 +3,14 @@
 //   implements: github-release-executor
 // ---
 
-//! Release evidence contribution transport.
+//! Release evidence contribution transport and deterministic final assembly.
 
+pub mod assemble;
 pub mod contribution;
 
 use crate::error::{Error, Result};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 /// Prefix every SHA-256 digest recorded by an evidence document carries.
@@ -49,12 +50,28 @@ pub(crate) fn copy_and_digest(source: &Path, destination: &Path) -> Result<Strin
     Ok(format!("{DIGEST_PREFIX}{:x}", hasher.finalize()))
 }
 
+/// Digest one existing file without loading it entirely into memory.
+pub(crate) fn digest_file(path: &Path) -> Result<String> {
+    let mut reader = std::fs::File::open(path).map_err(|error| Error::io(path, error))?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut reader, &mut hasher).map_err(|error| Error::io(path, error))?;
+    Ok(format!("{DIGEST_PREFIX}{:x}", hasher.finalize()))
+}
+
 /// Whether a value is a canonical `sha256:<64 lowercase hex>` digest.
 pub(crate) fn is_digest(value: &str) -> bool {
     value
         .strip_prefix(DIGEST_PREFIX)
         .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
         && value.to_ascii_lowercase() == value
+}
+
+/// Whether a value is a full SHA-1 or SHA-256 Git object identifier.
+pub(crate) fn is_git_object(value: &str) -> bool {
+    matches!(value.len(), 40 | 64)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 /// Whether a contributor namespace can be used as an evidence key.

@@ -2285,6 +2285,97 @@ release-units:
     );
 }
 
+const EVIDENCE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  sample-library:
+    path: .
+    npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+const EVIDENCE_FRAGMENT: &str = r#"$schema: https://intentional.foo/schemas/publisher-evidence/v1
+contract: publisher-evidence-1
+release-unit: sample-library
+publisher: npm
+target: primary
+source-commit: 1111111111111111111111111111111111111111
+release-commit: 2222222222222222222222222222222222222222
+global-tag:
+  name: release/1.0.0
+  object: 3333333333333333333333333333333333333333
+  target: 2222222222222222222222222222222222222222
+plan-digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+subject:
+  kind: npm-package
+  identity: sample-library
+  version: 1.0.0
+  digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+packager:
+  id: npm
+  version: 10.8.2
+build-provenance: []
+attached-metadata: []
+destination:
+  identity: registry.example.test/sample-library
+  version: 1.0.0
+  digest: sha512-example
+clean-client:
+  mode: public
+  client: npm
+  version: 10.8.2
+  digest: sha512-example
+destination-aliases: []
+phase-tags: []
+"#;
+
+fn assembly_environment() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("GITHUB_REPOSITORY", "example-owner/example-repository"),
+        ("GITHUB_WORKFLOW", "publish"),
+        ("GITHUB_RUN_ID", "42"),
+        ("GITHUB_RUN_ATTEMPT", "1"),
+        ("GITHUB_SHA", "2222222222222222222222222222222222222222"),
+    ]
+}
+
+/// Stage one contribution through the CLI and place it under its transport name.
+fn contribute_artifact(repo: &TestRepo, namespace: &str, job: &str, attempt: &str) -> PathBuf {
+    let staged = format!("staging/{namespace}-{job}-{attempt}");
+    let output = repo
+        .cli_with_env(&[("GITHUB_JOB", job), ("GITHUB_RUN_ATTEMPT", attempt)])
+        .args([
+            "evidence",
+            "contribute",
+            "--namespace",
+            namespace,
+            "--value-file",
+            "value.yml",
+            "--attachment",
+            "report.json",
+            "--output",
+            &staged,
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).expect("UTF-8 stdout");
+    let artifact = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("artifact-name: "))
+        .expect("contribute names its transport artifact")
+        .to_owned();
+    let destination = repo.root.join("artifacts").join(&artifact);
+    fs::create_dir_all(destination.parent().expect("artifacts directory"))
+        .expect("artifacts directory");
+    fs::rename(repo.root.join(&staged), &destination).expect("transport the bundle");
+    destination
+}
+
 #[test]
 fn evidence_contribute_writes_a_bundle_and_names_its_transport_artifact() {
     let repo = TestRepo::new();
@@ -2343,5 +2434,67 @@ fn evidence_contribute_requires_content() {
         .failure()
         .stderr(predicate::str::contains(
             "at least one value file or attachment is required",
+        ));
+}
+
+#[test]
+fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write("value.yml", "outcome: clean\n");
+    repo.write("report.json", "{\"ok\":true}");
+    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    contribute_artifact(&repo, "assessment", "scan", "1");
+
+    repo.cli_with_env(&assembly_environment())
+        .args([
+            "evidence",
+            "assemble",
+            "--input",
+            "artifacts",
+            "--output",
+            "release-evidence",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("attachment: report.json"));
+
+    let evidence = fs::read_to_string(repo.root.join("release-evidence/intentional-evidence.yml"))
+        .expect("release evidence");
+    assert!(
+        evidence.contains("contract: release-evidence-1"),
+        "{evidence}"
+    );
+    assert!(evidence.contains("run-id: 42"), "{evidence}");
+    assert!(evidence.contains("outcome: clean"), "{evidence}");
+    assert!(
+        repo.root
+            .join("release-evidence/attachments/report.json")
+            .is_file(),
+        "accepted contributed files are emitted once beside the statement"
+    );
+}
+
+#[test]
+fn evidence_assemble_requires_its_workflow_identity() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    repo.cli()
+        .env_remove("GITHUB_REPOSITORY")
+        .args([
+            "evidence",
+            "assemble",
+            "--input",
+            "artifacts",
+            "--output",
+            "release-evidence",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "GITHUB_REPOSITORY identifies the assembling workflow run",
         ));
 }
