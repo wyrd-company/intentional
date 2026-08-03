@@ -1,0 +1,73 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional record built subject"
+description: "Record one built publishable subject produced from the released commit"
+author: "wyrd-company"
+branding:
+  icon: "package"
+  color: "orange"
+
+inputs:
+  release-unit:
+    description: "Release-unit identifier the built subject belongs to"
+    required: true
+  identity:
+    description: "Subject identity every configured destination resolves"
+    required: true
+  subject:
+    description: "File or directory holding the bytes the build produced"
+    required: true
+  output:
+    description: "File the schema-backed built-subject document is written to"
+    required: true
+  working-directory:
+    description: "Repository directory holding the released commit and its tags"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  built-subject-path:
+    description: "Path of the recorded built-subject document"
+    value: ${{ steps.record.outputs.built-subject-path }}
+  digest:
+    description: "Immutable digest computed over the bytes the build produced"
+    value: ${{ steps.record.outputs.digest }}
+  version:
+    description: "Version the verified global release tag reproduces for the release unit"
+    value: ${{ steps.record.outputs.version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Record the built subject
+      id: record
+      shell: bash
+      env:
+        INPUT_RELEASE_UNIT: ${{ inputs.release-unit }}
+        INPUT_IDENTITY: ${{ inputs.identity }}
+        INPUT_SUBJECT: ${{ inputs.subject }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        intentional --directory "$INPUT_WORKING_DIRECTORY" evidence built-subject \
+          --release-unit "$INPUT_RELEASE_UNIT" \
+          --identity "$INPUT_IDENTITY" \
+          --subject "$INPUT_SUBJECT" \
+          --output "$INPUT_OUTPUT" |
+          "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
+            built-subject-path digest version

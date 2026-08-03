@@ -11,9 +11,10 @@ use crate::evidence::assemble::{
     EvidenceReference, IntendedDestination, PhaseSubject, PhaseTagEvidence, PublisherEvidence,
     PHASE_TAG_EVIDENCE_SCHEMA, PUBLISHER_EVIDENCE_SCHEMA,
 };
-use crate::evidence::{is_digest, is_git_object};
+use crate::evidence::{digest_bytes, digest_file, is_digest, is_git_object};
 use crate::model::TagPhase;
 use crate::plan::canonical_json;
+use crate::release::tag::verify_release_tag;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -330,6 +331,109 @@ pub fn load_built_subjects(config: &Config, input: &Path) -> Result<Vec<BuiltSub
     Ok(subjects.into_values().collect())
 }
 
+/// Record one built subject from the release the repository itself proves.
+///
+/// Neither the version nor the digest is supplied by the caller. The version is
+/// the one the verified global release tag reproduces for that release unit, so
+/// a build job cannot record a subject under some other release's version, and
+/// the digest is computed here over the bytes the build actually produced, so a
+/// build job cannot claim bytes it did not emit. Everything a later phase tag
+/// seals about a subject therefore comes from the repository or from the file
+/// system, and only the subject's destination identity is asserted.
+pub fn record_built_subject(
+    root: &Path,
+    release_unit: &str,
+    identity: &str,
+    subject: &Path,
+    output: &Path,
+) -> Result<BuiltSubject> {
+    if identity.trim().is_empty() {
+        return Err(Error::Validation(
+            "a built subject records the identity every destination resolves".to_owned(),
+        ));
+    }
+    let verified = verify_release_tag(root)?;
+    let version = verified.versions.get(release_unit).ok_or_else(|| {
+        Error::Validation(format!(
+            "release unit {release_unit:?} publishes nothing in global release tag {}; it releases {}",
+            verified.global_tag,
+            if verified.versions.is_empty() {
+                "nothing".to_owned()
+            } else {
+                verified
+                    .versions
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ))
+    })?;
+    let built = BuiltSubject {
+        schema: BUILT_SUBJECT_SCHEMA.to_owned(),
+        contract: BUILT_SUBJECT_CONTRACT.to_owned(),
+        release_unit: release_unit.to_owned(),
+        identity: identity.to_owned(),
+        version: version.clone(),
+        digest: digest_subject(subject)?,
+        provenance: None,
+    };
+    if output.exists() {
+        return Err(Error::Validation(format!(
+            "built-subject output {} already exists; one subject is built once",
+            output.display()
+        )));
+    }
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+    }
+    let document = serde_yaml::to_string(&built)?;
+    std::fs::write(output, document).map_err(|error| Error::io(output, error))?;
+    Ok(built)
+}
+
+/// Digest the bytes one build produced, whether it produced one file or a tree.
+///
+/// A directory digests as its ordered member manifest rather than as a concatenation,
+/// so a build that renames a member without changing any byte still changes the
+/// subject digest. The manifest is the release-unit-relative path and the member
+/// digest of every regular file, sorted by path.
+fn digest_subject(subject: &Path) -> Result<String> {
+    if subject.is_file() {
+        return digest_file(subject);
+    }
+    if !subject.is_dir() {
+        return Err(Error::Validation(format!(
+            "built subject bytes {} do not exist",
+            subject.display()
+        )));
+    }
+    let mut members = walkdir::WalkDir::new(subject)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .collect::<Vec<_>>();
+    members.sort();
+    if members.is_empty() {
+        return Err(Error::Validation(format!(
+            "built subject bytes {} contain no file; a subject with no bytes has no digest",
+            subject.display()
+        )));
+    }
+    let mut manifest = String::new();
+    for member in &members {
+        let relative = member.strip_prefix(subject).unwrap_or(member);
+        manifest.push_str(&format!(
+            "{}\u{0}{}\n",
+            relative.display(),
+            digest_file(member)?
+        ));
+    }
+    Ok(digest_bytes(manifest.as_bytes()))
+}
+
 /// Read every publisher-evidence fragment one evidence input directory offers.
 pub fn load_publisher_evidence(input: &Path) -> Result<Vec<PublisherEvidence>> {
     let mut fragments: BTreeMap<String, PublisherEvidence> = BTreeMap::new();
@@ -407,6 +511,104 @@ mod tests {
         "sha256:4444444444444444444444444444444444444444444444444444444444444444";
     const SUBJECT_DIGEST: &str =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+
+    // Version and digest are the two claims a phase tag seals about a subject
+    // that a later cross-check compares. Both are derived here rather than
+    // supplied, so a build job cannot record a version this release does not
+    // publish or bytes it did not produce.
+    #[test]
+    fn records_a_built_subject_from_the_proved_release_and_the_produced_bytes() {
+        let released = crate::release::tag::tests::ReleasedWorkspace::new();
+        let root = released.root.clone();
+        let bytes = root.join("build/subject.tgz");
+        std::fs::create_dir_all(bytes.parent().expect("parent")).expect("build directory");
+        std::fs::write(&bytes, b"subject bytes").expect("built bytes");
+        let output = root.join("staged/built-subject.yml");
+
+        let built = record_built_subject(&root, "widget", "sample-widget", &bytes, &output)
+            .expect("the built subject is recorded");
+        assert_eq!(built.schema, BUILT_SUBJECT_SCHEMA);
+        assert_eq!(built.identity(), "widget/sample-widget");
+        assert_eq!(
+            built.version, "1.1.0",
+            "the version is the one the verified global release tag reproduces"
+        );
+        assert_eq!(
+            built.digest,
+            digest_bytes(b"subject bytes"),
+            "the digest is computed over the bytes the build produced"
+        );
+        let config = Config::load(&root).expect("configuration");
+        let staged = load_built_subjects(&config, output.parent().expect("staged"))
+            .expect("the written document loads as staged evidence");
+        assert_eq!(staged, vec![built]);
+
+        // One subject is built once, so a second recording into the same
+        // document is a collision rather than a repeat.
+        let error = record_built_subject(&root, "widget", "sample-widget", &bytes, &output)
+            .expect_err("a second recording into the same output is refused");
+        assert!(
+            error.to_string().contains("one subject is built once"),
+            "{error}"
+        );
+    }
+
+    // A release unit this release does not publish has no version to record, so
+    // recording one under some other unit's version would bind the subject to a
+    // release it is not part of.
+    #[test]
+    fn refuses_a_subject_for_a_release_unit_the_release_does_not_publish() {
+        let released = crate::release::tag::tests::ReleasedWorkspace::new();
+        let root = released.root.clone();
+        let bytes = root.join("build/subject.tgz");
+        std::fs::create_dir_all(bytes.parent().expect("parent")).expect("build directory");
+        std::fs::write(&bytes, b"subject bytes").expect("built bytes");
+
+        let error = record_built_subject(
+            &root,
+            "absent-unit",
+            "sample-widget",
+            &bytes,
+            &root.join("staged/absent.yml"),
+        )
+        .expect_err("a release unit outside this release is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("publishes nothing in global release tag"),
+            "{error}"
+        );
+        assert!(
+            !root.join("staged/absent.yml").exists(),
+            "a refused recording writes nothing"
+        );
+    }
+
+    // A build that produces a tree digests as its ordered member manifest, so
+    // moving a member without changing a byte still changes the subject. A
+    // digest over the concatenated members alone would call those two builds
+    // the same subject.
+    #[test]
+    fn a_renamed_member_changes_the_digest_of_a_built_tree() {
+        let released = crate::release::tag::tests::ReleasedWorkspace::new();
+        let root = released.root.clone();
+        let tree = root.join("build/tree");
+        std::fs::create_dir_all(&tree).expect("build tree");
+        std::fs::write(tree.join("first"), b"one").expect("member");
+        std::fs::write(tree.join("second"), b"two").expect("member");
+        let first =
+            record_built_subject(&root, "widget", "sample-widget", &tree, &root.join("a.yml"))
+                .expect("the built tree is recorded");
+
+        std::fs::rename(tree.join("second"), tree.join("third")).expect("rename a member");
+        let renamed =
+            record_built_subject(&root, "widget", "sample-widget", &tree, &root.join("b.yml"))
+                .expect("the renamed tree is recorded");
+        assert_ne!(
+            first.digest, renamed.digest,
+            "a renamed member is a different subject"
+        );
+    }
 
     fn bindings() -> PhaseBindings<'static> {
         PhaseBindings {

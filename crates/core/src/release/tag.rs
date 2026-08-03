@@ -447,7 +447,7 @@ fn discard_released_tags(clone: &Path, release: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
@@ -457,9 +457,14 @@ mod tests {
     const RECORD_TAG_ID: &str = "release-unit/widget/primary";
 
     /// A git workspace carrying one applied release and its published global tag.
-    struct ReleasedWorkspace {
+    ///
+    /// Reused by every module whose behaviour is defined against a genuinely
+    /// released checkout, because building one from parts is what lets a test
+    /// prove a release identity the repository never actually carried.
+    pub(crate) struct ReleasedWorkspace {
+        #[allow(dead_code)]
         temp: tempfile::TempDir,
-        root: PathBuf,
+        pub(crate) root: PathBuf,
         /// Accepted source commit S.
         source: String,
         /// Deterministic release commit R.
@@ -490,7 +495,7 @@ mod tests {
 
     impl ReleasedWorkspace {
         /// Author one intent, build the release, and publish its annotated global tag.
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let temp = tempfile::tempdir().expect("temporary directory");
             let root = temp.path().join("workspace");
             std::fs::create_dir_all(&root).expect("create workspace");

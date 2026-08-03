@@ -326,6 +326,24 @@ commands:
           arity:
             min: 1
             max: 1
+      - name: sealed-output
+        flags:
+          - --sealed-output
+        kind: option
+        description: >-
+          Directory in which to write the phase evidence the declared phase
+          sealed, as its own schema-identified document.
+        required: false
+        repeatable: false
+        requires:
+          - phase
+        conflicts-with:
+          - baseline
+        value:
+          type: directory
+          arity:
+            min: 1
+            max: 1
       - name: plan
         flags:
           - --plan
@@ -365,8 +383,8 @@ commands:
       - intentional tag --baseline --version sample-library=1.2.3
     notes:
       - >-
-        Relative --plan and --evidence paths are resolved from --directory
-        rather than from the process working directory.
+        Relative --plan, --evidence, and --sealed-output paths are resolved from
+        --directory rather than from the process working directory.
       - Repeating --version for the same identifier fails.
       - >-
         A phased tag encodes canonical phase evidence in its annotated record
@@ -376,6 +394,13 @@ commands:
         phase evidence and therefore accepts no --evidence, because accepting a
         directory it cannot bind would silently discard the claim it carries.
         --evidence is invalid without --phase in either case.
+      - >-
+        --sealed-output writes what the phase sealed as one
+        `phase-tag-evidence` document named for the phase, so evidence assembly
+        can classify it by document identity. The document is written whether or
+        not this invocation created a tag, because a rerun that finds its phase
+        tags already present carries the same sealed claim. It fails when the
+        configuration seals no phase evidence at all.
       - >-
         A before-publication phase seals the built subjects and the configured
         intended destinations, and refuses to seal an empty subject set for a
@@ -643,6 +668,89 @@ commands:
     summary: Construct schema-backed release evidence artifacts.
     mode: non-interactive
     subcommands:
+      - name: built-subject
+        summary: Record one built publishable subject produced from the released commit.
+        mode: non-interactive
+        options:
+          - name: release-unit
+            flags:
+              - --release-unit
+            kind: option
+            description: Release-unit identifier the built subject belongs to.
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+          - name: identity
+            flags:
+              - --identity
+            kind: option
+            description: Subject identity every configured destination resolves.
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
+          - name: subject
+            flags:
+              - --subject
+            kind: option
+            description: File or directory holding the bytes the build produced.
+            required: true
+            repeatable: false
+            value:
+              type: path
+              arity:
+                min: 1
+                max: 1
+          - name: output
+            flags:
+              - --output
+            kind: option
+            description: File in which to write the schema-backed built-subject document.
+            required: true
+            repeatable: false
+            value:
+              type: file
+              arity:
+                min: 1
+                max: 1
+        output:
+          modes:
+            - name: built-subject
+              description: >-
+                Writes one built-subject document and prints the subject,
+                version, digest, and document path.
+              machine-readable: true
+          exit-codes:
+            - code: 0
+              meaning: The built subject was recorded.
+            - code: 1
+              meaning: >-
+                The global release tag did not verify, the release unit
+                publishes nothing in it, the produced bytes were absent, or the
+                output already existed.
+        examples:
+          - >-
+            intentional evidence built-subject --release-unit sample-library
+            --identity sample-library --subject build/sample-library.tgz
+            --output staged/built-subject.yml
+        notes:
+          - >-
+            The version is the one the verified global release tag reproduces
+            for that release unit and the digest is computed over the bytes at
+            --subject, so neither is asserted by the caller. A directory digests
+            as its ordered member manifest, so a renamed member is a different
+            subject.
+          - >-
+            The command runs in a checkout of the released commit. A release
+            unit the release does not publish is refused rather than recorded
+            under another unit's version.
       - name: contribute
         summary: Construct one repository-owned evidence contribution bundle.
         mode: non-interactive

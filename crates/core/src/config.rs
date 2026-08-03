@@ -654,6 +654,28 @@ impl Config {
         unphased
     }
 
+    /// Executor phases the configured tags declare, in phase order.
+    ///
+    /// A phase with no configured tag seals nothing, so the derived publication
+    /// graph carries a tag job only for a phase this configuration actually
+    /// declares. Deriving one regardless would produce a job whose command
+    /// refuses to run.
+    pub fn declared_phases(&self) -> Vec<TagPhase> {
+        let mut declared = Vec::new();
+        for release_unit in self.release_units.values() {
+            for tag in release_unit.tags.values() {
+                declared.extend(tag.require_phase);
+            }
+        }
+        for tag in self.workspace_tags.values() {
+            declared.extend(tag.require_phase);
+        }
+        [TagPhase::BeforePublication, TagPhase::AfterPublication]
+            .into_iter()
+            .filter(|phase| declared.contains(phase))
+            .collect()
+    }
+
     /// Canonical id for a named release-unit tag.
     pub fn release_unit_tag_id(release_unit_id: &str, tag_id: &str) -> String {
         format!("release-unit/{release_unit_id}/{tag_id}")

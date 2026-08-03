@@ -1,0 +1,66 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+name: "intentional seal phase tags"
+description: "Create the annotated release tags one executor phase declares and expose what they sealed"
+author: "wyrd-company"
+branding:
+  icon: "tag"
+  color: "orange"
+
+# Tag creation is local and credential-free. This Action never pushes: the
+# repository-local job that consumes its output mints the installation token
+# that is the sole Git repository-write authority and pushes the tags itself.
+
+inputs:
+  phase:
+    description: "Executor phase declaration: before-publication or after-publication"
+    required: true
+  evidence:
+    description: "Directory of built-subject or publisher-evidence documents the phase seals"
+    required: true
+  sealed-output:
+    description: "Directory the sealed phase-tag evidence document is written to"
+    required: true
+  working-directory:
+    description: "Repository directory holding the released commit and its tags"
+    required: false
+    default: "."
+  intentional-version:
+    description: "Released intentional version without a v prefix, or latest"
+    required: false
+    default: "latest"
+
+outputs:
+  sealed-phase-evidence:
+    description: "Path of the document carrying what this phase sealed"
+    value: ${{ steps.seal.outputs.sealed-phase-evidence }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install intentional
+      shell: bash
+      env:
+        REQUESTED_VERSION: ${{ inputs.intentional-version }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Seal the phase release tags
+      id: seal
+      shell: bash
+      env:
+        INPUT_PHASE: ${{ inputs.phase }}
+        INPUT_EVIDENCE: ${{ inputs.evidence }}
+        INPUT_SEALED_OUTPUT: ${{ inputs.sealed-output }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        intentional --directory "$INPUT_WORKING_DIRECTORY" tag \
+          --phase "$INPUT_PHASE" \
+          --evidence "$INPUT_EVIDENCE" \
+          --sealed-output "$INPUT_SEALED_OUTPUT" |
+          "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
+            sealed-phase-evidence

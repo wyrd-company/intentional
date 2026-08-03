@@ -49,8 +49,8 @@ pub use evidence::contribution::{
 };
 pub use evidence::phase::{
     build_after_publication, build_before_publication, load_built_subjects,
-    load_publisher_evidence, BuiltSubject, PhaseBindings, BUILT_SUBJECT_CONTRACT,
-    BUILT_SUBJECT_SCHEMA, PHASE_EVIDENCE_FIELD,
+    load_publisher_evidence, record_built_subject, BuiltSubject, PhaseBindings,
+    BUILT_SUBJECT_CONTRACT, BUILT_SUBJECT_SCHEMA, PHASE_EVIDENCE_FIELD,
 };
 pub use executor::check::{check_executor, ExecutorCheck};
 pub use executor::init::{

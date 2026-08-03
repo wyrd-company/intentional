@@ -7,10 +7,10 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     assemble, check_executor, check_workspace, compare_workflow, contribute, initialize,
-    initialize_executor, prepare_release, verify_handoff, verify_publication, verify_release,
-    verify_release_tag, ApplyResult, AssembleRequest, Bump, CheckoutContext, ComparisonStatus,
-    Config, ContributionRequest, ExecutorInitState, GhReleaseSource, InitState, IntentDraft,
-    PublisherKind, ReleasePlan, StampResult, SystemClock, TagPhase, TagResult,
+    initialize_executor, prepare_release, record_built_subject, verify_handoff, verify_publication,
+    verify_release, verify_release_tag, ApplyResult, AssembleRequest, Bump, CheckoutContext,
+    ComparisonStatus, Config, ContributionRequest, ExecutorInitState, GhReleaseSource, InitState,
+    IntentDraft, PublisherKind, ReleasePlan, StampResult, SystemClock, TagPhase, TagResult,
     VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus, CONFIG_PATH,
     LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
@@ -88,6 +88,8 @@ enum ReleaseCommand {
 
 #[derive(Debug, Subcommand)]
 enum EvidenceCommand {
+    /// Record one built publishable subject produced from the released commit.
+    BuiltSubject(BuiltSubjectArgs),
     /// Construct one repository-owned evidence contribution bundle.
     Contribute(ContributeArgs),
     /// Assemble publisher fragments and contributions into final release evidence.
@@ -144,6 +146,25 @@ struct ReleaseArgs {
 struct PrepareArgs {
     /// Directory in which to write the release-candidate handoff.
     #[arg(long, value_name = "DIRECTORY")]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct BuiltSubjectArgs {
+    /// Release-unit identifier the built subject belongs to.
+    #[arg(long)]
+    release_unit: String,
+
+    /// Subject identity every configured destination resolves.
+    #[arg(long)]
+    identity: String,
+
+    /// File or directory holding the bytes the build produced.
+    #[arg(long, value_name = "PATH")]
+    subject: PathBuf,
+
+    /// File in which to write the schema-backed built-subject document.
+    #[arg(long, value_name = "PATH")]
     output: PathBuf,
 }
 
@@ -280,6 +301,10 @@ struct TagArgs {
     #[arg(long, value_name = "PATH", requires = "phase")]
     evidence: Option<PathBuf>,
 
+    /// Directory in which to write the phase evidence the declared phase sealed.
+    #[arg(long, value_name = "PATH", requires = "phase")]
+    sealed_output: Option<PathBuf>,
+
     /// Digest-sealed release plan to verify before creating release tags.
     #[arg(long, value_name = "PATH")]
     plan: Option<PathBuf>,
@@ -329,6 +354,9 @@ fn run() -> Result<u8> {
         }
         Command::Executor(ExecutorCommand::Check) => return executor_check(&cli.directory),
         Command::Release(ReleaseCommand::Prepare(args)) => prepare(&cli.directory, args),
+        Command::Evidence(EvidenceCommand::BuiltSubject(args)) => {
+            evidence_built_subject(&cli.directory, args)
+        }
         Command::Evidence(EvidenceCommand::Contribute(args)) => {
             evidence_contribute(&cli.directory, args)
         }
@@ -491,6 +519,17 @@ fn executor_check(root: &std::path::Path) -> Result<u8> {
     Ok(1)
 }
 
+fn evidence_built_subject(root: &std::path::Path, args: BuiltSubjectArgs) -> Result<()> {
+    let subject = resolve(root, args.subject);
+    let output = resolve(root, args.output);
+    let built = record_built_subject(root, &args.release_unit, &args.identity, &subject, &output)?;
+    println!("subject: {}", built.identity());
+    println!("version: {}", built.version);
+    println!("digest: {}", built.digest);
+    println!("built-subject-path: {}", output.display());
+    Ok(())
+}
+
 fn evidence_contribute(root: &std::path::Path, args: ContributeArgs) -> Result<()> {
     let value_file = args.value_file.map(|path| resolve(root, path));
     let attachments = args
@@ -620,6 +659,9 @@ fn tag(root: &std::path::Path, args: TagArgs) -> Result<()> {
     if args.baseline && args.evidence.is_some() {
         bail!("--baseline and --evidence cannot be combined");
     }
+    if args.baseline && args.sealed_output.is_some() {
+        bail!("--baseline and --sealed-output cannot be combined");
+    }
     if !args.baseline && !explicit.is_empty() {
         bail!("--version is valid only with --baseline");
     }
@@ -646,6 +688,15 @@ fn tag(root: &std::path::Path, args: TagArgs) -> Result<()> {
         println!("{operation}");
     }
     result.apply(root, args.dry_run)?;
+    if let Some(sealed_output) = args.sealed_output {
+        let sealed_output = resolve(root, sealed_output);
+        match result.write_sealed_phase_evidence(&sealed_output)? {
+            Some(path) => println!("sealed-phase-evidence: {}", path.display()),
+            None => bail!(
+                "--sealed-output requires a phase that seals evidence; this configuration declares no global release tag to bind it to"
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -832,12 +883,13 @@ mod generated_invocations {
     /// Invocations the published composite Actions run.
     ///
     /// One per Action: `prepare-release`, `verify-handoff`,
-    /// `verify-release-tag`, `verify-publication`, `assemble-evidence`, and
-    /// `contribute`. Asserted exactly for the same reason the generated count
+    /// `verify-release-tag`, `verify-publication`, `assemble-evidence`,
+    /// `contribute`, `record-built-subject`, and `seal-phase-tags`. Asserted
+    /// exactly for the same reason the generated count
     /// is: an Action that stops invoking the command, and a recognizer that
     /// stops seeing one, must both fail here rather than bind a smaller surface
     /// than this module claims.
-    const ACTION_INVOCATIONS: usize = 6;
+    const ACTION_INVOCATIONS: usize = 8;
 
     /// Directory holding the composite Actions this repository publishes.
     fn actions_directory() -> std::path::PathBuf {

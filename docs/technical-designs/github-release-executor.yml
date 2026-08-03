@@ -202,7 +202,8 @@ proposed-design:
     Its operations are `init`, `diff`, and `check`; applying a workflow patch is
     the explicit `--apply` mode of `executor diff`. Runtime release jobs use
     provider-neutral commands: `intentional release prepare`,
-    `intentional evidence contribute`, `intentional evidence assemble`,
+    `intentional evidence built-subject`, `intentional evidence contribute`,
+    `intentional evidence assemble`, `intentional tag --phase`,
     `intentional verify handoff`, `intentional verify release-tag`,
     `intentional verify publication`, and `intentional verify release`.
 
@@ -228,7 +229,11 @@ proposed-design:
     `candidate-path`, `source-sha`, `release-sha`, `global-tag`, and
     `plan-digest`. The verify-handoff and verify-release-tag Actions each expose
     `source-sha`, `release-sha`, `global-tag`, and `plan-digest`. The
-    verify-publication Action exposes `evidence-path`. The contribute and
+    verify-publication Action exposes `evidence-path`. The
+    record-built-subject Action exposes `built-subject-path`, `digest`, and
+    `version`. The seal-phase-tags Action exposes `sealed-phase-evidence` and
+    never pushes, because tag creation is local and the repository-owned job
+    that consumes it holds the push authority. The contribute and
     assemble Actions expose no outputs. Schema-backed files are the
     authoritative handoff and evidence contracts. Downstream operations read
     and verify those files; GitHub outputs route selected identities and paths
@@ -317,13 +322,33 @@ proposed-design:
     dependency graph from the selected recipes and configured publish gates.
 
     Each distinct publishable subject is built once from R and assigned an
-    immutable digest before distribution. Publisher jobs consume or promote
-    that subject; separate destinations never rebuild it. Different package
-    formats are distinct subjects and each is built once. Before-publication
-    package tags are created and atomically pushed only after their configured
-    prerequisites are valid. After-publication tags are created only after the
-    corresponding publisher evidence exists. All tags target R and bind the
-    same release plan.
+    immutable digest before distribution. A subject is one release unit and one
+    packager, so two destinations of one packager are one subject and two
+    package formats of one release unit are two. Each derives one build job that
+    produces the subject's bytes and runs `intentional evidence built-subject`,
+    which reads the version the verified global release tag reproduces and
+    computes the digest over the bytes the build emitted. The bytes and the
+    built-subject document travel together as one workflow artifact: the
+    before-publication tag job reads the document and the publisher jobs promote
+    the bytes. Publisher jobs consume or promote that subject; separate
+    destinations never rebuild it.
+
+    A phase the configuration declares derives a managed tag job that runs
+    `intentional tag --phase`. The before-publication job depends on every build
+    job, so it seals the subjects that exist and the destinations the release
+    intends before any publication has occurred. The after-publication job
+    depends on every publisher job, so it seals the accepted fragments only once
+    they exist. Tag creation is local and credential-free; each tag job then
+    mints the short-lived installation token and pushes the annotated tags that
+    point at R through the repository-owned privileged step, so no
+    Intentional-owned Action holds repository-write authority. All tags target R
+    and bind the same release plan.
+
+    Each tag job writes what its phase sealed as its own phase-tag-evidence
+    document and uploads it as an evidence artifact, because assembly recognizes
+    evidence by document identity and cannot read a tag message. The document is
+    written whether or not the invocation created a tag, so a retried
+    publication reaches assembly with the evidence the release carries.
 
     Each publisher job runs `intentional verify publication` with explicit
     release-unit and publisher identity and the target selector required by the
@@ -499,10 +524,15 @@ proposed-design:
 
     Assembly recognizes publisher and phase-tag evidence by document identity
     rather than by artifact name, so the derived workflow graph is what bounds
-    which jobs can contribute it. Closure depends on every publisher job, and a
-    publisher job that did not complete prevents closure. Removing that
-    dependency would let any repository-owned job supply a fragment for a
-    publication that never ran.
+    which jobs can contribute it. Assembly depends on every phase tag job the
+    configuration declares, and a declared phase whose sealed evidence never
+    reaches assembly fails it. Every phase comparison iterates the documents
+    supplied, so a run that supplies none would agree with everything. For the
+    same reason a fragment naming a subject identity no sealed subject of its
+    release unit names is a failure rather than a comparison against nothing.
+    Closure depends on every publisher job, and a publisher job that did not
+    complete prevents closure. Removing that dependency would let any
+    repository-owned job supply a fragment for a publication that never ran.
 
   repository-evidence-contributions: |-
     A standard credential-free contribution Action wraps

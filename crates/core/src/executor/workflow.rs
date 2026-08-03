@@ -23,7 +23,7 @@ use crate::error::{Error, Result};
 use crate::executor::recipe::{
     resolve_publications, Packager, SelectedPublication, PRIMARY_TARGET,
 };
-use crate::model::PublisherKind;
+use crate::model::{PublisherKind, TagPhase};
 use crate::plan::canonical_json;
 use crate::textdiff;
 use crate::yaml_edit::Document;
@@ -811,6 +811,43 @@ fn publish_contract(
     let assemble = format!("{}assemble_evidence", namespaces.job);
     let close = format!("{}close_release", namespaces.job);
     let mut jobs = vec![(verify.clone(), job(PUBLISH_VERIFY_JOB, namespaces, &[]))];
+
+    // One build job per distinct publishable subject, so a subject two
+    // destinations distribute is produced once and both publisher jobs receive
+    // the same immutable bytes. Distinctness is the release unit and the
+    // packager that produces the format: two destinations of one packager are
+    // one subject, and two package formats of one release unit are two.
+    let subjects = distinct_subjects(root, config, &selection.selected);
+    let mut build_jobs = Vec::new();
+    for subject in &subjects {
+        let id = format!("{}build_{}", namespaces.job, subject.slug);
+        build_jobs.push(id.clone());
+        jobs.push((id, build_job(namespaces, &verify, subject)));
+    }
+
+    // A phase with no configured tag seals nothing, so its job is derived only
+    // where the configuration declares it. Deriving one regardless would emit a
+    // job whose command refuses the invocation.
+    let declared = config.declared_phases();
+    let before = declared
+        .contains(&TagPhase::BeforePublication)
+        .then(|| format!("{}tag_before_publication", namespaces.job));
+    let after = declared
+        .contains(&TagPhase::AfterPublication)
+        .then(|| format!("{}tag_after_publication", namespaces.job));
+
+    // The before-publication tag states what the release built and is committed
+    // to publishing, so it seals after every build and before any publication.
+    if let Some(before) = &before {
+        let mut needs = vec![verify.clone()];
+        needs.extend(build_jobs.iter().cloned());
+        jobs.push((
+            before.clone(),
+            phase_tag_job(namespaces, TagPhase::BeforePublication, &needs),
+        ));
+    }
+
+    let publisher_upstream = before.clone().unwrap_or_else(|| verify.clone());
     let mut publisher_jobs = Vec::new();
     let mut identities = BTreeSet::new();
     for publication in &selection.selected {
@@ -826,7 +863,43 @@ fn publish_contract(
             )]);
         }
         publisher_jobs.push(id.clone());
-        jobs.push((id, publisher_job(namespaces, &verify, publication, config)));
+        let subject = subjects
+            .iter()
+            .find(|subject| subject.covers(publication))
+            .ok_or_else(|| {
+                vec![WorkflowDiagnostic::at(
+                    "subject-underived",
+                    format!(
+                        "publication {} distributes a subject no build job produces",
+                        publication.identity()
+                    ),
+                    &format!("jobs.{id}"),
+                )]
+            })?;
+        let mut needs = vec![publisher_upstream.clone()];
+        // The build job stays an explicit dependency even when the
+        // before-publication tag already transitively orders it, because the
+        // publisher downloads that job's artifact and a graph that only
+        // implies the producer is one refactor away from racing it.
+        let producer = format!("{}build_{}", namespaces.job, subject.slug);
+        if !needs.contains(&producer) {
+            needs.push(producer);
+        }
+        jobs.push((
+            id,
+            publisher_job(namespaces, &needs, publication, subject, config),
+        ));
+    }
+
+    // The after-publication tag seals the completed fragments, so it follows
+    // every publisher job and precedes the assembly that reads what it sealed.
+    if let Some(after) = &after {
+        let mut needs = vec![verify.clone()];
+        needs.extend(publisher_jobs.iter().cloned());
+        jobs.push((
+            after.clone(),
+            phase_tag_job(namespaces, TagPhase::AfterPublication, &needs),
+        ));
     }
 
     // Tag verification seeds the graph unconditionally so that closure can
@@ -836,6 +909,11 @@ fn publish_contract(
     // gate governs the final authority transition.
     let mut assemble_needs = vec![verify.clone()];
     assemble_needs.extend(publisher_jobs.iter().cloned());
+    // Assembly classifies the sealed phase evidence by document identity, so
+    // every tag job that produced one has to precede it or the evidence it
+    // requires would simply be absent.
+    assemble_needs.extend(before.iter().cloned());
+    assemble_needs.extend(after.iter().cloned());
     assemble_needs.extend(gates.iter().cloned());
     let mut close_needs = vec![assemble.clone()];
     close_needs.extend(gates.iter().cloned());
@@ -868,6 +946,99 @@ fn publish_contract(
         )),
         jobs: rendered_jobs(jobs)?,
     })
+}
+
+/// One publishable subject and the publications that distribute it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DistinctSubject {
+    /// Release unit whose sources the subject is built from.
+    release_unit: String,
+    /// Packager that produces the subject's format.
+    packager: Packager,
+    /// Identity every configured destination resolves the subject by.
+    identity: String,
+    /// Release-unit-relative working directory the build runs in.
+    working_directory: String,
+    /// Job and artifact name fragment.
+    slug: String,
+}
+
+impl DistinctSubject {
+    /// Whether one publication distributes this subject.
+    fn covers(&self, publication: &SelectedPublication) -> bool {
+        self.release_unit == publication.release_unit && self.packager == publication.packager
+    }
+}
+
+/// Collapse the selected publications into the subjects that must be built.
+///
+/// Two publications of one release unit that drive the same packager describe
+/// one subject with two destinations, not two subjects. That collapse is what
+/// makes the derived graph build once and promote, and it is the reason
+/// distinctness is decided here rather than per publisher job.
+fn distinct_subjects(
+    root: &Path,
+    config: &Config,
+    publications: &[SelectedPublication],
+) -> Vec<DistinctSubject> {
+    let mut subjects: Vec<DistinctSubject> = Vec::new();
+    for publication in publications {
+        if subjects.iter().any(|subject| subject.covers(publication)) {
+            continue;
+        }
+        let unit = &config.release_units[&publication.release_unit];
+        subjects.push(DistinctSubject {
+            release_unit: publication.release_unit.clone(),
+            packager: publication.packager,
+            identity: subject_identity(root, unit, publication),
+            working_directory: unit.path.display().to_string(),
+            slug: format!(
+                "{}_{}",
+                identifier(&publication.release_unit),
+                identifier(publication.packager.as_str())
+            ),
+        });
+    }
+    subjects
+}
+
+/// Identity the destinations of one subject resolve it by.
+///
+/// A packager whose native manifest names the published artifact is the
+/// authority on that name, because publisher evidence records the same native
+/// identity and assembly compares the two. Where the format has no such name,
+/// the release-unit id is the identity the recipe refines.
+fn subject_identity(
+    root: &Path,
+    unit: &crate::config::ReleaseUnitConfig,
+    publication: &SelectedPublication,
+) -> String {
+    let fallback = publication.release_unit.clone();
+    let directory = root.join(&unit.path);
+    match publication.packager {
+        Packager::Npm => std::fs::read_to_string(directory.join("package.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|manifest| {
+                manifest
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or(fallback),
+        Packager::Cargo => std::fs::read_to_string(directory.join("Cargo.toml"))
+            .ok()
+            .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
+            .and_then(|manifest| {
+                manifest
+                    .get("package")
+                    .and_then(|package| package.get("name"))
+                    .and_then(|name| name.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or(fallback),
+        Packager::GoReleaser | Packager::Buildx | Packager::DevContainerCli => fallback,
+    }
 }
 
 fn concurrency(group: &str) -> Value {
@@ -934,7 +1105,15 @@ fn job(
     namespaces: &PrefixNamespaces,
     extra: &[(&str, &str)],
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
-    let mut rendered = template
+    let mut rendered = template.to_owned();
+    // Derived values are substituted first because a value can itself name a
+    // namespace placeholder: a packager's build script refers to the prefixed
+    // subject environment variable, and substituting the namespaces first would
+    // leave that reference unrendered in a privileged job.
+    for (placeholder, value) in extra {
+        rendered = rendered.replace(placeholder, value);
+    }
+    let rendered = rendered
         .replace("@JOB@", &namespaces.job)
         .replace("@ENVVAR@", &namespaces.envvar)
         .replace("@ENVIRONMENT@", &namespaces.environment)
@@ -958,10 +1137,12 @@ fn job(
             "@VERIFY_PUBLICATION_ACTION@",
             &action_reference("verify-publication"),
         )
-        .replace("@ASSEMBLE_ACTION@", &action_reference("assemble-evidence"));
-    for (placeholder, value) in extra {
-        rendered = rendered.replace(placeholder, value);
-    }
+        .replace("@ASSEMBLE_ACTION@", &action_reference("assemble-evidence"))
+        .replace(
+            "@BUILT_SUBJECT_ACTION@",
+            &action_reference("record-built-subject"),
+        )
+        .replace("@TAG_PHASE_ACTION@", &action_reference("seal-phase-tags"));
     serde_yaml::from_str(&rendered).map_err(|error| {
         WorkflowDiagnostic::new(
             "job-template-invalid",
@@ -970,11 +1151,86 @@ fn job(
     })
 }
 
+/// Build job producing one distinct subject and recording what it produced.
+///
+/// The packager writes its bytes to the path the graph names, and the portable
+/// command digests exactly those bytes and reads the version from the verified
+/// global release tag. Neither value is asserted by the recipe, so a build job
+/// cannot record a subject it did not produce or a release it is not part of.
+fn build_job(
+    namespaces: &PrefixNamespaces,
+    verify: &str,
+    subject: &DistinctSubject,
+) -> std::result::Result<Value, WorkflowDiagnostic> {
+    job(
+        PUBLISH_BUILD_JOB,
+        namespaces,
+        &[
+            ("@NEEDS@", &render_list(&[verify.to_owned()])),
+            ("@SLUG@", &subject.slug),
+            (
+                "@BUILD_NAME@",
+                &scalar(&format!("Build the {} subject once", subject.identity)),
+            ),
+            (
+                "@RECORD_NAME@",
+                &scalar(&format!("Record the built {} subject", subject.identity)),
+            ),
+            (
+                "@UPLOAD_NAME@",
+                &scalar(&format!("Upload the built {} subject", subject.identity)),
+            ),
+            ("@BUILD_COMMAND@", build_command(subject.packager)),
+            ("@RELEASE_UNIT@", &scalar(&subject.release_unit)),
+            ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
+            ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
+        ],
+    )
+}
+
+/// Managed job sealing and publishing the tags one executor phase declares.
+fn phase_tag_job(
+    namespaces: &PrefixNamespaces,
+    phase: TagPhase,
+    needs: &[String],
+) -> std::result::Result<Value, WorkflowDiagnostic> {
+    // Each phase seals a different staged input: the before-publication phase
+    // seals the built subjects, the after-publication phase seals the accepted
+    // publisher fragments. Both are transported as artifacts of the jobs that
+    // produced them and both leave the sealed evidence behind as a document.
+    let staged = match phase {
+        TagPhase::BeforePublication => "subject",
+        TagPhase::AfterPublication => "evidence",
+    };
+    job(
+        PUBLISH_PHASE_TAG_JOB,
+        namespaces,
+        &[
+            ("@NEEDS@", &render_list(needs)),
+            ("@PHASE@", &phase.to_string()),
+            ("@STAGED@", staged),
+            (
+                "@SEAL_NAME@",
+                &scalar(&format!("Seal the {phase} release tags")),
+            ),
+            (
+                "@PUSH_NAME@",
+                &scalar(&format!("Publish the {phase} release tags")),
+            ),
+            (
+                "@UPLOAD_NAME@",
+                &scalar(&format!("Upload the sealed {phase} evidence")),
+            ),
+        ],
+    )
+}
+
 /// Publisher job derived from one resolved publication and its recipe.
 fn publisher_job(
     namespaces: &PrefixNamespaces,
-    verify: &str,
+    needs: &[String],
     publication: &SelectedPublication,
+    subject: &DistinctSubject,
     config: &Config,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
     let unit = &config.release_units[&publication.release_unit];
@@ -1003,8 +1259,13 @@ fn publisher_job(
         PUBLISH_PUBLISHER_JOB,
         namespaces,
         &[
-            ("@NEEDS@", &render_list(&[verify.to_owned()])),
+            ("@NEEDS@", &render_list(needs)),
             ("@SLUG@", &slug),
+            ("@SUBJECT_SLUG@", &subject.slug),
+            (
+                "@SUBJECT_NAME@",
+                &scalar(&format!("Download the built {} subject", subject.identity)),
+            ),
             ("@PUBLISH_NAME@", &scalar(&format!("Publish {identity}"))),
             (
                 "@VERIFY_NAME@",
@@ -1027,6 +1288,30 @@ fn publisher_job(
             ("@PERMISSIONS@", &publisher_permissions(publication)),
         ],
     )
+}
+
+/// Native command that produces one subject's bytes without distributing them.
+///
+/// This is the packager seam the maintained recipes refine. It states the
+/// minimal native build each packager performs and where the graph expects its
+/// bytes; provenance generation, attached metadata, signatures, and destination
+/// alias behaviour belong to the recipe that owns the destination, not here.
+const fn build_command(packager: Packager) -> &'static str {
+    match packager {
+        Packager::Npm => "      npm pack --pack-destination \"${@ENVVAR@SUBJECT}\"",
+        Packager::Cargo => {
+            "      cargo package --locked --target-dir \"${RUNNER_TEMP}/@JOB@cargo\"\n      cp \"${RUNNER_TEMP}\"/@JOB@cargo/package/*.crate \"${@ENVVAR@SUBJECT}/\""
+        }
+        Packager::GoReleaser => {
+            "      goreleaser release --clean --skip=publish,announce\n      cp -R dist/. \"${@ENVVAR@SUBJECT}/\""
+        }
+        Packager::Buildx => {
+            "      docker buildx build --provenance true --sbom true --output \"type=oci,dest=${@ENVVAR@SUBJECT}/subject.oci.tar\" ."
+        }
+        Packager::DevContainerCli => {
+            "      devcontainer features package --output-folder \"${@ENVVAR@SUBJECT}\" ."
+        }
+    }
 }
 
 /// Native command the selected recipe drives for one publication.
@@ -1174,6 +1459,117 @@ steps:
       intentional-version: @VERSION@
 "#;
 
+/// Build job for one distinct publishable subject.
+///
+/// The bytes and the built-subject document travel together in one artifact:
+/// the tag job reads the document and the publisher jobs promote the bytes, and
+/// a transport that separated them would let a publisher receive bytes no
+/// phase tag ever sealed.
+const PUBLISH_BUILD_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+permissions:
+  contents: read
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: @BUILD_NAME@
+    working-directory: @WORKING_DIRECTORY@
+    env:
+      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/@SLUG@/bytes
+    run: |
+      set -euo pipefail
+      mkdir -p "${@ENVVAR@SUBJECT}"
+@BUILD_COMMAND@
+  - name: @RECORD_NAME@
+    uses: @BUILT_SUBJECT_ACTION@
+    with:
+      release-unit: @RELEASE_UNIT@
+      identity: @SUBJECT_IDENTITY@
+      subject: ${{ runner.temp }}/@JOB@subject/@SLUG@/bytes
+      output: ${{ runner.temp }}/@JOB@subject/@SLUG@/built-subject.yml
+      intentional-version: @VERSION@
+  - name: @UPLOAD_NAME@
+    uses: @UPLOAD@
+    with:
+      name: @JOB@subject-@SLUG@
+      path: ${{ runner.temp }}/@JOB@subject/@SLUG@
+      retention-days: 1
+"#;
+
+/// Managed job that seals one executor phase and publishes its tags.
+///
+/// Tag creation is local and pushing is repository-owned: the portable command
+/// never holds a credential and never writes to the repository, and the push
+/// step mints the short-lived installation token that is the sole Git
+/// repository-write authority. The tags pushed are the annotated tags that
+/// point at the released commit, which is exactly the set the phase just
+/// created plus the already-published global tag the push leaves unchanged.
+///
+/// The sealed evidence is uploaded as its own artifact because assembly reads
+/// documents, not tag messages; a phase whose evidence stayed inside Git would
+/// be invisible to the command that has to compare it.
+const PUBLISH_PHASE_TAG_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+environment: @ENVIRONMENT@
+permissions:
+  contents: read
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: Download the staged @PHASE@ evidence
+    uses: @DOWNLOAD@
+    with:
+      pattern: @JOB@@STAGED@-*
+      path: ${{ runner.temp }}/@JOB@staged
+  - name: @SEAL_NAME@
+    uses: @TAG_PHASE_ACTION@
+    with:
+      phase: @PHASE@
+      evidence: ${{ runner.temp }}/@JOB@staged
+      sealed-output: ${{ runner.temp }}/@JOB@phase/@PHASE@
+      intentional-version: @VERSION@
+  - id: @JOB@token
+    name: Mint a short-lived repository token
+    uses: @APP_TOKEN@
+    with:
+      app-id: ${{ vars.@ENVVAR@GITHUB_APP_ID }}
+      private-key: ${{ secrets.@ENVVAR@GITHUB_APP_PRIVATE_KEY }}
+  - name: @PUSH_NAME@
+    env:
+      GITHUB_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+    run: |
+      set -euo pipefail
+      git remote set-url origin \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+      mapfile -t refs < <(git tag --points-at HEAD --format='refs/tags/%(refname:strip=2)')
+      test "${#refs[@]}" -gt 0
+      git push --atomic origin "${refs[@]}"
+  - name: @UPLOAD_NAME@
+    uses: @UPLOAD@
+    with:
+      name: @JOB@evidence-phase-@PHASE@
+      path: ${{ runner.temp }}/@JOB@phase/@PHASE@
+      retention-days: 1
+"#;
+
 const PUBLISH_PUBLISHER_JOB: &str = r#"
 needs:
 @NEEDS@
@@ -1190,8 +1586,15 @@ steps:
       fetch-depth: 0
       fetch-tags: true
       persist-credentials: false
+  - name: @SUBJECT_NAME@
+    uses: @DOWNLOAD@
+    with:
+      name: @JOB@subject-@SUBJECT_SLUG@
+      path: ${{ runner.temp }}/@JOB@subject
   - name: @PUBLISH_NAME@
     working-directory: @WORKING_DIRECTORY@
+    env:
+      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/bytes
     run: @PACKAGE_COMMAND@
   - name: @VERIFY_NAME@
     uses: @VERIFY_PUBLICATION_ACTION@
@@ -1317,6 +1720,7 @@ release-units:
     cargo: {}
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
+      staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
 "#;
 
     const REPOSITORY_RELEASE_WORKFLOW: &str = r#"# maintained by the repository
@@ -1657,6 +2061,8 @@ jobs:
                 WorkflowRole::Publish,
                 [
                     "assemble-evidence",
+                    "record-built-subject",
+                    "seal-phase-tags",
                     "verify-publication",
                     "verify-release-tag",
                 ]
@@ -1816,6 +2222,231 @@ jobs:
             assert!(
                 declared.contains(key),
                 "the {action} Action declares {key}; declared: {declared:?}"
+            );
+        }
+    }
+
+    /// A workspace whose one release unit distributes one subject to two OCI destinations.
+    const TWO_DESTINATION_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml, gates: [ artifact_check ] }
+release-units:
+  component:
+    path: component
+    oci:
+      dockerhub: { repository: example-owner/example-image }
+      ghcr: {}
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+      published:
+        role: projection
+        template: '{id}/published@{version}'
+        require-phase: after-publication
+"#;
+
+    fn two_destination_workspace(label: &str) -> Workspace {
+        let workspace = workspace(label);
+        workspace
+            .write(".intentional/config.yml", TWO_DESTINATION_CONFIG)
+            .write("component/Dockerfile", "FROM scratch\n");
+        workspace
+    }
+
+    /// Managed jobs of the derived publish workflow, by identifier.
+    fn publish_jobs(root: &Path) -> serde_yaml::Mapping {
+        let document: Value =
+            serde_yaml::from_str(&workflow(root, WorkflowRole::Publish)).expect("result parses");
+        document["jobs"].as_mapping().expect("jobs").clone()
+    }
+
+    fn job_needs(jobs: &serde_yaml::Mapping, id: &str) -> Vec<String> {
+        jobs[&Value::String(id.to_owned())]["needs"]
+            .as_sequence()
+            .expect("needs")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn job_ids(jobs: &serde_yaml::Mapping, prefix: &str) -> Vec<String> {
+        jobs.keys()
+            .filter_map(Value::as_str)
+            .filter(|id| id.starts_with(prefix))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    // A subject is the thing a release publishes, not the act of publishing it.
+    // Two destinations of one packager describe one subject, so the graph has
+    // to derive one producer and two consumers of its artifact. Asserting the
+    // derived graph rather than the template text is what makes this survive a
+    // change in how the jobs are spelled.
+    #[test]
+    fn builds_one_subject_once_and_promotes_it_to_every_destination() {
+        let workspace = two_destination_workspace("workflow-build-once");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let builds = job_ids(&jobs, "intentional_build_");
+        assert_eq!(
+            builds,
+            vec!["intentional_build_component_buildx".to_owned()],
+            "two destinations of one packager derive one build job: {builds:?}"
+        );
+        let publishers = job_ids(&jobs, "intentional_publish_");
+        assert_eq!(
+            publishers.len(),
+            2,
+            "both destinations still derive their own publisher job: {publishers:?}"
+        );
+        for publisher in &publishers {
+            assert!(
+                job_needs(&jobs, publisher).contains(&builds[0]),
+                "{publisher} depends on the job that built its subject"
+            );
+            let downloads = jobs[&Value::String(publisher.clone())]["steps"]
+                .as_sequence()
+                .expect("steps")
+                .iter()
+                .filter_map(|step| step["with"]["name"].as_str())
+                .filter(|name| name.starts_with("intentional_subject-"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                downloads,
+                vec!["intentional_subject-component_buildx".to_owned()],
+                "{publisher} promotes the one built subject rather than rebuilding it"
+            );
+        }
+    }
+
+    // The phases exist to state what was true before and after publication, so
+    // their position in the graph is the whole claim: a before-publication tag
+    // sealed after a publisher job would seal what already shipped, and an
+    // after-publication tag sealed before one would seal what had not.
+    #[test]
+    fn orders_each_phase_tag_between_the_work_it_seals_and_the_work_it_gates() {
+        let workspace = two_destination_workspace("workflow-phase-order");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let before = "intentional_tag_before_publication";
+        let after = "intentional_tag_after_publication";
+        for build in job_ids(&jobs, "intentional_build_") {
+            assert!(
+                job_needs(&jobs, before).contains(&build),
+                "the before-publication tag seals after {build}"
+            );
+        }
+        for publisher in job_ids(&jobs, "intentional_publish_") {
+            assert!(
+                job_needs(&jobs, &publisher).contains(&before.to_owned()),
+                "{publisher} publishes only after the before-publication tag is sealed"
+            );
+            assert!(
+                job_needs(&jobs, after).contains(&publisher),
+                "the after-publication tag seals after {publisher}"
+            );
+        }
+        let assembly = job_needs(&jobs, "intentional_assemble_evidence");
+        for phase in [before, after] {
+            assert!(
+                assembly.contains(&phase.to_owned()),
+                "assembly reads what {phase} sealed: {assembly:?}"
+            );
+        }
+    }
+
+    // A phase with no configured tag seals nothing, so deriving its job would
+    // emit a privileged job whose command refuses the invocation.
+    #[test]
+    fn derives_no_tag_job_for_a_phase_the_configuration_does_not_declare() {
+        let declared = workspace("workflow-one-phase");
+        converge(declared.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(declared.root());
+        assert!(
+            jobs.contains_key(Value::String(
+                "intentional_tag_after_publication".to_owned()
+            )),
+            "the declared phase derives its tag job"
+        );
+
+        let undeclared = workspace("workflow-no-before-phase");
+        undeclared.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "      staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }\n",
+                "",
+            ),
+        );
+        converge(undeclared.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(undeclared.root());
+        assert!(
+            !jobs.contains_key(Value::String(
+                "intentional_tag_before_publication".to_owned()
+            )),
+            "an undeclared phase derives no tag job"
+        );
+        assert!(
+            !job_needs(&jobs, "intentional_assemble_evidence")
+                .contains(&"intentional_tag_before_publication".to_owned()),
+            "assembly does not wait on a job that does not exist"
+        );
+    }
+
+    // Tag creation is local and pushing is repository-owned, so a phase tag
+    // reaches the repository through a job that mints the installation token
+    // rather than through an Intentional-owned Action.
+    #[test]
+    fn pushes_each_phase_tag_through_the_repository_owned_privileged_step() {
+        let workspace = two_destination_workspace("workflow-phase-push");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        for phase in [
+            "intentional_tag_before_publication",
+            "intentional_tag_after_publication",
+        ] {
+            let body = &jobs[&Value::String(phase.to_owned())];
+            assert_eq!(
+                body["environment"].as_str(),
+                Some("intentional-release"),
+                "{phase} transitions authority inside the protected environment"
+            );
+            let steps = body["steps"].as_sequence().expect("steps");
+            assert!(
+                steps.iter().any(|step| step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))),
+                "{phase} mints the installation token that is the sole push authority"
+            );
+            let seal = steps
+                .iter()
+                .position(|step| {
+                    intentional_action(step).is_some_and(|(name, _)| name == "seal-phase-tags")
+                })
+                .unwrap_or_else(|| panic!("{phase} seals its tags through the published Action"));
+            let push = steps
+                .iter()
+                .position(|step| {
+                    step.get("run")
+                        .and_then(Value::as_str)
+                        .is_some_and(|body| body.contains("git push --atomic"))
+                })
+                .unwrap_or_else(|| panic!("{phase} pushes the tags it sealed"));
+            assert!(
+                seal < push,
+                "{phase} seals its tags locally before any of them is pushed"
             );
         }
     }

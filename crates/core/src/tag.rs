@@ -37,6 +37,13 @@ pub struct PlannedTag {
 pub struct TagResult {
     /// Tags in prerequisite-safe order.
     pub tags: Vec<PlannedTag>,
+    /// Canonical phase evidence every tag of this invocation seals.
+    ///
+    /// Retained independently of `tags`, because a rerun that finds its phase
+    /// tags already created plans no tag and still has to hand the sealed
+    /// evidence to assembly. Dropping it with the tag would make a retried
+    /// publication fail assembly for evidence the release genuinely carries.
+    pub sealed_phase_evidence: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -372,7 +379,36 @@ impl TagResult {
                 ),
             });
         }
-        Ok(Self { tags })
+        Ok(Self {
+            tags,
+            sealed_phase_evidence: evidence,
+        })
+    }
+
+    /// Write the phase evidence this invocation sealed as its own document.
+    ///
+    /// The tag record carries the evidence as one canonical record line, which
+    /// nothing downstream of Git can read. Assembly recognizes evidence by
+    /// document identity, so the same sealed value is written as a
+    /// schema-identified document and transported like every other fragment.
+    /// The document is the sealed record decoded and re-serialized, not a
+    /// second derivation, so the tag and the artifact cannot disagree.
+    pub fn write_sealed_phase_evidence(&self, output: &Path) -> Result<Option<std::path::PathBuf>> {
+        let Some(record) = &self.sealed_phase_evidence else {
+            return Ok(None);
+        };
+        let evidence = phase::decode(record)?;
+        std::fs::create_dir_all(output).map_err(|error| Error::io(output, error))?;
+        let path = output.join(format!("{}.yml", evidence.phase));
+        if path.exists() {
+            return Err(Error::Validation(format!(
+                "sealed phase evidence {} already exists; one phase seals once",
+                path.display()
+            )));
+        }
+        let document = serde_yaml::to_string(&evidence)?;
+        std::fs::write(&path, document).map_err(|error| Error::io(&path, error))?;
+        Ok(Some(path))
     }
 
     /// Human-readable operations printed identically for dry and real runs.
@@ -1586,6 +1622,59 @@ phase-tags: []
         let evidence = phase::decode(&record.fields[PHASE_EVIDENCE_FIELD])
             .expect("phase evidence decodes from the record");
         assert_eq!(evidence.subjects[0].identity, "sample-library: staged");
+    }
+
+    // Assembly reads documents, not tag messages, so the sealed evidence has to
+    // leave the invocation as a document. A rerun that finds its phase tags
+    // already created plans no tag and still carries the same sealed claim,
+    // because a retried publication has to reach assembly with the evidence the
+    // release genuinely carries.
+    #[test]
+    fn writes_the_sealed_phase_evidence_whether_or_not_a_tag_was_created() {
+        let workspace = phase_workspace("tag-phase-sealed-output");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let planned = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("before-publication tags");
+        planned
+            .apply(workspace.root(), false)
+            .expect("tags created");
+
+        let first = workspace.root().join("sealed");
+        let path = planned
+            .write_sealed_phase_evidence(&first)
+            .expect("the sealed evidence is written")
+            .expect("a phase that seals evidence writes a document");
+        assert_eq!(
+            path.file_name().and_then(std::ffi::OsStr::to_str),
+            Some("before-publication.yml")
+        );
+        let text = std::fs::read_to_string(&path).expect("sealed document");
+        let document: serde_yaml::Value =
+            serde_yaml::from_str(&text).expect("the sealed document parses");
+        assert_eq!(
+            document["$schema"].as_str(),
+            Some(PHASE_TAG_EVIDENCE_SCHEMA),
+            "assembly classifies the document by identity"
+        );
+        assert_eq!(
+            serde_yaml::from_str::<crate::evidence::assemble::PhaseTagEvidence>(&text)
+                .expect("the document is schema-valid"),
+            sealed(&planned.tags[0].message),
+            "the document carries exactly what the tag sealed"
+        );
+
+        let repeat = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("an identical phase tag is completed work");
+        assert!(repeat.tags.is_empty(), "a completed tag is not recreated");
+        let retry = repeat
+            .write_sealed_phase_evidence(&workspace.root().join("sealed-retry"))
+            .expect("the retry writes its sealed evidence")
+            .expect("a completed phase still carries what it sealed");
+        assert_eq!(
+            std::fs::read_to_string(retry).expect("retry document"),
+            text,
+            "a retried publication reaches assembly with the same sealed evidence"
+        );
     }
 
     #[test]

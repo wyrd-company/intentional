@@ -82,8 +82,8 @@ pub mod fixture {
     ///
     /// One release unit with one publishable adapter is the smallest
     /// configuration that still derives every managed job: preparation, the
-    /// authority transition, tag verification, one publisher, evidence
-    /// assembly, and closure.
+    /// authority transition, tag verification, one subject build, both phase
+    /// tags, one publisher, evidence assembly, and closure.
     pub const MANAGED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
 workspace-tags:
@@ -99,6 +99,7 @@ release-units:
     cargo: {}
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
+      staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
 "#;
 
     /// Repository-owned workflow the managed slices are spliced into.
