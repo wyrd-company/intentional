@@ -1,0 +1,23 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  An Intentional release plan is canonical JSON emitted by `intentional plan`.
+  The adjacent JSON Schema asset defines the digest seal, interpretation
+  contract, generator identity, optional release channel, changed release
+  units, contributing intent identifiers, rendered release notes, complete tag
+  records, and prerequisite-safe tag order. The schema retains the published
+  runtime identifier `https://intentional.foo/schemas/release-plan.yml`.
+
+  The `digest` is the lowercase SHA-256 digest of Intentional's canonical JSON
+  serialization of the plan payload with the digest field excluded. Object keys
+  are serialized in lexical order and arrays retain their contract-defined
+  semantic order. A supplied plan is accepted for tagging only when its digest,
+  generator contract, versions, tags, and current repository state agree with
+  the applied release.
+validation-criteria: >-
+  A plan conforms when it validates against `release-plan.json-schema.yml`, its
+  digest recomputes from the canonical payload, and Intentional accepts it for
+  the matching applied workspace state. Core and CLI tests verify deterministic
+  canonical serialization, digest sensitivity, release-unit ordering, tag
+  ordering, channels, plan sealing, and rejection of stale or altered plans.

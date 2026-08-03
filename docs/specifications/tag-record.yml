@@ -1,0 +1,24 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  An Intentional annotated-tag record is the closed logical object encoded as
+  newline-delimited `key: value` entries in an annotated Git tag message. The
+  adjacent JSON Schema asset defines its interpretation contract, generator,
+  release-plan digest, configured tag identifier, semantic version, and
+  baseline marker. The schema retains the published runtime identifier
+  `https://intentional.foo/schemas/tag-record.yml`.
+
+  Every configured release tag is an annotated Git tag whose message contains
+  exactly one value for every record field. Release records bind the tag name
+  and target commit to the digest-sealed release plan. Baseline records use a
+  deterministic digest of the established version set. Intentional treats an
+  exact existing record as idempotent completion and rejects conflicting tag
+  targets or record values.
+validation-criteria: >-
+  A record conforms when its parsed logical object validates against
+  `tag-record.json-schema.yml` and Intentional verifies the tag name, target,
+  configured identity, version, digest, baseline status, and prerequisite
+  records. Tag tests cover record rendering and parsing, baseline establishment,
+  retry acceptance, phase requirements, prerequisite order, and conflict
+  rejection.

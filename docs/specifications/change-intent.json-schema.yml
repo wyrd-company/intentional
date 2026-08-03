@@ -1,0 +1,17 @@
+# ---
+# relationships:
+#   implements: change-intent
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/change-intent.yml
+title: Intentional change-intent front matter
+description: >-
+  YAML front-matter mapping from configured release-unit identifiers to their
+  requested semantic-version bumps.
+type: object
+minProperties: 1
+propertyNames:
+  type: string
+  minLength: 1
+additionalProperties:
+  enum: [ major, minor, patch ]

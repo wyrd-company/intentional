@@ -1,0 +1,26 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  Intentional workspace configuration is a closed YAML document stored at
+  `.intentional/config.yml`. The adjacent JSON Schema asset defines the
+  `contract-1` interpretation contract, global versioning settings, fixed and
+  linked release-unit groups, workspace tags, discovery dispositions, release
+  units, version projections, dependency edges, and annotated-tag declarations.
+  The schema retains the published runtime identifier
+  `https://intentional.foo/schemas/config.yml`.
+
+  Release-unit and tag identifiers are mapping keys. A release unit identifies
+  its workspace-relative path and one or more tags. Projections select a
+  maintained ecosystem or format adapter, a release-unit-relative file, and a
+  materialization mode. Generic JSON, TOML, and YAML projections also identify
+  their version field by pointer. Intentional applies semantic validation after
+  deserialization for graph references, tag templates and ordering, projection
+  requirements, path ownership, and release-unit relationships that JSON Schema
+  cannot express in isolation.
+validation-criteria: >-
+  A document conforms when it validates against `config.json-schema.yml` and
+  Intentional's configuration loader accepts it. Core tests deserialize the
+  adjacent schema, exercise closed-field and enum constraints, and verify the
+  semantic invariants enforced by the loader. `intentional check` loads this
+  contract as part of workspace validation.

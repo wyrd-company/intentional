@@ -1,0 +1,25 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  An Intentional initialization plan is a closed YAML document stored at
+  `.intentional/init-plan.yml` when workspace discovery requires operator input.
+  `intentional init --json` emits the same data model as canonical JSON. The
+  adjacent JSON Schema asset defines its source fingerprint, inferred
+  configuration, discovered candidates and their evidence, operator
+  resolutions, diagnostics, converted intents, version parity, planned
+  operations, and post-commit action. The schema retains the published runtime
+  identifier `https://intentional.foo/schemas/init-plan.yml`.
+
+  The plan is bound to the discovered source state by a SHA-256 fingerprint.
+  Candidate evidence uses exact workspace-relative paths and content digests.
+  A plan in `needs-input` state carries unresolved choices; a plan in `ready`
+  state contains the resolutions required for deterministic application.
+  Intentional revalidates the source fingerprint, evidence, resolutions, and
+  inferred configuration before applying the plan.
+validation-criteria: >-
+  A plan conforms when it validates against `init-plan.json-schema.yml`, parses
+  as Intentional's initialization-plan model, and passes source and resolution
+  validation. Core and CLI tests cover YAML and JSON serialization, discovery
+  candidate variants, diagnostics, invalidated evidence, stale source
+  fingerprints, ready-state application, and Changesets authority transfer.

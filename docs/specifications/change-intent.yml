@@ -1,0 +1,23 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  An Intentional change intent is a Markdown file under
+  `.intentional/intents/` with a YAML front-matter mapping followed by non-empty
+  changelog prose. The adjacent JSON Schema asset defines the front-matter
+  snippet: each mapping key is a configured release-unit identifier and each
+  value is the requested `major`, `minor`, or `patch` semantic-version bump.
+  The filename stem is the intent identifier.
+
+  The Markdown body is the changelog message contributed to every named release
+  unit. Intentional trims surrounding body whitespace and preserves the
+  resulting prose in deterministic release-note generation. Every named release
+  unit must exist in the active workspace configuration.
+validation-criteria: >-
+  The YAML front matter conforms when it validates against
+  `change-intent.json-schema.yml`. The complete file conforms when it uses exact
+  opening and closing front-matter delimiters, contains non-empty changelog
+  prose, and Intentional resolves every mapping key to a configured release
+  unit. Intent parsing and authoring tests cover deterministic front-matter
+  rendering, non-empty bump mappings, unknown release units, and non-empty
+  changelog messages.

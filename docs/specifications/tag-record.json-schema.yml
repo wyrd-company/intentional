@@ -1,0 +1,25 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/tag-record.yml
+title: Intentional annotated tag record
+description: >-
+  The canonical fields encoded as newline-delimited key/value entries in an
+  annotated Git tag message.
+type: object
+additionalProperties: false
+required: [ contract, generator, plan-digest, tag-id, version, baseline ]
+properties:
+  contract:
+    const: contract-1
+  generator:
+    type: string
+    pattern: "^intentional [0-9]+\\.[0-9]+\\.[0-9]+"
+  plan-digest:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  tag-id: { type: string }
+  version: { type: string }
+  baseline: { type: boolean }
