@@ -321,6 +321,7 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
                 text,
                 previous.key_line_end,
                 pending_comment.unwrap_or(line.start),
+                indent,
             );
         }
         entries.push(Entry {
@@ -334,7 +335,7 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
         });
     }
     if let Some(previous) = entries.last_mut() {
-        previous.end = trimmed_end(text, previous.key_line_end, region.end);
+        previous.end = trimmed_end(text, previous.key_line_end, region.end, indent);
     }
     Some(entries)
 }
@@ -346,14 +347,23 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
 /// are appended last, so leaving those lines inside the final entry would
 /// destroy a maintainer's closing comment on the next replacement — exactly the
 /// content this module exists to protect.
-fn trimmed_end(text: &str, floor: usize, mut end: usize) -> usize {
+///
+/// The pull-back stops at the entry's own value. A `#` line indented past the
+/// container is script text inside a literal block scalar, not a comment about
+/// the container: `run: |` bodies routinely end in a shell comment, and
+/// treating one as a container line would splice the next entry into the middle
+/// of somebody's script. Blank lines carry no such ambiguity at any column.
+fn trimmed_end(text: &str, floor: usize, mut end: usize, indent: usize) -> usize {
     while end > floor {
         let start = line_start(text, end - 1);
         if start < floor {
             break;
         }
-        let line = text[start..end].trim();
-        if !(line.is_empty() || line.starts_with('#') || line == "...") {
+        let line = &text[start..end];
+        let content = line.trim();
+        let outside = content.is_empty()
+            || ((content.starts_with('#') || content == "...") && indent_of(line) <= indent);
+        if !outside {
             break;
         }
         end = start;
@@ -723,6 +733,30 @@ mod tests {
             document.text(),
             "jobs:\n  a:\n    runs-on: z\n  b:\n    runs-on: y\n  # closes the jobs block\n",
             "a new entry lands before the comment that closes the mapping"
+        );
+    }
+
+    #[test]
+    fn leaves_a_script_comment_inside_the_entry_that_owns_it() {
+        let source = "jobs:\n  repository_job:\n    steps:\n      - run: |\n          make build\n          # tidy up afterwards\n";
+        let mut document = Document::parse(source).expect("parses");
+        document
+            .set(&["jobs", "managed"], &value("runs-on: ubuntu-latest\n"))
+            .expect("inserts after the last entry");
+        assert_eq!(
+            document.text(),
+            "jobs:\n  repository_job:\n    steps:\n      - run: |\n          make build\n          # tidy up afterwards\n  managed:\n    runs-on: ubuntu-latest\n",
+            "a shell comment ending a literal block scalar belongs to its job, not the mapping"
+        );
+        assert_eq!(
+            document
+                .get(&["jobs", "repository_job", "steps"])
+                .expect("steps")
+                .expect("present")[0]["run"]
+                .as_str()
+                .expect("script"),
+            "make build\n# tidy up afterwards\n",
+            "the script survives intact"
         );
     }
 
