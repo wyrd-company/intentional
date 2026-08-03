@@ -428,6 +428,15 @@ fn select_one(
     let recipe = match matches.as_slice() {
         [recipe] => *recipe,
         [] => {
+            // A capability the release unit nearly derived is the cause the
+            // user can act on. Reporting only the derived set names the
+            // symptom, and for a Go module whose command package was not
+            // discovered it names the wrong thing entirely.
+            if let Some(reason) = withheld_capability_reason(root, release_unit, capabilities)? {
+                return Err(Error::Validation(format!(
+                    "no maintained publication recipe matches the configured target {id}/{publisher}/{target}: {reason}"
+                )));
+            }
             return Err(Error::Validation(format!(
                 "no maintained publication recipe matches the configured target {id}/{publisher}/{target}; derived capabilities are {}",
                 capability_names(capabilities)
@@ -498,6 +507,36 @@ fn retrieval_mode(recipe: &Recipe, destination: Option<&str>) -> CleanClientMode
     }
 }
 
+/// Why a release unit that looks publishable derived no capability for it.
+///
+/// Native evidence that a project is a Go module is not evidence that it is a
+/// publishable Go application: the packager builds a command, and a module with
+/// no discoverable command package has nothing for it to build. That distinction
+/// is invisible in the derived capability set, so it is reported here rather
+/// than leaving the user to read "derived capabilities are none" and conclude
+/// the release unit is not a Go project at all.
+fn withheld_capability_reason(
+    root: &Path,
+    release_unit: &ReleaseUnitConfig,
+    capabilities: &BTreeSet<Capability>,
+) -> Result<Option<String>> {
+    if capabilities.contains(&Capability::GoApplication) {
+        return Ok(None);
+    }
+    let directory = root.join(&release_unit.path);
+    if !directory.join("go.mod").is_file() {
+        return Ok(None);
+    }
+    if main_package_directory(&directory)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "release unit {} is a Go module but declares no discoverable main package, so it derives no {} capability; the maintained recipes build a command, and the packager finds one in the release-unit root, under cmd to {COMMAND_SEARCH_DEPTH} directories deep, or wherever the native GoReleaser configuration's builds[].main names",
+        release_unit.path.display(),
+        Capability::GoApplication
+    )))
+}
+
 fn capability_names(capabilities: &BTreeSet<Capability>) -> String {
     if capabilities.is_empty() {
         return "none".to_owned();
@@ -537,7 +576,9 @@ pub fn derive_capabilities(
             unit.join("Cargo.toml"),
         )?);
     }
-    if root.join(unit).join("go.mod").is_file() && has_main_package(&root.join(unit))? {
+    if root.join(unit).join("go.mod").is_file()
+        && main_package_directory(&root.join(unit))?.is_some()
+    {
         derived.push(capability_evidence(
             root,
             Capability::GoApplication,
@@ -664,39 +705,158 @@ fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Strin
     }
 }
 
-fn has_main_package(directory: &Path) -> Result<bool> {
-    let mut roots = vec![directory.to_owned()];
-    let commands = directory.join("cmd");
-    if commands.is_dir() {
-        for entry in std::fs::read_dir(&commands).map_err(|error| Error::io(&commands, error))? {
-            let entry = entry.map_err(|error| Error::io(&commands, error))?;
-            if entry.path().is_dir() {
-                roots.push(entry.path());
-            }
+/// Directories a Go module's command package can be discovered in.
+///
+/// Real Go repositories place the command a release publishes in one of three
+/// shapes, and the derivation reads all three because the packager can only
+/// build what one of them names.
+///
+/// The packager's own configuration is the first and most authoritative source:
+/// GoReleaser's `builds[].main` states the main package directory outright, so
+/// a repository whose command lives somewhere idiosyncratic has already said
+/// where. The conventional `cmd/<name>` layout is the second, read to a bounded
+/// depth because `cmd/<name>/<platform>` and `cmd/<name>/internal` both occur.
+/// The module root is the third, which is the whole layout of a single-binary
+/// tool.
+///
+/// Depth is bounded rather than unbounded on purpose. An unbounded walk of a
+/// release unit would read `vendor/`, `testdata/`, and every dependency copied
+/// into the tree, and would derive a publishable capability from a `package
+/// main` that belongs to something the release does not publish.
+const COMMAND_SEARCH_DEPTH: usize = 3;
+
+/// Where one release unit's Go command package lives, when it can be found.
+///
+/// Discovery returns the directory rather than a boolean because the reason a
+/// capability was withheld has to be reportable: a `go.mod` with no discoverable
+/// command is a diagnosable configuration, not an absent Go module.
+fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
+    for root in command_search_roots(directory)? {
+        if declares_main_package(&root)? {
+            return Ok(Some(root));
         }
     }
-    for root in roots {
-        let Ok(entries) = std::fs::read_dir(&root) else {
+    Ok(None)
+}
+
+/// Every directory the main package could be discovered in, in priority order.
+fn command_search_roots(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut roots = goreleaser_main_directories(directory)?;
+    roots.push(directory.to_owned());
+    collect_command_directories(&directory.join("cmd"), COMMAND_SEARCH_DEPTH, &mut roots)?;
+    let mut seen = BTreeSet::new();
+    roots.retain(|root| root.is_dir() && seen.insert(root.clone()));
+    Ok(roots)
+}
+
+/// Main package directories the native GoReleaser configuration names.
+///
+/// GoReleaser resolves `builds[].main` relative to its own working directory,
+/// which the derived build job sets to the release unit, so the same relative
+/// resolution is applied here. A path escaping the release unit is ignored
+/// rather than followed: capability derivation reads the unit it is deriving.
+fn goreleaser_main_directories(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut directories = Vec::new();
+    for name in Packager::GoReleaser.configuration_paths() {
+        let path = directory.join(name);
+        if !path.is_file() {
             continue;
-        };
-        for entry in entries {
-            let entry = entry.map_err(|error| Error::io(&root, error))?;
-            let path = entry.path();
-            if path.extension().is_none_or(|extension| extension != "go") {
-                continue;
-            }
-            let Ok(text) = std::fs::read_to_string(&path) else {
+        }
+        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+        let document = serde_yaml::from_str::<serde_yaml::Value>(&text)
+            .map_err(|error| Error::Validation(format!("{name} is not valid YAML: {error}")))?;
+        let builds = document
+            .get("builds")
+            .and_then(serde_yaml::Value::as_sequence)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        for build in builds {
+            let Some(main) = build.get("main").and_then(serde_yaml::Value::as_str) else {
                 continue;
             };
-            if text
-                .lines()
-                .any(|line| line.trim_end() == "package main" || line.trim_end() == "package main;")
+            // `main` names either a package directory or a single file within
+            // one, and both forms mean the same package.
+            let relative = Path::new(main.trim_start_matches("./"));
+            let relative = if relative
+                .extension()
+                .is_some_and(|extension| extension == "go")
             {
-                return Ok(true);
+                relative.parent().unwrap_or(Path::new("")).to_owned()
+            } else {
+                relative.to_owned()
+            };
+            if relative.components().any(|component| {
+                matches!(component, std::path::Component::ParentDir)
+                    || component.as_os_str().to_string_lossy().starts_with('/')
+            }) {
+                continue;
             }
+            directories.push(directory.join(relative));
+        }
+    }
+    Ok(directories)
+}
+
+/// Collect `cmd` subdirectories to a bounded depth.
+fn collect_command_directories(
+    directory: &Path,
+    remaining: usize,
+    collected: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if remaining == 0 || !directory.is_dir() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(directory).map_err(|error| Error::io(directory, error))?;
+    let mut children = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|error| Error::io(directory, error))?.path();
+        if path.is_dir() {
+            children.push(path);
+        }
+    }
+    children.sort();
+    for child in children {
+        collected.push(child.clone());
+        collect_command_directories(&child, remaining - 1, collected)?;
+    }
+    Ok(())
+}
+
+/// Whether the Go files directly inside one directory declare `package main`.
+///
+/// The clause is read as Go declares it rather than as an exact line, because a
+/// build-constrained file and a file carrying an import comment both spell the
+/// package clause with something after it and both are ordinary Go.
+fn declares_main_package(directory: &Path) -> Result<bool> {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Ok(false);
+    };
+    for entry in entries {
+        let path = entry.map_err(|error| Error::io(directory, error))?.path();
+        if path.extension().is_none_or(|extension| extension != "go") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.lines().any(is_main_package_clause) {
+            return Ok(true);
         }
     }
     Ok(false)
+}
+
+/// Whether one source line is the `package main` clause.
+fn is_main_package_clause(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("package ") else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    let Some(rest) = rest.strip_prefix("main") else {
+        return false;
+    };
+    let rest = rest.trim_start_matches(';').trim();
+    rest.is_empty() || rest.starts_with("//") || rest.starts_with("/*")
 }
 
 #[cfg(test)]
@@ -1002,6 +1162,152 @@ release-units:
                 recipe.target
             );
         }
+    }
+
+    /// The Go layouts a maintained GoReleaser recipe has to recognize.
+    ///
+    /// Each entry is the layout of a real Go repository shape, paired with the
+    /// files that make it that shape. Deriving the capability from one layout
+    /// and not another would leave a publishable repository reporting that no
+    /// maintained recipe matches its configured target.
+    const GO_LAYOUTS: [(&str, &[(&str, &str)]); 5] = [
+        (
+            "a single-binary tool with main at the module root",
+            &[("component/main.go", "package main\n\nfunc main() {}\n")],
+        ),
+        (
+            "the conventional cmd/<name> layout",
+            &[(
+                "component/cmd/example/main.go",
+                "package main\n\nfunc main() {}\n",
+            )],
+        ),
+        (
+            "a command nested below cmd/<name>",
+            &[(
+                "component/cmd/example/app/main.go",
+                "package main\n\nfunc main() {}\n",
+            )],
+        ),
+        (
+            "a main package the native GoReleaser configuration names",
+            &[
+                (
+                    "component/.goreleaser.yaml",
+                    "version: 2\nbuilds:\n  - main: ./tools/example\n",
+                ),
+                (
+                    "component/tools/example/main.go",
+                    "package main\n\nfunc main() {}\n",
+                ),
+            ],
+        ),
+        (
+            "a package clause carrying an import comment",
+            &[(
+                "component/main.go",
+                "package main // import \"example.test/component\"\n\nfunc main() {}\n",
+            )],
+        ),
+    ];
+
+    #[test]
+    fn derives_the_go_application_capability_from_every_supported_layout() {
+        for (layout, files) in GO_LAYOUTS {
+            let workspace = Workspace::new("go-layout");
+            workspace.write("component/go.mod", "module example.test/component\n");
+            for (relative, contents) in files {
+                workspace.write(relative, contents);
+            }
+            let derived =
+                derive_capabilities(workspace.root(), &config("").release_units["component"])
+                    .expect("capabilities derive");
+            assert!(
+                capability_set(&derived).contains(&Capability::GoApplication),
+                "{layout} derives the go-application capability"
+            );
+
+            let selected = select_publications(
+                workspace.root(),
+                &config("    homebrew: { repository: example-org/homebrew-tap }\n"),
+            )
+            .unwrap_or_else(|error| panic!("{layout} selects a recipe: {error}"));
+            assert_eq!(selected[0].packager, Packager::GoReleaser);
+        }
+    }
+
+    #[test]
+    fn reports_a_go_module_with_no_discoverable_command_as_the_cause() {
+        let workspace = Workspace::new("go-no-command");
+        workspace
+            .write("component/go.mod", "module example.test/component\n")
+            .write(
+                "component/library.go",
+                "package component\n\nfunc Example() {}\n",
+            );
+        let error = select_publications(
+            workspace.root(),
+            &config("    homebrew: { repository: example-org/homebrew-tap }\n"),
+        )
+        .expect_err("a module with no command is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("is a Go module but declares no discoverable main package"),
+            "{error}"
+        );
+
+        // The diagnostic names the missing command rather than the derived set,
+        // which is the whole point: "derived capabilities are none" tells a Go
+        // repository nothing about what it has to fix.
+        assert!(
+            !error.to_string().contains("derived capabilities are"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn withholds_the_capability_from_a_main_package_outside_the_release_unit() {
+        // An unbounded search would reach a vendored or copied command and
+        // derive a capability for something the release does not publish.
+        let workspace = Workspace::new("go-vendored");
+        workspace
+            .write("component/go.mod", "module example.test/component\n")
+            .write(
+                "component/vendor/example.test/other/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write(
+                "component/cmd/example/deep/deeper/deepest/main.go",
+                "package main\n\nfunc main() {}\n",
+            );
+        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
+            .expect("capabilities derive");
+        assert!(
+            !capability_set(&derived).contains(&Capability::GoApplication),
+            "a command outside the searched layout derives nothing"
+        );
+    }
+
+    #[test]
+    fn a_go_module_that_derives_its_capability_reports_no_withheld_reason() {
+        // The reason exists to explain an absent capability. Reporting one for
+        // a release unit whose capability derived would make an unrelated
+        // unsupported combination read as a Go layout problem.
+        let workspace = Workspace::new("go-unrelated");
+        workspace
+            .write("component/go.mod", "module example.test/component\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n");
+        let error = select_publications(workspace.root(), &config("    npm: {}\n"))
+            .expect_err("an unsupported combination is refused");
+        assert!(
+            error.to_string().contains("derived capabilities are"),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains("no discoverable main package"),
+            "{error}"
+        );
     }
 
     #[test]
