@@ -761,17 +761,25 @@ fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
 
 /// Every directory the main package could be discovered in, in priority order.
 fn command_search_roots(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut roots = crate::executor::goreleaser::read(directory)?
-        .map(|config| {
-            config
-                .main_directories
-                .into_iter()
-                .map(|relative| directory.join(relative))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut roots = Vec::new();
+    let mut prefixes = vec![directory.join("cmd")];
+    if let Some(config) = crate::executor::goreleaser::read(directory)? {
+        for relative in config.main_directories {
+            // GoReleaser accepts an ellipsis import path, which names every
+            // main package beneath a prefix rather than one package. Reading it
+            // as a directory would look for a directory literally called `...`.
+            match relative.file_name().and_then(|name| name.to_str()) {
+                Some("...") => {
+                    prefixes.push(directory.join(relative.parent().unwrap_or(Path::new(""))))
+                }
+                _ => roots.push(directory.join(relative)),
+            }
+        }
+    }
     roots.push(directory.to_owned());
-    collect_command_directories(&directory.join("cmd"), COMMAND_SEARCH_DEPTH, &mut roots)?;
+    for prefix in prefixes {
+        collect_command_directories(&prefix, COMMAND_SEARCH_DEPTH, &mut roots)?;
+    }
     let mut seen = BTreeSet::new();
     roots.retain(|root| root.is_dir() && seen.insert(root.clone()));
     Ok(roots)
@@ -1150,7 +1158,7 @@ release-units:
     /// files that make it that shape. Deriving the capability from one layout
     /// and not another would leave a publishable repository reporting that no
     /// maintained recipe matches its configured target.
-    const GO_LAYOUTS: [(&str, &[(&str, &str)]); 5] = [
+    const GO_LAYOUTS: [(&str, &[(&str, &str)]); 6] = [
         (
             "a single-binary tool with main at the module root",
             &[("component/main.go", "package main\n\nfunc main() {}\n")],
@@ -1178,6 +1186,19 @@ release-units:
                 ),
                 (
                     "component/tools/example/main.go",
+                    "package main\n\nfunc main() {}\n",
+                ),
+            ],
+        ),
+        (
+            "an ellipsis import path naming every command beneath a prefix",
+            &[
+                (
+                    "component/.goreleaser.yaml",
+                    "version: 2\nbuilds:\n  - main: ./tools/...\n",
+                ),
+                (
+                    "component/tools/nested/example/main.go",
                     "package main\n\nfunc main() {}\n",
                 ),
             ],
