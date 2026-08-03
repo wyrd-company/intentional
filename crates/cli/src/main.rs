@@ -339,9 +339,13 @@ fn resolve(root: &std::path::Path, path: PathBuf) -> PathBuf {
 }
 
 fn environment(name: &str) -> Result<String> {
-    std::env::var(name).map_err(|_| {
-        anyhow::anyhow!("{name} identifies the assembling workflow run and must be set")
-    })
+    match std::env::var(name) {
+        Ok(value) => Ok(value),
+        Err(std::env::VarError::NotPresent) => {
+            bail!("{name} identifies the assembling workflow run and must be set")
+        }
+        Err(error) => bail!("{name} is set to a value this platform cannot read: {error}"),
+    }
 }
 
 /// Read a workflow variable that is absent only outside GitHub Actions.
