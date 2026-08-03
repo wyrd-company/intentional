@@ -8,6 +8,7 @@
 use crate::error::{Error, Result};
 use crate::evidence::{
     copy_and_digest, digest_bytes, is_digest, is_flat_name, is_namespace, prepare_output,
+    DIGEST_PREFIX,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ pub const CONTRIBUTION_ARTIFACT_PREFIX: &str = "intentional-contribution";
 /// Job identity used when a contribution is constructed outside GitHub Actions.
 pub const LOCAL_JOB: &str = "local";
 
-const NAMESPACE_HASH_LENGTH: usize = 16;
+const NAMESPACE_HASH_LENGTH: usize = 64;
 
 /// One contributed file inventoried by its Release asset name, bundle-relative
 /// path, and digest.
@@ -167,6 +168,12 @@ pub fn contribute(request: &ContributionRequest<'_>) -> Result<ContributionBundl
     if request.value_file.is_none() && request.attachments.is_empty() {
         findings.push("at least one value file or attachment is required".to_owned());
     }
+    if !is_job_identity(request.job) {
+        findings.push(format!(
+            "contributing job {:?} must be a GitHub job identifier",
+            request.job
+        ));
+    }
     let mut sources: Vec<(String, &Path)> = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for attachment in request.attachments {
@@ -263,41 +270,32 @@ pub fn contribute(request: &ContributionRequest<'_>) -> Result<ContributionBundl
 ///
 /// The hash keeps arbitrary contributor namespaces out of GitHub artifact
 /// names while still giving assembly a stable grouping key it can bind back to
-/// the namespace the manifest declares.
+/// the namespace the manifest declares. It is the complete digest, so two
+/// namespaces can never share a grouping key.
 pub fn namespace_hash(namespace: &str) -> String {
     digest_bytes(namespace.as_bytes())
-        .trim_start_matches("sha256:")
-        .chars()
-        .take(NAMESPACE_HASH_LENGTH)
-        .collect()
+        .trim_start_matches(DIGEST_PREFIX)
+        .to_owned()
 }
 
 /// Collision-safe artifact name transporting one contribution bundle.
 pub fn artifact_name(namespace: &str, job: &str, run_attempt: u32) -> String {
     format!(
-        "{CONTRIBUTION_ARTIFACT_PREFIX}-{}-{}-{run_attempt}",
-        namespace_hash(namespace),
-        job_slug(job)
+        "{CONTRIBUTION_ARTIFACT_PREFIX}-{}-{job}-{run_attempt}",
+        namespace_hash(namespace)
     )
 }
 
-/// Reduce a job identifier to the characters a GitHub artifact name accepts.
-fn job_slug(job: &str) -> String {
-    let slug: String = job
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if slug.is_empty() {
-        LOCAL_JOB.to_owned()
-    } else {
-        slug
-    }
+/// Whether a job identifier survives an artifact name without losing identity.
+///
+/// GitHub job identifiers are already restricted to these characters, so a job
+/// is recorded exactly as the workflow names it rather than folded into a slug
+/// that could make two distinct jobs share one contribution.
+pub(crate) fn is_job_identity(job: &str) -> bool {
+    !job.is_empty()
+        && job
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 /// Contributor identity recovered from one contribution artifact name.
@@ -355,6 +353,29 @@ mod tests {
             job: "assess",
             run_attempt: 1,
         }
+    }
+
+    #[test]
+    fn rejects_a_job_identity_an_artifact_name_could_not_carry() {
+        let workspace = Workspace::new("contribute-job");
+        workspace.write("value.yml", "1\n");
+        let value_file = workspace.root().join("value.yml");
+        let output = workspace.root().join("bundle");
+        let error = contribute(&ContributionRequest {
+            namespace: "assessment",
+            value_file: Some(&value_file),
+            attachments: &[],
+            output: &output,
+            job: "scan report",
+            run_attempt: 1,
+        })
+        .expect_err("unusable job identity rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("must be a GitHub job identifier"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -530,8 +551,21 @@ mod tests {
         let name = artifact_name("assessment", "scan-and-report", 12);
         let parsed = parse_artifact_name(&name).expect("artifact name parses");
         assert_eq!(parsed.namespace_hash, namespace_hash("assessment"));
-        assert_eq!(parsed.job, "scan_and_report");
+        assert_eq!(
+            parsed.job, "scan-and-report",
+            "a job keeps its exact identity"
+        );
         assert_eq!(parsed.run_attempt, 12);
+        assert_eq!(
+            namespace_hash("assessment").len(),
+            64,
+            "the complete digest keys a contribution"
+        );
+        assert_ne!(
+            artifact_name("assessment", "scan-a", 1),
+            artifact_name("assessment", "scan_a", 1),
+            "jobs that differ only in separator remain distinct"
+        );
         assert_ne!(
             artifact_name("assessment", "one", 1),
             artifact_name("assessment", "two", 1)
