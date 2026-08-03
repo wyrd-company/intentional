@@ -42,6 +42,13 @@ pub const WORKFLOW_CONTRACT: &str = "github-workflow-1";
 /// Published workflow-diff schema identifier.
 pub const WORKFLOW_DIFF_SCHEMA: &str = "https://intentional.foo/schemas/workflow-diff/v1";
 
+/// Largest workflow the comparison will read.
+///
+/// `--workflow` accepts an arbitrary file and the patch is computed from a
+/// quadratic line comparison, so the input is bounded rather than trusted. A
+/// GitHub workflow is orders of magnitude smaller than this.
+const MAX_WORKFLOW_LINES: usize = 2_000;
+
 const CHECKOUT_ACTION: &str = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09";
 const UPLOAD_ARTIFACT_ACTION: &str =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
@@ -267,6 +274,18 @@ pub fn compare_configured_workflow(
         }
     };
     let input_digest = digest(&text);
+    let lines = text.lines().count();
+    if lines > MAX_WORKFLOW_LINES {
+        let diagnostic = WorkflowDiagnostic::at(
+            "workflow-too-large",
+            format!(
+                "{} has {lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}",
+                relative.display()
+            ),
+            &relative.display().to_string(),
+        );
+        return Ok(blocked(role, relative, file, text, vec![diagnostic]));
+    }
     let contract = match derive_contract(root, config, github, role) {
         Ok(contract) => contract,
         Err(diagnostics) => return Ok(blocked(role, relative, file, text, diagnostics)),
@@ -1589,6 +1608,26 @@ jobs:
             compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert_eq!(comparison.diagnostics[0].code, "job-identifier-collision");
+    }
+
+    #[test]
+    fn refuses_to_compare_an_unbounded_workflow() {
+        let workspace = workspace("workflow-too-large");
+        let padding = (0..=MAX_WORKFLOW_LINES)
+            .map(|line| format!("# padding {line}\n"))
+            .collect::<String>();
+        workspace.write(
+            "oversized.yml",
+            &format!("{padding}{REPOSITORY_RELEASE_WORKFLOW}"),
+        );
+        let comparison = compare_workflow(
+            workspace.root(),
+            WorkflowRole::Release,
+            Some(Path::new("oversized.yml")),
+        )
+        .expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics[0].code, "workflow-too-large");
     }
 
     #[test]

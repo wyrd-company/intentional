@@ -12,6 +12,9 @@
 /// Context lines shown either side of a change.
 const CONTEXT: usize = 3;
 
+// The line comparison below builds a full longest-common-subsequence table,
+// which is quadratic in lines. Callers bound their input before reaching it.
+
 /// Render a unified patch that turns `before` into `after`.
 ///
 /// An empty result means the two texts are identical.

@@ -272,6 +272,11 @@ Apply re-reads the workflow and refuses the transformation if the file changed
 after the patch was computed, so a stale patch never overwrites newer content.
 Use `--workflow PATH` to compare a candidate file instead of the configured one.
 
+A comparison can also report advisories you should read before applying it. The
+safe top-level permission default withdraws workflow-level scopes such as
+`id-token: write`; the comparison names each one it drops so a repository-owned
+job that needs it can declare it per job.
+
 Reconciliation adds the required triggers, the release concurrency policy, a
 safe top-level permission default, and the complete managed jobs, and wires each
 configured gate into the job it governs. Your own triggers, jobs, comments, and

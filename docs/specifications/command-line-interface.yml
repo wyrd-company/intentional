@@ -506,7 +506,13 @@ commands:
         notes:
           - >-
             A comparison that finds drift still completes successfully and
-            communicates the drift through its selected output mode.
+            communicates the drift through its selected output mode. Diff
+            reports; executor check is the command that fails on drift, so
+            continuous integration gates on check rather than on this exit code.
+          - >-
+            A conformant or different result can carry advisory diagnostics
+            naming consequences of the proposed transformation, such as
+            workflow-level permission scopes the safe default withdraws.
           - >-
             Without --apply the command is read-only. With --apply it changes
             only the selected workflow file.
