@@ -53,7 +53,10 @@ description: >-
   because only the recipe holds the credentials and the ecosystem knowledge to
   compare a client-side artifact with a destination-side one. Verification
   records the digest unchanged and compares it only against later observations
-  of the same publication.
+  of the same publication. A client that reports no digest of its own records
+  one the recipe computes over the bytes it retrieved, because the field states
+  what the client received; the destination's own published checksum is a
+  destination-side claim and belongs in `destination.digest`.
 
   `authenticated-draft` is the one mode whose retrieved bytes the protocol can
   check for itself. Those bytes are an asset of the still-draft GitHub Release,

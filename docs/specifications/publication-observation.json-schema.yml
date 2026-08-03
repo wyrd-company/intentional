@@ -108,6 +108,16 @@ properties:
           draft-asset inventory uses.
         type: string
         minLength: 1
+    allOf:
+      - if:
+          required: [ mode ]
+          properties:
+            mode:
+              const: authenticated-draft
+        then:
+          properties:
+            digest:
+              $ref: "#/$defs/sha256"
   destination-aliases:
     type: array
     items:

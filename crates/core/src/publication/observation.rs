@@ -7,8 +7,8 @@
 
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{
-    AttachedMetadata, CleanClient, Destination, DestinationAlias, EvidenceReference,
-    PackagerRecord, Subject,
+    AttachedMetadata, CleanClient, CleanClientMode, Destination, DestinationAlias,
+    EvidenceReference, PackagerRecord, Subject,
 };
 use crate::model::PublisherKind;
 use serde::{Deserialize, Serialize};
@@ -165,6 +165,23 @@ impl PublicationObservation {
                 }
             }
             ObservationState::Conflict => {}
+        }
+        // Every mode but this one records the retrieved bytes in the client's
+        // own form, which the protocol cannot interpret. An authenticated-draft
+        // retrieval is the exception: its bytes are a draft Release asset, and
+        // the draft-asset handoff verifies exactly those bytes against the
+        // canonical inventory the release sealed. Requiring the same spelling
+        // here is what keeps joining the two a comparison rather than a
+        // translation.
+        if let Some(retrieval) = &self.retrieval {
+            if retrieval.mode == CleanClientMode::AuthenticatedDraft
+                && !crate::evidence::is_digest(&retrieval.digest)
+            {
+                return Err(Error::Validation(format!(
+                    "{label} observes an authenticated-draft retrieval whose digest {:?} is not a canonical sha256 digest; those bytes are a draft Release asset and the release sealed their sha256",
+                    retrieval.digest
+                )));
+            }
         }
         match (self.state, self.conflict.as_deref()) {
             (ObservationState::Conflict, Some(conflict)) if !conflict.trim().is_empty() => Ok(()),
@@ -607,6 +624,44 @@ state: absent
             "{error}"
         );
         assert!(clock.waits.borrow().is_empty());
+    }
+
+    // The one retrieval whose bytes the protocol can check for itself is the
+    // draft Release asset the release already sealed a sha256 for. A digest in
+    // some other spelling makes the join a translation, which is exactly the
+    // silence this contract exists to remove.
+    #[test]
+    fn an_authenticated_draft_retrieval_that_is_not_a_canonical_sha256_is_rejected() {
+        let workspace = Workspace::new("observation-draft-digest");
+        let document = present_document()
+            .replace("publisher: npm", "publisher: homebrew")
+            .replace("mode: public", "mode: authenticated-draft");
+        workspace.write(
+            "observation.yml",
+            &document.replacen(
+                &format!("digest: {}\n", digest("aa")),
+                "digest: sha512-example\n",
+                4,
+            ),
+        );
+        let error = PublicationObservation::load(&workspace.root().join("observation.yml"))
+            .expect_err("a draft retrieval in a foreign digest form is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("authenticated-draft retrieval whose digest"),
+            "{error}"
+        );
+
+        // The same observation is accepted once it spells the digest the way
+        // the draft-asset inventory does.
+        workspace.write("observation.yml", &document);
+        let observation = PublicationObservation::load(&workspace.root().join("observation.yml"))
+            .expect("a canonical draft retrieval digest is accepted");
+        assert_eq!(
+            observation.retrieval.expect("retrieval").mode,
+            CleanClientMode::AuthenticatedDraft
+        );
     }
 
     #[test]
