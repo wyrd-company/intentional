@@ -4,7 +4,9 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST};
+use intentional_core::{
+    CandidateFile, ChangeStatus, ChangedPath, ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -158,6 +160,171 @@ impl ReleaseFixture {
         target
     }
 
+    /// Rewrite the prepared handoff into a self-consistent forgery.
+    ///
+    /// The forged release tree carries one extra file. Its commit, annotated
+    /// tag, Git bundle, changed-tree evidence, and file inventory are all
+    /// regenerated to agree with each other, so nothing short of rebuilding the
+    /// candidate from the accepted source commit can detect it.
+    fn forge_extra_file(
+        &self,
+        path: &str,
+        contents: &str,
+        candidate: &ReleaseCandidate,
+    ) -> ReleaseCandidate {
+        let blob = git_stdin(
+            &self.source,
+            &["hash-object", "-w", "--stdin", "--path", path],
+            contents,
+        );
+
+        let index = self._temp.path().join("forged-index");
+        let index = index.to_str().expect("index path").to_owned();
+        git_env(
+            &self.source,
+            &["read-tree", &candidate.release.commit],
+            &[("GIT_INDEX_FILE", index.as_str())],
+        );
+        git_env_stdin(
+            &self.source,
+            &["update-index", "--index-info"],
+            &[("GIT_INDEX_FILE", index.as_str())],
+            &format!("100644 {blob}\t{path}\n"),
+        );
+        let tree = git_env(
+            &self.source,
+            &["write-tree"],
+            &[("GIT_INDEX_FILE", index.as_str())],
+        );
+
+        let raw = git_raw(
+            &self.source,
+            &["cat-file", "commit", &candidate.release.commit],
+        );
+        let message = raw.split_once("\n\n").expect("commit message").1.to_owned();
+        let name = git(
+            &self.source,
+            &[
+                "show",
+                "--no-patch",
+                "--format=%an",
+                &candidate.release.commit,
+            ],
+        );
+        let email = git(
+            &self.source,
+            &[
+                "show",
+                "--no-patch",
+                "--format=%ae",
+                &candidate.release.commit,
+            ],
+        );
+        let date = git(
+            &self.source,
+            &[
+                "show",
+                "--no-patch",
+                "--date=raw",
+                "--format=%ad",
+                &candidate.release.commit,
+            ],
+        );
+        let commit = git_env_stdin(
+            &self.source,
+            &["commit-tree", &tree, "-p", &candidate.source.commit],
+            &[
+                ("GIT_AUTHOR_NAME", name.as_str()),
+                ("GIT_AUTHOR_EMAIL", email.as_str()),
+                ("GIT_AUTHOR_DATE", date.as_str()),
+                ("GIT_COMMITTER_NAME", name.as_str()),
+                ("GIT_COMMITTER_EMAIL", email.as_str()),
+                ("GIT_COMMITTER_DATE", date.as_str()),
+            ],
+            &message,
+        );
+
+        let tag_body = git_raw(
+            &self.source,
+            &["cat-file", "tag", &candidate.global_tag.object],
+        );
+        let tag_body = tag_body.replacen(
+            &format!("object {}\n", candidate.release.commit),
+            &format!("object {commit}\n"),
+            1,
+        );
+        let tag_object = git_stdin(&self.source, &["mktag"], &tag_body);
+
+        git(
+            &self.source,
+            &["update-ref", "refs/heads/intentional-release", &commit],
+        );
+        git(
+            &self.source,
+            &[
+                "update-ref",
+                "refs/tags/intentional-global-release",
+                &tag_object,
+            ],
+        );
+        let bundle = self.handoff.join("release.bundle");
+        fs::remove_file(&bundle).expect("replace bundle");
+        git(
+            &self.source,
+            &[
+                "bundle",
+                "create",
+                bundle.to_str().expect("bundle path"),
+                &format!("^{}", candidate.source.commit),
+                "refs/heads/intentional-release",
+                "refs/tags/intentional-global-release",
+            ],
+        );
+        git(
+            &self.source,
+            &["update-ref", "-d", "refs/heads/intentional-release"],
+        );
+        git(
+            &self.source,
+            &["update-ref", "-d", "refs/tags/intentional-global-release"],
+        );
+
+        let materialized = format!("candidate/{path}");
+        fs::write(self.handoff.join(&materialized), contents).expect("materialize forgery");
+
+        let mut manifest = candidate.clone();
+        manifest.release.commit = commit.clone();
+        manifest.release.tree = tree;
+        manifest.global_tag.object = tag_object;
+        manifest.global_tag.target = commit;
+        manifest.changed_tree.push(ChangedPath {
+            path: path.to_owned(),
+            status: ChangeStatus::Added,
+            digest: Some(digest(contents.as_bytes())),
+        });
+        manifest
+            .changed_tree
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        manifest.files.push(CandidateFile {
+            path: materialized,
+            sha256: digest(contents.as_bytes()),
+            size: contents.len() as u64,
+        });
+        let bundle_bytes = fs::read(&bundle).expect("bundle bytes");
+        for file in &mut manifest.files {
+            if file.path == "release.bundle" {
+                file.sha256 = digest(&bundle_bytes);
+                file.size = bundle_bytes.len() as u64;
+            }
+        }
+        manifest
+            .files
+            .sort_by(|left, right| left.path.cmp(&right.path));
+        manifest.git_bundle.sha256 = digest(&bundle_bytes);
+        self.write_manifest(&manifest.to_yaml().expect("forged manifest"));
+        manifest
+    }
+
     fn verify(&self, clone: &Path) -> Command {
         let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
         command.arg("-C").arg(clone);
@@ -166,8 +333,49 @@ impl ReleaseFixture {
     }
 }
 
+fn digest(bytes: &[u8]) -> String {
+    format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
+fn git_raw(directory: &Path, arguments: &[&str]) -> String {
+    run_git(directory, arguments, &[], None)
+}
+
+fn git_env(directory: &Path, arguments: &[&str], environment: &[(&str, &str)]) -> String {
+    run_git(directory, arguments, environment, None)
+        .trim()
+        .to_owned()
+}
+
+fn git_stdin(directory: &Path, arguments: &[&str], input: &str) -> String {
+    run_git(directory, arguments, &[], Some(input))
+        .trim()
+        .to_owned()
+}
+
+fn git_env_stdin(
+    directory: &Path,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+    input: &str,
+) -> String {
+    run_git(directory, arguments, environment, Some(input))
+        .trim()
+        .to_owned()
+}
+
 fn git(directory: &Path, arguments: &[&str]) -> String {
-    let output = ProcessCommand::new("git")
+    run_git(directory, arguments, &[], None).trim().to_owned()
+}
+
+fn run_git(
+    directory: &Path,
+    arguments: &[&str],
+    environment: &[(&str, &str)],
+    input: Option<&str>,
+) -> String {
+    let mut command = ProcessCommand::new("git");
+    command
         .args(arguments)
         .current_dir(directory)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -176,17 +384,31 @@ fn git(directory: &Path, arguments: &[&str]) -> String {
         .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture Author")
         .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .output()
-        .expect("run git");
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    if input.is_some() {
+        command.stdin(std::process::Stdio::piped());
+    }
+    let mut child = command.spawn().expect("run git");
+    if let Some(input) = input {
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .expect("git input")
+            .write_all(input.as_bytes())
+            .expect("write git input");
+    }
+    let output = child.wait_with_output().expect("collect git output");
     assert!(
         output.status.success(),
         "git {arguments:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout)
-        .expect("UTF-8 git output")
-        .trim()
-        .to_owned()
+    String::from_utf8(output.stdout).expect("UTF-8 git output")
 }
 
 #[test]
@@ -212,16 +434,35 @@ fn prepares_a_deterministic_candidate_without_mutating_the_workspace() {
         ),
         ""
     );
-    // The annotated global tag exists locally and is not published.
+    // The annotated global tag is recorded under the reserved namespace so it
+    // never becomes version authority in the preparing checkout.
     assert_eq!(
-        git(&fixture.source, &["rev-parse", "refs/tags/1.1.0"]),
+        git(
+            &fixture.source,
+            &["rev-parse", "refs/intentional/release/global-tag"]
+        ),
         candidate.global_tag.object
+    );
+    assert_eq!(
+        git(&fixture.source, &["tag", "--list"]),
+        "1.0.0",
+        "preparation must not create the release tag in the tag namespace"
     );
     assert_eq!(
         git(&fixture.remote, &["tag", "--list", "1.1.0"]),
         "",
         "preparation must not publish the global release tag"
     );
+    // The fixed transport ref names are never written into the workspace.
+    for reference in [
+        "refs/heads/intentional-release",
+        "refs/tags/intentional-global-release",
+    ] {
+        assert!(
+            !git(&fixture.source, &["show-ref"]).contains(reference),
+            "preparation must not write {reference} into the workspace"
+        );
+    }
 
     // The commit identity is a fixed protocol value bound to the source timestamp.
     let identity = git(
@@ -586,7 +827,7 @@ fn refuses_a_malformed_git_bundle() {
 }
 
 #[test]
-fn refuses_a_bundle_that_exceeds_the_transport_bound() {
+fn refuses_a_bundle_whose_inventoried_size_exceeds_the_transport_bound() {
     let fixture = ReleaseFixture::new();
     fixture.author_release();
     let candidate = fixture.prepare();
@@ -598,23 +839,49 @@ fn refuses_a_bundle_that_exceeds_the_transport_bound() {
             file.size = intentional_core::MAX_BUNDLE_BYTES + 1;
         }
     }
-    fixture.write_manifest(&manifest_yaml_without_validation(&manifest));
+    fixture.write_manifest(&manifest.to_yaml().expect("manifest"));
 
     fixture
         .verify(&clone)
         .assert()
         .failure()
-        .stderr(predicates::str::contains("byte bound"));
+        .stderr(predicates::str::contains("byte handoff bound"));
 }
 
 #[test]
-fn refuses_a_handoff_when_the_verifying_repository_advanced_past_the_source() {
+fn refuses_a_bundle_that_is_oversized_on_disk() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    fixture.prepare();
+    let clone = fixture.privileged_clone("privileged");
+
+    // The inventory understates the size, so only the observed-size gate can
+    // reject this bundle before it is read.
+    let bundle = fs::OpenOptions::new()
+        .write(true)
+        .open(fixture.handoff.join("release.bundle"))
+        .expect("bundle");
+    bundle
+        .set_len(intentional_core::MAX_BUNDLE_BYTES + 1)
+        .expect("grow bundle");
+    drop(bundle);
+
+    fixture
+        .verify(&clone)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("byte handoff bound"));
+}
+
+#[test]
+fn refuses_a_handoff_that_conflicts_with_an_existing_release_tag() {
     let fixture = ReleaseFixture::new();
     fixture.author_release();
     let candidate = fixture.prepare();
     let clone = fixture.privileged_clone("privileged");
 
-    // The verifying clone already carries a conflicting tag for the same name.
+    // The verifying clone already carries a different record under the same
+    // release tag name, which the import must refuse rather than overwrite.
     git(
         &clone,
         &["tag", "-a", "1.1.0", "-m", "conflicting record", "HEAD"],
@@ -660,4 +927,73 @@ fn refuses_a_handoff_whose_inventory_addresses_a_path_outside_the_directory() {
 /// producer has. A hostile producer does not, so tests need a raw encoder.
 fn manifest_yaml_without_validation(candidate: &ReleaseCandidate) -> String {
     serde_yaml::to_string(candidate).expect("serialize manifest")
+}
+
+#[test]
+fn refuses_a_coherent_forgery_only_the_reproduction_clone_can_reject() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    let candidate = fixture.prepare();
+    let clone = fixture.privileged_clone("privileged");
+
+    // Build a handoff that agrees with itself end to end: a release tree
+    // carrying an extra file, a matching commit and annotated tag, a bundle
+    // regenerated from those objects, and an inventory and changed-tree that
+    // both describe the result. Every declared-value check passes, so only the
+    // bundle-free rebuild from the accepted source commit can reject it.
+    let forged = fixture.forge_extra_file("backdoor.sh", "#!/bin/sh\nexfiltrate\n", &candidate);
+
+    assert_ne!(forged.release.commit, candidate.release.commit);
+    assert_eq!(forged.release.parent, candidate.source.commit);
+    assert_eq!(forged.global_tag.target, forged.release.commit);
+    forged
+        .validate()
+        .expect("the forgery is internally consistent");
+
+    fixture
+        .verify(&clone)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("reproduced release tree"));
+}
+
+#[test]
+fn refuses_a_handoff_that_transports_a_symbolic_link() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    fixture.prepare();
+    let clone = fixture.privileged_clone("privileged");
+
+    std::os::unix::fs::symlink("/etc/passwd", fixture.handoff.join("candidate/linked"))
+        .expect("symbolic link");
+
+    fixture
+        .verify(&clone)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("symbolic link"));
+}
+
+#[test]
+fn refuses_a_manifest_that_moves_the_source_to_a_different_real_commit() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    let candidate = fixture.prepare();
+    let clone = fixture.privileged_clone("privileged");
+
+    // Both the source and the declared parent move to the baseline commit, so
+    // the manifest stays self-consistent and the refusal has to come from the
+    // parent of the imported release commit.
+    let baseline = git(&fixture.source, &["rev-parse", "HEAD~1"]);
+    assert_ne!(baseline, candidate.source.commit);
+    let mut manifest = candidate.clone();
+    manifest.source.commit = baseline.clone();
+    manifest.release.parent = baseline;
+    fixture.write_manifest(&manifest.to_yaml().expect("manifest"));
+
+    fixture
+        .verify(&clone)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("sole parent"));
 }
