@@ -7,9 +7,10 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     assemble, check_executor, check_workspace, contribute, initialize, initialize_executor,
-    ApplyResult, AssembleRequest, Bump, Config, ContributionRequest, ExecutorInitState, InitState,
-    IntentDraft, ReleasePlan, StampResult, TagPhase, TagResult, WorkflowIdentity, WorkspaceStatus,
-    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    prepare_release, verify_handoff, ApplyResult, AssembleRequest, Bump, Config,
+    ContributionRequest, ExecutorInitState, InitState, IntentDraft, ReleasePlan, StampResult,
+    TagPhase, TagResult, WorkflowIdentity, WorkspaceStatus, CONFIG_PATH, LOCAL_JOB,
+    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -54,9 +55,15 @@ enum Command {
     /// Configure and reconcile the repository release protocol.
     #[command(subcommand)]
     Executor(ExecutorCommand),
+    /// Construct release protocol artifacts.
+    #[command(subcommand)]
+    Release(ReleaseCommand),
     /// Construct schema-backed release evidence artifacts.
     #[command(subcommand)]
     Evidence(EvidenceCommand),
+    /// Verify release protocol identities, handoffs, and evidence.
+    #[command(subcommand)]
+    Verify(VerifyCommand),
     /// Print the agent-facing Intentional workflow skill.
     Skill,
 }
@@ -70,11 +77,30 @@ enum ExecutorCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum ReleaseCommand {
+    /// Resolve the source and construct its deterministic release candidate.
+    Prepare(PrepareArgs),
+}
+
+#[derive(Debug, Subcommand)]
 enum EvidenceCommand {
     /// Construct one repository-owned evidence contribution bundle.
     Contribute(ContributeArgs),
     /// Assemble publisher fragments and contributions into final release evidence.
     Assemble(AssembleArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum VerifyCommand {
+    /// Independently verify a prepared release-candidate handoff.
+    Handoff(HandoffArgs),
+}
+
+#[derive(Debug, Args)]
+struct PrepareArgs {
+    /// Directory in which to write the release-candidate handoff.
+    #[arg(long, value_name = "DIRECTORY")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -105,6 +131,13 @@ struct AssembleArgs {
     /// Directory in which to write the closed final-evidence bundle.
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct HandoffArgs {
+    /// Release-candidate handoff directory to verify.
+    #[arg(value_name = "HANDOFF")]
+    handoff: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -225,12 +258,14 @@ fn run() -> Result<u8> {
             return executor_init(&cli.directory, args.dry_run)
         }
         Command::Executor(ExecutorCommand::Check) => return executor_check(&cli.directory),
+        Command::Release(ReleaseCommand::Prepare(args)) => prepare(&cli.directory, args),
         Command::Evidence(EvidenceCommand::Contribute(args)) => {
             evidence_contribute(&cli.directory, args)
         }
         Command::Evidence(EvidenceCommand::Assemble(args)) => {
             evidence_assemble(&cli.directory, args)
         }
+        Command::Verify(VerifyCommand::Handoff(args)) => handoff(&cli.directory, args),
         Command::Skill => skill(),
     }?;
     Ok(0)
@@ -238,6 +273,23 @@ fn run() -> Result<u8> {
 
 fn skill() -> Result<()> {
     print!("{SKILL_DOCUMENT}");
+    Ok(())
+}
+
+fn prepare(root: &std::path::Path, args: PrepareArgs) -> Result<()> {
+    let prepared = prepare_release(root, &args.output)?;
+    for projection in prepared.projections() {
+        println!("{projection}");
+    }
+    Ok(())
+}
+
+fn handoff(root: &std::path::Path, args: HandoffArgs) -> Result<()> {
+    let verified = verify_handoff(root, &args.handoff)?;
+    println!("release handoff verified");
+    for projection in verified.projections() {
+        println!("{projection}");
+    }
     Ok(())
 }
 

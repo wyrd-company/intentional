@@ -16,6 +16,7 @@ pub mod init;
 pub mod intent;
 pub mod model;
 pub mod plan;
+pub mod release;
 pub mod stamp;
 pub mod status;
 pub mod tag;
@@ -67,11 +68,21 @@ pub use plan::{
     canonical_json, render_changelog_section, ChangelogEntry, Generator, PlanReleaseUnit, PlanTag,
     ReleasePlan,
 };
+pub use release::build::{RELEASE_IDENTITY_EMAIL, RELEASE_IDENTITY_NAME};
+pub use release::candidate::{
+    BundleInventory, CandidateFile, CandidateReleaseIdentity, ChangeStatus, ChangedPath, GlobalTag,
+    PlanInventory, ReleaseCandidate, SourceIdentity, BUNDLE_RELEASE_HEAD, BUNDLE_TAG_HEAD,
+    CANDIDATE_TREE_DIRECTORY, IMPORTED_RELEASE_REF, MAX_BUNDLE_BYTES, RELEASE_BUNDLE_FILE,
+    RELEASE_CANDIDATE_CONTRACT, RELEASE_CANDIDATE_MANIFEST, RELEASE_CANDIDATE_SCHEMA,
+    RELEASE_PLAN_FILE,
+};
+pub use release::prepare::{prepare_release, PreparedRelease};
+pub use release::verify::{verify_handoff, VerifiedHandoff};
 pub use stamp::StampResult;
 pub use status::{
     Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
-pub use tag::{tag_record_issues, PlannedTag, TagResult};
+pub use tag::{release_tag_message, tag_record_issues, PlannedTag, TagResult};
 pub use version::{
     aggregate_bumps, bump_version, bump_version_with_mapping, effective_bumps, resolve_versions,
     ReleaseUnitVersion, VersionRepository,

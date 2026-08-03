@@ -1119,6 +1119,11 @@ fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::Signa
     })
 }
 
+/// Canonical annotated-tag record message for one release tag.
+pub fn release_tag_message(contract: &str, digest: &str, id: &str, version: &str) -> String {
+    tag_message(contract, digest, id, version, false)
+}
+
 fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: bool) -> String {
     format!(
         "intentional release record\n\ncontract: {contract}\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {id}\nversion: {version}\nbaseline: {baseline}\n",
