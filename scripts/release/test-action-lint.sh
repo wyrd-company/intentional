@@ -230,6 +230,96 @@ FIXTURE
 
 expect_pass "a digest-pinned container step" "$temporary/pinned-container.yml"
 
+# The scheme is not case-sensitive to the gate. Reading it as though it were
+# sends the reference to the commit-identity branch, which tells the reader to
+# pin an image to something images do not have.
+cat > "$temporary/shouted-container.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container step whose scheme is not spelled in lower case"
+runs:
+  using: "composite"
+  steps:
+    - name: Convert
+      uses: DOCKER://alpine:3.20
+FIXTURE
+
+expect_failure_matching \
+  "a container step with an upper-case scheme" \
+  "not pinned to an image digest" \
+  "$temporary/shouted-container.yml"
+
+shouted_output="$("${linter[@]}" "$temporary/shouted-container.yml" 2>&1 || true)"
+if grep -qF -- "40-character commit identity" <<<"$shouted_output"; then
+  echo "an upper-case container scheme was told to pin to a commit identity:" >&2
+  echo "$shouted_output" >&2
+  failures=$((failures + 1))
+fi
+
+# A recognised runtime the gate then reads nothing from is the same clean pass
+# over nothing the unrecognised-runtime rule exists to stop. `docker` is
+# recognised, so its image is held to the digest rule a container step is.
+cat > "$temporary/floating-image.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action whose image is a mutable tag"
+runs:
+  using: "docker"
+  image: "docker://alpine:latest"
+FIXTURE
+
+expect_failure_matching \
+  "a container action pinned to a mutable tag" \
+  "runs\.image uses docker://alpine:latest, which is not pinned to an image digest" \
+  "$temporary/floating-image.yml"
+
+# GitHub resolves a bare registry reference too, so omitting the scheme must not
+# become the way around the rule.
+cat > "$temporary/schemeless-image.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action naming a registry image without the scheme"
+runs:
+  using: "docker"
+  image: "alpine:latest"
+FIXTURE
+
+expect_failure_matching \
+  "a container action naming a bare registry image" \
+  "runs\.image uses alpine:latest, which is not pinned to an image digest" \
+  "$temporary/schemeless-image.yml"
+
+cat > "$temporary/imageless.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action that declares no image at all"
+runs:
+  using: "docker"
+FIXTURE
+
+expect_failure_matching \
+  "a container action with no image" \
+  "docker runtime but declares no image" \
+  "$temporary/imageless.yml"
+
+cat > "$temporary/pinned-image.yml" <<FIXTURE
+name: "fixture"
+description: "A container action pinned to its manifest digest"
+runs:
+  using: "docker"
+  image: "docker://alpine@sha256:$digest"
+FIXTURE
+
+expect_pass "a digest-pinned container action" "$temporary/pinned-image.yml"
+
+# A Dockerfile is repository content, versioned with the action itself, so it is
+# the one image form that needs no digest.
+cat > "$temporary/dockerfile-image.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action built from a Dockerfile in the repository"
+runs:
+  using: "docker"
+  image: "Dockerfile"
+FIXTURE
+
+expect_pass "a container action built from a Dockerfile" "$temporary/dockerfile-image.yml"
+
 # Discovery is the property the explicit-path cases above cannot exercise: they
 # hand the gate the file. Copying the gate into a fixture repository lets it
 # discover for itself, and lets the expected document count be an exact number.
@@ -303,6 +393,24 @@ if uncovered_output="$(python3 "$uncovered/scripts/release/lint-actions.py" 2>&1
 elif ! grep -qE -- "\.github/actions/internal/action\.yaml.*interpolates" <<<"$uncovered_output"; then
   echo "the lint gate rejected the discovery fixture without naming the uncovered document:" >&2
   echo "$uncovered_output" >&2
+  failures=$((failures + 1))
+fi
+
+# A symlinked directory is a door discovery will not walk through: `rglob` does
+# not descend one, so an action document beneath it would never be opened. The
+# gate reports the door rather than passing over what is behind it.
+linked="$temporary/linked"
+fixture_repository "$linked"
+mkdir -p "$linked/elsewhere/hidden"
+cp "$temporary/compliant.yml" "$linked/elsewhere/hidden/action.yml"
+ln -s ../elsewhere/hidden "$linked/actions/linked"
+
+if linked_output="$(python3 "$linked/scripts/release/lint-actions.py" 2>&1)"; then
+  echo "expected the lint gate to report a symlinked directory, but it passed" >&2
+  failures=$((failures + 1))
+elif ! grep -qE -- "actions/linked: is a symlinked directory" <<<"$linked_output"; then
+  echo "the lint gate failed without naming the symlinked directory:" >&2
+  echo "$linked_output" >&2
   failures=$((failures + 1))
 fi
 

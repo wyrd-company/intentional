@@ -21,7 +21,10 @@ gate:
   A container reference carries no commit identity, so its immutable name is the
   manifest digest instead.
 * A `runs.using` runtime the gate does not recognise leaves every step in that
-  document unread, so it is reported rather than skipped.
+  document unread, so it is reported rather than skipped. A recognised runtime
+  is inspected: a container action's `runs.image` is held to the same digest
+  rule a container step is, because naming a runtime as known and then reading
+  nothing is the same clean-pass-over-nothing this gate exists to stop.
 
 Run with no arguments to lint every action document in the repository. Explicit
 paths are for this gate's own tests.
@@ -31,7 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -50,7 +53,7 @@ PINNED_REFERENCE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 # A container reference carries no commit identity at all. Its immutable name is
 # the manifest digest, so it is held to that rule and told so in those terms.
 CONTAINER_SCHEME = "docker://"
-PINNED_CONTAINER = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+PINNED_IMAGE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 COMPOSITE_RUNTIME = "composite"
 CONTAINER_RUNTIME = "docker"
@@ -107,6 +110,31 @@ def discover() -> list[Path]:
     return documents
 
 
+def unreachable_links() -> list[str]:
+    """Report symlinked directories under the search roots.
+
+    `rglob` does not descend a symlinked directory, so an action document
+    reachable only through one is never opened. Following it would invite a
+    cycle. Reporting it keeps the gate's field of view equal to its claim: the
+    reader is told the tree holds a door this gate will not walk through.
+    """
+
+    findings = []
+    for relative in SEARCH_ROOTS:
+        base = ROOT / relative
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
+            if is_excluded(path) or not path.is_symlink() or not path.is_dir():
+                continue
+            findings.append(
+                f"{describe(path)}: is a symlinked directory; discovery does not "
+                "descend one, so any action document beneath it would go "
+                "unchecked. Replace it with a real directory."
+            )
+    return findings
+
+
 def describe(path: Path) -> str:
     try:
         return str(path.relative_to(ROOT))
@@ -157,6 +185,27 @@ def check_step(step: dict, position: int, location: str) -> list[str]:
     return findings
 
 
+def container_target(reference: str) -> str | None:
+    """Return the reference past its `docker://` scheme, or None if it has none.
+
+    The scheme is matched case-insensitively. Reading it any other way sends
+    `DOCKER://alpine:3.20` to the commit-identity branch, which tells the reader
+    to pin an image to something images do not have.
+    """
+
+    if reference[: len(CONTAINER_SCHEME)].lower() == CONTAINER_SCHEME:
+        return reference[len(CONTAINER_SCHEME) :]
+    return None
+
+
+def digest_finding(reference: str, where: str) -> str:
+    return (
+        f"{where} uses {reference}, which is not pinned to an image digest; "
+        f"reference the image as {CONTAINER_SCHEME}<image>@sha256:<64 "
+        "hexadecimal characters>"
+    )
+
+
 def check_reference(reference: object, where: str) -> list[str]:
     if not isinstance(reference, str):
         return [f"{where} has a uses: that is not a reference"]
@@ -164,14 +213,11 @@ def check_reference(reference: object, where: str) -> list[str]:
     if reference.startswith("./") or reference.startswith("../"):
         return []
 
-    if reference.startswith(CONTAINER_SCHEME):
-        if PINNED_CONTAINER.match(reference):
+    target = container_target(reference)
+    if target is not None:
+        if PINNED_IMAGE.match(target):
             return []
-        return [
-            f"{where} uses {reference}, which is not pinned to an image digest; "
-            f"reference the image as {CONTAINER_SCHEME}<image>@sha256:<64 "
-            "hexadecimal characters>"
-        ]
+        return [digest_finding(reference, where)]
 
     if not PINNED_REFERENCE.match(reference):
         return [
@@ -180,6 +226,29 @@ def check_reference(reference: object, where: str) -> list[str]:
         ]
 
     return []
+
+
+def check_image(image: object, where: str) -> list[str]:
+    """Hold a container runtime's image to the same digest rule as a step.
+
+    GitHub accepts a registry reference with or without the `docker://` scheme,
+    so `alpine:latest` is as mutable here as `docker://alpine:latest` is in a
+    step. A Dockerfile is repository content, versioned with the action itself,
+    and is the one form that needs no digest.
+    """
+
+    if not isinstance(image, str) or not image:
+        return [f"{where} is not an image reference"]
+
+    target = container_target(image)
+    if target is None:
+        if PurePosixPath(image).name.startswith("Dockerfile"):
+            return []
+        return [digest_finding(image, where)]
+
+    if PINNED_IMAGE.match(target):
+        return []
+    return [digest_finding(image, where)]
 
 
 def check(path: Path) -> list[str]:
@@ -215,6 +284,11 @@ def check(path: Path) -> list[str]:
             f"not recognise; it recognises {recognised}"
         ]
 
+    if runtime == CONTAINER_RUNTIME:
+        if "image" not in runs:
+            return [f"{location}: runs with the docker runtime but declares no image:"]
+        return check_image(runs["image"], f"{location}: runs.image")
+
     if runtime != COMPOSITE_RUNTIME:
         return []
 
@@ -232,13 +306,16 @@ def check(path: Path) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    documents = [Path(argument) for argument in argv] or discover()
+    explicit = [Path(argument) for argument in argv]
+    documents = explicit or discover()
 
     if not documents:
         print("No action document was linted; the gate is vacuous.", file=sys.stderr)
         return 1
 
-    findings = []
+    # Only discovery can leave a document unread. Explicit paths were named by
+    # the caller, so there is no field of view to report on.
+    findings = [] if explicit else unreachable_links()
     for path in documents:
         if not path.is_file():
             findings.append(f"{describe(path)}: does not exist")
