@@ -213,3 +213,34 @@ Takeover changes only Intentional and recognized Changesets state in one
 rollback-capable transaction. Repository-specific scripts and workflows remain
 the user's responsibility. Baseline tags are created against the externally
 committed takeover state, so the authority boundary stays explicit.
+
+## Configure the GitHub executor
+
+Opt a repository into the GitHub executor and its explicit publication intent:
+
+```console
+intentional executor init
+```
+
+The first run writes `.intentional/executor-init-plan.yml` and exits with code
+`2`. Set each candidate `resolution` to `accept` or `decline`, then rerun the
+command until it reports the `Ready` state and updates
+`.intentional/config.yml`. Accepting a publication offers its dependent targets
+on the next run, so the plan converges through explicit decisions rather than
+inference.
+
+Initialization reports the repository settings Intentional never mutates: the
+GitHub App must be a ruleset bypass actor for the default branch and every
+managed release tag namespace, the App credentials must exist as repository
+secrets, and the protected release environment must guard the authority
+transition.
+
+Validate the result whenever configuration or native packager files change:
+
+```console
+intentional executor check
+```
+
+The check resolves every configured publication to exactly one maintained
+recipe, verifies the native packager configuration that recipe requires, and
+reports missing workflows and gate jobs.
