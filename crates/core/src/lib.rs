@@ -22,8 +22,12 @@ pub mod version;
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
-    Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection,
-    ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
+    CargoPublisher, Config, DiscoveryConfig, DockerhubTarget, ExcludedPathReceipt, ExecutorPrefix,
+    GhcrTarget, GithubConfig, GithubWorkflow, GithubWorkflows, HomebrewPublisher,
+    ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher, OciPublisher,
+    PrefixNamespaces, Projection, ReleaseUnitConfig, Settings, SystemPackagePublisher, TagConfig,
+    WorkflowRole, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT, DEFAULT_ENVVAR_PREFIX,
+    DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 pub use error::{Error, Result};
 pub use init::{
@@ -34,7 +38,8 @@ pub use init::{
 };
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, AttachedComponent, Bump, Pre1BumpMapping, ProjectionMode, PublisherKind,
+    ReleaseUnitDisposition, TagPhase, TagRole,
 };
 pub use plan::{
     canonical_json, render_changelog_section, ChangelogEntry, Generator, PlanReleaseUnit, PlanTag,

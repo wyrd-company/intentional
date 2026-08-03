@@ -7,7 +7,8 @@
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, AttachedComponent, Bump, Pre1BumpMapping, ProjectionMode, PublisherKind,
+    ReleaseUnitDisposition, TagPhase, TagRole,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,6 +47,9 @@ pub struct Config {
     /// Receipts for discovery candidates already resolved by initialization.
     #[serde(default, skip_serializing_if = "DiscoveryConfig::is_empty")]
     pub discovery: DiscoveryConfig,
+    /// Opt-in GitHub executor integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<GithubConfig>,
     /// Release-unit inventory keyed by stable release-unit id.
     pub release_units: BTreeMap<String, ReleaseUnitConfig>,
 }
@@ -60,6 +64,7 @@ impl Default for Config {
             linked: Vec::new(),
             workspace_tags: BTreeMap::new(),
             discovery: DiscoveryConfig::default(),
+            github: None,
             release_units: BTreeMap::new(),
         }
     }
@@ -107,6 +112,228 @@ pub struct ExcludedPathReceipt {
     pub evidence_digest: String,
 }
 
+/// Default repository-owned release workflow proposed by executor initialization.
+pub const DEFAULT_RELEASE_WORKFLOW: &str = ".github/workflows/release.yml";
+
+/// Default repository-owned publish workflow proposed by executor initialization.
+pub const DEFAULT_PUBLISH_WORKFLOW: &str = ".github/workflows/publish.yml";
+
+/// Job and step identifier namespace reserved when no prefix is configured.
+pub const DEFAULT_JOB_PREFIX: &str = "intentional_";
+
+/// Environment variable namespace reserved when no prefix is configured.
+pub const DEFAULT_ENVVAR_PREFIX: &str = "INTENTIONAL_";
+
+/// GitHub executor opt-in and its repository-owned workflow identities.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GithubConfig {
+    /// Repository-owned workflows carrying Intentional-managed slices.
+    pub workflows: GithubWorkflows,
+    /// Reserved job, step, and environment variable namespaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<ExecutorPrefix>,
+}
+
+impl GithubConfig {
+    /// Resolve the reserved identifier namespaces for this configuration.
+    pub fn namespaces(&self) -> Result<PrefixNamespaces> {
+        match &self.prefix {
+            Some(prefix) => prefix.namespaces(),
+            None => PrefixNamespaces::new(DEFAULT_JOB_PREFIX, DEFAULT_ENVVAR_PREFIX),
+        }
+    }
+
+    /// Workflow configuration for one executor role.
+    pub fn workflow(&self, role: WorkflowRole) -> &GithubWorkflow {
+        match role {
+            WorkflowRole::Release => &self.workflows.release,
+            WorkflowRole::Publish => &self.workflows.publish,
+        }
+    }
+}
+
+/// Executor role of a repository-owned workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WorkflowRole {
+    /// Workflow that seals a release plan and performs the release authority transition.
+    Release,
+    /// Tag-triggered workflow that publishes and closes the release.
+    Publish,
+}
+
+impl WorkflowRole {
+    /// Stable lowercase name used by commands, diagnostics, and plans.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Publish => "publish",
+        }
+    }
+
+    /// Both executor roles in stable order.
+    pub const ALL: [Self; 2] = [Self::Release, Self::Publish];
+}
+
+impl std::fmt::Display for WorkflowRole {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for WorkflowRole {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "release" => Ok(Self::Release),
+            "publish" => Ok(Self::Publish),
+            _ => Err(format!("expected release or publish; got {value}")),
+        }
+    }
+}
+
+/// Repository-owned workflows managed by the GitHub executor.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GithubWorkflows {
+    /// Workflow performing release preparation and the authority transition.
+    pub release: GithubWorkflow,
+    /// Workflow performing publication and immutable Release closure.
+    pub publish: GithubWorkflow,
+}
+
+/// One repository-owned workflow and the gates gating its authority transition.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GithubWorkflow {
+    /// Exact workspace-relative workflow path used as the command default.
+    pub path: PathBuf,
+    /// Repository-owned job identifiers that gate the managed transition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<String>,
+}
+
+/// Configured reservation of the managed identifier namespaces.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ExecutorPrefix {
+    /// One name normalized into both namespaces.
+    Scalar(String),
+    /// Independently configured job and environment variable namespaces.
+    Namespaces {
+        /// Job and step identifier namespace.
+        job: String,
+        /// Environment variable namespace.
+        envvar: String,
+    },
+}
+
+impl ExecutorPrefix {
+    /// Normalize the configured prefix into validated namespaces.
+    pub fn namespaces(&self) -> Result<PrefixNamespaces> {
+        match self {
+            Self::Scalar(value) => {
+                let words = identifier_words(value);
+                if words.is_empty() {
+                    return Err(Error::Validation(format!(
+                        "github prefix {value:?} contains no identifier characters"
+                    )));
+                }
+                PrefixNamespaces::new(
+                    &format!("{}_", words.join("_").to_lowercase()),
+                    &format!("{}_", words.join("_").to_uppercase()),
+                )
+            }
+            Self::Namespaces { job, envvar } => {
+                PrefixNamespaces::new(&separated(job), &separated(envvar))
+            }
+        }
+    }
+}
+
+/// Validated identifier namespaces reserved by the executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixNamespaces {
+    /// Prefix reserved for managed job and step identifiers.
+    pub job: String,
+    /// Prefix reserved for managed environment variables.
+    pub envvar: String,
+    /// Protected GitHub environment guarding the release authority transition.
+    pub environment: String,
+}
+
+impl PrefixNamespaces {
+    fn new(job: &str, envvar: &str) -> Result<Self> {
+        validate_namespace(job, "github job prefix", true)?;
+        validate_namespace(envvar, "github envvar prefix", false)?;
+        let environment =
+            format!("{}-release", job.trim_end_matches('_').replace('_', "-")).to_lowercase();
+        if !environment
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        {
+            return Err(Error::Validation(format!(
+                "github job prefix {job:?} does not derive a usable release environment name"
+            )));
+        }
+        Ok(Self {
+            job: job.to_owned(),
+            envvar: envvar.to_owned(),
+            environment,
+        })
+    }
+}
+
+fn separated(value: &str) -> String {
+    if value.ends_with('_') {
+        value.to_owned()
+    } else {
+        format!("{value}_")
+    }
+}
+
+fn identifier_words(value: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut previous_lower_or_digit = false;
+    for character in value.chars() {
+        if !character.is_ascii_alphanumeric() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            previous_lower_or_digit = false;
+            continue;
+        }
+        if character.is_ascii_uppercase() && previous_lower_or_digit && !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+        previous_lower_or_digit = character.is_ascii_lowercase() || character.is_ascii_digit();
+        current.push(character);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn validate_namespace(value: &str, description: &str, allow_hyphen: bool) -> Result<()> {
+    let body = value.trim_end_matches('_');
+    let valid_start = body
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || character == '_');
+    let valid_body = body.chars().all(|character| {
+        character.is_ascii_alphanumeric() || character == '_' || (allow_hyphen && character == '-')
+    });
+    if body.is_empty() || !valid_start || !valid_body {
+        return Err(Error::Validation(format!(
+            "{description} {value:?} must normalize to an identifier starting with a letter"
+        )));
+    }
+    Ok(())
+}
+
 /// Workspace-wide release behavior.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -149,6 +376,157 @@ pub struct ReleaseUnitConfig {
     /// Authored internal dependency edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    /// Explicit npm publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub npm: Option<NpmPublisher>,
+    /// Explicit Cargo publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cargo: Option<CargoPublisher>,
+    /// Explicit Homebrew publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub homebrew: Option<HomebrewPublisher>,
+    /// Explicit RPM publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<SystemPackagePublisher>,
+    /// Explicit APT publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apt: Option<SystemPackagePublisher>,
+    /// Explicit Arch User Repository publication intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aur: Option<SystemPackagePublisher>,
+    /// Explicit OCI publication intent with at least one peer target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oci: Option<OciPublisher>,
+}
+
+impl ReleaseUnitConfig {
+    /// Managed release unit without dependency edges or publication intent.
+    pub fn managed(
+        path: PathBuf,
+        projections: Vec<Projection>,
+        tags: BTreeMap<String, TagConfig>,
+    ) -> Self {
+        Self {
+            path,
+            disposition: ReleaseUnitDisposition::Managed,
+            projections,
+            tags,
+            depends_on: Vec::new(),
+            npm: None,
+            cargo: None,
+            homebrew: None,
+            rpm: None,
+            apt: None,
+            aur: None,
+            oci: None,
+        }
+    }
+
+    /// Publishers this release unit explicitly opts into, in stable order.
+    pub fn publishers(&self) -> Vec<PublisherKind> {
+        [
+            (PublisherKind::Npm, self.npm.is_some()),
+            (PublisherKind::Cargo, self.cargo.is_some()),
+            (PublisherKind::Homebrew, self.homebrew.is_some()),
+            (PublisherKind::Rpm, self.rpm.is_some()),
+            (PublisherKind::Apt, self.apt.is_some()),
+            (PublisherKind::Aur, self.aur.is_some()),
+            (PublisherKind::Oci, self.oci.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(publisher, configured)| configured.then_some(publisher))
+        .collect()
+    }
+}
+
+/// npm publication intent; an empty mapping selects the npmjs primary destination.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct NpmPublisher {
+    /// GitHub secret name holding the bootstrap npm token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_secret: Option<String>,
+    /// Destinations published in addition to the npmjs primary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_targets: Option<NpmAdditionalTargets>,
+}
+
+/// npm destinations published alongside the primary.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct NpmAdditionalTargets {
+    /// GitHub Package Registry destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github: Option<NpmGithubTarget>,
+}
+
+/// GitHub Package Registry destination; identity derives from GitHub and package evidence.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct NpmGithubTarget {}
+
+/// Cargo publication intent; an empty mapping selects the native primary registry.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CargoPublisher {
+    /// GitHub secret name holding the bootstrap registry token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_secret: Option<String>,
+}
+
+/// Homebrew publication intent; formula identity derives from release-unit evidence.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct HomebrewPublisher {
+    /// Tap repository receiving the generated formula.
+    pub repository: String,
+}
+
+/// RPM, APT, and AUR publication intent carried entirely by native packager configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct SystemPackagePublisher {}
+
+/// OCI publication intent; every destination is an explicit peer target.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct OciPublisher {
+    /// Docker Hub destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dockerhub: Option<DockerhubTarget>,
+    /// GitHub Container Registry destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ghcr: Option<GhcrTarget>,
+}
+
+/// Docker Hub OCI destination.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct DockerhubTarget {
+    /// Docker Hub repository when the identity is not derivable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// GitHub variable name holding the Docker Hub username.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_var: Option<String>,
+    /// GitHub secret name holding the Docker Hub access token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_secret: Option<String>,
+    /// Attached components this destination suppresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omit: Vec<AttachedComponent>,
+}
+
+/// GitHub Container Registry OCI destination.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct GhcrTarget {
+    /// Registry repository when the derived owner and subject are overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// Attached components this destination suppresses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omit: Vec<AttachedComponent>,
 }
 
 fn is_managed(disposition: &ReleaseUnitDisposition) -> bool {
@@ -340,6 +718,8 @@ impl Config {
         }
 
         self.validate_discovery()?;
+        self.validate_github()?;
+        self.validate_publishers()?;
         self.validate_release_groups()?;
         self.validate_dependency_acyclic()?;
         self.validate_tag_graph(&canonical_tags)
@@ -380,6 +760,55 @@ impl Config {
                     receipt.path.display()
                 )));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_github(&self) -> Result<()> {
+        let Some(github) = &self.github else {
+            return Ok(());
+        };
+        let namespaces = github.namespaces()?;
+        for role in WorkflowRole::ALL {
+            let workflow = github.workflow(role);
+            validate_exact_discovery_path(&workflow.path, &format!("github {role} workflow path"))?;
+            let mut gates = BTreeSet::new();
+            for gate in &workflow.gates {
+                validate_workflow_job_id(gate, &format!("github {role} workflow gate"))?;
+                if gate.starts_with(&namespaces.job) {
+                    return Err(Error::Validation(format!(
+                        "github {role} workflow gate {gate} uses the reserved job prefix {}",
+                        namespaces.job
+                    )));
+                }
+                if !gates.insert(gate) {
+                    return Err(Error::Validation(format!(
+                        "github {role} workflow repeats gate {gate}"
+                    )));
+                }
+            }
+        }
+        if github.workflows.release.path == github.workflows.publish.path {
+            return Err(Error::Validation(format!(
+                "github release and publish workflows must be distinct files; both name {}",
+                github.workflows.release.path.display()
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_publishers(&self) -> Result<()> {
+        for (id, release_unit) in &self.release_units {
+            let publishers = release_unit.publishers();
+            if self.github.is_none() {
+                if let Some(publisher) = publishers.first() {
+                    return Err(Error::Validation(format!(
+                        "release unit {id} configures the {publisher} publisher; a configured publisher requires GitHub executor configuration"
+                    )));
+                }
+                continue;
+            }
+            validate_release_unit_publishers(id, release_unit)?;
         }
         Ok(())
     }
@@ -532,6 +961,133 @@ fn validate_dependencies(
                 "release unit {id} repeats dependency {dependency}"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_release_unit_publishers(id: &str, release_unit: &ReleaseUnitConfig) -> Result<()> {
+    let scope = |publisher: PublisherKind| format!("release unit {id} {publisher}");
+    if let Some(npm) = &release_unit.npm {
+        validate_optional_identifier(
+            npm.token_secret.as_deref(),
+            &format!("{} token-secret", scope(PublisherKind::Npm)),
+        )?;
+        if let Some(targets) = &npm.additional_targets {
+            if targets.github.is_none() {
+                return Err(Error::Validation(format!(
+                    "{} additional-targets must name at least one destination",
+                    scope(PublisherKind::Npm)
+                )));
+            }
+        }
+    }
+    if let Some(cargo) = &release_unit.cargo {
+        validate_optional_identifier(
+            cargo.token_secret.as_deref(),
+            &format!("{} token-secret", scope(PublisherKind::Cargo)),
+        )?;
+    }
+    if let Some(homebrew) = &release_unit.homebrew {
+        validate_repository(
+            &homebrew.repository,
+            &format!("{} repository", scope(PublisherKind::Homebrew)),
+        )?;
+    }
+    if let Some(oci) = &release_unit.oci {
+        if oci.dockerhub.is_none() && oci.ghcr.is_none() {
+            return Err(Error::Validation(format!(
+                "{} must name at least one of dockerhub or ghcr",
+                scope(PublisherKind::Oci)
+            )));
+        }
+        if let Some(dockerhub) = &oci.dockerhub {
+            let scope = format!("{} dockerhub", scope(PublisherKind::Oci));
+            if let Some(repository) = &dockerhub.repository {
+                validate_repository(repository, &format!("{scope} repository"))?;
+            }
+            validate_optional_identifier(
+                dockerhub.username_var.as_deref(),
+                &format!("{scope} username-var"),
+            )?;
+            validate_optional_identifier(
+                dockerhub.token_secret.as_deref(),
+                &format!("{scope} token-secret"),
+            )?;
+            validate_omit(&dockerhub.omit, &scope)?;
+        }
+        if let Some(ghcr) = &oci.ghcr {
+            let scope = format!("{} ghcr", scope(PublisherKind::Oci));
+            if let Some(repository) = &ghcr.repository {
+                validate_repository(repository, &format!("{scope} repository"))?;
+            }
+            validate_omit(&ghcr.omit, &scope)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_omit(omit: &[AttachedComponent], description: &str) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for component in omit {
+        if !seen.insert(component) {
+            return Err(Error::Validation(format!(
+                "{description} repeats omitted component {component}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_identifier(value: Option<&str>, description: &str) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let valid_start = value
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || character == '_');
+    if !valid_start
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return Err(Error::Validation(format!(
+            "{description} {value:?} must be a GitHub variable or secret name"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_repository(value: &str, description: &str) -> Result<()> {
+    let segments = value.split('/').collect::<Vec<_>>();
+    let valid = segments.len() == 2
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || "_.-".contains(character))
+        });
+    if !valid {
+        return Err(Error::Validation(format!(
+            "{description} {value:?} must be owner/name"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_workflow_job_id(value: &str, description: &str) -> Result<()> {
+    let valid_start = value
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic() || character == '_');
+    if !valid_start
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
+    {
+        return Err(Error::Validation(format!(
+            "{description} {value:?} must be a GitHub job identifier"
+        )));
     }
     Ok(())
 }
@@ -813,6 +1369,217 @@ release-units:
             .expect_err("tag cycle rejected")
             .to_string()
             .contains("tag-order cycle"));
+    }
+
+    const GITHUB: &str = r#"github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+"#;
+
+    fn with_github(extra: &str) -> String {
+        VALID.replace(
+            "release-units:\n",
+            &format!("{GITHUB}{extra}release-units:\n"),
+        )
+    }
+
+    #[test]
+    fn requires_github_executor_for_configured_publishers() {
+        let without = VALID.replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    npm: {}\n",
+        );
+        assert!(Config::from_yaml(&without)
+            .expect_err("publisher without executor rejected")
+            .to_string()
+            .contains("requires GitHub executor configuration"));
+
+        let with = with_github("").replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    npm: {}\n",
+        );
+        let config = Config::from_yaml(&with).expect("publisher with executor accepted");
+        assert_eq!(
+            config.release_units["library"].publishers(),
+            vec![PublisherKind::Npm]
+        );
+    }
+
+    #[test]
+    fn round_trips_direct_publisher_properties() {
+        let text = with_github("").replace(
+            "    path: packages/application\n",
+            r#"    path: packages/application
+    homebrew: { repository: example-org/homebrew-tap }
+    oci:
+      ghcr: { omit: [ signature ] }
+      dockerhub: { repository: example-org/example-image, username-var: EXAMPLE_USER }
+"#,
+        );
+        let config = Config::from_yaml(&text).expect("publisher properties accepted");
+        let application = &config.release_units["application"];
+        assert_eq!(
+            application.publishers(),
+            vec![PublisherKind::Homebrew, PublisherKind::Oci]
+        );
+        let oci = application.oci.as_ref().expect("oci publisher");
+        assert_eq!(
+            oci.ghcr.as_ref().expect("ghcr target").omit,
+            vec![AttachedComponent::Signature]
+        );
+        let reparsed = Config::from_yaml(&config.to_yaml().expect("serializes"))
+            .expect("serialized config reparses");
+        assert_eq!(reparsed, config);
+    }
+
+    #[test]
+    fn rejects_publisher_shapes_that_carry_no_destination() {
+        let empty_oci = with_github("").replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    oci: {}\n",
+        );
+        assert!(Config::from_yaml(&empty_oci)
+            .expect_err("empty oci rejected")
+            .to_string()
+            .contains("at least one of dockerhub or ghcr"));
+
+        let empty_additional = with_github("").replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    npm: { additional-targets: {} }\n",
+        );
+        assert!(Config::from_yaml(&empty_additional)
+            .expect_err("empty additional targets rejected")
+            .to_string()
+            .contains("at least one destination"));
+    }
+
+    #[test]
+    fn rejects_credential_values_shaped_as_names() {
+        let invalid = with_github("").replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    cargo: { token-secret: 'not a name' }\n",
+        );
+        assert!(Config::from_yaml(&invalid)
+            .expect_err("credential-looking value rejected")
+            .to_string()
+            .contains("must be a GitHub variable or secret name"));
+    }
+
+    #[test]
+    fn normalizes_scalar_and_explicit_prefixes() {
+        let default = Config::from_yaml(&with_github("")).expect("default prefix accepted");
+        let namespaces = default
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("default namespaces");
+        assert_eq!(namespaces.job, DEFAULT_JOB_PREFIX);
+        assert_eq!(namespaces.envvar, DEFAULT_ENVVAR_PREFIX);
+        assert_eq!(namespaces.environment, "intentional-release");
+
+        let scalar = Config::from_yaml(&with_github("").replace(
+            "  workflows:\n",
+            "  prefix: releaseAutomation\n  workflows:\n",
+        ))
+        .expect("scalar prefix accepted");
+        let namespaces = scalar
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("scalar namespaces");
+        assert_eq!(namespaces.job, "release_automation_");
+        assert_eq!(namespaces.envvar, "RELEASE_AUTOMATION_");
+        assert_eq!(namespaces.environment, "release-automation-release");
+
+        let explicit = Config::from_yaml(&with_github("").replace(
+            "  workflows:\n",
+            "  prefix: { job: managed-slice, envvar: MANAGED }\n  workflows:\n",
+        ))
+        .expect("explicit prefix accepted");
+        let namespaces = explicit
+            .github
+            .as_ref()
+            .expect("github config")
+            .namespaces()
+            .expect("explicit namespaces");
+        assert_eq!(namespaces.job, "managed-slice_");
+        assert_eq!(namespaces.envvar, "MANAGED_");
+        assert_eq!(namespaces.environment, "managed-slice-release");
+    }
+
+    #[test]
+    fn rejects_prefixes_that_cannot_form_identifiers() {
+        let invalid = with_github("").replace("  workflows:\n", "  prefix: '1234'\n  workflows:\n");
+        assert!(Config::from_yaml(&invalid)
+            .expect_err("numeric prefix rejected")
+            .to_string()
+            .contains("must normalize to an identifier"));
+    }
+
+    #[test]
+    fn rejects_gates_that_collide_with_reserved_jobs() {
+        let invalid = with_github("").replace(
+            "    release: { path: .github/workflows/release.yml }",
+            "    release: { path: .github/workflows/release.yml, gates: [ intentional_prepare ] }",
+        );
+        assert!(Config::from_yaml(&invalid)
+            .expect_err("reserved gate rejected")
+            .to_string()
+            .contains("uses the reserved job prefix"));
+
+        let valid = with_github("").replace(
+            "    release: { path: .github/workflows/release.yml }",
+            "    release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }",
+        );
+        let config = Config::from_yaml(&valid).expect("repository-owned gate accepted");
+        assert_eq!(
+            config
+                .github
+                .expect("github config")
+                .workflows
+                .release
+                .gates,
+            vec!["candidate_check".to_owned()]
+        );
+    }
+
+    #[test]
+    fn rejects_one_workflow_file_serving_both_executor_roles() {
+        let invalid = with_github("").replace(
+            ".github/workflows/publish.yml",
+            ".github/workflows/release.yml",
+        );
+        assert!(Config::from_yaml(&invalid)
+            .expect_err("shared workflow rejected")
+            .to_string()
+            .contains("must be distinct files"));
+    }
+
+    #[test]
+    fn published_config_schema_carries_executor_and_publisher_contracts() {
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../schemas/config.yml"))
+                .expect("config schema parses");
+        let github = &schema["$defs"]["github"];
+        assert_eq!(github["additionalProperties"].as_bool(), Some(false));
+        assert_eq!(github["required"].as_sequence().expect("required").len(), 1);
+        let release_unit = &schema["$defs"]["release-unit"]["properties"];
+        for publisher in ["npm", "cargo", "homebrew", "rpm", "apt", "aur", "oci"] {
+            assert!(
+                release_unit[publisher].is_mapping(),
+                "schema declares the {publisher} publisher"
+            );
+        }
+        assert_eq!(
+            schema["$defs"]["attached-component"]["enum"]
+                .as_sequence()
+                .expect("attached components")
+                .len(),
+            3
+        );
     }
 
     #[test]

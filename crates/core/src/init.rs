@@ -1143,11 +1143,10 @@ fn apply_candidate_resolutions(
         )))?;
         config.release_units.insert(
             release_unit.clone(),
-            ReleaseUnitConfig {
+            ReleaseUnitConfig::managed(
                 path,
-                disposition: ReleaseUnitDisposition::Managed,
-                projections: projection.into_iter().collect(),
-                tags: BTreeMap::from([(
+                projection.into_iter().collect(),
+                BTreeMap::from([(
                     tag.id.clone(),
                     TagConfig {
                         role: tag.role,
@@ -1156,8 +1155,7 @@ fn apply_candidate_resolutions(
                         tag_after: Vec::new(),
                     },
                 )]),
-                depends_on: Vec::new(),
-            },
+            ),
         );
     }
     for candidate in candidates {
@@ -2202,11 +2200,10 @@ fn materialize_discovery_inventory(
             .expect("identity group is not empty");
         discovery.config.release_units.insert(
             identity.clone(),
-            ReleaseUnitConfig {
+            ReleaseUnitConfig::managed(
                 path,
-                disposition: ReleaseUnitDisposition::Managed,
                 projections,
-                tags: BTreeMap::from([(
+                BTreeMap::from([(
                     tag.id.clone(),
                     TagConfig {
                         role: tag.role,
@@ -2215,8 +2212,7 @@ fn materialize_discovery_inventory(
                         tag_after: Vec::new(),
                     },
                 )]),
-                depends_on: Vec::new(),
-            },
+            ),
         );
         let versions = observations
             .iter()

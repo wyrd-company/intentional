@@ -156,3 +156,73 @@ impl Adapter {
         }
     }
 }
+
+/// Publisher adapter a release unit explicitly opts into.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum PublisherKind {
+    /// npm registry publication.
+    Npm,
+    /// Cargo registry publication.
+    Cargo,
+    /// Homebrew tap publication.
+    Homebrew,
+    /// RPM repository publication.
+    Rpm,
+    /// APT repository publication.
+    Apt,
+    /// Arch User Repository publication.
+    Aur,
+    /// OCI registry publication.
+    Oci,
+}
+
+impl PublisherKind {
+    /// Configuration property name for this publisher.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Cargo => "cargo",
+            Self::Homebrew => "homebrew",
+            Self::Rpm => "rpm",
+            Self::Apt => "apt",
+            Self::Aur => "aur",
+            Self::Oci => "oci",
+        }
+    }
+}
+
+impl fmt::Display for PublisherKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Supply-chain component a maintained recipe can attach to a published subject.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum AttachedComponent {
+    /// Software bill of materials bound to the subject digest.
+    Sbom,
+    /// Build provenance attestation.
+    Provenance,
+    /// Keyless signature bound to the published subject.
+    Signature,
+}
+
+impl AttachedComponent {
+    /// Stable component name used in configuration and diagnostics.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sbom => "sbom",
+            Self::Provenance => "provenance",
+            Self::Signature => "signature",
+        }
+    }
+}
+
+impl fmt::Display for AttachedComponent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
