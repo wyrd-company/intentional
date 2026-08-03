@@ -8,11 +8,12 @@ use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     assemble, check_executor, check_workspace, compare_workflow, contribute, initialize,
     initialize_executor, prepare_release, record_built_subject, verify_handoff, verify_publication,
-    verify_release, verify_release_tag, ApplyResult, AssembleRequest, Bump, CheckoutContext,
-    ComparisonStatus, Config, ContributionRequest, ExecutorInitState, GhReleaseSource, InitState,
-    IntentDraft, PublisherKind, ReleasePlan, ReleaseSource, StampResult, SystemClock, TagPhase,
-    TagResult, VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus,
-    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    verify_release_observed, verify_release_tag, ApplyResult, AssembleRequest, Bump,
+    CheckoutContext, ComparisonStatus, Config, ContributionRequest, DestinationObserver,
+    ExecutorInitState, GhReleaseSource, InitState, IntentDraft, ObservedPublications,
+    PublisherKind, ReleasePlan, ReleaseSource, StampResult, SystemClock, TagPhase, TagResult,
+    VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus, CONFIG_PATH,
+    LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -144,6 +145,10 @@ struct ReleaseArgs {
     /// Perform post-closure destination readback in addition to recorded evidence.
     #[arg(long)]
     live: bool,
+
+    /// Directory of post-closure observations a public consumer client produced.
+    #[arg(long, value_name = "PATH", requires = "live")]
+    observations: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -441,7 +446,22 @@ fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
 
 fn release(root: &std::path::Path, args: ReleaseArgs) -> Result<()> {
     let source = GhReleaseSource::new(root);
-    let verification = verify_release(root, &args.version, args.live, &source)?;
+    // Without observations the only available live read is the closed Release
+    // asset, which proves the recorded bytes are unchanged and claims nothing
+    // about what an unauthenticated consumer resolves. Supplying them is what
+    // makes a draft-dependent publisher's deferred public path checkable.
+    let observer = args
+        .observations
+        .map(|directory| ObservedPublications::new(resolve(root, directory)));
+    let verification = verify_release_observed(
+        root,
+        &args.version,
+        args.live,
+        &source,
+        observer
+            .as_ref()
+            .map(|observer| observer as &dyn DestinationObserver),
+    )?;
     for entry in verification.report() {
         println!("{entry}");
     }

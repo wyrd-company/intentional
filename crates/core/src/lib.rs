@@ -92,7 +92,8 @@ pub use publication::observation::{
 };
 pub use publication::release::{
     verify_release, verify_release_observed, Attestation, DestinationObserver, GhReleaseSource,
-    LiveObservation, ReleaseAsset, ReleaseRecord, ReleaseSource, ReleaseVerification,
+    LiveObservation, ObservedPublications, ReleaseAsset, ReleaseRecord, ReleaseSource,
+    ReleaseVerification,
 };
 pub use publication::verify::{
     verify_publication, CheckoutContext, PlannedRelease, PublicationContext, VerifiedPublication,

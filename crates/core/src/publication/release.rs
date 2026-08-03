@@ -30,7 +30,7 @@ use crate::publication::draft::is_draft_dependent;
 use crate::publication::observation::{ObservationState, PublicationObservation};
 use crate::release::git::GitCommand;
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// One asset held by a GitHub Release.
@@ -361,6 +361,73 @@ pub type LiveObservation = PublicationObservation;
 pub trait DestinationObserver {
     /// Read one publication back and retrieve it through its public client.
     fn observe(&self, repository: &str, fragment: &PublisherEvidence) -> Result<LiveObservation>;
+}
+
+/// Post-closure observations a public consumer client left on disk.
+///
+/// The publication protocol never speaks a registry protocol itself: a
+/// credential-bearing, client-specific readback runs where the client is
+/// installed and reaches the command as a schema-backed document. Live
+/// verification is the same problem after closure, and it has the same answer.
+/// A recipe that resolves its release with `brew`, `dnf`, `apt`, or `pacman`
+/// writes what that client found, and this observer reads it.
+///
+/// That is what makes the deferred public path checkable at all. Before closure
+/// a draft-dependent publisher cannot claim public retrieval, so its public
+/// consumer check is deferred to here; without an observer the only available
+/// read is the closed Release asset, which proves the bytes are unchanged and
+/// deliberately claims nothing about what an unauthenticated consumer resolves.
+///
+/// Naming each document by publication identity is the whole binding. An
+/// observer that scanned a directory would let one publication's proved
+/// retrieval stand in for another's, and `verify_live` compares the identity it
+/// receives precisely because a document can be written by anyone.
+#[derive(Debug, Clone)]
+pub struct ObservedPublications {
+    directory: PathBuf,
+}
+
+impl ObservedPublications {
+    /// Read post-closure observations from one directory.
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    /// File one publication's observation is read from.
+    ///
+    /// The name is derived from the publication identity rather than accepted
+    /// from the document, so a document naming a publication it was not written
+    /// for is read as the publication whose file it occupies and then reported
+    /// by the identity comparison.
+    pub fn path(&self, identity: &str) -> PathBuf {
+        let slug = identity
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        self.directory.join(format!("{slug}.yml"))
+    }
+}
+
+impl DestinationObserver for ObservedPublications {
+    fn observe(&self, _repository: &str, fragment: &PublisherEvidence) -> Result<LiveObservation> {
+        let identity = fragment.identity();
+        let path = self.path(&identity);
+        if !path.exists() {
+            return Err(Error::Validation(format!(
+                "no post-closure observation of {identity} was supplied at {}; a public consumer client writes what it resolved and live verification reads it",
+                path.display()
+            )));
+        }
+        PublicationObservation::load(&path)
+    }
 }
 
 /// The readback a closed GitHub Release is itself sufficient for.
@@ -2027,6 +2094,120 @@ release-units:
         )
         .expect_err("the disagreement is reported");
         assert!(error.to_string().contains("live readback"), "{error}");
+    }
+
+    /// A present public observation of the released Homebrew publication.
+    fn public_observation(digest: &str) -> String {
+        format!(
+            "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
+contract: {PUBLICATION_OBSERVATION_CONTRACT}
+release-unit: component
+publisher: homebrew
+target: primary
+state: present
+subject:
+  kind: homebrew-formula
+  identity: example-tool
+  version: 1.0.0
+  digest: {digest}
+packager:
+  id: goreleaser
+  version: 2.4.0
+destination:
+  identity: example-owner/homebrew-component
+  version: 1.0.0
+  digest: {digest}
+retrieval:
+  mode: public
+  client: brew
+  version: 4.3.0
+  digest: {digest}
+"
+        )
+    }
+
+    // A draft-dependent publisher cannot claim public retrieval before closure,
+    // so its public consumer check is deferred to live verification. This is
+    // that check: the observation a public client wrote after closure, read
+    // through the same document contract a repository-local readback uses.
+    #[test]
+    fn live_verification_proves_the_deferred_public_path_from_a_supplied_observation() {
+        let (released, _, source) = scenario("verify-live-observed");
+        let directory = released.workspace.root().join("observations");
+        let observer = ObservedPublications::new(&directory);
+        std::fs::create_dir_all(&directory).expect("observation directory");
+        std::fs::write(
+            observer.path("component/homebrew/primary"),
+            public_observation(&digest_bytes(DELIVERABLE)),
+        )
+        .expect("observation written");
+
+        let verification = verify_release_observed(
+            released.workspace.root(),
+            "1.0.0",
+            true,
+            &source,
+            Some(&observer),
+        )
+        .expect("the deferred public path verifies");
+        let report = verification.report().join("\n");
+        assert!(
+            report.contains("live public retrieval of component/homebrew/primary"),
+            "{report}"
+        );
+    }
+
+    // A publication with no supplied observation is reported rather than
+    // silently passing. Live verification that shrugged at an absent document
+    // would report a proved public path for a client that never ran.
+    #[test]
+    fn live_verification_reports_a_publication_no_observation_covers() {
+        let (released, _, source) = scenario("verify-live-unobserved");
+        let observer = ObservedPublications::new(released.workspace.root().join("observations"));
+        let error = verify_release_observed(
+            released.workspace.root(),
+            "1.0.0",
+            true,
+            &source,
+            Some(&observer),
+        )
+        .expect_err("an unobserved publication is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("no post-closure observation of component/homebrew/primary"),
+            "{error}"
+        );
+    }
+
+    // The file a publication's observation is read from is derived from its
+    // identity. Reading whichever document a directory happened to contain
+    // would let one publication's proved retrieval stand in for another's.
+    #[test]
+    fn reads_each_publication_observation_from_its_own_identity() {
+        let (released, _, source) = scenario("verify-live-misfiled");
+        let directory = released.workspace.root().join("observations");
+        let observer = ObservedPublications::new(&directory);
+        std::fs::create_dir_all(&directory).expect("observation directory");
+        std::fs::write(
+            observer.path("component/cargo/primary"),
+            public_observation(&digest_bytes(DELIVERABLE)),
+        )
+        .expect("observation written");
+        let error = verify_release_observed(
+            released.workspace.root(),
+            "1.0.0",
+            true,
+            &source,
+            Some(&observer),
+        )
+        .expect_err("a misfiled observation does not cover another publication");
+        assert!(
+            error
+                .to_string()
+                .contains("no post-closure observation of component/homebrew/primary"),
+            "{error}"
+        );
     }
 
     #[test]
