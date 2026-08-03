@@ -983,6 +983,12 @@ fn distinct_subjects(
 ) -> Vec<DistinctSubject> {
     let mut subjects: Vec<DistinctSubject> = Vec::new();
     for publication in publications {
+        // Losing this collapse is not visible in the emitted document unless
+        // the job identifier changes with it: two subjects deriving one slug
+        // derive one job identifier, and the YAML mapping silently keeps the
+        // last. The test that proves build-once therefore mutates the slug as
+        // well, because that pair is what a real regression looks like. Do not
+        // "fix" it by asserting on the collapsed mapping alone.
         if subjects.iter().any(|subject| subject.covers(publication)) {
             continue;
         }
@@ -1180,6 +1186,13 @@ fn build_job(
                 "@UPLOAD_NAME@",
                 &scalar(&format!("Upload the built {} subject", subject.identity)),
             ),
+            (
+                "@DOCUMENT_NAME@",
+                &scalar(&format!(
+                    "Upload the {} built-subject document",
+                    subject.identity
+                )),
+            ),
             ("@BUILD_COMMAND@", build_command(subject.packager)),
             ("@RELEASE_UNIT@", &scalar(&subject.release_unit)),
             ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
@@ -1199,7 +1212,11 @@ fn phase_tag_job(
     // publisher fragments. Both are transported as artifacts of the jobs that
     // produced them and both leave the sealed evidence behind as a document.
     let staged = match phase {
-        TagPhase::BeforePublication => "subject",
+        // The before-publication phase reads documents, not bytes, so it
+        // downloads the document-only artifact rather than every subject's
+        // build output. Bytes and document still travel together to the
+        // publishers, which is where the binding has to hold.
+        TagPhase::BeforePublication => "subjectdoc",
         TagPhase::AfterPublication => "evidence",
     };
     job(
@@ -1503,6 +1520,12 @@ steps:
       name: @JOB@subject-@SLUG@
       path: ${{ runner.temp }}/@JOB@subject/@SLUG@
       retention-days: 1
+  - name: @DOCUMENT_NAME@
+    uses: @UPLOAD@
+    with:
+      name: @JOB@subjectdoc-@SLUG@
+      path: ${{ runner.temp }}/@JOB@subject/@SLUG@/built-subject.yml
+      retention-days: 1
 "#;
 
 /// Managed job that seals one executor phase and publishes its tags.
@@ -1510,9 +1533,19 @@ steps:
 /// Tag creation is local and pushing is repository-owned: the portable command
 /// never holds a credential and never writes to the repository, and the push
 /// step mints the short-lived installation token that is the sole Git
-/// repository-write authority. The tags pushed are the annotated tags that
-/// point at the released commit, which is exactly the set the phase just
-/// created plus the already-published global tag the push leaves unchanged.
+/// repository-write authority.
+///
+/// The refs pushed are read from the repository rather than named by the
+/// derivation, and that is the contract rather than a convenience. This job
+/// checks out with `fetch-tags: true` and creates tags in exactly one step, so
+/// the annotated tags pointing at the released commit are the ones this phase
+/// sealed plus the already-published global tag, whose re-push is a no-op. That
+/// set is also what makes the job idempotent: a rerun after a partial failure
+/// finds some tags already present, plans none of them, and still pushes the
+/// complete set, where a list of newly created refs would be empty and push
+/// nothing. Naming the refs from the seal step's output would be structural but
+/// would trade that recovery away, so any change to it has to keep the rerun
+/// path pushing what the release already carries.
 ///
 /// The sealed evidence is uploaded as its own artifact because assembly reads
 /// documents, not tag messages; a phase whose evidence stayed inside Git would
@@ -2284,6 +2317,53 @@ release-units:
             .filter(|id| id.starts_with(prefix))
             .map(str::to_owned)
             .collect()
+    }
+
+    /// Every unrendered `@PLACEHOLDER@` a derived workflow still carries.
+    ///
+    /// A placeholder is an uppercase-and-underscore run between two `@`, which
+    /// no substituted value produces: an Action pin, a token URL, and a shell
+    /// variable all continue in characters this stops at.
+    fn residual_placeholders(workflow: &str) -> Vec<String> {
+        let bytes = workflow.as_bytes();
+        let mut residual = Vec::new();
+        for (start, _) in workflow.match_indices('@') {
+            let mut end = start + 1;
+            while end < bytes.len() && (bytes[end].is_ascii_uppercase() || bytes[end] == b'_') {
+                end += 1;
+            }
+            if end > start + 1 && bytes.get(end) == Some(&b'@') {
+                residual.push(workflow[start..=end].to_owned());
+            }
+        }
+        residual
+    }
+
+    // Rendering substitutes derived values before namespaces, because a derived
+    // value can itself name a namespace placeholder: a packager's build script
+    // refers to the prefixed subject variable. Substituting in the other order
+    // emits `${@ENVVAR@SUBJECT}` verbatim into a privileged job's shell, which
+    // every graph, ordering, and identity assertion in this module happily
+    // accepts because the document still parses and every job is still where it
+    // belongs. The residue is the only observable, so the residue is what is
+    // asserted -- for the whole class rather than for the one placeholder that
+    // exposed it.
+    #[test]
+    fn leaves_no_unrendered_placeholder_in_any_derived_workflow() {
+        for workspace in [
+            workspace("workflow-placeholders"),
+            two_destination_workspace("workflow-placeholders-oci"),
+        ] {
+            for role in WorkflowRole::ALL {
+                converge(workspace.root(), role);
+                let derived = workflow(workspace.root(), role);
+                assert_eq!(
+                    residual_placeholders(&derived),
+                    Vec::<String>::new(),
+                    "the {role} workflow renders every managed template placeholder"
+                );
+            }
+        }
     }
 
     // A subject is the thing a release publishes, not the act of publishing it.
