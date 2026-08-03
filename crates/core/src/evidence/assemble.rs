@@ -29,6 +29,8 @@ pub const RELEASE_EVIDENCE_FILE: &str = "intentional-evidence.yml";
 pub const PUBLISHER_EVIDENCE_SCHEMA: &str = "https://intentional.foo/schemas/publisher-evidence/v1";
 /// Contract identity of one publisher evidence fragment.
 pub const PUBLISHER_EVIDENCE_CONTRACT: &str = "publisher-evidence-1";
+/// Schema identity of canonical phase-tag evidence.
+pub const PHASE_TAG_EVIDENCE_SCHEMA: &str = "https://intentional.foo/schemas/phase-tag-evidence/v1";
 
 /// Annotated tag identity recorded by evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +221,9 @@ pub struct IntendedDestination {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct PhaseTagEvidence {
+    /// Phase-tag evidence schema identity.
+    #[serde(rename = "$schema")]
+    pub schema: String,
     /// Declared executor phase.
     pub phase: TagPhase,
     /// Source commit S.
@@ -489,6 +494,9 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
     })
 }
 
+/// Keys that only canonical phase-tag evidence carries.
+const PHASE_TAG_KEYS: [&str; 3] = ["phase", "intended-destinations", "publisher-evidence"];
+
 /// Everything one input directory offers assembly.
 #[derive(Debug, Default)]
 struct ScannedInput {
@@ -560,16 +568,22 @@ fn classify(path: &Path, scan: &mut ScannedInput, findings: &mut Vec<String>) ->
                     "publisher evidence {label} is not schema-valid: {error}"
                 )),
             },
+            Some(PHASE_TAG_EVIDENCE_SCHEMA) => match serde_yaml::from_str(&text) {
+                Ok(phase) => scan.phases.push((candidate.clone(), phase)),
+                Err(error) => findings.push(format!(
+                    "phase-tag evidence {label} is not schema-valid: {error}"
+                )),
+            },
             Some(CONTRIBUTION_SCHEMA) => findings.push(format!(
                 "contribution manifest {label} is outside a contribution transport artifact"
             )),
-            _ if document.get("phase").is_some() && document.get("global-tag").is_some() => {
-                match serde_yaml::from_str(&text) {
-                    Ok(phase) => scan.phases.push((candidate.clone(), phase)),
-                    Err(error) => findings.push(format!(
-                        "phase-tag evidence {label} is not schema-valid: {error}"
-                    )),
-                }
+            // Evidence that resembles a phase-tag document but does not identify
+            // itself is reported rather than skipped, so a drifted artifact can
+            // never be mistaken for evidence that was never supplied.
+            _ if PHASE_TAG_KEYS.iter().any(|key| document.get(*key).is_some()) => {
+                findings.push(format!(
+                    "{label} carries phase-tag evidence that does not declare $schema {PHASE_TAG_EVIDENCE_SCHEMA}"
+                ))
             }
             _ => {}
         }
@@ -1369,7 +1383,8 @@ phase-tags: []
         std::fs::write(
             input.join("phase-tag-evidence.yml"),
             format!(
-                r#"phase: before-publication
+                r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: before-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: release/1.0.0
@@ -1392,6 +1407,40 @@ intended-destinations:
             assemble(&request(&workspace, &input, &output)).expect_err("disagreement rejected");
         assert!(
             error.to_string().contains("while") && error.to_string().contains("sealed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn reports_phase_tag_evidence_that_does_not_identify_itself() {
+        let workspace = workspace("assemble-unidentified-phase");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        std::fs::write(
+            input.join("phase-tag-evidence.yml"),
+            format!(
+                r#"phase: before-publication
+source-commit: {SOURCE}
+release-commit: {RELEASE}
+tag: release/1.0.0
+plan-digest: {PLAN_DIGEST}
+subjects: []
+"#
+            ),
+        )
+        .expect("phase evidence");
+        let output = workspace.root().join("release-evidence");
+        let error =
+            assemble(&request(&workspace, &input, &output)).expect_err("silent drop rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("carries phase-tag evidence that does not declare $schema"),
             "{error}"
         );
     }

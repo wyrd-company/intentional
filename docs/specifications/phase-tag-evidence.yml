@@ -9,7 +9,9 @@ description: >-
   destinations and build provenance without claiming destination observation.
   After-publication evidence embeds the completed publisher-evidence fragments
   valid when the tag is created. Large native attestations remain digest-bound
-  references.
+  references. The value identifies itself with
+  `$schema: https://intentional.foo/schemas/phase-tag-evidence/v1` so a consumer
+  recognizes it by identity rather than by shape.
 validation-criteria: >-
   A value conforms when it validates against
   `phase-tag-evidence.json-schema.yml`, agrees with the annotated tag target and

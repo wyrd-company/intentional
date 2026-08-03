@@ -8,6 +8,7 @@ title: Intentional phase-tag evidence
 type: object
 additionalProperties: false
 required:
+  - $schema
   - phase
   - source-commit
   - release-commit
@@ -15,6 +16,8 @@ required:
   - plan-digest
   - subjects
 properties:
+  $schema:
+    const: https://intentional.foo/schemas/phase-tag-evidence/v1
   phase:
     enum: [ before-publication, after-publication ]
   source-commit:
