@@ -692,6 +692,63 @@ fn publisher_findings(fragment: &PublisherEvidence, label: &str) -> Vec<String> 
     findings
 }
 
+/// Report every mechanical problem in one phase-tag evidence document.
+///
+/// The published schema pairs a phase with the claim it must carry and the
+/// claim it must not, and the serde path cannot express that pairing because
+/// both claim fields are optional. Without this check an after-publication
+/// document that seals nothing, or a before-publication document that intends
+/// nothing, would pass every later comparison by omission.
+fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
+    let mut findings = Vec::new();
+    let (required, present, forbidden, absent) = match phase.phase {
+        TagPhase::BeforePublication => (
+            "intended-destinations",
+            phase.intended_destinations.is_some(),
+            "publisher-evidence",
+            phase.publisher_evidence.is_none(),
+        ),
+        TagPhase::AfterPublication => (
+            "publisher-evidence",
+            phase.publisher_evidence.is_some(),
+            "intended-destinations",
+            phase.intended_destinations.is_none(),
+        ),
+    };
+    if !present {
+        findings.push(format!(
+            "{label} declares {} without {required}",
+            phase.phase
+        ));
+    }
+    if !absent {
+        findings.push(format!(
+            "{label} declares {} but carries {forbidden}",
+            phase.phase
+        ));
+    }
+    for (field, value) in [
+        ("source-commit", &phase.source_commit),
+        ("release-commit", &phase.release_commit),
+    ] {
+        if !is_git_object(value) {
+            findings.push(format!(
+                "{label} records {field} {value:?}, which is not a complete Git object identifier"
+            ));
+        }
+    }
+    if !is_digest(&phase.plan_digest) {
+        findings.push(format!(
+            "{label} records plan-digest {:?}, which is not a sha256 digest",
+            phase.plan_digest
+        ));
+    }
+    if phase.global_tag.is_empty() {
+        findings.push(format!("{label} records an empty global tag name"));
+    }
+    findings
+}
+
 /// Determine the one release identity every fragment agrees on.
 fn release_identity(scan: &ScannedInput, findings: &mut Vec<String>) -> Option<ReleaseIdentity> {
     let mut identity: Option<ReleaseIdentity> = None;
@@ -743,6 +800,9 @@ fn compare_phase_evidence(
     accepted: &BTreeMap<String, &PublisherEvidence>,
     findings: &mut Vec<String>,
 ) {
+    for (path, phase) in &scan.phases {
+        findings.extend(phase_findings(phase, &path.display().to_string()));
+    }
     let Some(release) = release else {
         return;
     };
@@ -1598,6 +1658,64 @@ publisher-evidence:
             ),
             "{error}"
         );
+    }
+
+    #[test]
+    fn rejects_a_phase_tag_that_omits_the_claim_its_phase_requires() {
+        for (label, phase, tail, expected) in [
+            (
+                "after-without-seal",
+                "after-publication",
+                "",
+                "declares after-publication without publisher-evidence",
+            ),
+            (
+                "before-without-intent",
+                "before-publication",
+                "",
+                "declares before-publication without intended-destinations",
+            ),
+            (
+                "before-with-seal",
+                "before-publication",
+                "intended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\npublisher-evidence: []\n",
+                "declares before-publication but carries publisher-evidence",
+            ),
+            (
+                "after-with-intent",
+                "after-publication",
+                "publisher-evidence: []\nintended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\n",
+                "declares after-publication but carries intended-destinations",
+            ),
+        ] {
+            let workspace = workspace(&format!("assemble-phase-{label}"));
+            let input = workspace.root().join("artifacts");
+            std::fs::create_dir_all(&input).expect("artifacts");
+            std::fs::write(
+                input.join("publisher-evidence.yml"),
+                fragment("component", "npm", "primary"),
+            )
+            .expect("fragment");
+            std::fs::write(
+                input.join("phase.yml"),
+                format!(
+                    r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: {phase}
+source-commit: {SOURCE}
+release-commit: {RELEASE}
+global-tag: release/1.0.0
+plan-digest: {PLAN_DIGEST}
+subjects: []
+{tail}"#
+                ),
+            )
+            .expect("phase evidence");
+            let output = workspace.root().join("release-evidence");
+            let error =
+                assemble(&request(&workspace, &input, &output)).expect_err("omission rejected");
+            assert!(error.to_string().contains(expected), "{label}: {error}");
+            assert!(!output.exists(), "{label}: a rejected assembly writes nothing");
+        }
     }
 
     #[test]
