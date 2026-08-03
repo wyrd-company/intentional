@@ -935,13 +935,38 @@ mod generated_invocations {
         // that is not one is the command word.
         let command = tokens.iter().position(|token| !is_assignment(token));
         if command.is_some_and(|index| is_executable(&tokens[index])) {
-            return Some(tokens[command.expect("command word")..].to_vec());
+            return Some(without_redirections(
+                &tokens[command.expect("command word")..],
+            ));
         }
         assert!(
             !tokens.iter().any(|token| is_executable(token)),
             "`{fragment}` names the intentional executable outside command position; an unclassifiable invocation must fail rather than pass"
         );
         None
+    }
+
+    /// Drop the redirections a shell consumes before the command sees them.
+    ///
+    /// `intentional verify release-tag >/dev/null` runs a command with no
+    /// arguments; handing `>/dev/null` to the parser would reject a command the
+    /// shell accepts. A bare operator also consumes the word after it.
+    fn without_redirections(tokens: &[String]) -> Vec<String> {
+        let mut kept = Vec::new();
+        let mut skip = false;
+        for token in tokens {
+            if skip {
+                skip = false;
+                continue;
+            }
+            let operator = token.trim_start_matches(|character: char| character.is_ascii_digit());
+            if operator.starts_with('>') || operator.starts_with('<') {
+                skip = operator.trim_start_matches(['>', '<']).is_empty();
+                continue;
+            }
+            kept.push(token.clone());
+        }
+        kept
     }
 
     /// Whether a command word runs this binary, bare or named by a path.
@@ -1060,9 +1085,14 @@ mod generated_invocations {
     /// because the substituted command is itself executed. That is the shape a
     /// `run:` step takes when it projects a command's output into
     /// `$GITHUB_OUTPUT`, so it has to be read rather than stepped over.
+    ///
+    /// Both subshell parentheses separate. A leading `(` left attached to the
+    /// command word would make the fragment start with `(intentional`, which is
+    /// neither the executable nor a tokenization failure, so the invocation
+    /// would be skipped in silence rather than read or reported.
     fn simple_commands(line: &str) -> Vec<String> {
         let mut work = line.to_owned();
-        for separator in ["$(", "&&", "||", "`", ")", "|", ";", "&"] {
+        for separator in ["$(", "&&", "||", "`", "(", ")", "|", ";", "&"] {
             work = work.replace(separator, "\u{0}");
         }
         work.split('\u{0}')
@@ -1147,23 +1177,92 @@ mod generated_invocations {
     ///
     /// A shipped Action spells its options literally but takes their values
     /// from workflow inputs, so a value the parser validates against a closed
-    /// set arrives as `$INPUT_PUBLISHER` rather than as `npm`. Only that one
-    /// case is tolerated, and only when the value clap rejected is itself an
-    /// unexpanded shell parameter: every structural rejection — an unknown
-    /// option, an unknown subcommand, a missing required argument, an
-    /// unexpected positional — still fails. The option names and the command
-    /// path are what these documents fix; their values are supplied at runtime.
+    /// set arrives as `$INPUT_PUBLISHER` rather than as `npm`. Such a value is
+    /// substituted rather than excused: the placeholder is replaced with a value
+    /// the parser named as valid and the whole invocation is parsed again. Only
+    /// the token clap rejected changes, so every structural defect the same
+    /// invocation carries — an unknown option, an unknown subcommand, a missing
+    /// required argument, an unexpected positional — is still reached and still
+    /// fails.
+    ///
+    /// Excusing the invocation instead would hide all of them. clap reports one
+    /// error per parse, so an Action whose first rejection is a placeholder in a
+    /// closed-set option would never have its remaining arguments examined at
+    /// all. The option names and the command path are what these documents fix;
+    /// their values are supplied at runtime.
     fn parser_rejection(tokens: &[String]) -> Option<String> {
-        let error = Cli::try_parse_from(tokens).err()?;
-        let value_level = matches!(
+        let mut tokens = tokens.to_vec();
+        // Each round resolves one placeholder, and no round introduces one, so
+        // the substitution cannot outlast the arguments it is substituting.
+        for _ in 0..=tokens.len() {
+            let error = Cli::try_parse_from(&tokens).err()?;
+            let Some((rejected, accepted)) = placeholder_substitution(&error) else {
+                return Some(error.to_string());
+            };
+            let Some(token) = tokens.iter_mut().find(|token| **token == rejected) else {
+                return Some(error.to_string());
+            };
+            *token = accepted;
+        }
+        None
+    }
+
+    /// Values standing in for a workflow input the parser validates itself.
+    ///
+    /// An option whose values clap enumerates needs no entry: the parser names
+    /// an acceptable value in the rejection itself. An option parsed by a
+    /// hand-written conversion carries no such enumeration, so the stand-in is
+    /// stated here. Each entry is proved to still be needed, so an option that
+    /// stops being closed-set retires its entry rather than lingering as an
+    /// unexamined excuse.
+    const PLACEHOLDER_VALUES: &[(&str, &str)] = &[("--publisher", "cargo")];
+
+    /// The placeholder value one parse rejected and a value it would accept.
+    ///
+    /// Only a value-level rejection of an unexpanded shell parameter qualifies.
+    /// A rejection this cannot resolve is reported rather than tolerated, so an
+    /// Action that introduces a closed-set option fails here until the stand-in
+    /// for it is stated, instead of quietly excusing the whole invocation.
+    fn placeholder_substitution(error: &clap::error::Error) -> Option<(String, String)> {
+        if !matches!(
             error.kind(),
             clap::error::ErrorKind::InvalidValue | clap::error::ErrorKind::ValueValidation
-        );
-        let rejected = match error.get(clap::error::ContextKind::InvalidValue) {
-            Some(clap::error::ContextValue::String(value)) => value.clone(),
-            _ => String::new(),
+        ) {
+            return None;
+        }
+        let rejected = match error.get(clap::error::ContextKind::InvalidValue)? {
+            clap::error::ContextValue::String(value) => value.clone(),
+            _ => return None,
         };
-        (!value_level || !rejected.contains('$')).then(|| error.to_string())
+        if !rejected.contains('$') {
+            return None;
+        }
+        let accepted = match error.get(clap::error::ContextKind::ValidValue) {
+            Some(clap::error::ContextValue::Strings(values)) => values.first().cloned(),
+            Some(clap::error::ContextValue::String(value)) => Some(value.clone()),
+            _ => rejected_option(error).and_then(stand_in_value),
+        }?;
+        Some((rejected, accepted))
+    }
+
+    /// The long option one rejection names, without its value placeholder.
+    fn rejected_option(error: &clap::error::Error) -> Option<String> {
+        match error.get(clap::error::ContextKind::InvalidArg)? {
+            clap::error::ContextValue::String(argument) => argument
+                .split_whitespace()
+                .next()
+                .filter(|name| name.starts_with("--"))
+                .map(str::to_owned),
+            _ => None,
+        }
+    }
+
+    /// The stated stand-in for one option's runtime value.
+    fn stand_in_value(option: String) -> Option<String> {
+        PLACEHOLDER_VALUES
+            .iter()
+            .find(|(name, _)| *name == option)
+            .map(|(_, value)| (*value).to_owned())
     }
 
     #[test]
@@ -1212,6 +1311,136 @@ mod generated_invocations {
             total, ACTION_INVOCATIONS,
             "the published Actions invoke a known number of commands; an Action that stopped invoking one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
         );
+    }
+
+    // Parsing what each Action spells today proves the gate reads it; it does
+    // not prove the gate would reject a defect. Each Action's own extracted
+    // invocation is mutated here and the rejection is asserted per Action, so
+    // an Action whose defect the judgement masks fails naming itself rather
+    // than hiding inside an aggregate that another Action keeps green.
+    #[test]
+    fn refuses_a_misspelled_option_in_every_published_action() {
+        let mut checked = 0usize;
+        for (action, invocations) in action_invocations() {
+            for tokens in invocations {
+                let option = tokens
+                    .iter()
+                    .position(|token| token.starts_with("--"))
+                    .unwrap_or_else(|| panic!("{action} spells an option to misspell: {tokens:?}"));
+                let mut misspelled = tokens.clone();
+                misspelled[option] = format!("--x{}", &tokens[option][2..]);
+                checked += 1;
+                assert!(
+                    parser_rejection(&misspelled).is_some(),
+                    "{action} would accept `{}`, so a misspelling in it reaches a release runner",
+                    shell_words::join(&misspelled)
+                );
+            }
+        }
+        assert_eq!(
+            checked, ACTION_INVOCATIONS,
+            "every published invocation is mutated, not only the ones a defect happens to reach"
+        );
+    }
+
+    // A required option deleted outright is the same defect class as a
+    // misspelled one, and it is the shape that a first-error-wins judgement
+    // masks most completely: nothing remains to look wrong.
+    #[test]
+    fn refuses_a_published_action_that_drops_a_required_option() {
+        let (action, invocations) = action_invocations()
+            .into_iter()
+            .find(|(action, _)| action.contains("verify-publication"))
+            .expect("the publication Action is published");
+        for tokens in invocations {
+            let option = tokens
+                .iter()
+                .position(|token| token == "--output")
+                .expect("the publication Action names the fragment it writes");
+            let mut dropped = tokens.clone();
+            dropped.drain(option..=option + 1);
+            assert!(
+                parser_rejection(&dropped).is_some(),
+                "{action} would accept `{}`, so a dropped required option reaches a release runner",
+                shell_words::join(&dropped)
+            );
+        }
+    }
+
+    // A stand-in that no published Action still needs is an excuse nothing
+    // examines. Each entry has to name an option some Action passes a runtime
+    // placeholder to, and the stand-in has to be a value this binary accepts,
+    // so an option that stops being closed-set retires its entry here.
+    #[test]
+    fn every_stated_stand_in_is_still_needed_and_still_accepted() {
+        let invocations = action_invocations()
+            .into_iter()
+            .flat_map(|(_, invocations)| invocations)
+            .collect::<Vec<_>>();
+        for (option, value) in PLACEHOLDER_VALUES {
+            let carrier = invocations
+                .iter()
+                .find(|tokens| {
+                    tokens
+                        .windows(2)
+                        .any(|pair| pair[0] == *option && pair[1].contains('$'))
+                })
+                .unwrap_or_else(|| {
+                    panic!("no published Action passes {option} a runtime placeholder")
+                });
+            // The entry is load-bearing only while the parser itself names no
+            // acceptable value for this option.
+            let error = Cli::try_parse_from(carrier).expect_err("the placeholder is rejected");
+            assert_eq!(
+                placeholder_substitution(&error).map(|(_, accepted)| accepted),
+                Some((*value).to_owned()),
+                "{option} still needs a stated stand-in rather than naming its own"
+            );
+
+            let mut substituted = carrier.clone();
+            let index = substituted
+                .iter()
+                .position(|token| token == option)
+                .expect("the option this stand-in names");
+            substituted[index + 1] = (*value).to_owned();
+            assert!(
+                Cli::try_parse_from(&substituted).map_or_else(
+                    |error| rejected_option(&error).as_deref() != Some(*option),
+                    |_| true
+                ),
+                "{option} accepts the stated stand-in {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_a_subshell_wrapped_invocation() {
+        let invocations = body_invocations("(intentional release prepare --output /tmp/candidate)");
+        assert_eq!(
+            invocations.len(),
+            1,
+            "a subshell runs the command it wraps: {invocations:?}"
+        );
+        assert_eq!(
+            invocations[0][1..],
+            ["release", "prepare", "--output", "/tmp/candidate"]
+        );
+    }
+
+    #[test]
+    fn reads_a_redirected_invocation_as_the_command_the_shell_runs() {
+        for body in [
+            "intentional verify release-tag >/dev/null 2>&1",
+            "intentional verify release-tag > /dev/null",
+        ] {
+            let invocations = body_invocations(body);
+            assert_eq!(invocations.len(), 1, "`{body}`: {invocations:?}");
+            assert_eq!(invocations[0][1..], ["verify", "release-tag"], "`{body}`");
+            assert!(
+                parser_rejection(&invocations[0]).is_none(),
+                "`{body}` is a command this binary accepts"
+            );
+        }
     }
 
     #[test]
