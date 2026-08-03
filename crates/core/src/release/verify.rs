@@ -69,6 +69,9 @@ pub fn verify_handoff(root: &Path, handoff: &Path) -> Result<VerifiedHandoff> {
         .map_err(|error| Error::io(&manifest_path, error))?;
     let candidate = ReleaseCandidate::from_yaml(&manifest_text)?;
 
+    // A conflicting local ref is reported before any untrusted object is read,
+    // so an operator sees the real obstacle rather than a reproduction failure.
+    require_importable_refs(root, &candidate)?;
     verify_transported_files(&directory, &candidate)?;
     let plan = verify_sealed_plan(&directory, &candidate)?;
 
@@ -525,8 +528,7 @@ fn import_pushable_identities(
     candidate: &ReleaseCandidate,
 ) -> Result<()> {
     let tag_reference = format!("refs/tags/{}", candidate.global_tag.name);
-    require_absent_or_identical(root, &tag_reference, &candidate.global_tag.object)?;
-    require_absent_or_identical(root, IMPORTED_RELEASE_REF, &candidate.release.commit)?;
+    require_importable_refs(root, candidate)?;
     let bundle_argument = bundle
         .to_str()
         .ok_or_else(|| Error::Git("the bundle path is not valid UTF-8".to_owned()))?
@@ -553,6 +555,16 @@ fn import_pushable_identities(
         )));
     }
     Ok(())
+}
+
+/// Refuse to verify a handoff whose identities conflict with existing local refs.
+fn require_importable_refs(root: &Path, candidate: &ReleaseCandidate) -> Result<()> {
+    require_absent_or_identical(
+        root,
+        &format!("refs/tags/{}", candidate.global_tag.name),
+        &candidate.global_tag.object,
+    )?;
+    require_absent_or_identical(root, IMPORTED_RELEASE_REF, &candidate.release.commit)
 }
 
 /// Accept an identical existing ref and reject a conflicting one.
