@@ -337,8 +337,8 @@ rules:
             world:
               publication_visible: true
               destination_digest_matches: true
-          - when: A public clean client resolves and retrieves the exact subject
-          - then: The publisher evidence records successful readback and retrieval
+          - when: A public clean client resolves the released version and retrieves it
+          - then: The publisher evidence records successful readback and the retrieved bytes
             world:
               clean_client_retrieval: true
               public_client_retrieval: true

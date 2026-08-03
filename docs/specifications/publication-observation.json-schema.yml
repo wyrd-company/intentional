@@ -87,12 +87,25 @@ properties:
       mode:
         enum: [ public, authenticated-draft ]
       client:
+        description: >-
+          Consumer tool the recipe drove to retrieve the release.
         type: string
         minLength: 1
       version:
+        description: >-
+          Version of the retrieving client itself, not of the release it
+          retrieved. The release version is subject.version and
+          destination.version.
         type: string
         minLength: 1
       digest:
+        description: >-
+          Bytes the client actually retrieved, spelled in that client's own
+          form. Establishing that those bytes are the published subject is the
+          recipe's obligation, discharged before the observation is written. An
+          authenticated-draft retrieval is the exception: its bytes are a draft
+          Release asset, so it records the canonical sha256: digest the
+          draft-asset inventory uses.
         type: string
         minLength: 1
   destination-aliases:

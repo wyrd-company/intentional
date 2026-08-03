@@ -38,6 +38,31 @@ description: >-
   the observed mode unchanged and refuses a draft claim from a publisher whose
   consumer path is independent of GitHub Release assets.
 
+  `retrieval.client` and `retrieval.version` describe the client that performed
+  the retrieval, not the release it retrieved: the consumer tool the recipe
+  drove and that tool's own version. The release version is `subject.version`
+  and `destination.version`, and a client version is never compared with either.
+
+  `retrieval.digest` holds the bytes the client actually retrieved, spelled in
+  whatever form that client reports — an npm integrity string, a registry
+  checksum, an OCI descriptor digest — rather than a canonical form the protocol
+  imposes on every ecosystem. The observation therefore states what was
+  retrieved; it does not by itself state that what was retrieved is the
+  published subject. Establishing that equality is the recipe's obligation,
+  discharged with the client's own tooling before the observation is written,
+  because only the recipe holds the credentials and the ecosystem knowledge to
+  compare a client-side artifact with a destination-side one. Verification
+  records the digest unchanged and compares it only against later observations
+  of the same publication.
+
+  `authenticated-draft` is the one mode whose retrieved bytes the protocol can
+  check for itself. Those bytes are an asset of the still-draft GitHub Release,
+  and the draft-asset handoff already verifies each retrieved asset against the
+  canonical `sha256:` inventory the release sealed. A recipe therefore records
+  that same canonical `sha256:` digest as `retrieval.digest` for this mode, so
+  the handoff's verified result and the observation's claim are the same value
+  and joining them is a comparison rather than a translation.
+
   The observation contains no timestamps or other wall-clock values, so the
   publisher-evidence fragment derived from it is byte-identical across runs and
   across runners.
@@ -54,4 +79,6 @@ validation-criteria: >-
   observation after a completed publish attempt fails, and reaching the
   deadline is a distinct retryable failure. The command writes its
   publisher-evidence fragment only after a `present` observation passes every
-  check.
+  check. An `authenticated-draft` retrieval spells its digest in the canonical
+  `sha256:` form the draft-asset inventory uses; every other mode spells it in
+  the retrieving client's own form.
