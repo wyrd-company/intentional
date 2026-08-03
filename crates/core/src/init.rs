@@ -41,6 +41,13 @@ const TRANSACTION_PATH: &str = ".intentional/.takeover-transaction";
 const TRANSACTION_STATE_PATH: &str = ".intentional/.takeover-state";
 const DEVCONTAINER_FEATURE_MANIFEST: &str = "devcontainer-feature.json";
 const DEVCONTAINER_TEMPLATE_MANIFEST: &str = "devcontainer-template.json";
+const GITHUB_ACTION_MANIFESTS: [&str; 2] = ["action.yml", "action.yaml"];
+const DOCKERFILE_MANIFEST: &str = "Dockerfile";
+const TERRAFORM_ANCHOR: &str = "main.tf";
+const TERRAFORM_PLUGIN_MODULES: [&str; 2] = [
+    "github.com/hashicorp/terraform-plugin-framework",
+    "github.com/hashicorp/terraform-plugin-sdk",
+];
 
 /// Process outcome for initialization.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -2048,7 +2055,30 @@ fn discover(root: &Path) -> Result<Discovery> {
         ..Discovery::default()
     };
     let mut observations = Vec::new();
+    let mut terraform_sources = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
     for path in manifest_paths {
+        if let Some(artifact) = tag_only_artifact_for(&path) {
+            let relative = workspace_relative(root, &path)?;
+            match artifact {
+                TagOnlyArtifact::TerraformSource => {
+                    terraform_sources
+                        .entry(
+                            relative
+                                .parent()
+                                .map(Path::to_path_buf)
+                                .unwrap_or_else(PathBuf::new),
+                        )
+                        .or_default()
+                        .insert(relative);
+                }
+                TagOnlyArtifact::GithubAction | TagOnlyArtifact::DockerImage => {
+                    let candidate = path_derived_candidate(root, artifact, &relative)?;
+                    discovery.evidence.insert(candidate.path.clone());
+                    discovery.candidates.push(candidate);
+                }
+            }
+            continue;
+        }
         if let Some(candidate) = devcontainer_candidate(root, &path)? {
             discovery.evidence.insert(candidate.path.clone());
             if let (Some(native_identity), Some(projection), Some(tag)) = (
@@ -2079,12 +2109,9 @@ fn discover(root: &Path) -> Result<Discovery> {
             continue;
         }
         let (id, version) = manifest_identity(&path, adapter)?;
-        let relative_manifest = path
-            .strip_prefix(root)
-            .map_err(|error| Error::Validation(format!("manifest is outside workspace: {error}")))?
-            .to_owned();
+        let relative_manifest = workspace_relative(root, &path)?;
         let manifest_evidence = evidence(root, &relative_manifest, Vec::new())?;
-        let detector = detector_for(adapter).to_owned();
+        let detector = ecosystem_detector(&path, adapter)?.to_owned();
         let candidate = DiscoveryCandidate {
             id: DiscoveryCandidate::stable_id(&detector, &relative_manifest)?,
             detector,
@@ -2129,6 +2156,13 @@ fn discover(root: &Path) -> Result<Discovery> {
         discovery
             .evidence
             .insert(path.strip_prefix(root).unwrap_or(&path).to_owned());
+    }
+    for (directory, sources) in terraform_sources {
+        let candidate = terraform_module_candidate(root, &directory, &sources)?;
+        for item in &candidate.evidence {
+            discovery.evidence.insert(item.path.clone());
+        }
+        discovery.candidates.push(candidate);
     }
     materialize_discovery_inventory(&mut discovery, observations)?;
     discovery.npm_dependencies = derive_npm_dependencies(root, &mut discovery.config)?;
@@ -2417,6 +2451,7 @@ fn hard_excluded(root: &Path, path: &Path) -> bool {
                     | ".ruff_cache"
                     | ".dart_tool"
                     | ".pub-cache"
+                    | ".terraform"
                     | "obj"
             )
         })
@@ -2471,6 +2506,224 @@ fn remove_git_ignored(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<()> 
     Ok(())
 }
 
+/// Structural artifact classes whose version authority is a canonical Git tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagOnlyArtifact {
+    /// `action.yml` or `action.yaml` composite, Docker, or JavaScript action definition.
+    GithubAction,
+    /// `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile` build definition.
+    DockerImage,
+    /// One `.tf` file contributing to its directory's Terraform module.
+    TerraformSource,
+}
+
+impl TagOnlyArtifact {
+    fn detector(self) -> &'static str {
+        match self {
+            Self::GithubAction => "github-action",
+            Self::DockerImage => "docker-image",
+            Self::TerraformSource => "terraform-module",
+        }
+    }
+}
+
+/// Classify one path by filename evidence alone.
+///
+/// Nothing here reads workflows, Compose files, registry coordinates, image
+/// names, or publication state; a match asserts only that the file is the
+/// recognized build definition at that path.
+fn tag_only_artifact_for(path: &Path) -> Option<TagOnlyArtifact> {
+    let name = path.file_name()?.to_str()?;
+    if GITHUB_ACTION_MANIFESTS.contains(&name) {
+        return Some(TagOnlyArtifact::GithubAction);
+    }
+    if name == DOCKERFILE_MANIFEST || docker_image_variant(name).is_some() {
+        return Some(TagOnlyArtifact::DockerImage);
+    }
+    if path.extension().is_some_and(|extension| extension == "tf") {
+        return Some(TagOnlyArtifact::TerraformSource);
+    }
+    None
+}
+
+/// Extract the variant segment of a `Dockerfile.<variant>` or `<variant>.Dockerfile` name.
+fn docker_image_variant(name: &str) -> Option<&str> {
+    name.strip_prefix("Dockerfile.")
+        .or_else(|| name.strip_suffix(".Dockerfile"))
+        .filter(|variant| !variant.is_empty())
+}
+
+/// Suggest an identity derived from path evidence, when the path yields a usable id.
+fn path_derived_identity(relative: &Path, variant: Option<&str>) -> Option<String> {
+    let derived = variant.or_else(|| {
+        relative
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+    })?;
+    (!derived.is_empty()
+        && derived
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character)))
+    .then(|| derived.to_owned())
+}
+
+/// Build one tag-only candidate whose version authority is its canonical Git tag.
+fn tag_only_candidate(
+    detector: &str,
+    path: PathBuf,
+    evidence: Vec<SourceEvidence>,
+    native_identity: Option<String>,
+    diagnostics: Vec<ExtractionDiagnostic>,
+) -> Result<DiscoveryCandidate> {
+    Ok(DiscoveryCandidate {
+        id: DiscoveryCandidate::stable_id(detector, &path)?,
+        detector: detector.to_owned(),
+        path,
+        evidence,
+        native_identity,
+        raw_version: None,
+        projection: None,
+        tag: Some(CandidateTagSuggestion {
+            id: "primary".to_owned(),
+            role: TagRole::Primary,
+            template: "{id}@{version}".to_owned(),
+        }),
+        diagnostics,
+        resolution: None,
+    })
+}
+
+/// Report that no identity could be derived from the artifact's path.
+fn identity_not_path_derivable(
+    detector: &str,
+    relative: &Path,
+    source: &SourceEvidence,
+) -> ExtractionDiagnostic {
+    extraction_diagnostic(
+        "identity-extraction",
+        &format!("{detector}-identity-not-path-derivable"),
+        format!(
+            "{} has no directory or filename segment usable as an id; the detector derives identity only from the path, so name the release unit explicitly.",
+            relative.display()
+        ),
+        source,
+    )
+}
+
+/// Emit one path-derived GitHub Action or Docker/OCI candidate.
+fn path_derived_candidate(
+    root: &Path,
+    artifact: TagOnlyArtifact,
+    relative: &Path,
+) -> Result<DiscoveryCandidate> {
+    let detector = artifact.detector();
+    let source = evidence(root, relative, Vec::new())?;
+    let variant = match artifact {
+        TagOnlyArtifact::DockerImage => relative
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(docker_image_variant),
+        TagOnlyArtifact::GithubAction | TagOnlyArtifact::TerraformSource => None,
+    };
+    let native_identity = path_derived_identity(relative, variant);
+    let diagnostics = match native_identity {
+        Some(_) => Vec::new(),
+        None => vec![identity_not_path_derivable(detector, relative, &source)],
+    };
+    tag_only_candidate(
+        detector,
+        relative.to_owned(),
+        vec![source],
+        native_identity,
+        diagnostics,
+    )
+}
+
+/// Emit one Terraform module candidate for a directory holding `.tf` files.
+///
+/// The whole directory is the module, so every `.tf` file in it is evidence and
+/// `main.tf` anchors the candidate identity when it exists.
+fn terraform_module_candidate(
+    root: &Path,
+    directory: &Path,
+    sources: &BTreeSet<PathBuf>,
+) -> Result<DiscoveryCandidate> {
+    let anchor = sources
+        .iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == TERRAFORM_ANCHOR)
+        })
+        .or_else(|| sources.iter().next())
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "Terraform module directory {} has no .tf sources",
+                directory.display()
+            ))
+        })?
+        .clone();
+    let evidence = sources
+        .iter()
+        .map(|path| evidence(root, path, Vec::new()))
+        .collect::<Result<Vec<_>>>()?;
+    let anchor_evidence = evidence
+        .iter()
+        .find(|item| item.path == anchor)
+        .expect("anchor evidence")
+        .clone();
+    let detector = TagOnlyArtifact::TerraformSource.detector();
+    let native_identity = path_derived_identity(&anchor, None);
+    let diagnostics = match native_identity {
+        Some(_) => Vec::new(),
+        None => vec![identity_not_path_derivable(
+            detector,
+            directory,
+            &anchor_evidence,
+        )],
+    };
+    tag_only_candidate(detector, anchor, evidence, native_identity, diagnostics)
+}
+
+/// Select the detector presentation for one ecosystem manifest.
+///
+/// Go modules that require the Terraform Plugin Framework or SDK present as
+/// Terraform providers, which is the more specific identity for the same file.
+fn ecosystem_detector(path: &Path, adapter: Adapter) -> Result<&'static str> {
+    if adapter != Adapter::Go {
+        return Ok(detector_for(adapter));
+    }
+    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+    Ok(if requires_terraform_plugin_module(&text) {
+        "terraform-provider"
+    } else {
+        detector_for(adapter)
+    })
+}
+
+/// Report whether a `go.mod` directly requires a Terraform provider plugin module.
+fn requires_terraform_plugin_module(text: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        if line.ends_with("// indirect") {
+            return false;
+        }
+        let line = line.strip_prefix("require ").unwrap_or(line).trim_start();
+        TERRAFORM_PLUGIN_MODULES.iter().any(|module| {
+            line.strip_prefix(module).is_some_and(|rest| {
+                rest.is_empty() || rest.starts_with(' ') || rest.starts_with('/')
+            })
+        })
+    })
+}
+
+fn workspace_relative(root: &Path, path: &Path) -> Result<PathBuf> {
+    Ok(path
+        .strip_prefix(root)
+        .map_err(|error| Error::Validation(format!("manifest is outside workspace: {error}")))?
+        .to_owned())
+}
+
 fn detector_for(adapter: Adapter) -> &'static str {
     match adapter {
         Adapter::Npm => "npm-package",
@@ -2494,7 +2747,9 @@ fn devcontainer_detector_for(path: &Path) -> Option<&'static str> {
 }
 
 fn is_discoverable_manifest(path: &Path) -> bool {
-    adapter_for(path).is_some() || devcontainer_detector_for(path).is_some()
+    adapter_for(path).is_some()
+        || devcontainer_detector_for(path).is_some()
+        || tag_only_artifact_for(path).is_some()
 }
 
 fn devcontainer_candidate(root: &Path, path: &Path) -> Result<Option<DiscoveryCandidate>> {

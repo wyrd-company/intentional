@@ -808,6 +808,341 @@ fn devcontainer_candidates_support_every_resolution_flow() {
     assert!(!config.release_units.contains_key("sample-template"));
 }
 
+fn write_tag_only_fixtures(repo: &TestRepo) {
+    repo.write("action.yml", "name: Root\nruns:\n  using: composite\n");
+    repo.write(
+        "actions/publish/action.yml",
+        "name: Publish\nruns:\n  using: composite\n",
+    );
+    repo.write(
+        "actions/verify/action.yaml",
+        "name: Verify\nruns:\n  using: composite\n",
+    );
+    repo.write("Dockerfile", "FROM scratch\n");
+    repo.write("images/Dockerfile.runtime", "FROM scratch\n");
+    repo.write("images/toolchain.Dockerfile", "FROM scratch\n");
+    repo.write(
+        "modules/network/main.tf",
+        "resource \"null_resource\" \"sample\" {}\n",
+    );
+    repo.write("modules/network/variables.tf", "variable \"sample\" {}\n");
+    repo.write(
+        "modules/storage/outputs.tf",
+        "output \"sample\" {\n  value = 1\n}\n",
+    );
+}
+
+#[test]
+fn tag_only_detectors_derive_identity_from_path_evidence_alone() {
+    let repo = TestRepo::new();
+    write_tag_only_fixtures(&repo);
+    repo.write(".github/workflows/release.yml", "name: release\n");
+    repo.write("compose.yaml", "services: {}\n");
+    repo.write(
+        ".terraform/modules/vendored/main.tf",
+        "resource \"null_resource\" \"vendored\" {}\n",
+    );
+    repo.commit("add tag-only fixtures");
+
+    let first = initialize(&repo.root, false)
+        .expect("tag-only candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    let second = initialize(&repo.root, false)
+        .expect("repeatable candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    assert_eq!(first, second);
+
+    let observed = first
+        .discovery_candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.detector.as_str(),
+                candidate.path.to_string_lossy().into_owned(),
+                candidate.native_identity.clone(),
+                candidate.evidence.len(),
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        observed,
+        [
+            ("docker-image", "Dockerfile".to_owned(), None, 1),
+            (
+                "docker-image",
+                "images/Dockerfile.runtime".to_owned(),
+                Some("runtime".to_owned()),
+                1
+            ),
+            (
+                "docker-image",
+                "images/toolchain.Dockerfile".to_owned(),
+                Some("toolchain".to_owned()),
+                1
+            ),
+            ("github-action", "action.yml".to_owned(), None, 1),
+            (
+                "github-action",
+                "actions/publish/action.yml".to_owned(),
+                Some("publish".to_owned()),
+                1
+            ),
+            (
+                "github-action",
+                "actions/verify/action.yaml".to_owned(),
+                Some("verify".to_owned()),
+                1
+            ),
+            (
+                "terraform-module",
+                "modules/network/main.tf".to_owned(),
+                Some("network".to_owned()),
+                2
+            ),
+            (
+                "terraform-module",
+                "modules/storage/outputs.tf".to_owned(),
+                Some("storage".to_owned()),
+                1
+            ),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+
+    for candidate in &first.discovery_candidates {
+        assert!(candidate.projection.is_none(), "{} projects", candidate.id);
+        assert!(candidate.raw_version.is_none(), "{} versions", candidate.id);
+        let tag = candidate.tag.as_ref().expect("tag-only tag suggestion");
+        assert_eq!(tag.template, "{id}@{version}");
+        let expected = if candidate.native_identity.is_some() {
+            Vec::new()
+        } else {
+            vec![format!(
+                "{}-identity-not-path-derivable",
+                candidate.detector
+            )]
+        };
+        assert_eq!(
+            candidate
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.code.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    let module = first
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.path == Path::new("modules/network/main.tf"))
+        .expect("Terraform module candidate");
+    assert_eq!(
+        module
+            .evidence
+            .iter()
+            .map(|item| item.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec![
+            "modules/network/main.tf".to_owned(),
+            "modules/network/variables.tf".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn terraform_plugin_go_modules_present_as_providers() {
+    let repo = TestRepo::new();
+    repo.write(
+        "go.mod",
+        "module github.com/example/terraform-provider-sample\n\ngo 1.22\n\nrequire (\n\tgithub.com/hashicorp/terraform-plugin-framework v1.8.0\n)\n",
+    );
+    repo.write(
+        "tools/go.mod",
+        "module github.com/example/sample-tools\n\ngo 1.22\n\nrequire (\n\tgithub.com/hashicorp/terraform-plugin-sdk/v2 v2.33.0 // indirect\n)\n",
+    );
+    repo.commit("add Go module fixtures");
+
+    let plan = initialize(&repo.root, false)
+        .expect("provider candidate plan")
+        .plan
+        .expect("unresolved candidates");
+    let provider = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.path == Path::new("go.mod"))
+        .expect("provider candidate");
+    assert_eq!(provider.detector, "terraform-provider");
+    assert_eq!(
+        provider.native_identity.as_deref(),
+        Some("github.com/example/terraform-provider-sample")
+    );
+    assert!(provider.raw_version.is_none());
+
+    let module = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.path == Path::new("tools/go.mod"))
+        .expect("plain Go module candidate");
+    assert_eq!(module.detector, "go-module");
+}
+
+#[test]
+fn tag_only_candidates_support_every_resolution_flow() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    write_tag_only_fixtures(&repo);
+    repo.commit("add tag-only resolution fixtures");
+
+    repo.cli().arg("init").assert().code(2);
+    let plan_path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(&plan_path).expect("tag-only initialization plan"),
+    )
+    .expect("valid tag-only initialization plan");
+    let creator = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "npm-package")
+        .expect("npm creator")
+        .id
+        .clone();
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(match candidate.native_identity.as_deref() {
+            _ if candidate.detector == "npm-package" => CandidateResolution::Independent {
+                release_unit: "sample-library".to_owned(),
+            },
+            Some("publish" | "runtime" | "network") => CandidateResolution::Independent {
+                release_unit: candidate
+                    .native_identity
+                    .clone()
+                    .expect("path-derived identity"),
+            },
+            Some("verify" | "toolchain") => CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: Some(creator.clone()),
+            },
+            _ => CandidateResolution::Excluded,
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved tag-only plan"))
+        .expect("write tag-only plan");
+    repo.cli().arg("init").assert().success();
+
+    let config = intentional_core::Config::load(&repo.root).expect("tag-only config");
+    for (id, path) in [
+        ("publish", "actions/publish"),
+        ("runtime", "images"),
+        ("network", "modules/network"),
+    ] {
+        let unit = &config.release_units[id];
+        assert!(unit.projections.is_empty(), "{id} carries a projection");
+        assert_eq!(unit.path, Path::new(path));
+        assert_eq!(unit.tags["primary"].template, "{id}@{version}");
+    }
+    assert_eq!(config.release_units["sample-library"].projections.len(), 1);
+
+    let managed = config
+        .discovery
+        .managed_paths
+        .iter()
+        .map(|receipt| {
+            (
+                receipt.detector.as_str(),
+                receipt.path.to_string_lossy().into_owned(),
+                receipt.release_unit.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(managed.contains(&(
+        "github-action",
+        "actions/verify/action.yaml".to_owned(),
+        "sample-library"
+    )));
+    assert!(managed.contains(&(
+        "terraform-module",
+        "modules/network/main.tf".to_owned(),
+        "network"
+    )));
+    let excluded = config
+        .discovery
+        .excluded_paths
+        .iter()
+        .map(|receipt| receipt.path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        excluded,
+        vec![
+            "Dockerfile".to_owned(),
+            "action.yml".to_owned(),
+            "modules/storage/outputs.tf".to_owned()
+        ]
+    );
+
+    assert!(initialize(&repo.root, false)
+        .expect("receipt no-op")
+        .operations
+        .is_empty());
+
+    repo.write("Dockerfile", "FROM scratch\nLABEL sample=1\n");
+    repo.cli().arg("init").assert().code(2);
+    let reopened: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("reopened plan"))
+            .expect("valid reopened plan");
+    assert_eq!(
+        reopened
+            .discovery_candidates
+            .iter()
+            .map(|candidate| candidate.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["Dockerfile".to_owned()]
+    );
+
+    repo.write(
+        "modules/network/outputs.tf",
+        "output \"added\" {\n  value = 1\n}\n",
+    );
+    let managed_after = initialize(&repo.root, false)
+        .expect("managed Terraform module rescan")
+        .plan
+        .expect("unresolved candidates")
+        .discovery_candidates
+        .iter()
+        .map(|candidate| candidate.path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(managed_after, vec!["Dockerfile".to_owned()]);
+}
+
+#[test]
+fn tag_only_release_units_require_explicit_baseline_versions() {
+    let repo = TestRepo::new();
+    repo.write("images/Dockerfile.runtime", "FROM scratch\n");
+    repo.commit("add tag-only baseline fixture");
+
+    repo.cli().arg("init").assert().code(2);
+    resolve_plan(&repo, |identity| CandidateResolution::Independent {
+        release_unit: identity.to_owned(),
+    });
+    repo.cli().arg("init").assert().success();
+    repo.commit("adopt Intentional");
+
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "tag-only release unit runtime requires --version runtime=X.Y.Z",
+        ));
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "runtime=1.4.0"])
+        .assert()
+        .success();
+    assert_eq!(git(&repo.root, &["tag", "--list"]), "runtime@1.4.0");
+}
+
 #[test]
 fn repeatable_init_consumes_a_stale_plan_after_the_candidate_closes() {
     let repo = TestRepo::new();
