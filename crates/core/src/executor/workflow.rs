@@ -954,10 +954,14 @@ fn publisher_job(
     };
     let identity = publication.identity();
     let slug = identifier(&identity);
+    // Publisher credentials stay in the repository-owned recipe steps, so the
+    // destination readback they perform reaches the portable command as a
+    // schema-backed observation rather than as a second verification path.
     let verify_command = format!(
-        "intentional verify publication --release-unit {} --publisher {}{target} --output \"${{{{ runner.temp }}}}/{}evidence/{slug}.yml\"",
+        "intentional verify publication --release-unit {} --publisher {}{target} --observation \"${{{{ runner.temp }}}}/{}observation/{slug}.yml\" --output \"${{{{ runner.temp }}}}/{}evidence/{slug}.yml\"",
         publication.release_unit,
         publication.publisher.as_str(),
+        namespaces.job,
         namespaces.job
     );
     job(

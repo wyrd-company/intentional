@@ -7,6 +7,9 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::evidence::assemble::{IntendedDestination, PublisherEvidence};
+use crate::evidence::phase::{self, PhaseBindings, PHASE_EVIDENCE_FIELD};
+use crate::executor::recipe::{select_publications, SelectedPublication};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
 use crate::plan::{canonical_json, Generator, ReleasePlan};
@@ -53,17 +56,23 @@ struct TagCandidate {
 }
 
 impl TagResult {
-    /// Recover an applied release and plan its annotated tags.
+    /// Recover an applied release and plan its unphased annotated tags.
     pub fn build(root: &Path, channel: Option<&str>, phase: Option<TagPhase>) -> Result<Self> {
-        Self::build_with_plan(root, channel, phase, None)
+        Self::build_with_plan(root, channel, phase, None, None)
     }
 
     /// Verify a supplied sealed plan or recover one locally, then plan annotated tags.
+    ///
+    /// `evidence_input` is the directory the publication workflow staged for the
+    /// requested phase: built subjects before publication, completed publisher
+    /// fragments after it. A phase tag without that directory could only claim
+    /// what its own invocation asserted, so the two are required together.
     pub fn build_with_plan(
         root: &Path,
         channel: Option<&str>,
         phase: Option<TagPhase>,
         plan_path: Option<&Path>,
+        evidence_input: Option<&Path>,
     ) -> Result<Self> {
         let config = Config::load(root)?;
         let repository = VersionRepository::discover(root)?;
@@ -118,7 +127,15 @@ impl TagResult {
             }
             _ => {}
         }
-        Self::from_versions(root, &config, &versions, phase, false, Some(&plan.digest))
+        Self::from_versions(
+            root,
+            &config,
+            &versions,
+            phase,
+            false,
+            Some(&plan.digest),
+            evidence_input,
+        )
     }
 
     /// Infer and plan initial annotated baseline tags.
@@ -192,9 +209,18 @@ impl TagResult {
             versions.insert(canonical, version.to_string());
         }
         let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
-        Self::from_versions(root, &config, &versions, None, true, digest.as_deref())
+        Self::from_versions(
+            root,
+            &config,
+            &versions,
+            None,
+            true,
+            digest.as_deref(),
+            None,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn from_versions(
         root: &Path,
         config: &Config,
@@ -202,6 +228,7 @@ impl TagResult {
         phase: Option<TagPhase>,
         baseline: bool,
         release_digest: Option<&str>,
+        evidence_input: Option<&Path>,
     ) -> Result<Self> {
         let payload = TagDigestPayload {
             contract: &config.contract,
@@ -269,6 +296,18 @@ impl TagResult {
             .head_id()
             .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
             .detach();
+        let evidence = match (phase, evidence_input) {
+            (Some(phase), input) => {
+                sealed_phase_evidence(root, config, &repository, &candidates, phase, digest, input)?
+            }
+            (None, Some(input)) => {
+                return Err(Error::Validation(format!(
+                    "phase evidence directory {} applies only to a --phase invocation",
+                    input.display()
+                )))
+            }
+            (None, None) => None,
+        };
         let mut tags = Vec::new();
         for id in order {
             let candidate = &selected[&id];
@@ -282,6 +321,7 @@ impl TagResult {
                     digest,
                     baseline,
                     head,
+                    evidence.as_deref(),
                 )?;
                 continue;
             }
@@ -322,7 +362,14 @@ impl TagResult {
             tags.push(PlannedTag {
                 id: id.clone(),
                 name: candidate.name.clone(),
-                message: tag_message(&config.contract, digest, &id, &candidate.version, baseline),
+                message: tag_message(
+                    &config.contract,
+                    digest,
+                    &id,
+                    &candidate.version,
+                    baseline,
+                    evidence.as_deref(),
+                ),
             });
         }
         Ok(Self { tags })
@@ -384,10 +431,18 @@ fn validate_existing_candidate(
     digest: &str,
     baseline: bool,
     head: gix::ObjectId,
+    evidence: Option<&str>,
 ) -> Result<()> {
     if record.target != head {
         return Err(Error::Validation(format!(
             "existing tag {name} targets a different commit"
+        )));
+    }
+    // A phase tag seals a historical observation, so a retry that would seal a
+    // different one is a conflict rather than a repeat of completed work.
+    if record.fields.get(PHASE_EVIDENCE_FIELD).map(String::as_str) != evidence {
+        return Err(Error::Validation(format!(
+            "existing tag {name} has unexpected {PHASE_EVIDENCE_FIELD}"
         )));
     }
     let baseline = baseline.to_string();
@@ -1121,14 +1176,124 @@ fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::Signa
 
 /// Canonical annotated-tag record message for one release tag.
 pub fn release_tag_message(contract: &str, digest: &str, id: &str, version: &str) -> String {
-    tag_message(contract, digest, id, version, false)
+    tag_message(contract, digest, id, version, false, None)
 }
 
-fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: bool) -> String {
+fn tag_message(
+    contract: &str,
+    digest: &str,
+    id: &str,
+    version: &str,
+    baseline: bool,
+    evidence: Option<&str>,
+) -> String {
+    let phase_evidence = match evidence {
+        Some(evidence) => format!("{PHASE_EVIDENCE_FIELD}: {evidence}\n"),
+        None => String::new(),
+    };
     format!(
-        "intentional release record\n\ncontract: {contract}\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {id}\nversion: {version}\nbaseline: {baseline}\n",
+        "intentional release record\n\ncontract: {contract}\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {id}\nversion: {version}\nbaseline: {baseline}\n{phase_evidence}",
         crate::VERSION
     )
+}
+
+/// Seal the evidence every phase tag of one invocation carries.
+///
+/// The bindings are read from the repository rather than from the caller: R is
+/// the commit being tagged, S is its sole parent, and the global tag is the one
+/// configured tag that declares no phase. A phase tag that trusted supplied
+/// identities could bind a release to a history it never had.
+fn sealed_phase_evidence(
+    root: &Path,
+    config: &Config,
+    repository: &gix::Repository,
+    candidates: &BTreeMap<String, TagCandidate>,
+    phase: TagPhase,
+    digest: &str,
+    input: Option<&Path>,
+) -> Result<Option<String>> {
+    let release_commit = repository
+        .head_id()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+        .detach();
+    let commit = repository
+        .find_object(release_commit)
+        .map_err(|error| Error::Git(format!("failed to read HEAD commit: {error}")))?
+        .try_into_commit()
+        .map_err(|error| Error::Git(format!("HEAD is not a commit: {error}")))?;
+    let parents = commit.parent_ids().collect::<Vec<_>>();
+    let [source_commit] = parents.as_slice() else {
+        return Err(Error::Validation(format!(
+            "the release commit has {} parents; a phase tag requires the single source commit it \
+             was derived from",
+            parents.len()
+        )));
+    };
+    // Phase evidence binds the global release tag, which only an executor
+    // configuration declares. Executor conformance reports a configuration
+    // without exactly one, so a workspace that phases its tags without the
+    // executor still records plain phased tags rather than failing here.
+    let unphased = config.unphased_tags();
+    let [global] = unphased.as_slice() else {
+        return Ok(None);
+    };
+    let global_tag = candidates.get(&global.id).ok_or_else(|| {
+        Error::Validation(format!(
+            "global release tag {} has no version in this release",
+            global.id
+        ))
+    })?;
+    let source = source_commit.detach().to_string();
+    let release = release_commit.to_string();
+    let bindings = PhaseBindings {
+        source_commit: &source,
+        release_commit: &release,
+        global_tag: &global_tag.name,
+        plan_digest: digest,
+    };
+    let evidence = match phase {
+        TagPhase::BeforePublication => {
+            let destinations = select_publications(root, config)?
+                .into_iter()
+                .map(|publication| IntendedDestination {
+                    release_unit: publication.release_unit,
+                    publisher: publication.publisher,
+                    target: publication.target,
+                })
+                .collect::<Vec<_>>();
+            let subjects = match input {
+                Some(input) => phase::load_built_subjects(input)?,
+                None => Vec::new(),
+            };
+            phase::build_before_publication(bindings, &subjects, &destinations)?
+        }
+        TagPhase::AfterPublication => {
+            let fragments = match input {
+                Some(input) => phase::load_publisher_evidence(input)?,
+                None => Vec::new(),
+            };
+            // An after-publication tag claims that every configured publication
+            // completed, so sealing fewer fragments than the configuration
+            // selects would record a claim the release cannot support.
+            let sealed = fragments
+                .iter()
+                .map(PublisherEvidence::identity)
+                .collect::<BTreeSet<_>>();
+            let expected = select_publications(root, config)?
+                .iter()
+                .map(SelectedPublication::identity)
+                .collect::<BTreeSet<_>>();
+            let missing = expected.difference(&sealed).cloned().collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(Error::Validation(format!(
+                    "an after-publication tag seals every configured publication, but no evidence was staged for {}",
+                    missing.join(", ")
+                )));
+            }
+            phase::build_after_publication(bindings, &fragments)?
+        }
+    };
+    phase::encode(&evidence).map(Some)
 }
 
 fn render_tag(template: &str, id: &str, version: &str) -> String {
@@ -1152,6 +1317,295 @@ fn channel_iteration(version: &Version, channel: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::evidence::assemble::PHASE_TAG_EVIDENCE_SCHEMA;
+    use crate::evidence::assemble::{PUBLISHER_EVIDENCE_CONTRACT, PUBLISHER_EVIDENCE_SCHEMA};
+    use crate::evidence::phase::{BUILT_SUBJECT_CONTRACT, BUILT_SUBJECT_SCHEMA};
+    use crate::executor::fixture::Workspace;
+    use std::path::PathBuf;
+
+    const PLAN_DIGEST: &str =
+        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    const SUBJECT_DIGEST: &str =
+        "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+
+    const PHASE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    npm: {}
+    tags:
+      primary: { role: primary, template: 'release/{version}' }
+      staged:
+        role: projection
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+      published:
+        role: projection
+        template: '{id}/published@{version}'
+        require-phase: after-publication
+"#;
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A workspace whose HEAD is a release commit with exactly one parent.
+    fn phase_workspace(label: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        workspace
+            .write(".intentional/config.yml", PHASE_CONFIG)
+            .write(
+                "component/package.json",
+                r#"{"name":"sample-library","version":"1.0.0"}"#,
+            );
+        let root = workspace.root();
+        git(root, &["init", "-q"]);
+        git(root, &["config", "user.name", "Fixture Author"]);
+        git(root, &["config", "user.email", "fixture@example.invalid"]);
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "source"]);
+        workspace.write("component/CHANGELOG.md", "# Changelog\n\n## 1.0.0\n");
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-q", "-m", "release"]);
+        workspace
+    }
+
+    /// Stage one built-subject document exactly as the build job writes it.
+    fn stage_built_subject(workspace: &Workspace, identity: &str) -> PathBuf {
+        workspace.write(
+            "evidence/built-subject.yml",
+            &format!(
+                "$schema: {BUILT_SUBJECT_SCHEMA}\ncontract: {BUILT_SUBJECT_CONTRACT}\nrelease-unit: component\nidentity: {identity:?}\nversion: 1.0.0\ndigest: {SUBJECT_DIGEST}\n"
+            ),
+        );
+        workspace.root().join("evidence")
+    }
+
+    /// Stage one completed publisher fragment exactly as verification writes it.
+    fn stage_publisher_evidence(workspace: &Workspace, tag_object: &str) -> PathBuf {
+        workspace.write(
+            "evidence/publisher-evidence.yml",
+            &format!(
+                r#"$schema: {PUBLISHER_EVIDENCE_SCHEMA}
+contract: {PUBLISHER_EVIDENCE_CONTRACT}
+release-unit: component
+publisher: npm
+target: primary
+source-commit: "{tag_object}"
+release-commit: "{tag_object}"
+global-tag:
+  name: release/1.0.0
+  object: "{tag_object}"
+  target: "{tag_object}"
+plan-digest: {PLAN_DIGEST}
+subject:
+  kind: npm-package
+  identity: sample-library
+  version: 1.0.0
+  digest: {SUBJECT_DIGEST}
+packager:
+  id: npm
+  version: 10.8.2
+build-provenance: []
+attached-metadata: []
+destination:
+  identity: registry.example.test/sample-library
+  version: 1.0.0
+  digest: sha512-example
+clean-client:
+  mode: public
+  client: npm
+  version: 10.8.2
+  digest: sha512-example
+destination-aliases: []
+phase-tags: []
+"#
+            ),
+        );
+        workspace.root().join("evidence")
+    }
+
+    fn plan_phase_tags(root: &Path, phase: TagPhase, input: &Path) -> Result<TagResult> {
+        let config = Config::load(root)?;
+        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        TagResult::from_versions(
+            root,
+            &config,
+            &versions,
+            Some(phase),
+            false,
+            Some(PLAN_DIGEST),
+            Some(input),
+        )
+    }
+
+    /// The phase evidence one planned tag message carries.
+    fn sealed(message: &str) -> crate::evidence::assemble::PhaseTagEvidence {
+        let line = message
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{PHASE_EVIDENCE_FIELD}: ")))
+            .expect("a phase evidence record line");
+        phase::decode(line).expect("decodable phase evidence")
+    }
+
+    #[test]
+    fn a_before_publication_tag_names_every_configured_destination() {
+        let workspace = phase_workspace("tag-before-publication");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let result = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("before-publication tags");
+        assert_eq!(
+            result
+                .tags
+                .iter()
+                .map(|tag| tag.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["component/staged@1.0.0"]
+        );
+        let evidence = sealed(&result.tags[0].message);
+        assert_eq!(evidence.schema, PHASE_TAG_EVIDENCE_SCHEMA);
+        assert_eq!(evidence.global_tag, "release/1.0.0");
+        assert_eq!(evidence.plan_digest, PLAN_DIGEST);
+        assert_eq!(
+            evidence
+                .intended_destinations
+                .expect("intended destinations")
+                .iter()
+                .map(IntendedDestination::identity)
+                .collect::<Vec<_>>(),
+            vec!["component/npm/primary"]
+        );
+        assert_eq!(evidence.subjects[0].digest, SUBJECT_DIGEST);
+    }
+
+    #[test]
+    fn an_after_publication_tag_seals_the_accepted_fragments() {
+        let workspace = phase_workspace("tag-after-publication");
+        let object = "6666666666666666666666666666666666666666";
+        let input = stage_publisher_evidence(&workspace, object);
+        let result = plan_phase_tags(workspace.root(), TagPhase::AfterPublication, &input)
+            .expect("after-publication tags");
+        let evidence = sealed(&result.tags[0].message);
+        let fragments = evidence.publisher_evidence.expect("sealed fragments");
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].identity(), "component/npm/primary");
+        assert_eq!(fragments[0].source_commit, object);
+        assert!(
+            evidence.intended_destinations.is_none(),
+            "an after-publication tag intends nothing"
+        );
+        assert_eq!(evidence.subjects.len(), 1);
+    }
+
+    #[test]
+    fn an_identical_phase_tag_is_accepted_and_a_conflicting_one_is_rejected() {
+        let workspace = phase_workspace("tag-phase-retry");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let planned = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("before-publication tags");
+        planned
+            .apply(workspace.root(), false)
+            .expect("tags created");
+
+        let repeat = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("an identical phase tag is completed work");
+        assert!(repeat.tags.is_empty(), "a completed tag is not recreated");
+
+        stage_built_subject(&workspace, "sample-tool");
+        let error = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect_err("a conflicting phase tag is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unexpected {PHASE_EVIDENCE_FIELD}")),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_phase_evidence_record_line_survives_the_record_separator_in_its_values() {
+        let workspace = phase_workspace("tag-phase-separator");
+        let input = stage_built_subject(&workspace, "sample-library: staged");
+        let planned = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("before-publication tags");
+        planned
+            .apply(workspace.root(), false)
+            .expect("tags created");
+
+        let repository = gix::discover(workspace.root()).expect("repository");
+        let record = read_tag_record(&repository, &planned.tags[0].name)
+            .expect("a readable record")
+            .expect("an annotated record");
+        assert_eq!(record.fields["version"], "1.0.0");
+        let evidence = phase::decode(&record.fields[PHASE_EVIDENCE_FIELD])
+            .expect("phase evidence decodes from the record");
+        assert_eq!(evidence.subjects[0].identity, "sample-library: staged");
+    }
+
+    #[test]
+    fn a_phase_seals_what_it_can_prove_and_an_unphased_run_refuses_staged_evidence() {
+        let workspace = phase_workspace("tag-phase-pairing");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let config = Config::load(workspace.root()).expect("configuration");
+        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        // Built subjects are the one claim a phase cannot derive, so an absent
+        // directory seals none rather than refusing to record the phase at all.
+        let planned = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            Some(TagPhase::BeforePublication),
+            false,
+            Some(PLAN_DIGEST),
+            None,
+        )
+        .expect("a phase without staged subjects still seals its bindings");
+        let sealed = planned
+            .tags
+            .first()
+            .expect("one planned phase tag")
+            .message
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{PHASE_EVIDENCE_FIELD}: ")))
+            .expect("the record seals phase evidence");
+        assert!(
+            phase::decode(sealed)
+                .expect("sealed evidence decodes")
+                .subjects
+                .is_empty(),
+            "no staged subject seals no subject"
+        );
+        let error = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            None,
+            false,
+            Some(PLAN_DIGEST),
+            Some(&input),
+        )
+        .expect_err("staged evidence without a phase is rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("applies only to a --phase invocation"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn reads_leading_release_section() {
@@ -1170,11 +1624,40 @@ mod tests {
             "release-unit/sample/primary",
             "1.2.0",
             false,
+            None,
         );
         assert!(message.contains("contract: contract-1"));
         assert!(message.contains("plan-digest: sha256:abc"));
         assert!(message.contains("version: 1.2.0"));
         assert!(message.contains(&format!("generator: intentional {}", crate::VERSION)));
+        assert!(
+            !message.contains(PHASE_EVIDENCE_FIELD),
+            "a record without phase semantics carries no phase evidence"
+        );
+    }
+
+    #[test]
+    fn a_phase_record_appends_the_evidence_as_its_final_line() {
+        let unphased = tag_message(
+            "contract-1",
+            "sha256:abc",
+            "release-unit/sample/staged",
+            "1.2.0",
+            false,
+            None,
+        );
+        let phased = tag_message(
+            "contract-1",
+            "sha256:abc",
+            "release-unit/sample/staged",
+            "1.2.0",
+            false,
+            Some(r#"{"phase":"before-publication"}"#),
+        );
+        assert_eq!(
+            phased,
+            format!("{unphased}{PHASE_EVIDENCE_FIELD}: {{\"phase\":\"before-publication\"}}\n")
+        );
     }
 
     #[test]

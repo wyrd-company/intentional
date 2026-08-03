@@ -1,0 +1,174 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/publication-observation/v1
+title: Intentional publication observation
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - release-unit
+  - publisher
+  - target
+  - state
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/publication-observation/v1
+  contract:
+    const: publication-observation-1
+  release-unit:
+    type: string
+    minLength: 1
+  publisher:
+    enum: [ npm, cargo, homebrew, rpm, apt, aur, oci ]
+  target:
+    type: string
+    minLength: 1
+  state:
+    enum: [ present, pending, absent, conflict ]
+  subject:
+    $ref: "#/$defs/subject"
+  packager:
+    type: object
+    additionalProperties: false
+    required: [ id, version ]
+    properties:
+      id:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+  build-provenance:
+    type: array
+    items:
+      $ref: "#/$defs/evidence-reference"
+  attached-metadata:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ kind, digest ]
+      properties:
+        kind:
+          enum: [ sbom, provenance, signature ]
+        digest:
+          type: string
+          minLength: 1
+        reference:
+          type: string
+          minLength: 1
+  destination:
+    type: object
+    additionalProperties: false
+    required: [ identity, version, digest ]
+    properties:
+      identity:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+  retrieval:
+    type: object
+    additionalProperties: false
+    required: [ mode, client, version, digest ]
+    properties:
+      mode:
+        enum: [ public, authenticated-draft ]
+      client:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+  destination-aliases:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [ name, digest ]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        digest:
+          type: string
+          minLength: 1
+  conflict:
+    type: string
+    minLength: 1
+allOf:
+  - if:
+      required: [ state ]
+      properties:
+        state:
+          const: present
+    then:
+      required: [ subject, packager, destination, retrieval ]
+  - if:
+      required: [ state ]
+      properties:
+        state:
+          enum: [ pending, absent ]
+    then:
+      allOf:
+        - not: { required: [ subject ] }
+        - not: { required: [ packager ] }
+        - not: { required: [ build-provenance ] }
+        - not: { required: [ attached-metadata ] }
+        - not: { required: [ destination ] }
+        - not: { required: [ retrieval ] }
+        - not: { required: [ destination-aliases ] }
+  - if:
+      required: [ state ]
+      properties:
+        state:
+          const: conflict
+    then:
+      required: [ conflict ]
+    else:
+      not: { required: [ conflict ] }
+$defs:
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  subject:
+    type: object
+    additionalProperties: false
+    required: [ kind, identity, version, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      identity:
+        type: string
+        minLength: 1
+      version:
+        type: string
+        minLength: 1
+      digest:
+        $ref: "#/$defs/sha256"
+  evidence-reference:
+    type: object
+    additionalProperties: false
+    required: [ kind, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      reference:
+        type: string
+        minLength: 1

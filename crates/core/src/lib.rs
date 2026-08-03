@@ -47,6 +47,11 @@ pub use evidence::contribution::{
     ContributionRequest, ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX,
     CONTRIBUTION_MANIFEST, CONTRIBUTION_SCHEMA, LOCAL_JOB,
 };
+pub use evidence::phase::{
+    build_after_publication, build_before_publication, load_built_subjects,
+    load_publisher_evidence, BuiltSubject, PhaseBindings, BUILT_SUBJECT_CONTRACT,
+    BUILT_SUBJECT_SCHEMA, PHASE_EVIDENCE_FIELD,
+};
 pub use executor::check::{check_executor, ExecutorCheck};
 pub use executor::init::{
     initialize_executor, ExecutorInitPlan, ExecutorInitResult, ExecutorInitState,
@@ -75,6 +80,24 @@ pub use plan::{
     canonical_json, render_changelog_section, ChangelogEntry, Generator, PlanReleaseUnit, PlanTag,
     ReleasePlan,
 };
+pub use publication::draft::{
+    is_draft_dependent, retrieve_assets, verify_handoff as verify_draft_handoff, write_handoff,
+    AuthenticatedDraftRetrieval, DraftReleaseAssetHandoff, HandoffAsset, HandoffRequest,
+    RetrievedAsset, VerifiedDraftHandoff, DRAFT_DEPENDENT_PUBLISHERS, DRAFT_HANDOFF_CONTRACT,
+    DRAFT_HANDOFF_FILE, DRAFT_HANDOFF_SCHEMA,
+};
+pub use publication::observation::{
+    observe, Clock, ConsistencyPolicy, ObservationState, PublicationObservation, SystemClock,
+    PUBLICATION_OBSERVATION_CONTRACT, PUBLICATION_OBSERVATION_SCHEMA,
+};
+pub use publication::release::{
+    verify_release, verify_release_observed, Attestation, DestinationObserver, GhReleaseSource,
+    LiveObservation, ReleaseAsset, ReleaseRecord, ReleaseSource, ReleaseVerification,
+};
+pub use publication::verify::{
+    verify_publication, CheckoutContext, PublicationContext, VerifiedPublication,
+    VerifyPublicationRequest,
+};
 pub use release::build::{RELEASE_IDENTITY_EMAIL, RELEASE_IDENTITY_NAME};
 pub use release::candidate::{
     BundleInventory, CandidateFile, CandidateReleaseIdentity, ChangeStatus, ChangedPath, GlobalTag,
@@ -84,6 +107,7 @@ pub use release::candidate::{
     RELEASE_CANDIDATE_MANIFEST, RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
 };
 pub use release::prepare::{prepare_release, PreparedRelease};
+pub use release::tag::{verify_release_tag, VerifiedReleaseTag};
 pub use release::verify::{verify_handoff, VerifiedHandoff};
 pub use stamp::StampResult;
 pub use status::{

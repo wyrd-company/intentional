@@ -1,0 +1,54 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/built-subject/v1
+title: Intentional built subject
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - contract
+  - release-unit
+  - identity
+  - version
+  - digest
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/built-subject/v1
+  contract:
+    const: built-subject-1
+  release-unit:
+    type: string
+    minLength: 1
+  identity:
+    type: string
+    minLength: 1
+  version:
+    type: string
+    minLength: 1
+  digest:
+    $ref: "#/$defs/sha256"
+  provenance:
+    type: array
+    items:
+      $ref: "#/$defs/evidence-reference"
+$defs:
+  sha256:
+    type: string
+    pattern: "^sha256:[0-9a-f]{64}$"
+  evidence-reference:
+    type: object
+    additionalProperties: false
+    required: [ kind, digest ]
+    properties:
+      kind:
+        type: string
+        minLength: 1
+      digest:
+        type: string
+        minLength: 1
+      reference:
+        type: string
+        minLength: 1

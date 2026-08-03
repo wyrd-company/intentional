@@ -4,3 +4,1307 @@
 // ---
 
 //! Verification of one destination publication and its affirmative evidence fragment.
+
+use crate::config::Config;
+use crate::error::{Error, Result};
+use crate::evidence::assemble::{
+    AttachedMetadata, CleanClientMode, DestinationAlias, EvidenceReference, PhaseTagEvidence,
+    PublisherEvidence, ReleaseIdentity, TagIdentity, PUBLISHER_EVIDENCE_CONTRACT,
+    PUBLISHER_EVIDENCE_SCHEMA,
+};
+use crate::evidence::phase::{decode, PHASE_EVIDENCE_FIELD};
+use crate::executor::recipe::{resolve_publications, SelectedPublication, PRIMARY_TARGET};
+use crate::model::PublisherKind;
+use crate::publication::observation::{observe, Clock, ConsistencyPolicy, PublicationObservation};
+use crate::release::git;
+use crate::release::tag::verify_release_tag;
+use std::path::{Path, PathBuf};
+
+/// npm spelling that selects the constrained npm primary registry.
+const NPMJS_SELECTOR: &str = "npmjs";
+/// Cargo spelling that selects the primary registry only when it is that registry.
+const CRATES_IO_SELECTOR: &str = "crates.io";
+/// OCI target identities, which an adapter without a primary always requires.
+const OCI_TARGETS: [&str; 2] = ["dockerhub", "ghcr"];
+
+/// Repository-derived facts one publication verification binds its fragment to.
+///
+/// The command holds no credentials and speaks no registry protocol, so every
+/// fact outside the observation comes from the checkout through this seam.
+pub trait PublicationContext {
+    /// Release identity resolved from the verified global release tag.
+    fn release_identity(&self, root: &Path) -> Result<ReleaseIdentity>;
+
+    /// Fragment an after-publication tag at the release commit already sealed.
+    fn sealed_fragment(
+        &self,
+        root: &Path,
+        release_commit: &str,
+        identity: &str,
+    ) -> Result<Option<PublisherEvidence>>;
+
+    /// Phase tags at the release commit that bind one publication.
+    fn phase_tags(
+        &self,
+        root: &Path,
+        release_commit: &str,
+        identity: &str,
+    ) -> Result<Vec<TagIdentity>>;
+}
+
+/// The checkout the publication workflow runs in.
+///
+/// Every fact this context reports is proven from the repository rather than
+/// read from the observation, so a recipe cannot describe the release its own
+/// evidence claims to belong to.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckoutContext;
+
+impl CheckoutContext {
+    /// Read the checkout the publication workflow is running against.
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+/// One annotated tag at the release commit and the phase evidence it sealed.
+struct SealedTag {
+    identity: TagIdentity,
+    evidence: PhaseTagEvidence,
+}
+
+/// Every annotated tag at the release commit that sealed phase evidence.
+///
+/// A tag without phase semantics is skipped rather than reported, because the
+/// global release tag and every unphased record legitimately carry none.
+fn sealed_tags(root: &Path, release_commit: &str) -> Result<Vec<SealedTag>> {
+    let repository = gix::discover(root)
+        .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+    let references = repository
+        .references()
+        .map_err(|error| Error::Git(format!("failed to read references: {error}")))?;
+    let tags = references
+        .tags()
+        .map_err(|error| Error::Git(format!("failed to read tags: {error}")))?;
+    let mut sealed = Vec::new();
+    for mut reference in tags.flatten() {
+        let name = reference.name().shorten().to_string();
+        let Some(object_id) = reference.try_id().map(gix::Id::detach) else {
+            continue;
+        };
+        let target = reference
+            .peel_to_id()
+            .map_err(|error| Error::Git(format!("failed to peel tag {name}: {error}")))?
+            .detach();
+        if target.to_string() != release_commit {
+            continue;
+        }
+        let object = repository
+            .find_object(object_id)
+            .map_err(|error| Error::Git(format!("failed to read tag {name}: {error}")))?;
+        let Ok(tag) = object.try_into_tag() else {
+            continue;
+        };
+        let decoded = tag
+            .decode()
+            .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
+        let message = decoded.message.to_string();
+        let Some(line) = message
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{PHASE_EVIDENCE_FIELD}: ")))
+        else {
+            continue;
+        };
+        sealed.push(SealedTag {
+            identity: TagIdentity {
+                name,
+                object: object_id.to_string(),
+                target: target.to_string(),
+            },
+            evidence: decode(line)?,
+        });
+    }
+    sealed.sort_by(|left, right| left.identity.name.cmp(&right.identity.name));
+    Ok(sealed)
+}
+
+impl PublicationContext for CheckoutContext {
+    fn release_identity(&self, root: &Path) -> Result<ReleaseIdentity> {
+        let verified = verify_release_tag(root)?;
+        let reference = format!("refs/tags/{}", verified.global_tag);
+        Ok(ReleaseIdentity {
+            source_commit: verified.source,
+            release_commit: verified.release,
+            global_tag: TagIdentity {
+                object: git::resolve(root, &reference)?,
+                target: git::resolve(root, &format!("{reference}^{{commit}}"))?,
+                name: verified.global_tag,
+            },
+            plan_digest: verified.plan_digest,
+        })
+    }
+
+    fn sealed_fragment(
+        &self,
+        root: &Path,
+        release_commit: &str,
+        identity: &str,
+    ) -> Result<Option<PublisherEvidence>> {
+        let mut found: Option<PublisherEvidence> = None;
+        for tag in sealed_tags(root, release_commit)? {
+            let Some(sealed) = tag.evidence.publisher_evidence else {
+                continue;
+            };
+            for fragment in sealed {
+                if fragment.identity() != identity {
+                    continue;
+                }
+                // Two after-publication tags at the same release commit seal the
+                // same publication, so a disagreement between them is a broken
+                // record rather than a choice this command may make.
+                if found.as_ref().is_some_and(|first| first != &fragment) {
+                    return Err(Error::Validation(format!(
+                        "after-publication tags at {release_commit} seal conflicting evidence for {identity}"
+                    )));
+                }
+                found = Some(fragment);
+            }
+        }
+        Ok(found)
+    }
+
+    fn phase_tags(
+        &self,
+        root: &Path,
+        release_commit: &str,
+        identity: &str,
+    ) -> Result<Vec<TagIdentity>> {
+        let mut bound = Vec::new();
+        for tag in sealed_tags(root, release_commit)? {
+            let intends = tag
+                .evidence
+                .intended_destinations
+                .iter()
+                .flatten()
+                .any(|destination| destination.identity() == identity);
+            let seals = tag
+                .evidence
+                .publisher_evidence
+                .iter()
+                .flatten()
+                .any(|fragment| fragment.identity() == identity);
+            if intends || seals {
+                bound.push(tag.identity);
+            }
+        }
+        Ok(bound)
+    }
+}
+
+/// Inputs of one `intentional verify publication` invocation.
+pub struct VerifyPublicationRequest<'a> {
+    /// Workspace whose configuration determines the expected publications.
+    pub root: &'a Path,
+    /// Release unit whose publication is verified.
+    pub release_unit: &'a str,
+    /// Publisher adapter that performed the publication.
+    pub publisher: PublisherKind,
+    /// Target selector, absent when the adapter's primary is implied.
+    pub target: Option<&'a str>,
+    /// Observation document the recipe's readback steps wrote.
+    pub observation: &'a Path,
+    /// File the affirmative fragment is written to.
+    pub output: &'a Path,
+    /// Observation policy, replacing the adapter's maintained default.
+    pub policy: Option<ConsistencyPolicy>,
+    /// Observation timing.
+    pub clock: &'a dyn Clock,
+    /// Repository-derived facts the fragment binds to.
+    pub context: &'a dyn PublicationContext,
+}
+
+impl<'a> VerifyPublicationRequest<'a> {
+    /// Verify one publication using the adapter's maintained observation policy.
+    pub fn new(
+        root: &'a Path,
+        release_unit: &'a str,
+        publisher: PublisherKind,
+        observation: &'a Path,
+        output: &'a Path,
+        clock: &'a dyn Clock,
+        context: &'a dyn PublicationContext,
+    ) -> Self {
+        Self {
+            root,
+            release_unit,
+            publisher,
+            target: None,
+            observation,
+            output,
+            policy: None,
+            clock,
+            context,
+        }
+    }
+}
+
+/// One verified publication and the fragment written for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedPublication {
+    /// Path of the written fragment.
+    pub path: PathBuf,
+    /// Fragment the assembly job consumes.
+    pub evidence: PublisherEvidence,
+    /// Whether an after-publication tag had already sealed this fragment.
+    pub reused: bool,
+}
+
+/// Verify one destination publication and write its affirmative evidence.
+pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<VerifiedPublication> {
+    let selected = select_publication(
+        request.root,
+        request.release_unit,
+        request.publisher,
+        request.target,
+    )?;
+    let identity = selected.identity();
+    let policy = request
+        .policy
+        .unwrap_or_else(|| ConsistencyPolicy::maintained(request.publisher));
+    let observation = observe(request.observation, &identity, &policy, request.clock)?;
+    let observed = accept_observation(&observation, &selected, &identity)?;
+    let release = request.context.release_identity(request.root)?;
+
+    let sealed =
+        request
+            .context
+            .sealed_fragment(request.root, &release.release_commit, &identity)?;
+    let (evidence, reused) = match sealed {
+        Some(fragment) => {
+            revalidate_sealed(&fragment, &release, &observed, &identity)?;
+            (fragment, true)
+        }
+        None => {
+            let phase_tags =
+                request
+                    .context
+                    .phase_tags(request.root, &release.release_commit, &identity)?;
+            (
+                construct(&selected, &observation, &observed, &release, phase_tags),
+                false,
+            )
+        }
+    };
+
+    let document = serde_yaml::to_string(&evidence)?;
+    if let Some(parent) = request.output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+        }
+    }
+    std::fs::write(request.output, document).map_err(|error| Error::io(request.output, error))?;
+    Ok(VerifiedPublication {
+        path: request.output.to_path_buf(),
+        evidence,
+        reused,
+    })
+}
+
+/// Members a present observation always carries, borrowed together.
+struct ObservedPublication<'a> {
+    subject: &'a crate::evidence::assemble::Subject,
+    packager: &'a crate::evidence::assemble::PackagerRecord,
+    destination: &'a crate::evidence::assemble::Destination,
+    retrieval: &'a crate::evidence::assemble::CleanClient,
+}
+
+/// Resolve one selector to the single configured publication it names.
+fn select_publication(
+    root: &Path,
+    release_unit: &str,
+    publisher: PublisherKind,
+    selector: Option<&str>,
+) -> Result<SelectedPublication> {
+    let config = Config::load(root)?;
+    let selection = resolve_publications(root, &config)?;
+    let configured: Vec<&SelectedPublication> = selection
+        .selected
+        .iter()
+        .filter(|publication| {
+            publication.release_unit == release_unit && publication.publisher == publisher
+        })
+        .collect();
+    let target = canonical_target(publisher, selector, &configured)?;
+    configured
+        .into_iter()
+        .find(|publication| publication.target == target)
+        .cloned()
+        .ok_or_else(|| {
+            let expected = if selection.selected.is_empty() {
+                "none".to_owned()
+            } else {
+                selection
+                    .selected
+                    .iter()
+                    .map(SelectedPublication::identity)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            Error::Validation(format!(
+                "publication {release_unit}/{publisher}/{target} is not configured; configured publications are {expected}"
+            ))
+        })
+}
+
+/// Normalize one command-line target selector to a canonical target identity.
+///
+/// Selector spellings exist so an operator names a destination the way its
+/// ecosystem does. They resolve to canonical identities here and never reach
+/// evidence, where one identity per adapter keeps fragments comparable.
+fn canonical_target(
+    publisher: PublisherKind,
+    selector: Option<&str>,
+    configured: &[&SelectedPublication],
+) -> Result<String> {
+    if publisher == PublisherKind::Oci {
+        return match selector {
+            Some(target) if OCI_TARGETS.contains(&target) => Ok(target.to_owned()),
+            Some(PRIMARY_TARGET) | None => Err(Error::Validation(format!(
+                "the oci publisher has no primary target; select --target {}",
+                OCI_TARGETS.join(" or --target ")
+            ))),
+            Some(target) => Err(Error::Validation(format!(
+                "target {target:?} is not an oci target; the oci publisher accepts {}",
+                OCI_TARGETS.join(" or ")
+            ))),
+        };
+    }
+    match selector {
+        None | Some(PRIMARY_TARGET) => Ok(PRIMARY_TARGET.to_owned()),
+        Some(NPMJS_SELECTOR) if publisher == PublisherKind::Npm => Ok(PRIMARY_TARGET.to_owned()),
+        Some(CRATES_IO_SELECTOR) if publisher == PublisherKind::Cargo => {
+            let primary = configured
+                .iter()
+                .find(|publication| publication.target == PRIMARY_TARGET);
+            match primary.and_then(|publication| publication.destination.as_deref()) {
+                Some(CRATES_IO_SELECTOR) | None => Ok(PRIMARY_TARGET.to_owned()),
+                Some(registry) => Err(Error::Validation(format!(
+                    "target {CRATES_IO_SELECTOR:?} does not name the configured Cargo primary registry {registry:?}; select the configured primary with --target {PRIMARY_TARGET}"
+                ))),
+            }
+        }
+        Some(target) => Ok(target.to_owned()),
+    }
+}
+
+/// Bind one present observation to the publication it claims to describe.
+fn accept_observation<'a>(
+    observation: &'a PublicationObservation,
+    selected: &SelectedPublication,
+    identity: &str,
+) -> Result<ObservedPublication<'a>> {
+    let observed = observation.identity();
+    if observed != identity {
+        return Err(Error::Validation(format!(
+            "the observation describes publication {observed} instead of {identity}"
+        )));
+    }
+    let (Some(subject), Some(packager), Some(destination), Some(retrieval)) = (
+        observation.subject.as_ref(),
+        observation.packager.as_ref(),
+        observation.destination.as_ref(),
+        observation.retrieval.as_ref(),
+    ) else {
+        return Err(Error::Validation(format!(
+            "the observation of {identity} is not a complete present readback"
+        )));
+    };
+    if let Some(configured) = selected.destination.as_deref() {
+        if destination.identity != configured {
+            return Err(Error::Validation(format!(
+                "publication {identity} was observed at destination {:?} instead of its configured destination {configured:?}",
+                destination.identity
+            )));
+        }
+    }
+    if retrieval.mode == CleanClientMode::AuthenticatedDraft && !draft_dependent(selected.publisher)
+    {
+        return Err(Error::Validation(format!(
+            "publication {identity} claims authenticated-draft retrieval; the {} publisher resolves its release through the public consumer path and records mode public",
+            selected.publisher
+        )));
+    }
+    Ok(ObservedPublication {
+        subject,
+        packager,
+        destination,
+        retrieval,
+    })
+}
+
+/// Whether a publisher's normal consumer path resolves a draft Release asset.
+const fn draft_dependent(publisher: PublisherKind) -> bool {
+    matches!(
+        publisher,
+        PublisherKind::Homebrew | PublisherKind::Rpm | PublisherKind::Apt | PublisherKind::Aur
+    )
+}
+
+/// Build the affirmative fragment from one accepted observation.
+fn construct(
+    selected: &SelectedPublication,
+    observation: &PublicationObservation,
+    observed: &ObservedPublication<'_>,
+    release: &ReleaseIdentity,
+    phase_tags: Vec<TagIdentity>,
+) -> PublisherEvidence {
+    let mut build_provenance = observation.build_provenance.clone();
+    build_provenance.sort_by_key(reference_key);
+    let mut attached_metadata = observation.attached_metadata.clone();
+    attached_metadata.sort_by_key(metadata_key);
+    let mut destination_aliases = observation.destination_aliases.clone();
+    destination_aliases.sort_by_key(alias_key);
+    let mut phase_tags = phase_tags;
+    phase_tags.sort_by_key(|tag| (tag.name.clone(), tag.object.clone()));
+    PublisherEvidence {
+        schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
+        contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
+        release_unit: selected.release_unit.clone(),
+        publisher: selected.publisher,
+        target: selected.target.clone(),
+        source_commit: release.source_commit.clone(),
+        release_commit: release.release_commit.clone(),
+        global_tag: release.global_tag.clone(),
+        plan_digest: release.plan_digest.clone(),
+        subject: observed.subject.clone(),
+        packager: observed.packager.clone(),
+        build_provenance,
+        attached_metadata,
+        destination: observed.destination.clone(),
+        clean_client: observed.retrieval.clone(),
+        destination_aliases,
+        phase_tags,
+    }
+}
+
+/// Stable ordering key of one supply-chain reference.
+fn reference_key(reference: &EvidenceReference) -> (String, String, String) {
+    (
+        reference.kind.clone(),
+        reference.digest.clone(),
+        reference.reference.clone().unwrap_or_default(),
+    )
+}
+
+/// Stable ordering key of one attached component.
+fn metadata_key(metadata: &AttachedMetadata) -> (String, String, String) {
+    (
+        metadata.kind.to_string(),
+        metadata.digest.clone(),
+        metadata.reference.clone().unwrap_or_default(),
+    )
+}
+
+/// Stable ordering key of one mutable destination alias.
+fn alias_key(alias: &DestinationAlias) -> (String, String) {
+    (alias.name.clone(), alias.digest.clone())
+}
+
+/// Revalidate only the immutable claims of an already sealed fragment.
+///
+/// A retry runs on a different runner, after aliases have advanced and with
+/// different tool versions, so comparing mutable state would reject the very
+/// historical claim the sealed tag exists to preserve.
+fn revalidate_sealed(
+    fragment: &PublisherEvidence,
+    release: &ReleaseIdentity,
+    observed: &ObservedPublication<'_>,
+    identity: &str,
+) -> Result<()> {
+    let sealed_identity = fragment.identity();
+    if sealed_identity != identity {
+        return Err(Error::Validation(format!(
+            "the after-publication tag seals publication {sealed_identity} instead of {identity}"
+        )));
+    }
+    for (claim, sealed, current) in [
+        (
+            "source commit",
+            &fragment.source_commit,
+            &release.source_commit,
+        ),
+        (
+            "release commit",
+            &fragment.release_commit,
+            &release.release_commit,
+        ),
+        (
+            "global tag name",
+            &fragment.global_tag.name,
+            &release.global_tag.name,
+        ),
+        (
+            "global tag object",
+            &fragment.global_tag.object,
+            &release.global_tag.object,
+        ),
+        (
+            "global tag target",
+            &fragment.global_tag.target,
+            &release.global_tag.target,
+        ),
+        ("plan digest", &fragment.plan_digest, &release.plan_digest),
+        (
+            "subject digest",
+            &fragment.subject.digest,
+            &observed.subject.digest,
+        ),
+        (
+            "destination identity",
+            &fragment.destination.identity,
+            &observed.destination.identity,
+        ),
+        (
+            "destination version",
+            &fragment.destination.version,
+            &observed.destination.version,
+        ),
+    ] {
+        if sealed != current {
+            return Err(Error::Validation(format!(
+                "the sealed fragment for {identity} records {claim} {sealed:?} while the release states {current:?}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::evidence::assemble::{
+        CleanClient, Destination, PackagerRecord, PhaseTagEvidence, Subject,
+    };
+    use crate::executor::fixture::Workspace;
+    use crate::publication::observation::tests::{digest, present_document};
+    use crate::publication::observation::{
+        ObservationState, PUBLICATION_OBSERVATION_CONTRACT, PUBLICATION_OBSERVATION_SCHEMA,
+    };
+    use std::cell::Cell;
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    /// Observation timing that never advances, because these tests never wait.
+    struct StillClock(Cell<Duration>);
+
+    impl Clock for StillClock {
+        fn elapsed(&self) -> Duration {
+            self.0.get()
+        }
+
+        fn wait(&self, duration: Duration) {
+            self.0.set(self.0.get() + duration);
+        }
+    }
+
+    /// Repository facts supplied directly by a test.
+    struct TestContext {
+        release: ReleaseIdentity,
+        sealed: BTreeMap<String, PublisherEvidence>,
+        phase_tags: Vec<TagIdentity>,
+    }
+
+    impl TestContext {
+        fn new() -> Self {
+            Self {
+                release: ReleaseIdentity {
+                    source_commit: "a".repeat(40),
+                    release_commit: "b".repeat(40),
+                    global_tag: TagIdentity {
+                        name: "release/1.2.3".to_owned(),
+                        object: "c".repeat(40),
+                        target: "b".repeat(40),
+                    },
+                    plan_digest: digest("ee"),
+                },
+                sealed: BTreeMap::new(),
+                phase_tags: Vec::new(),
+            }
+        }
+    }
+
+    impl PublicationContext for TestContext {
+        fn release_identity(&self, _root: &Path) -> Result<ReleaseIdentity> {
+            Ok(self.release.clone())
+        }
+
+        fn sealed_fragment(
+            &self,
+            _root: &Path,
+            _release_commit: &str,
+            identity: &str,
+        ) -> Result<Option<PublisherEvidence>> {
+            Ok(self.sealed.get(identity).cloned())
+        }
+
+        fn phase_tags(
+            &self,
+            _root: &Path,
+            _release_commit: &str,
+            _identity: &str,
+        ) -> Result<Vec<TagIdentity>> {
+            Ok(self.phase_tags.clone())
+        }
+    }
+
+    const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+    /// A workspace whose sole release unit declares one publisher block.
+    fn workspace(label: &str, publisher: &str, files: &[(&str, &str)]) -> Workspace {
+        let workspace = Workspace::new(label);
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "    path: component\n",
+                &format!("    path: component\n{publisher}"),
+            ),
+        );
+        for (path, contents) in files {
+            workspace.write(path, contents);
+        }
+        workspace
+    }
+
+    /// A workspace publishing the sample npm library through its primary.
+    fn npm_workspace(label: &str) -> Workspace {
+        workspace(
+            label,
+            "    npm: {}\n",
+            &[(
+                "component/package.json",
+                r#"{"name":"sample-library","version":"1.2.3"}"#,
+            )],
+        )
+    }
+
+    fn request<'a>(
+        workspace: &'a Workspace,
+        publisher: PublisherKind,
+        target: Option<&'a str>,
+        observation: &'a Path,
+        output: &'a Path,
+        clock: &'a StillClock,
+        context: &'a TestContext,
+    ) -> VerifyPublicationRequest<'a> {
+        VerifyPublicationRequest {
+            root: workspace.root(),
+            release_unit: "component",
+            publisher,
+            target,
+            observation,
+            output,
+            policy: Some(ConsistencyPolicy {
+                interval: Duration::from_secs(1),
+                backoff: 2,
+                maximum_interval: Duration::from_secs(4),
+                deadline: Duration::from_secs(4),
+            }),
+            clock,
+            context,
+        }
+    }
+
+    fn clock() -> StillClock {
+        StillClock(Cell::new(Duration::ZERO))
+    }
+
+    #[test]
+    fn a_present_observation_produces_a_deterministic_fragment() {
+        let workspace = npm_workspace("verify-present");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace(
+                "state: present\n",
+                &format!(
+                    "state: present
+build-provenance:
+  - kind: sbom
+    digest: {second}
+  - kind: attestation
+    digest: {first}
+    reference: https://example.test/attestation
+destination-aliases:
+  - name: next
+    digest: {second}
+  - name: latest
+    digest: {first}
+",
+                    first = digest("11"),
+                    second = digest("22")
+                ),
+            ),
+        );
+        let context = TestContext {
+            phase_tags: vec![
+                TagIdentity {
+                    name: "component@1.2.3-published".to_owned(),
+                    object: "d".repeat(40),
+                    target: "b".repeat(40),
+                },
+                TagIdentity {
+                    name: "component@1.2.3-building".to_owned(),
+                    object: "e".repeat(40),
+                    target: "b".repeat(40),
+                },
+            ],
+            ..TestContext::new()
+        };
+        let clock = clock();
+        let observation = workspace.root().join("observation.yml");
+        let first = workspace.root().join("first.yml");
+        let second = workspace.root().join("second.yml");
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &first,
+            &clock,
+            &context,
+        ))
+        .expect("the publication verifies");
+        assert!(!verified.reused);
+        assert_eq!(verified.evidence.identity(), "component/npm/primary");
+        assert_eq!(verified.evidence.target, PRIMARY_TARGET);
+        assert_eq!(verified.evidence.destination.identity, "npmjs");
+        assert_eq!(verified.evidence.schema, PUBLISHER_EVIDENCE_SCHEMA);
+        assert_eq!(verified.evidence.contract, PUBLISHER_EVIDENCE_CONTRACT);
+        assert_eq!(
+            verified
+                .evidence
+                .build_provenance
+                .iter()
+                .map(|reference| reference.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["attestation", "sbom"],
+            "references are ordered by a stable key"
+        );
+        assert_eq!(
+            verified
+                .evidence
+                .destination_aliases
+                .iter()
+                .map(|alias| alias.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["latest", "next"]
+        );
+        assert_eq!(
+            verified
+                .evidence
+                .phase_tags
+                .iter()
+                .map(|tag| tag.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["component@1.2.3-building", "component@1.2.3-published"]
+        );
+
+        verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &second,
+            &clock,
+            &context,
+        ))
+        .expect("the publication verifies again");
+        assert_eq!(
+            std::fs::read_to_string(&first).expect("first fragment"),
+            std::fs::read_to_string(&second).expect("second fragment"),
+            "two runs over one observation are byte-identical"
+        );
+    }
+
+    #[test]
+    fn the_npmjs_selector_names_the_npm_primary() {
+        let workspace = npm_workspace("verify-npmjs");
+        workspace.write("observation.yml", &present_document());
+        let context = TestContext::new();
+        let clock = clock();
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            Some(NPMJS_SELECTOR),
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect("the npmjs alias selects the primary");
+        assert_eq!(
+            verified.evidence.target, PRIMARY_TARGET,
+            "a selector alias never reaches evidence"
+        );
+    }
+
+    #[test]
+    fn the_crates_io_selector_names_only_a_crates_io_primary() {
+        let files = [(
+            "component/Cargo.toml",
+            "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\n",
+        )];
+        let accepted = workspace("verify-crates-io", "    cargo: {}\n", &files);
+        accepted.write(
+            "observation.yml",
+            &present_document()
+                .replace("publisher: npm", "publisher: cargo")
+                .replace("identity: npmjs", "identity: crates.io")
+                .replace("kind: npm-package", "kind: crate")
+                .replace("id: npm", "id: cargo")
+                .replace("client: npm", "client: cargo"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let verified = verify_publication(&request(
+            &accepted,
+            PublisherKind::Cargo,
+            Some(CRATES_IO_SELECTOR),
+            &accepted.root().join("observation.yml"),
+            &accepted.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect("the crates.io alias selects the crates.io primary");
+        assert_eq!(verified.evidence.target, PRIMARY_TARGET);
+        assert_eq!(verified.evidence.destination.identity, "crates.io");
+
+        let custom = workspace(
+            "verify-custom-registry",
+            "    cargo: {}\n",
+            &[(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\npublish = [\"example-registry\"]\n",
+            )],
+        );
+        custom.write("observation.yml", &present_document());
+        let error = verify_publication(&request(
+            &custom,
+            PublisherKind::Cargo,
+            Some(CRATES_IO_SELECTOR),
+            &custom.root().join("observation.yml"),
+            &custom.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("the alias never redirects to another registry");
+        assert!(
+            error.to_string().contains("example-registry")
+                && error.to_string().contains("--target primary"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_oci_publisher_requires_an_explicit_target() {
+        let workspace = workspace(
+            "verify-oci",
+            "    oci:\n      ghcr: {}\n",
+            &[("component/Dockerfile", "FROM scratch\n")],
+        );
+        workspace.write(
+            "observation.yml",
+            &present_document()
+                .replace("publisher: npm", "publisher: oci")
+                .replace("target: primary", "target: ghcr")
+                .replace("identity: npmjs", "identity: ghcr.io/example-org/component")
+                .replace("kind: npm-package", "kind: oci-image")
+                .replace(
+                    "id: npm\n  version: 10.9.0",
+                    "id: buildx\n  version: 0.17.0",
+                )
+                .replace("client: npm", "client: crane"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        for selector in [None, Some(PRIMARY_TARGET)] {
+            let error = verify_publication(&request(
+                &workspace,
+                PublisherKind::Oci,
+                selector,
+                &workspace.root().join("observation.yml"),
+                &workspace.root().join("evidence.yml"),
+                &clock,
+                &context,
+            ))
+            .expect_err("an oci publication names its registry");
+            assert!(
+                error.to_string().contains("has no primary target"),
+                "{error}"
+            );
+        }
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Oci,
+            Some("ghcr"),
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect("an explicit oci target verifies");
+        assert_eq!(verified.evidence.target, "ghcr");
+    }
+
+    #[test]
+    fn an_unconfigured_publication_names_the_configured_ones() {
+        let workspace = npm_workspace("verify-unconfigured");
+        workspace.write("observation.yml", &present_document());
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            Some("github"),
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("an unconfigured target is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("publication component/npm/github is not configured")
+                && error.to_string().contains("component/npm/primary"),
+            "{error}"
+        );
+        assert!(
+            !workspace.root().join("evidence.yml").exists(),
+            "a refused verification writes nothing"
+        );
+    }
+
+    #[test]
+    fn a_draft_mode_claim_from_a_public_publisher_is_rejected() {
+        let workspace = npm_workspace("verify-draft-claim");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace("mode: public", "mode: authenticated-draft"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a draft-mode claim from npm is reported");
+        assert!(error.to_string().contains("authenticated-draft"), "{error}");
+        assert!(!workspace.root().join("evidence.yml").exists());
+    }
+
+    #[test]
+    fn a_draft_dependent_publisher_records_authenticated_draft_retrieval() {
+        let workspace = workspace(
+            "verify-draft-dependent",
+            "    homebrew:\n      repository: example-org/example-tap\n",
+            &[
+                ("component/go.mod", "module example.test/component\n"),
+                ("component/main.go", "package main\n\nfunc main() {}\n"),
+            ],
+        );
+        workspace.write(
+            "observation.yml",
+            &present_document()
+                .replace("publisher: npm", "publisher: homebrew")
+                .replace("identity: npmjs", "identity: example-org/example-tap")
+                .replace("kind: npm-package", "kind: homebrew-formula")
+                .replace(
+                    "id: npm\n  version: 10.9.0",
+                    "id: goreleaser\n  version: 2.4.0",
+                )
+                .replace("mode: public", "mode: authenticated-draft")
+                .replace("client: npm", "client: brew"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Homebrew,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect("a draft-dependent publication verifies");
+        assert_eq!(
+            verified.evidence.clean_client.mode,
+            CleanClientMode::AuthenticatedDraft,
+            "the recorded mode is exactly the one observed"
+        );
+    }
+
+    /// A sealed fragment agreeing with the release the tests resolve.
+    fn sealed_fragment(context: &TestContext) -> PublisherEvidence {
+        PublisherEvidence {
+            schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
+            contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
+            release_unit: "component".to_owned(),
+            publisher: PublisherKind::Npm,
+            target: PRIMARY_TARGET.to_owned(),
+            source_commit: context.release.source_commit.clone(),
+            release_commit: context.release.release_commit.clone(),
+            global_tag: context.release.global_tag.clone(),
+            plan_digest: context.release.plan_digest.clone(),
+            subject: Subject {
+                kind: "npm-package".to_owned(),
+                identity: "sample-library".to_owned(),
+                version: "1.2.3".to_owned(),
+                digest: digest("aa"),
+            },
+            packager: PackagerRecord {
+                id: "npm".to_owned(),
+                version: "10.8.0".to_owned(),
+            },
+            build_provenance: Vec::new(),
+            attached_metadata: Vec::new(),
+            destination: Destination {
+                identity: "npmjs".to_owned(),
+                version: "1.2.3".to_owned(),
+                digest: digest("aa"),
+            },
+            clean_client: CleanClient {
+                mode: CleanClientMode::Public,
+                client: "npm".to_owned(),
+                version: "10.8.0".to_owned(),
+                digest: digest("aa"),
+            },
+            destination_aliases: vec![DestinationAlias {
+                name: "latest".to_owned(),
+                digest: digest("aa"),
+            }],
+            phase_tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_sealed_fragment_is_reused_though_aliases_and_tool_versions_advanced() {
+        let workspace = npm_workspace("verify-reuse");
+        workspace.write(
+            "observation.yml",
+            &present_document()
+                .replace("version: 10.9.0", "version: 11.0.0")
+                .replace(
+                    "state: present\n",
+                    &format!(
+                        "state: present
+destination-aliases:
+  - name: latest
+    digest: {}
+",
+                        digest("99")
+                    ),
+                ),
+        );
+        let mut context = TestContext::new();
+        let sealed = sealed_fragment(&context);
+        context
+            .sealed
+            .insert("component/npm/primary".to_owned(), sealed.clone());
+        let clock = clock();
+        let output = workspace.root().join("evidence.yml");
+        let verified = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &output,
+            &clock,
+            &context,
+        ))
+        .expect("the sealed fragment is reused");
+        assert!(verified.reused);
+        assert_eq!(
+            verified.evidence, sealed,
+            "the historical claim is unchanged"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&output).expect("fragment"),
+            serde_yaml::to_string(&sealed).expect("sealed document"),
+            "a reused fragment is written unchanged"
+        );
+    }
+
+    #[test]
+    fn a_sealed_fragment_whose_subject_digest_disagrees_is_rejected() {
+        let workspace = npm_workspace("verify-reuse-conflict");
+        workspace.write("observation.yml", &present_document());
+        let mut context = TestContext::new();
+        let mut sealed = sealed_fragment(&context);
+        sealed.subject.digest = digest("bb");
+        context
+            .sealed
+            .insert("component/npm/primary".to_owned(), sealed);
+        let clock = clock();
+        let output = workspace.root().join("evidence.yml");
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &output,
+            &clock,
+            &context,
+        ))
+        .expect_err("a disagreeing sealed subject is reported");
+        assert!(error.to_string().contains("subject digest"), "{error}");
+        assert!(!output.exists(), "a refused verification writes nothing");
+    }
+
+    #[test]
+    fn a_sealed_fragment_bound_to_another_release_is_rejected() {
+        let workspace = npm_workspace("verify-reuse-rebound");
+        workspace.write("observation.yml", &present_document());
+        let mut context = TestContext::new();
+        let mut sealed = sealed_fragment(&context);
+        sealed.plan_digest = digest("ff");
+        context
+            .sealed
+            .insert("component/npm/primary".to_owned(), sealed);
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a rebound sealed fragment is reported");
+        assert!(error.to_string().contains("plan digest"), "{error}");
+    }
+
+    #[test]
+    fn an_observation_of_another_publication_is_rejected() {
+        let workspace = npm_workspace("verify-foreign-observation");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace("release-unit: component", "release-unit: other-component"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a foreign observation is reported");
+        assert!(
+            error
+                .to_string()
+                .contains("describes publication other-component/npm/primary"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_observation_at_another_destination_is_rejected() {
+        let workspace = npm_workspace("verify-foreign-destination");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace("identity: npmjs", "identity: example-registry"),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &workspace.root().join("evidence.yml"),
+            &clock,
+            &context,
+        ))
+        .expect_err("a foreign destination is reported");
+        assert!(error.to_string().contains("example-registry"), "{error}");
+    }
+
+    #[test]
+    fn a_pending_observation_past_its_deadline_writes_no_fragment() {
+        let workspace = npm_workspace("verify-deadline");
+        workspace.write(
+            "observation.yml",
+            &format!(
+                "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
+contract: {PUBLICATION_OBSERVATION_CONTRACT}
+release-unit: component
+publisher: npm
+target: primary
+state: {}
+",
+                ObservationState::Pending
+            ),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let output = workspace.root().join("evidence.yml");
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &workspace.root().join("observation.yml"),
+            &output,
+            &clock,
+            &context,
+        ))
+        .expect_err("an exhausted deadline is reported");
+        assert!(error.to_string().contains("retryable"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn phase_tag_evidence_seals_the_same_fragment_shape() {
+        let context = TestContext::new();
+        let sealed = sealed_fragment(&context);
+        let document = serde_yaml::to_string(&PhaseTagEvidence {
+            schema: crate::evidence::assemble::PHASE_TAG_EVIDENCE_SCHEMA.to_owned(),
+            phase: crate::model::TagPhase::AfterPublication,
+            source_commit: context.release.source_commit.clone(),
+            release_commit: context.release.release_commit.clone(),
+            global_tag: context.release.global_tag.name.clone(),
+            plan_digest: context.release.plan_digest.clone(),
+            subjects: Vec::new(),
+            intended_destinations: None,
+            publisher_evidence: Some(vec![sealed.clone()]),
+        })
+        .expect("phase-tag evidence serializes");
+        let decoded: PhaseTagEvidence =
+            serde_yaml::from_str(&document).expect("phase-tag evidence round-trips");
+        assert_eq!(
+            decoded.publisher_evidence.expect("sealed fragments"),
+            vec![sealed],
+            "a sealed fragment survives the tag record unchanged"
+        );
+    }
+}

@@ -4,3 +4,770 @@
 // ---
 
 //! Independent verification of the published global release tag.
+//!
+//! The initial publication job runs inside a checkout of the released commit
+//! with complete history and every tag present, and it holds no credentials.
+//! It therefore proves the release from the repository alone: it resolves the
+//! one configured tag that declares no publication phase, requires that tag to
+//! be an annotated tag targeting the checked-out commit, reads the Intentional
+//! record the tag carries, and rebuilds the whole candidate from the sole
+//! parent so the tag, tree, plan digest, projections, changelogs, and consumed
+//! intents are proven to agree rather than assumed to.
+
+use crate::config::{Config, UnphasedTag};
+use crate::error::{Error, Result};
+use crate::release::build::build_candidate;
+use crate::release::git::{self, GitCommand};
+use semver::Version;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// Intentional record field binding a tag to the sealed release plan.
+const PLAN_DIGEST_FIELD: &str = "plan-digest";
+
+/// Intentional record fields every release tag must carry.
+const REQUIRED_FIELDS: [&str; 6] = [
+    "contract",
+    "generator",
+    PLAN_DIGEST_FIELD,
+    "tag-id",
+    "version",
+    "baseline",
+];
+
+/// A published global release tag that reproduced every release invariant.
+#[derive(Debug, Clone)]
+pub struct VerifiedReleaseTag {
+    /// Accepted source commit S, the sole parent of the release commit.
+    pub source: String,
+    /// Released commit R the global tag targets.
+    pub release: String,
+    /// Rendered name of the annotated global release tag.
+    pub global_tag: String,
+    /// Digest sealed inside the release plan the tag binds.
+    pub plan_digest: String,
+}
+
+impl VerifiedReleaseTag {
+    /// Stable identity lines the credential-free verify-release-tag Action projects.
+    pub fn projections(&self) -> Vec<String> {
+        vec![
+            format!("source-sha: {}", self.source),
+            format!("release-sha: {}", self.release),
+            format!("global-tag: {}", self.global_tag),
+            format!("plan-digest: {}", self.plan_digest),
+        ]
+    }
+}
+
+/// Verify the global release tag the current checkout sits on.
+pub fn verify_release_tag(root: &Path) -> Result<VerifiedReleaseTag> {
+    let config = Config::load(root)?;
+    let configured = global_release_tag(&config)?;
+    let release = git::resolve(root, "HEAD^{commit}")?;
+    let tag = resolve_published_tag(root, &release, &configured)?;
+    let (tree, source) = release_commit_shape(root, &release)?;
+    verify_record(&tag, &config, &configured)?;
+    let plan_digest = tag
+        .fields
+        .get(PLAN_DIGEST_FIELD)
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "the global release tag {} is missing Intentional record field {PLAN_DIGEST_FIELD}",
+                tag.name
+            ))
+        })?
+        .clone();
+    reproduce_release(root, &release, &tree, &source, &tag, &plan_digest)?;
+    Ok(VerifiedReleaseTag {
+        source,
+        release,
+        global_tag: tag.name,
+        plan_digest,
+    })
+}
+
+/// One annotated tag and the Intentional record its message carries.
+struct AnnotatedTag {
+    /// Rendered tag name the ref publishes.
+    name: String,
+    /// Identity of the annotated tag object itself.
+    object: String,
+    /// Commit named in the tag object header.
+    target: String,
+    /// Record fields decoded from the tag message.
+    fields: BTreeMap<String, String>,
+}
+
+/// The single configured tag that declares no publication phase.
+///
+/// Every other configured tag is created later by the publication workflow, so
+/// the unphased tag is the one release identity a publication run can already
+/// observe, and the constraint is reported here rather than left to fail inside
+/// a privileged job.
+fn global_release_tag(config: &Config) -> Result<UnphasedTag> {
+    let mut unphased = config.unphased_tags();
+    match unphased.len() {
+        1 => Ok(unphased.remove(0)),
+        0 => Err(Error::Validation(
+            "the GitHub executor requires one configured tag without require-phase as the global release tag; this workspace configures none"
+                .to_owned(),
+        )),
+        _ => Err(Error::Validation(format!(
+            "the GitHub executor requires exactly one configured tag without require-phase as the global release tag; this workspace configures {}",
+            unphased
+                .iter()
+                .map(|tag| tag.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Resolve the annotated global release tag the checked-out commit publishes.
+fn resolve_published_tag(
+    root: &Path,
+    release: &str,
+    configured: &UnphasedTag,
+) -> Result<AnnotatedTag> {
+    let (prefix, suffix) = configured.template.split_once("{version}").ok_or_else(|| {
+        Error::Validation(format!(
+            "configured tag {} has template {:?}, which renders no version",
+            configured.id, configured.template
+        ))
+    })?;
+    let listed = GitCommand::new(root)
+        .args([
+            "for-each-ref",
+            "--format=%(refname:strip=2)%00%(objecttype)%00%(objectname)%00%(*objectname)",
+            "refs/tags/",
+        ])
+        .run()?;
+    let mut matched = Vec::new();
+    for record in listed.text()?.lines().filter(|line| !line.is_empty()) {
+        let fields = record.split('\u{0}').collect::<Vec<_>>();
+        let [name, kind, object, peeled] = fields.as_slice() else {
+            return Err(Error::Git(format!(
+                "git for-each-ref produced an unreadable tag record: {record}"
+            )));
+        };
+        let Some(version) = name
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(suffix))
+        else {
+            continue;
+        };
+        if Version::parse(version).is_err() {
+            continue;
+        }
+        // An annotated tag reports its own identity and its peeled commit
+        // separately, so the commit a tag publishes is the peeled value where
+        // one exists and the ref target otherwise.
+        let target = if peeled.is_empty() { object } else { peeled };
+        if *target != release {
+            continue;
+        }
+        matched.push(((*name).to_owned(), (*kind).to_owned(), (*object).to_owned()));
+    }
+    match matched.as_slice() {
+        [(name, kind, object)] => {
+            if kind != "tag" {
+                return Err(Error::Validation(format!(
+                    "the global release tag {name} is a lightweight tag rather than an annotated tag object carrying an Intentional release record"
+                )));
+            }
+            read_annotated_tag(root, name, object)
+        }
+        [] => Err(Error::Validation(format!(
+            "the checkout does not sit on a global release tag; no tag rendered from template {:?} targets the checked-out commit {release}",
+            configured.template
+        ))),
+        candidates => Err(Error::Validation(format!(
+            "the checked-out commit {release} is targeted by more than one global release tag: {}",
+            candidates
+                .iter()
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Decode one annotated tag object into its header target and record fields.
+fn read_annotated_tag(root: &Path, name: &str, object: &str) -> Result<AnnotatedTag> {
+    let raw = GitCommand::new(root)
+        .args(["cat-file", "tag", object])
+        .run()?;
+    let text = raw.text()?;
+    let (header, message) = text.split_once("\n\n").ok_or_else(|| {
+        Error::Validation(format!(
+            "the global release tag {name} carries no Intentional release record"
+        ))
+    })?;
+    let mut target = None;
+    let mut kind = None;
+    let mut declared = None;
+    for line in header.lines() {
+        match line.split_once(' ') {
+            Some(("object", value)) => target = Some(value.to_owned()),
+            Some(("type", value)) => kind = Some(value.to_owned()),
+            Some(("tag", value)) => declared = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+    let target = target
+        .ok_or_else(|| Error::Git(format!("annotated tag {name} declares no target object")))?;
+    if kind.as_deref() != Some("commit") {
+        return Err(Error::Validation(format!(
+            "the global release tag {name} targets a {} rather than the release commit",
+            kind.unwrap_or_else(|| "missing type".to_owned())
+        )));
+    }
+    if declared.as_deref() != Some(name) {
+        return Err(Error::Validation(format!(
+            "the global release tag ref {name} publishes a tag object that names {}",
+            declared.unwrap_or_else(|| "nothing".to_owned())
+        )));
+    }
+    let fields = message
+        .lines()
+        .filter_map(|line| line.split_once(": "))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect::<BTreeMap<_, _>>();
+    Ok(AnnotatedTag {
+        name: name.to_owned(),
+        object: object.to_owned(),
+        target,
+        fields,
+    })
+}
+
+/// Prove the record is a complete, non-baseline release record for this workspace.
+fn verify_record(tag: &AnnotatedTag, config: &Config, configured: &UnphasedTag) -> Result<()> {
+    for field in REQUIRED_FIELDS {
+        if !tag.fields.contains_key(field) {
+            return Err(Error::Validation(format!(
+                "the global release tag {} is missing Intentional record field {field}",
+                tag.name
+            )));
+        }
+    }
+    for (field, expected) in [
+        ("contract", config.contract.as_str()),
+        ("tag-id", configured.id.as_str()),
+        ("baseline", "false"),
+    ] {
+        let found = tag.fields[field].as_str();
+        if found != expected {
+            return Err(Error::Validation(format!(
+                "the global release tag {} records {field} {found}; this workspace requires {expected}",
+                tag.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Read the tree and the sole parent of the released commit.
+fn release_commit_shape(root: &Path, release: &str) -> Result<(String, String)> {
+    let commit = GitCommand::new(root)
+        .args(["show", "--no-patch", "--format=%T%n%P", release])
+        .run()?;
+    let mut lines = commit.text()?.lines();
+    let tree = lines.next().unwrap_or_default().trim().to_owned();
+    let parents = lines
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    match parents.as_slice() {
+        [source] => Ok((tree, source.clone())),
+        [] => Err(Error::Validation(format!(
+            "the release commit {release} must have the accepted source commit as its sole parent; found no parent"
+        ))),
+        several => Err(Error::Validation(format!(
+            "the release commit {release} must have the accepted source commit as its sole parent; found {}",
+            several.join(", ")
+        ))),
+    }
+}
+
+/// Rebuild the candidate from the source commit alone and compare every identity.
+///
+/// Reproduction happens in a throwaway clone so verification never mutates the
+/// repository it is proving, and so the release tags the repository already
+/// carries can be excluded from the version authority the rebuild derives.
+fn reproduce_release(
+    root: &Path,
+    release: &str,
+    tree: &str,
+    source: &str,
+    tag: &AnnotatedTag,
+    plan_digest: &str,
+) -> Result<()> {
+    if tag.target != release {
+        return Err(Error::Validation(format!(
+            "the global release tag {} targets {}, not the checked-out release commit {release}",
+            tag.name, tag.target
+        )));
+    }
+    let reproduction_root = tempfile::Builder::new()
+        .prefix("intentional-release-tag-reproduce")
+        .tempdir()
+        .map_err(|error| Error::Git(format!("failed to create a reproduction clone: {error}")))?;
+    let clone = isolated_clone(root, reproduction_root.path(), source)?;
+    GitCommand::new(&clone)
+        .args(["checkout", "--quiet", "--force", "--detach", source])
+        .run()?;
+    discard_released_tags(&clone, release)?;
+
+    let built = build_candidate(&clone, source)?;
+    if built.plan.digest != plan_digest {
+        return Err(Error::Validation(format!(
+            "the global release tag {} binds plan digest {plan_digest} but rebuilding the release from source commit {source} seals {}; the verifying checkout must carry the release tags that hold version authority",
+            tag.name, built.plan.digest
+        )));
+    }
+    if built.release_tree != tree {
+        return Err(Error::Validation(format!(
+            "the reproduced release tree {} does not match the released tree {tree}; the released projections, changelogs, or consumed intents disagree with the sealed plan",
+            built.release_tree
+        )));
+    }
+    if built.release_commit != release {
+        return Err(Error::Validation(format!(
+            "the reproduced release commit {} does not match the released commit {release}",
+            built.release_commit
+        )));
+    }
+    if built.tag_object != tag.object || built.tag_name != tag.name {
+        return Err(Error::Validation(format!(
+            "the reproduced annotated global release tag does not match the published tag {}",
+            tag.name
+        )));
+    }
+    Ok(())
+}
+
+/// Create an isolated clone that already contains the accepted source commit.
+///
+/// Tags carry the version authority the release plan is derived from, so an
+/// isolated clone must keep them to reproduce a candidate faithfully.
+fn isolated_clone(root: &Path, into: &Path, source: &str) -> Result<PathBuf> {
+    let target = into.join("repository");
+    let target_argument = target
+        .to_str()
+        .ok_or_else(|| Error::Git("the clone path is not valid UTF-8".to_owned()))?
+        .to_owned();
+    let origin = root
+        .canonicalize()
+        .map_err(|error| Error::io(root, error))?;
+    let origin_argument = origin
+        .to_str()
+        .ok_or_else(|| Error::Git("the repository path is not valid UTF-8".to_owned()))?
+        .to_owned();
+    GitCommand::new(into)
+        .args([
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            &origin_argument,
+            &target_argument,
+        ])
+        .run()?;
+    if !git::has_object(&target, source)? {
+        GitCommand::new(&target)
+            .args([
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                &origin_argument,
+                "+refs/*:refs/intentional/source/*",
+            ])
+            .run()?;
+    }
+    if !git::has_object(&target, source)? {
+        return Err(Error::Validation(format!(
+            "the verifying repository does not contain the accepted source commit {source}"
+        )));
+    }
+    Ok(target)
+}
+
+/// Remove every tag the release itself created from the reproduction clone.
+///
+/// The release commit did not exist when the release plan was sealed, so a tag
+/// resolving to it is an output of this release rather than an input to it.
+/// Leaving those tags in place would let the release under verification supply
+/// the version authority it is supposed to be derived from, and a resumed
+/// publication would then reproduce a different plan than the one it is
+/// verifying. Only tags that already resolve to the release commit are removed,
+/// so no tag record can steer the reproduction environment.
+fn discard_released_tags(clone: &Path, release: &str) -> Result<()> {
+    let listed = GitCommand::new(clone)
+        .args([
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(*objectname)",
+            "refs/tags/",
+        ])
+        .run()?;
+    let mut released = Vec::new();
+    for record in listed.text()?.lines().filter(|line| !line.is_empty()) {
+        let fields = record.split('\u{0}').collect::<Vec<_>>();
+        let [reference, object, peeled] = fields.as_slice() else {
+            return Err(Error::Git(format!(
+                "git for-each-ref produced an unreadable tag record: {record}"
+            )));
+        };
+        let target = if peeled.is_empty() { object } else { peeled };
+        if *target == release {
+            released.push(((*reference).to_owned(), (*object).to_owned()));
+        }
+    }
+    for (reference, object) in released {
+        GitCommand::new(clone)
+            .args(["update-ref", "-d", &reference, &object])
+            .run()?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n";
+
+    const RECORD_TAG_ID: &str = "release-unit/widget/primary";
+
+    /// A git workspace carrying one applied release and its published global tag.
+    struct ReleasedWorkspace {
+        temp: tempfile::TempDir,
+        root: PathBuf,
+        /// Accepted source commit S.
+        source: String,
+        /// Deterministic release commit R.
+        release: String,
+        /// Identity of the annotated global tag object.
+        tag_object: String,
+        /// Rendered name of the global release tag.
+        tag_name: String,
+        /// Digest sealed inside the release plan.
+        plan_digest: String,
+    }
+
+    fn git(directory: &Path, arguments: &[&str]) -> String {
+        GitCommand::new(directory)
+            .args(arguments)
+            .run()
+            .unwrap_or_else(|error| panic!("git {arguments:?} failed: {error}"))
+            .line()
+            .expect("git output")
+    }
+
+    fn write(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("parent directory"))
+            .expect("create parent directory");
+        std::fs::write(path, contents).expect("write fixture file");
+    }
+
+    impl ReleasedWorkspace {
+        /// Author one intent, build the release, and publish its annotated global tag.
+        fn new() -> Self {
+            let temp = tempfile::tempdir().expect("temporary directory");
+            let root = temp.path().join("workspace");
+            std::fs::create_dir_all(&root).expect("create workspace");
+            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["config", "user.name", "Fixture Author"]);
+            git(&root, &["config", "user.email", "fixture@example.invalid"]);
+            write(&root, ".intentional/config.yml", CONFIG);
+            write(&root, "package.json", "{\n  \"version\": \"1.0.0\"\n}\n");
+            write(&root, ".intentional/intents/.keep", "");
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
+            crate::tag::TagResult::build_baseline(&root, &BTreeMap::new())
+                .expect("baseline tag set")
+                .apply(&root, false)
+                .expect("record baseline tags");
+
+            write(
+                &root,
+                ".intentional/intents/quiet-otter-0001.md",
+                "---\nwidget: minor\n---\n\nAdd a widget capability\n",
+            );
+            git(&root, &["add", "-A"]);
+            git(&root, &["commit", "--quiet", "-m", "Record release intent"]);
+
+            let source = git(&root, &["rev-parse", "HEAD^{commit}"]);
+            let built = build_candidate(&root, &source).expect("release candidate");
+            let workspace = Self {
+                temp,
+                root,
+                source,
+                release: built.release_commit.clone(),
+                tag_object: built.tag_object.clone(),
+                tag_name: built.tag_name.clone(),
+                plan_digest: built.plan.digest.clone(),
+            };
+            workspace.publish(&workspace.tag_name.clone(), &built.tag_object);
+            workspace.checkout(&built.release_commit);
+            workspace
+        }
+
+        /// Record one tag ref under `name`.
+        fn publish(&self, name: &str, object: &str) {
+            git(
+                &self.root,
+                &["update-ref", &format!("refs/tags/{name}"), object],
+            );
+        }
+
+        /// Remove the published global tag so a forgery can replace it.
+        fn unpublish(&self) {
+            git(
+                &self.root,
+                &["update-ref", "-d", &format!("refs/tags/{}", self.tag_name)],
+            );
+        }
+
+        fn checkout(&self, commit: &str) {
+            git(&self.root, &["checkout", "--quiet", "--detach", commit]);
+        }
+
+        /// Build an annotated tag object from a complete raw tag body.
+        fn mktag(&self, body: &str) -> String {
+            GitCommand::new(&self.root)
+                .arg("mktag")
+                .stdin(body.to_owned().into_bytes())
+                .run()
+                .expect("annotated tag object")
+                .line()
+                .expect("tag identity")
+        }
+
+        /// The tagger line of the published global tag, reused by forged tags.
+        fn tagger(&self) -> String {
+            GitCommand::new(&self.root)
+                .args(["cat-file", "tag", &self.tag_object])
+                .run()
+                .expect("published tag object")
+                .text()
+                .expect("tag text")
+                .lines()
+                .find(|line| line.starts_with("tagger "))
+                .expect("tagger line")
+                .to_owned()
+        }
+
+        /// A well-formed release record body over `target` named `name`.
+        fn record(&self, target: &str, name: &str, digest: &str) -> String {
+            format!(
+                "object {target}\ntype commit\ntag {name}\n{}\n\nintentional release record\n\ncontract: contract-1\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {RECORD_TAG_ID}\nversion: 1.1.0\nbaseline: false\n",
+                self.tagger(),
+                crate::VERSION
+            )
+        }
+
+        fn verify(&self) -> Result<VerifiedReleaseTag> {
+            verify_release_tag(&self.root)
+        }
+    }
+
+    #[test]
+    fn verifies_a_published_global_release_tag() {
+        let workspace = ReleasedWorkspace::new();
+        let verified = workspace.verify().expect("verified release tag");
+        assert_eq!(verified.source, workspace.source);
+        assert_eq!(verified.release, workspace.release);
+        assert_eq!(verified.global_tag, workspace.tag_name);
+        assert_eq!(verified.plan_digest, workspace.plan_digest);
+        assert_eq!(
+            verified.projections(),
+            vec![
+                format!("source-sha: {}", workspace.source),
+                format!("release-sha: {}", workspace.release),
+                format!("global-tag: {}", workspace.tag_name),
+                format!("plan-digest: {}", workspace.plan_digest),
+            ]
+        );
+    }
+
+    #[test]
+    fn leaves_the_verified_repository_unchanged() {
+        let workspace = ReleasedWorkspace::new();
+        let before = git(&workspace.root, &["for-each-ref", "--format=%(refname)"]);
+        workspace.verify().expect("verified release tag");
+        let after = git(&workspace.root, &["for-each-ref", "--format=%(refname)"]);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn rejects_a_checkout_that_the_release_tag_does_not_target() {
+        let workspace = ReleasedWorkspace::new();
+        workspace.checkout(&workspace.source);
+        let error = workspace
+            .verify()
+            .expect_err("the checkout is not the released commit");
+        assert!(
+            error
+                .to_string()
+                .contains("does not sit on a global release tag"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_release_commit_with_more_than_one_parent() {
+        let workspace = ReleasedWorkspace::new();
+        let tree = git(
+            &workspace.root,
+            &["rev-parse", &format!("{}^{{tree}}", workspace.release)],
+        );
+        let earlier = git(
+            &workspace.root,
+            &["rev-parse", &format!("{}~1", workspace.source)],
+        );
+        let merged = GitCommand::new(&workspace.root)
+            .args([
+                "commit-tree",
+                &tree,
+                "-p",
+                &workspace.source,
+                "-p",
+                &earlier,
+            ])
+            .stdin(b"chore(release): apply 1.1.0".to_vec())
+            .run()
+            .expect("merge commit")
+            .line()
+            .expect("merge identity");
+        let object = workspace.mktag(&workspace.record(&merged, "1.2.0", &workspace.plan_digest));
+        workspace.publish("1.2.0", &object);
+        workspace.checkout(&merged);
+        let error = workspace
+            .verify()
+            .expect_err("a release commit has one parent");
+        assert!(error.to_string().contains("sole parent"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_record_whose_plan_digest_disagrees() {
+        let workspace = ReleasedWorkspace::new();
+        let object = workspace.mktag(&workspace.record(
+            &workspace.release,
+            &workspace.tag_name,
+            &format!("sha256:{}", "0".repeat(64)),
+        ));
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &object);
+        let error = workspace
+            .verify()
+            .expect_err("the recorded digest is not the sealed digest");
+        assert!(error.to_string().contains("binds plan digest"), "{error}");
+    }
+
+    #[test]
+    fn rejects_a_projection_that_no_longer_matches_the_sealed_plan() {
+        let workspace = ReleasedWorkspace::new();
+        let blob = GitCommand::new(&workspace.root)
+            .args(["hash-object", "-w", "--stdin", "--path", "package.json"])
+            .stdin(b"{\n  \"version\": \"9.9.9\"\n}\n".to_vec())
+            .run()
+            .expect("forged projection blob")
+            .line()
+            .expect("blob identity");
+        let index = workspace.temp.path().join("forged-index");
+        let index = index.to_str().expect("index path").to_owned();
+        GitCommand::new(&workspace.root)
+            .args(["read-tree", &workspace.release])
+            .env("GIT_INDEX_FILE", &index)
+            .run()
+            .expect("read the released tree");
+        GitCommand::new(&workspace.root)
+            .args(["update-index", "--index-info"])
+            .env("GIT_INDEX_FILE", &index)
+            .stdin(format!("100644 {blob}\tpackage.json\n").into_bytes())
+            .run()
+            .expect("forge the projection");
+        let tree = GitCommand::new(&workspace.root)
+            .arg("write-tree")
+            .env("GIT_INDEX_FILE", &index)
+            .run()
+            .expect("forged tree")
+            .line()
+            .expect("tree identity");
+        let forged = GitCommand::new(&workspace.root)
+            .args(["commit-tree", &tree, "-p", &workspace.source])
+            .stdin(b"chore(release): apply 1.1.0".to_vec())
+            .run()
+            .expect("forged release commit")
+            .line()
+            .expect("commit identity");
+        let object = workspace.mktag(&workspace.record(
+            &forged,
+            &workspace.tag_name,
+            &workspace.plan_digest,
+        ));
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &object);
+        workspace.checkout(&forged);
+        let error = workspace
+            .verify()
+            .expect_err("the released projection was rewritten");
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the released tree"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_lightweight_tag_under_the_global_tag_name() {
+        let workspace = ReleasedWorkspace::new();
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &workspace.release);
+        let error = workspace
+            .verify()
+            .expect_err("a lightweight tag carries no release record");
+        assert!(error.to_string().contains("lightweight tag"), "{error}");
+    }
+
+    #[test]
+    fn requires_exactly_one_configured_tag_without_a_phase() {
+        let workspace = ReleasedWorkspace::new();
+        write(
+            &workspace.root,
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "        template: '{version}'\n",
+                "        template: '{version}'\n        require-phase: after-publication\n",
+            ),
+        );
+        let error = workspace
+            .verify()
+            .expect_err("no unphased tag is configured");
+        assert!(error.to_string().contains("configures none"), "{error}");
+
+        write(
+            &workspace.root,
+            ".intentional/config.yml",
+            &format!(
+                "{CONFIG}      mirror:\n        role: projection\n        template: '{{version}}-mirror'\n"
+            ),
+        );
+        let error = workspace
+            .verify()
+            .expect_err("two unphased tags are configured");
+        assert!(
+            error
+                .to_string()
+                .contains("configures release-unit/widget/mirror, release-unit/widget/primary"),
+            "{error}"
+        );
+    }
+}

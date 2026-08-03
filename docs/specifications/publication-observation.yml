@@ -1,0 +1,47 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  A publication observation is the schema-backed YAML result a repository-local
+  recipe writes after it reads one destination back and performs its applicable
+  closure-time consumer retrieval. Intentional commands never mutate a registry
+  and never hold publisher credentials, so the secret-bearing readback runs in
+  repository-local recipe steps and this document is the only thing
+  `intentional verify publication` learns about a destination. Its
+  `--observation` option names the file.
+
+  The observation identifies one publication by release unit, publisher, and
+  canonical target, and reports what the readback found as `state`. `present`
+  records the observed subject, the packager that produced it, native build
+  provenance, the metadata components actually attached, the destination
+  readback, the closure-time retrieval, and the mutable destination aliases
+  read back after promotion. `pending` reports a destination that accepted the
+  publication but has not made it observable, and `absent` reports a
+  destination holding no release under the expected identity; neither carries
+  destination detail. `conflict` names the observed identity, checksum, or
+  digest that disagrees with the expected release.
+
+  `retrieval.mode` identifies what the retrieval actually proved. `public`
+  means the recipe retrieved the release through the destination's normal
+  unauthenticated consumer path. `authenticated-draft` means the target
+  depended on an asset of the still-draft GitHub Release and retrieved those
+  bytes through the authenticated GitHub API. The verification command records
+  the observed mode unchanged and refuses a draft claim from a publisher whose
+  consumer path is independent of GitHub Release assets.
+
+  The observation contains no timestamps or other wall-clock values, so the
+  publisher-evidence fragment derived from it is byte-identical across runs and
+  across runners.
+validation-criteria: >-
+  An observation conforms when it validates against
+  `publication-observation.json-schema.yml`; its release unit, publisher, and
+  canonical target name a publication the workspace configuration selects; its
+  destination identity is the configured registry or repository; and its state
+  carries exactly the members that state admits. `intentional verify
+  publication` re-reads the document under the adapter's bounded
+  eventual-consistency policy: a missing document and a `pending` state remain
+  pending until the deadline, a `conflict` fails immediately, an `absent`
+  observation after a completed publish attempt fails, and reaching the
+  deadline is a distinct retryable failure. The command writes its
+  publisher-evidence fragment only after a `present` observation passes every
+  check.

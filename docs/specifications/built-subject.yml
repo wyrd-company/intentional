@@ -1,0 +1,32 @@
+$schema: https://refinery.systems/ontology/specification
+relationships: {}
+format: json-schema
+description: >-
+  A built-subject document is the YAML result the publication workflow's build
+  job writes once for each distinct publishable subject it produced from the
+  release commit. It names the release unit the subject belongs to, the subject
+  identity every destination resolves, the built version, and the immutable
+  digest that binds the bytes each publisher distributes or promotes. Optional
+  `provenance` entries reference native build attestations by digest so large
+  attestations stay outside the document. The document identifies itself with
+  `$schema: https://intentional.foo/schemas/built-subject/v1` so a consumer
+  recognizes it by identity rather than by shape or file name.
+
+  A subject is built once and published to every configured destination, so one
+  document describes one subject rather than one publication. Two documents that
+  name the same release unit and identity are a collision rather than a repeat:
+  a subject with two digests cannot be the immutable thing every destination
+  resolves.
+
+  `intentional tag --phase before-publication` consumes the staged documents and
+  seals their identities, versions, digests, and provenance references into the
+  before-publication tag. That tag therefore states what exists to publish
+  before any destination has observed it.
+validation-criteria: >-
+  A document conforms when it validates against
+  `built-subject.json-schema.yml`, declares its schema and contract identities,
+  records a canonical `sha256:` digest, and names a release unit the workspace
+  configuration declares. A staged set conforms when each release unit and
+  identity pair appears exactly once. Phase-tag creation reads the staged set,
+  rejects a duplicated identity, and orders the sealed subjects
+  deterministically.

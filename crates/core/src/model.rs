@@ -198,6 +198,25 @@ impl fmt::Display for PublisherKind {
     }
 }
 
+impl std::str::FromStr for PublisherKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "npm" => Ok(Self::Npm),
+            "cargo" => Ok(Self::Cargo),
+            "homebrew" => Ok(Self::Homebrew),
+            "rpm" => Ok(Self::Rpm),
+            "apt" => Ok(Self::Apt),
+            "aur" => Ok(Self::Aur),
+            "oci" => Ok(Self::Oci),
+            other => Err(format!(
+                "publisher must be npm, cargo, homebrew, rpm, apt, aur, or oci; got {other}"
+            )),
+        }
+    }
+}
+
 /// Supply-chain component a maintained recipe can attach to a published subject.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "lowercase")]

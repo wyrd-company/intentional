@@ -7,10 +7,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     assemble, check_executor, check_workspace, compare_workflow, contribute, initialize,
-    initialize_executor, prepare_release, verify_handoff, ApplyResult, AssembleRequest, Bump,
-    ComparisonStatus, Config, ContributionRequest, ExecutorInitState, InitState, IntentDraft,
-    ReleasePlan, StampResult, TagPhase, TagResult, WorkflowIdentity, WorkflowRole, WorkspaceStatus,
-    CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    initialize_executor, prepare_release, verify_handoff, verify_publication, verify_release,
+    verify_release_tag, ApplyResult, AssembleRequest, Bump, CheckoutContext, ComparisonStatus,
+    Config, ContributionRequest, ExecutorInitState, GhReleaseSource, InitState, IntentDraft,
+    PublisherKind, ReleasePlan, StampResult, SystemClock, TagPhase, TagResult,
+    VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus, CONFIG_PATH,
+    LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -96,6 +98,46 @@ enum EvidenceCommand {
 enum VerifyCommand {
     /// Independently verify a prepared release-candidate handoff.
     Handoff(HandoffArgs),
+    /// Verify the current global release tag before publication.
+    ReleaseTag,
+    /// Verify one destination publication and write its affirmative evidence.
+    Publication(PublicationArgs),
+    /// Verify an Intentional GitHub Release and its evidence.
+    Release(ReleaseArgs),
+}
+
+#[derive(Debug, Args)]
+struct PublicationArgs {
+    /// Release-unit identifier whose publication is verified.
+    #[arg(long)]
+    release_unit: String,
+
+    /// Configured publisher adapter identifier.
+    #[arg(long, value_parser = ["npm", "cargo", "homebrew", "rpm", "apt", "aur", "oci"])]
+    publisher: String,
+
+    /// Publisher target selector; a publisher with a primary target accepts omission.
+    #[arg(long)]
+    target: Option<String>,
+
+    /// Publication-observation document the recipe's readback steps produced.
+    #[arg(long, value_name = "PATH")]
+    observation: PathBuf,
+
+    /// File in which to write schema-backed publisher evidence.
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct ReleaseArgs {
+    /// Release version whose GitHub Release is verified.
+    #[arg(value_name = "VERSION")]
+    version: String,
+
+    /// Perform post-closure destination readback and public client retrieval.
+    #[arg(long)]
+    live: bool,
 }
 
 #[derive(Debug, Args)]
@@ -234,6 +276,10 @@ struct TagArgs {
     #[arg(long)]
     phase: Option<String>,
 
+    /// Directory of built-subject and publisher-evidence documents the phase seals.
+    #[arg(long, value_name = "PATH", requires = "phase")]
+    evidence: Option<PathBuf>,
+
     /// Digest-sealed release plan to verify before creating release tags.
     #[arg(long, value_name = "PATH")]
     plan: Option<PathBuf>,
@@ -290,6 +336,9 @@ fn run() -> Result<u8> {
             evidence_assemble(&cli.directory, args)
         }
         Command::Verify(VerifyCommand::Handoff(args)) => handoff(&cli.directory, args),
+        Command::Verify(VerifyCommand::ReleaseTag) => release_tag(&cli.directory),
+        Command::Verify(VerifyCommand::Publication(args)) => publication(&cli.directory, args),
+        Command::Verify(VerifyCommand::Release(args)) => release(&cli.directory, args),
         Command::Skill => skill(),
     }?;
     Ok(0)
@@ -315,6 +364,55 @@ fn handoff(root: &std::path::Path, args: HandoffArgs) -> Result<()> {
         println!("{projection}");
     }
     Ok(())
+}
+
+fn release_tag(root: &std::path::Path) -> Result<()> {
+    let verified = verify_release_tag(root)?;
+    println!("global release tag verified");
+    for projection in verified.projections() {
+        println!("{projection}");
+    }
+    Ok(())
+}
+
+fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
+    let observation = resolve(root, args.observation);
+    let output = resolve(root, args.output);
+    let clock = SystemClock::new();
+    let context = CheckoutContext::new();
+    let verified = verify_publication(&VerifyPublicationRequest {
+        root,
+        release_unit: &args.release_unit,
+        publisher: parse_publisher(&args.publisher)?,
+        target: args.target.as_deref(),
+        observation: &observation,
+        output: &output,
+        policy: None,
+        clock: &clock,
+        context: &context,
+    })?;
+    if verified.reused {
+        println!("reused the sealed publisher evidence");
+    }
+    // The Action projects exactly this line, so the fragment a consumer reads
+    // is the one this invocation proved rather than a path it guessed.
+    println!("evidence-path: {}", verified.path.display());
+    Ok(())
+}
+
+fn release(root: &std::path::Path, args: ReleaseArgs) -> Result<()> {
+    let source = GhReleaseSource::new(root);
+    let verification = verify_release(root, &args.version, args.live, &source)?;
+    for entry in verification.report() {
+        println!("{entry}");
+    }
+    Ok(())
+}
+
+fn parse_publisher(value: &str) -> Result<PublisherKind> {
+    value
+        .parse::<PublisherKind>()
+        .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
 fn executor_init(root: &std::path::Path, dry_run: bool) -> Result<u8> {
@@ -525,6 +623,9 @@ fn tag(root: &std::path::Path, args: TagArgs) -> Result<()> {
     if args.baseline && args.plan.is_some() {
         bail!("--baseline and --plan cannot be combined");
     }
+    if args.baseline && args.evidence.is_some() {
+        bail!("--baseline and --evidence cannot be combined");
+    }
     if !args.baseline && !explicit.is_empty() {
         bail!("--version is valid only with --baseline");
     }
@@ -538,7 +639,14 @@ fn tag(root: &std::path::Path, args: TagArgs) -> Result<()> {
                 root.join(path)
             }
         });
-        TagResult::build_with_plan(root, args.channel.as_deref(), phase, plan_path.as_deref())?
+        let evidence = args.evidence.map(|path| resolve(root, path));
+        TagResult::build_with_plan(
+            root,
+            args.channel.as_deref(),
+            phase,
+            plan_path.as_deref(),
+            evidence.as_deref(),
+        )?
     };
     for operation in result.operations() {
         println!("{operation}");
