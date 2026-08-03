@@ -1046,10 +1046,9 @@ release-units:
         let plan = run(&workspace).plan;
         let document: serde_yaml::Value =
             serde_yaml::from_str(&plan.to_yaml().expect("plan serializes")).expect("plan parses");
-        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../../../docs/specifications/executor-init-plan.json-schema.yml"
-        ))
-        .expect("schema parses");
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../../schemas/executor-init-plan.yml"))
+                .expect("schema parses");
         assert_eq!(
             schema["$id"].as_str(),
             Some(EXECUTOR_INIT_PLAN_SCHEMA),
