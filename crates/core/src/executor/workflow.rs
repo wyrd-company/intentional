@@ -1435,11 +1435,23 @@ steps:
 /// remote does not carry, and `--verify-tag` is what turns a reordering into a
 /// failure on the runner rather than a Release attached to nothing.
 ///
-/// Creation is create-if-absent. `immutable-github-release` states that a
-/// failure before closure leaves a resumable draft, so a rerun of this job has
-/// to find that draft and continue. A Release that exists and is no longer a
-/// draft is the opposite case: the release already closed, and continuing would
-/// mean uploading assets onto an immutable Release, so the transition refuses.
+/// Creation is create-if-absent, and absent means absent. `gh release view`
+/// fails for a Release that does not exist and equally for a rate limit, a 5xx,
+/// or a revoked token, so the branch is taken only when the failure says the
+/// Release was not found. Reading every failure as absence would turn the one
+/// case create-if-absent exists to serve -- a rerun where the draft does exist
+/// -- into a hard failure whose message points away from the real cause.
+///
+/// `immutable-github-release` states that a failure before closure leaves a
+/// resumable draft, so a rerun of this job has to find that draft and continue.
+/// A Release that exists and is no longer a draft is the opposite case: the
+/// release already closed, and continuing would mean uploading assets onto an
+/// immutable Release, so the transition refuses.
+///
+/// The step names its repository rather than inheriting one. The push step
+/// rewrote `origin` to embed the installation token, so a `gh` that resolved
+/// the repository from the remote would take the Release the whole publication
+/// protocol keys on from a URL another step mutated.
 const RELEASE_AUTHORITY_JOB: &str = r#"
 needs:
 @NEEDS@
@@ -1493,13 +1505,19 @@ steps:
   - name: Create the draft GitHub Release for the published tag
     env:
       GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      GH_REPO: ${{ github.repository }}
       @ENVVAR@GLOBAL_TAG: ${{ steps.@JOB@handoff.outputs.global-tag }}
     run: |
       set -euo pipefail
-      if drafted="$(gh release view "${@ENVVAR@GLOBAL_TAG}" \
-        --json isDraft --jq '.isDraft' 2>/dev/null)"; then
-        test "${drafted}" = "true"
+      viewed="$(gh release view "${@ENVVAR@GLOBAL_TAG}" \
+        --json isDraft --jq '.isDraft' 2>&1)" && resolved=0 || resolved=$?
+      if test "${resolved}" -eq 0; then
+        test "${viewed}" = "true"
       else
+        if ! printf '%s\n' "${viewed}" | grep -qi 'release not found'; then
+          printf 'the draft Release could not be resolved: %s\n' "${viewed}" >&2
+          exit 1
+        fi
         gh release create "${@ENVVAR@GLOBAL_TAG}" --draft --verify-tag \
           --title "${@ENVVAR@GLOBAL_TAG}" --notes ''
       fi
@@ -2945,6 +2963,11 @@ release-units:
             ("source-sha", "0000000000000000000000000000000000000000"),
             ("release-sha", "1111111111111111111111111111111111111111"),
         ]);
+        // The workflow contexts a runner would expand. Anything the step names
+        // that is neither a verified step output nor one of these is refused,
+        // because an ambient value that happens to agree with the verified
+        // identity today is exactly the substitution this job cannot take.
+        let contexts = BTreeMap::from([("${{ github.repository }}", "example-owner/example-repo")]);
         let environment = step["env"]
             .as_mapping()
             .expect("the creation step names its inputs")
@@ -2957,6 +2980,7 @@ release-units:
                     .and_then(|rest| rest.strip_suffix(" }}"))
                     .and_then(|rest| rest.rsplit_once(".outputs."))
                     .and_then(|(_, name)| outputs.get(name).copied())
+                    .or_else(|| contexts.get(value).copied())
                     .unwrap_or_else(|| {
                         panic!("the creation step reads {key} from a verified step output, not {value}")
                     });
@@ -2975,24 +2999,28 @@ release-units:
     /// Returns whether the step succeeded and the command line of every `gh`
     /// invocation it made, so a test can assert what the step did rather than
     /// what its text contains.
+    ///
+    /// The stub and its invocation log live outside the converged fixture so
+    /// test scaffolding never lands in the tree the derivation produced.
     fn run_draft_creation(root: &Path, gh: &str) -> (bool, String) {
         use std::os::unix::fs::PermissionsExt;
 
         let (script, environment) = draft_creation(root, "component@1.2.3");
-        let bin = root.join("draft-creation-stub");
-        std::fs::create_dir_all(&bin).expect("the stub directory is created");
-        let stub = bin.join("gh");
+        let scaffold = Workspace::new("draft-creation-scaffold");
+        let stub = scaffold.root().join("gh");
         std::fs::write(&stub, gh).expect("the stub is written");
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
             .expect("the stub is executable");
-        let log = root.join("draft-creation-invocations");
-        let _ = std::fs::remove_file(&log);
+        let log = scaffold.root().join("invocations");
 
         let mut command = std::process::Command::new("bash");
         command
             .args(["-c", &script])
             .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", scaffold.root().display()),
+            )
             .env("GH_STUB_LOG", log.display().to_string());
         for (key, value) in &environment {
             command.env(key, value);
@@ -3003,13 +3031,19 @@ release-units:
     }
 
     /// A `gh` stub that records its arguments and answers `release view` with
-    /// `outcome`, which is either a shell fragment or a drafted state.
+    /// `view`, a shell fragment standing in for one state of the Release.
     fn gh_stub(view: &str) -> String {
         format!(
             "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{GH_STUB_LOG}}\"\n\
              case \"$*\" in\n  *'release view'*)\n{view}\n    ;;\nesac\nexit 0\n"
         )
     }
+
+    /// The Release does not exist, in the words `gh` uses to say so.
+    const GH_RELEASE_ABSENT: &str = "    printf 'release not found\\n' >&2\n    exit 1";
+    /// The Release state could not be resolved at all.
+    const GH_RELEASE_UNRESOLVED: &str =
+        "    printf 'HTTP 503: Service Unavailable\\n' >&2\n    exit 1";
 
     // A draft cannot be created for a tag the remote does not yet carry, so the
     // creation step is only correct downstream of the atomic push. Order is
@@ -3096,10 +3130,8 @@ release-units:
         let workspace = workspace("workflow-draft-creation-rerun");
         converge(workspace.root(), WorkflowRole::Release);
 
-        let (created, invocations) = run_draft_creation(
-            workspace.root(),
-            &gh_stub("    printf 'release absent\\n' >&2\n    exit 1"),
-        );
+        let (created, invocations) =
+            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
         assert!(created, "the first run creates the draft: {invocations}");
         assert!(
             invocations.contains("release create") && invocations.contains("--draft"),
@@ -3112,6 +3144,85 @@ release-units:
         assert!(
             !invocations.contains("release create"),
             "a rerun against an existing draft creates nothing: {invocations}"
+        );
+    }
+
+    // The step names the repository it writes to rather than inheriting one.
+    // The push step immediately before it rewrote `origin` to embed the
+    // installation token, so a `gh` that resolved the repository from the
+    // remote would take the Release the whole publication protocol keys on from
+    // a URL another step mutated. That is an unstated cross-step dependency in
+    // the one step that creates the Release, which is why it is asserted.
+    #[test]
+    fn names_the_repository_the_draft_release_is_created_in() {
+        let workspace = workspace("workflow-draft-creation-repository");
+        converge(workspace.root(), WorkflowRole::Release);
+        let steps = managed_steps(workspace.root(), WorkflowRole::Release)
+            .into_iter()
+            .find(|(id, _)| id == "intentional_release")
+            .expect("the authority transition is derived")
+            .1;
+        let creation = steps
+            .iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("gh release create"))
+            })
+            .expect("the authority transition creates the draft Release");
+
+        assert_eq!(
+            creation["env"]["GH_REPO"].as_str(),
+            Some("${{ github.repository }}"),
+            "the creation step states the repository the draft lands in"
+        );
+    }
+
+    // The tag must already exist on the remote for the draft to attach to the
+    // release this transition published. Without `--verify-tag`, `gh release
+    // create` against a missing tag does not fail: it creates the tag at the
+    // default-branch head, and the Release is attached to a tag Intentional
+    // never made and never verified. The ordering test proves the template
+    // orders the two steps; this is the half that proves it on the runner, so
+    // it is asserted on the invocation the step actually made.
+    #[test]
+    fn creates_the_draft_only_against_a_tag_the_remote_already_carries() {
+        let workspace = workspace("workflow-draft-creation-tag-verified");
+        converge(workspace.root(), WorkflowRole::Release);
+
+        let (created, invocations) =
+            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
+        assert!(created, "the draft is created: {invocations}");
+        let creation = invocations
+            .lines()
+            .find(|line| line.contains("release create"))
+            .expect("the step creates the Release");
+        assert!(
+            creation.contains("--verify-tag"),
+            "creation refuses a tag the remote does not carry: {creation}"
+        );
+    }
+
+    // `gh release view` fails for a Release that does not exist and equally for
+    // a rate limit, a 5xx, or a revoked token. Reading every failure as absence
+    // turns the one case create-if-absent exists to serve -- a rerun where the
+    // draft does exist -- into a hard failure reported as a tag collision. The
+    // step is executed because the difference is entirely in what the failing
+    // command said, which no reading of the template can show.
+    #[test]
+    fn refuses_a_release_state_it_could_not_resolve_rather_than_assuming_absence() {
+        let workspace = workspace("workflow-draft-creation-unresolved");
+        converge(workspace.root(), WorkflowRole::Release);
+
+        let (continued, invocations) =
+            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_UNRESOLVED));
+        assert!(
+            !continued,
+            "an unresolved Release state stops the transition: {invocations}"
+        );
+        assert!(
+            !invocations.contains("release create"),
+            "an unresolved Release state is not treated as absence: {invocations}"
         );
     }
 
