@@ -163,6 +163,164 @@ FIXTURE
 
 expect_pass "an env-routed, pinned, bash composite step" "$temporary/compliant.yml"
 
+cat > "$temporary/unknown-runtime.yml" <<'FIXTURE'
+name: "fixture"
+description: "A runtime this gate has never been taught to read"
+runs:
+  using: "node12"
+  main: "index.js"
+FIXTURE
+
+expect_failure_matching \
+  "an unrecognised runs.using" \
+  "declares runs.using 'node12', which this gate does not recognise" \
+  "$temporary/unknown-runtime.yml"
+
+# `using: composite` is matched case-insensitively by GitHub. Reading it any
+# other way turns a capital letter into a silent exemption from every step rule.
+cat > "$temporary/capitalised-composite.yml" <<'FIXTURE'
+name: "fixture"
+description: "A violating step under a capitalised runtime name"
+runs:
+  using: "Composite"
+  steps:
+    - name: Report
+      run: echo done
+FIXTURE
+
+expect_failure_matching \
+  "a violating step under using: Composite" \
+  "run: without a shell" \
+  "$temporary/capitalised-composite.yml"
+
+cat > "$temporary/floating-container.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container step resolved by a mutable tag"
+runs:
+  using: "composite"
+  steps:
+    - name: Convert
+      uses: docker://alpine:3.20
+FIXTURE
+
+expect_failure_matching \
+  "a container step pinned to a tag" \
+  "not pinned to an image digest" \
+  "$temporary/floating-container.yml"
+
+# The commit-identity message belongs to commit-shaped references. Reporting it
+# against an image would tell the reader to pin to something images do not have.
+container_output="$("${linter[@]}" "$temporary/floating-container.yml" 2>&1 || true)"
+if grep -qF -- "40-character commit identity" <<<"$container_output"; then
+  echo "the lint gate told a container reference to pin to a commit identity:" >&2
+  echo "$container_output" >&2
+  failures=$((failures + 1))
+fi
+
+digest="$(printf '0%.0s' $(seq 64))"
+cat > "$temporary/pinned-container.yml" <<FIXTURE
+name: "fixture"
+description: "A container step pinned to its manifest digest"
+runs:
+  using: "composite"
+  steps:
+    - name: Convert
+      uses: docker://alpine@sha256:$digest
+FIXTURE
+
+expect_pass "a digest-pinned container step" "$temporary/pinned-container.yml"
+
+# Discovery is the property the explicit-path cases above cannot exercise: they
+# hand the gate the file. Copying the gate into a fixture repository lets it
+# discover for itself, and lets the expected document count be an exact number.
+fixture_repository() {
+  local repository="$1"
+
+  mkdir -p \
+    "$repository/scripts/release" \
+    "$repository/actions/published" \
+    "$repository/.github/actions/internal" \
+    "$repository/target/generated" \
+    "$repository/node_modules/vendored"
+  cp "$root/scripts/release/lint-actions.py" "$repository/scripts/release/lint-actions.py"
+
+  for document in \
+    "$repository/action.yml" \
+    "$repository/actions/published/action.yml" \
+    "$repository/.github/actions/internal/action.yaml" \
+    "$repository/target/generated/action.yml" \
+    "$repository/node_modules/vendored/action.yml"; do
+    cp "$temporary/compliant.yml" "$document"
+  done
+}
+
+discovered="$temporary/discovered"
+fixture_repository "$discovered"
+
+# Three documents are publishable; the two under target/ and node_modules/ are
+# not this repository's to fix. Asserting the number, not just the exit status,
+# means a future narrowing of discovery fails loudly instead of passing over
+# fewer files.
+discovered_output="$(python3 "$discovered/scripts/release/lint-actions.py" 2>&1)" || {
+  echo "expected the lint gate to accept the discovery fixture, but it reported:" >&2
+  echo "$discovered_output" >&2
+  failures=$((failures + 1))
+}
+
+if ! grep -qF -- "(3 checked)" <<<"$discovered_output"; then
+  echo "expected the lint gate to discover 3 action documents, but it reported:" >&2
+  echo "$discovered_output" >&2
+  failures=$((failures + 1))
+fi
+
+# The same discovery, proven by what it rejects: an interpolated run: in an
+# `action.yaml` under `.github/actions/` is a file the previous gate never
+# opened.
+uncovered="$temporary/uncovered"
+fixture_repository "$uncovered"
+cat > "$uncovered/.github/actions/internal/action.yaml" <<'FIXTURE'
+name: "fixture"
+description: "An interpolated run: in a spelling and a directory the gate must reach"
+inputs:
+  version:
+    description: "A value supplied by the caller"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Report
+      shell: bash
+      run: echo "${{ inputs.version }}"
+FIXTURE
+
+if uncovered_output="$(python3 "$uncovered/scripts/release/lint-actions.py" 2>&1)"; then
+  echo "expected the lint gate to reject the .github/actions/ action.yaml, but it passed" >&2
+  failures=$((failures + 1))
+elif ! grep -qE -- "\.github/actions/internal/action\.yaml.*interpolates" <<<"$uncovered_output"; then
+  echo "the lint gate rejected the discovery fixture without naming the uncovered document:" >&2
+  echo "$uncovered_output" >&2
+  failures=$((failures + 1))
+fi
+
+# The repository's own count, cross-checked against an enumeration the gate does
+# not perform. A narrowing that both sides share would still pass here; the
+# fixture above is what holds the exact number.
+expected_documents="$(
+  {
+    find . -maxdepth 1 -type f \( -name action.yml -o -name action.yaml \)
+    find ./actions ./.github/actions \
+      \( -name target -o -name node_modules \) -prune -o \
+      -type f \( -name action.yml -o -name action.yaml \) -print 2>/dev/null || true
+  } | wc -l
+)"
+
+repository_output="$("${linter[@]}")"
+if ! grep -qF -- "($expected_documents checked)" <<<"$repository_output"; then
+  echo "expected the lint gate to check $expected_documents documents, but it reported:" >&2
+  echo "$repository_output" >&2
+  failures=$((failures + 1))
+fi
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures composite-action lint assertions failed." >&2
   exit 1

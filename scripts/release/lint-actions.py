@@ -18,6 +18,10 @@ gate:
   anything a reviewer reads.
 * An external `uses:` reference resolved by tag or branch is mutable, so the
   code a consumer executes is whatever that name points at on the day it runs.
+  A container reference carries no commit identity, so its immutable name is the
+  manifest digest instead.
+* A `runs.using` runtime the gate does not recognise leaves every step in that
+  document unread, so it is reported rather than skipped.
 
 Run with no arguments to lint every action document in the repository. Explicit
 paths are for this gate's own tests.
@@ -43,7 +47,30 @@ EXPANSION = re.compile(r"\$\{\{")
 # shares that prefix.
 PINNED_REFERENCE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
+# A container reference carries no commit identity at all. Its immutable name is
+# the manifest digest, so it is held to that rule and told so in those terms.
+CONTAINER_SCHEME = "docker://"
+PINNED_CONTAINER = re.compile(r"^docker://[^@\s]+@sha256:[0-9a-f]{64}$")
+
+COMPOSITE_RUNTIME = "composite"
+CONTAINER_RUNTIME = "docker"
+# GitHub retires JavaScript runtimes on its own schedule. Naming the ones this
+# repository is willing to publish means a runtime that ages out is reported
+# rather than waved through as "something node-shaped".
+NODE_RUNTIMES = ("node20", "node24")
+KNOWN_RUNTIMES = (COMPOSITE_RUNTIME, CONTAINER_RUNTIME, *NODE_RUNTIMES)
+
 ROOT = Path(__file__).resolve().parents[2]
+
+# GitHub accepts either spelling, and resolves an Action from `.github/actions/`
+# exactly as it does from anywhere else in the tree. A gate that reads one
+# spelling in one directory reports clean over files it never opened.
+ACTION_FILENAMES = ("action.yml", "action.yaml")
+SEARCH_ROOTS = ("actions", ".github/actions")
+
+# Build output and vendored dependencies carry action documents this repository
+# does not publish and cannot fix.
+EXCLUDED_DIRECTORIES = frozenset({"target", "node_modules"})
 
 
 class LineLoader(yaml.SafeLoader):
@@ -55,14 +82,28 @@ class LineLoader(yaml.SafeLoader):
         return mapping
 
 
+def is_excluded(path: Path) -> bool:
+    return bool(EXCLUDED_DIRECTORIES.intersection(path.relative_to(ROOT).parts))
+
+
 def discover() -> list[Path]:
     """Return every action document in the repository, root action first."""
 
-    documents = []
-    root_action = ROOT / "action.yml"
-    if root_action.is_file():
-        documents.append(root_action)
-    documents.extend(sorted((ROOT / "actions").rglob("action.yml")))
+    documents = [
+        candidate
+        for filename in ACTION_FILENAMES
+        if (candidate := ROOT / filename).is_file()
+    ]
+
+    nested: set[Path] = set()
+    for relative in SEARCH_ROOTS:
+        base = ROOT / relative
+        if not base.is_dir():
+            continue
+        for filename in ACTION_FILENAMES:
+            nested.update(path for path in base.rglob(filename) if not is_excluded(path))
+
+    documents.extend(sorted(nested))
     return documents
 
 
@@ -111,17 +152,34 @@ def check_step(step: dict, position: int, location: str) -> list[str]:
 
     reference = step.get("uses")
     if reference is not None:
-        if not isinstance(reference, str):
-            findings.append(f"{where} has a uses: that is not a reference")
-        elif reference.startswith("./") or reference.startswith("../"):
-            pass
-        elif not PINNED_REFERENCE.match(reference):
-            findings.append(
-                f"{where} uses {reference}, which is not pinned to a complete "
-                "40-character commit identity"
-            )
+        findings.extend(check_reference(reference, where))
 
     return findings
+
+
+def check_reference(reference: object, where: str) -> list[str]:
+    if not isinstance(reference, str):
+        return [f"{where} has a uses: that is not a reference"]
+
+    if reference.startswith("./") or reference.startswith("../"):
+        return []
+
+    if reference.startswith(CONTAINER_SCHEME):
+        if PINNED_CONTAINER.match(reference):
+            return []
+        return [
+            f"{where} uses {reference}, which is not pinned to an image digest; "
+            f"reference the image as {CONTAINER_SCHEME}<image>@sha256:<64 "
+            "hexadecimal characters>"
+        ]
+
+    if not PINNED_REFERENCE.match(reference):
+        return [
+            f"{where} uses {reference}, which is not pinned to a complete "
+            "40-character commit identity"
+        ]
+
+    return []
 
 
 def check(path: Path) -> list[str]:
@@ -143,7 +201,21 @@ def check(path: Path) -> list[str]:
     if not using:
         return [f"{location}: does not declare runs.using"]
 
-    if using != "composite":
+    if not isinstance(using, str):
+        return [f"{location}: declares a runs.using that is not a runtime name"]
+
+    # GitHub resolves the runtime name case-insensitively. An unrecognised name
+    # is a finding rather than a skip: the alternative is a document whose steps
+    # are never read reporting a clean pass.
+    runtime = using.strip().lower()
+    if runtime not in KNOWN_RUNTIMES:
+        recognised = ", ".join(KNOWN_RUNTIMES)
+        return [
+            f"{location}: declares runs.using {using!r}, which this gate does "
+            f"not recognise; it recognises {recognised}"
+        ]
+
+    if runtime != COMPOSITE_RUNTIME:
         return []
 
     steps = runs.get("steps")
