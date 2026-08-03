@@ -240,16 +240,20 @@ fixture_repository() {
     "$repository/scripts/release" \
     "$repository/actions/published" \
     "$repository/.github/actions/internal" \
-    "$repository/target/generated" \
-    "$repository/node_modules/vendored"
+    "$repository/actions/published/target/generated" \
+    "$repository/actions/published/node_modules/vendored"
   cp "$root/scripts/release/lint-actions.py" "$repository/scripts/release/lint-actions.py"
 
+  # The excluded pair sits *inside* a search root. Placed at the fixture root
+  # they would be omitted by search scope rather than by EXCLUDED_DIRECTORIES,
+  # and the exclusion rule would have no assertion holding it: gutting
+  # is_excluded() to `return False` would leave the count at 3 either way.
   for document in \
     "$repository/action.yml" \
     "$repository/actions/published/action.yml" \
     "$repository/.github/actions/internal/action.yaml" \
-    "$repository/target/generated/action.yml" \
-    "$repository/node_modules/vendored/action.yml"; do
+    "$repository/actions/published/target/generated/action.yml" \
+    "$repository/actions/published/node_modules/vendored/action.yml"; do
     cp "$temporary/compliant.yml" "$document"
   done
 }
