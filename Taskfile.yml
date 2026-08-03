@@ -50,6 +50,10 @@ tasks:
       - actionlint .github/workflows/*.yml
       - shellcheck scripts/action/*.sh scripts/release/*.sh
       - ryl check .github/workflows/*.yml Taskfile.yml .intentional/config.yml
+      # Both lines are deliberate. The first attributes a regression to this
+      # repository's own action documents; the second attributes it to the
+      # gate's own semantics. Dropping either leaves one of those two failures
+      # indistinguishable from the other.
       - python3 scripts/release/lint-actions.py
       - scripts/release/test-action-lint.sh
       - python3 scripts/release/verify-versions.py
