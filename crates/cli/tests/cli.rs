@@ -897,15 +897,15 @@ fn tag_only_detectors_derive_identity_from_path_evidence_alone() {
             ),
             (
                 "terraform-module",
-                "modules/network/main.tf".to_owned(),
+                "modules/network".to_owned(),
                 Some("network".to_owned()),
-                2
+                3
             ),
             (
                 "terraform-module",
-                "modules/storage/outputs.tf".to_owned(),
+                "modules/storage".to_owned(),
                 Some("storage".to_owned()),
-                1
+                2
             ),
         ]
         .into_iter()
@@ -938,7 +938,7 @@ fn tag_only_detectors_derive_identity_from_path_evidence_alone() {
     let module = first
         .discovery_candidates
         .iter()
-        .find(|candidate| candidate.path == Path::new("modules/network/main.tf"))
+        .find(|candidate| candidate.path == Path::new("modules/network"))
         .expect("Terraform module candidate");
     assert_eq!(
         module
@@ -947,6 +947,7 @@ fn tag_only_detectors_derive_identity_from_path_evidence_alone() {
             .map(|item| item.path.to_string_lossy().into_owned())
             .collect::<Vec<_>>(),
         vec![
+            "modules/network".to_owned(),
             "modules/network/main.tf".to_owned(),
             "modules/network/variables.tf".to_owned()
         ]
@@ -963,6 +964,18 @@ fn terraform_plugin_go_modules_present_as_providers() {
     repo.write(
         "tools/go.mod",
         "module github.com/example/sample-tools\n\ngo 1.22\n\nrequire (\n\tgithub.com/hashicorp/terraform-plugin-sdk/v2 v2.33.0 // indirect\n)\n",
+    );
+    repo.write(
+        "replaced/go.mod",
+        "module github.com/example/plain-tool\n\ngo 1.22\n\nreplace (\n\tgithub.com/hashicorp/terraform-plugin-sdk/v2 => ./vendored/sdk\n)\n",
+    );
+    repo.write(
+        "excluded/go.mod",
+        "module github.com/example/other-tool\n\ngo 1.22\n\nexclude github.com/hashicorp/terraform-plugin-framework v1.8.0\n",
+    );
+    repo.write(
+        "single/go.mod",
+        "module github.com/example/terraform-provider-single\n\ngo 1.22\n\nrequire github.com/hashicorp/terraform-plugin-framework v1.8.0\n",
     );
     repo.commit("add Go module fixtures");
 
@@ -982,12 +995,23 @@ fn terraform_plugin_go_modules_present_as_providers() {
     );
     assert!(provider.raw_version.is_none());
 
-    let module = plan
+    let single = plan
         .discovery_candidates
         .iter()
-        .find(|candidate| candidate.path == Path::new("tools/go.mod"))
-        .expect("plain Go module candidate");
-    assert_eq!(module.detector, "go-module");
+        .find(|candidate| candidate.path == Path::new("single/go.mod"))
+        .expect("single-line require candidate");
+    assert_eq!(single.detector, "terraform-provider");
+
+    // Indirect requirements and non-require directives name a plugin module
+    // without depending on it.
+    for path in ["tools/go.mod", "replaced/go.mod", "excluded/go.mod"] {
+        let module = plan
+            .discovery_candidates
+            .iter()
+            .find(|candidate| candidate.path == Path::new(path))
+            .unwrap_or_else(|| panic!("plain Go module candidate for {path}"));
+        assert_eq!(module.detector, "go-module", "{path}");
+    }
 }
 
 #[test]
@@ -1062,11 +1086,7 @@ fn tag_only_candidates_support_every_resolution_flow() {
         "actions/verify/action.yaml".to_owned(),
         "sample-library"
     )));
-    assert!(managed.contains(&(
-        "terraform-module",
-        "modules/network/main.tf".to_owned(),
-        "network"
-    )));
+    assert!(managed.contains(&("terraform-module", "modules/network".to_owned(), "network")));
     let excluded = config
         .discovery
         .excluded_paths
@@ -1078,7 +1098,7 @@ fn tag_only_candidates_support_every_resolution_flow() {
         vec![
             "Dockerfile".to_owned(),
             "action.yml".to_owned(),
-            "modules/storage/outputs.tf".to_owned()
+            "modules/storage".to_owned()
         ]
     );
 
@@ -1100,20 +1120,212 @@ fn tag_only_candidates_support_every_resolution_flow() {
             .collect::<Vec<_>>(),
         vec!["Dockerfile".to_owned()]
     );
+}
 
+/// Report the unresolved candidate paths a rescan produces, or nothing when it is a no-op.
+fn rescan_candidate_paths(repo: &TestRepo) -> Vec<String> {
+    let result = initialize(&repo.root, false).expect("rescan");
+    result
+        .plan
+        .map(|plan| {
+            plan.discovery_candidates
+                .iter()
+                .map(|candidate| candidate.path.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn terraform_module_receipts_key_on_the_directory_not_its_contents() {
+    let repo = TestRepo::new();
+    repo.write(
+        "modules/network/main.tf",
+        "resource \"null_resource\" \"sample\" {}\n",
+    );
+    repo.write("modules/network/variables.tf", "variable \"sample\" {}\n");
+    repo.write(
+        "modules/storage/outputs.tf",
+        "output \"sample\" {\n  value = 1\n}\n",
+    );
+    repo.commit("add Terraform module fixtures");
+
+    repo.cli().arg("init").assert().code(2);
+    resolve_plan(&repo, |identity| {
+        if identity == "storage" {
+            CandidateResolution::Excluded
+        } else {
+            CandidateResolution::Independent {
+                release_unit: identity.to_owned(),
+            }
+        }
+    });
+    repo.cli().arg("init").assert().success();
+    assert!(rescan_candidate_paths(&repo).is_empty());
+
+    // A managed module that gains a source file stays managed.
     repo.write(
         "modules/network/outputs.tf",
         "output \"added\" {\n  value = 1\n}\n",
     );
-    let managed_after = initialize(&repo.root, false)
-        .expect("managed Terraform module rescan")
+    assert!(rescan_candidate_paths(&repo).is_empty());
+
+    // A managed module that loses main.tf stays the same single candidate.
+    fs::remove_file(repo.root.join("modules/network/main.tf")).expect("remove anchor");
+    assert!(rescan_candidate_paths(&repo).is_empty());
+    let config = intentional_core::Config::load(&repo.root).expect("config after anchor removal");
+    assert_eq!(
+        config
+            .discovery
+            .managed_paths
+            .iter()
+            .filter(|receipt| receipt.detector == "terraform-module")
+            .map(|receipt| receipt.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["modules/network".to_owned()]
+    );
+
+    // An excluded module reopens under its own path when any source changes,
+    // including a source that would previously have moved the anchor.
+    repo.write(
+        "modules/storage/main.tf",
+        "resource \"null_resource\" \"storage\" {}\n",
+    );
+    assert_eq!(
+        rescan_candidate_paths(&repo),
+        vec!["modules/storage".to_owned()]
+    );
+
+    repo.cli().arg("init").assert().code(2);
+    resolve_plan(&repo, |_| CandidateResolution::Excluded);
+    repo.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&repo.root).expect("config after re-exclusion");
+    assert_eq!(
+        config
+            .discovery
+            .excluded_paths
+            .iter()
+            .map(|receipt| receipt.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["modules/storage".to_owned()]
+    );
+
+    // Editing a non-anchor source of an excluded module also reopens it.
+    repo.write(
+        "modules/storage/outputs.tf",
+        "output \"sample\" {\n  value = 2\n}\n",
+    );
+    assert_eq!(
+        rescan_candidate_paths(&repo),
+        vec!["modules/storage".to_owned()]
+    );
+}
+
+#[test]
+fn a_root_terraform_module_is_one_workspace_root_candidate() {
+    let repo = TestRepo::new();
+    repo.write("main.tf", "resource \"null_resource\" \"root\" {}\n");
+    repo.write("variables.tf", "variable \"root\" {}\n");
+    repo.commit("add root Terraform module");
+
+    let plan = initialize(&repo.root, false)
+        .expect("root module plan")
         .plan
-        .expect("unresolved candidates")
+        .expect("unresolved candidates");
+    assert_eq!(plan.discovery_candidates.len(), 1);
+    let candidate = &plan.discovery_candidates[0];
+    assert_eq!(candidate.detector, "terraform-module");
+    assert_eq!(candidate.path, Path::new("."));
+    assert!(candidate.native_identity.is_none());
+    assert_eq!(
+        candidate
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        vec!["terraform-module-identity-not-path-derivable"]
+    );
+
+    let plan_path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan = plan;
+    plan.discovery_candidates[0].resolution = Some(CandidateResolution::Independent {
+        release_unit: "root-network".to_owned(),
+    });
+    fs::create_dir_all(plan_path.parent().expect("plan directory")).expect("plan directory");
+    fs::write(&plan_path, plan.to_yaml().expect("resolved root plan")).expect("write root plan");
+    repo.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&repo.root).expect("root module config");
+    assert_eq!(config.release_units["root-network"].path, Path::new("."));
+    assert_eq!(
+        config.discovery.managed_paths[0]
+            .path
+            .to_string_lossy()
+            .into_owned(),
+        "."
+    );
+}
+
+#[test]
+fn docker_and_identity_suggestions_reject_unusable_path_evidence() {
+    let repo = TestRepo::new();
+    repo.write(
+        "docs/Dockerfile.md",
+        "How to build the image.
+",
+    );
+    repo.write(
+        "docs/Dockerfile.example",
+        "FROM scratch
+",
+    );
+    repo.write(
+        "docs/Dockerfile.bak",
+        "FROM scratch
+",
+    );
+    repo.write(
+        ".config/Dockerfile",
+        "FROM scratch
+",
+    );
+    repo.write(
+        "-leading/Dockerfile",
+        "FROM scratch
+",
+    );
+    repo.write(
+        "images/Dockerfile.runtime",
+        "FROM scratch
+",
+    );
+    repo.commit("add Docker naming fixtures");
+
+    let plan = initialize(&repo.root, false)
+        .expect("Docker naming plan")
+        .plan
+        .expect("unresolved candidates");
+    let mut observed = plan
         .discovery_candidates
         .iter()
-        .map(|candidate| candidate.path.to_string_lossy().into_owned())
+        .map(|candidate| {
+            (
+                candidate.path.to_string_lossy().into_owned(),
+                candidate.native_identity.clone(),
+            )
+        })
         .collect::<Vec<_>>();
-    assert_eq!(managed_after, vec!["Dockerfile".to_owned()]);
+    observed.sort();
+    assert_eq!(
+        observed,
+        vec![
+            ("-leading/Dockerfile".to_owned(), None),
+            (".config/Dockerfile".to_owned(), None),
+            (
+                "images/Dockerfile.runtime".to_owned(),
+                Some("runtime".to_owned())
+            ),
+        ]
+    );
 }
 
 #[test]

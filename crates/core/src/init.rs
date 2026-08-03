@@ -43,7 +43,9 @@ const DEVCONTAINER_FEATURE_MANIFEST: &str = "devcontainer-feature.json";
 const DEVCONTAINER_TEMPLATE_MANIFEST: &str = "devcontainer-template.json";
 const GITHUB_ACTION_MANIFESTS: [&str; 2] = ["action.yml", "action.yaml"];
 const DOCKERFILE_MANIFEST: &str = "Dockerfile";
-const TERRAFORM_ANCHOR: &str = "main.tf";
+const NON_BUILD_DOCKERFILE_SUFFIXES: [&str; 12] = [
+    "bak", "example", "log", "md", "old", "orig", "rej", "sample", "swp", "template", "tmpl", "txt",
+];
 const TERRAFORM_PLUGIN_MODULES: [&str; 2] = [
     "github.com/hashicorp/terraform-plugin-framework",
     "github.com/hashicorp/terraform-plugin-sdk",
@@ -65,9 +67,9 @@ pub enum InitState {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SourceEvidence {
-    /// Workspace-relative source path.
+    /// Workspace-relative source path; a lone `.` names the workspace root directory.
     pub path: PathBuf,
-    /// SHA-256 of the complete file contents.
+    /// SHA-256 of the complete file contents, or of a directory's ordered member digests.
     pub digest: String,
     /// Relevant one-based source lines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1138,12 +1140,7 @@ fn apply_candidate_resolutions(
                 candidate_projection(candidate, candidate.path.parent().unwrap_or(Path::new("")))
             })
             .transpose()?;
-        let path = candidate
-            .path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let path = candidate_directory(candidate);
         let tag = candidate.tag.as_ref().ok_or_else(|| Error::Validation(format!(
             "discovery candidate {} cannot create an independent release unit without a tag suggestion",
             candidate.id
@@ -2105,13 +2102,14 @@ fn discover(root: &Path) -> Result<Discovery> {
         let Some(adapter) = adapter_for(&path) else {
             continue;
         };
-        if !is_project_manifest(&path, adapter)? {
+        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+        if !is_project_manifest(adapter, &text)? {
             continue;
         }
-        let (id, version) = manifest_identity(&path, adapter)?;
+        let (id, version) = manifest_identity(&path, adapter, &text)?;
         let relative_manifest = workspace_relative(root, &path)?;
         let manifest_evidence = evidence(root, &relative_manifest, Vec::new())?;
-        let detector = ecosystem_detector(&path, adapter)?.to_owned();
+        let detector = ecosystem_detector(adapter, &text).to_owned();
         let candidate = DiscoveryCandidate {
             id: DiscoveryCandidate::stable_id(&detector, &relative_manifest)?,
             detector,
@@ -2143,7 +2141,7 @@ fn discover(root: &Path) -> Result<Discovery> {
         observations.push(ManifestObservation {
             candidate_path: relative_manifest.clone(),
             native_identity: id,
-            private_package: adapter == Adapter::Npm && npm_manifest_is_private(&path)?,
+            private_package: adapter == Adapter::Npm && npm_manifest_is_private(&path, &text)?,
             projection: candidate
                 .projection
                 .clone()
@@ -2547,21 +2545,43 @@ fn tag_only_artifact_for(path: &Path) -> Option<TagOnlyArtifact> {
 }
 
 /// Extract the variant segment of a `Dockerfile.<variant>` or `<variant>.Dockerfile` name.
+///
+/// A `Dockerfile.<variant>` suffix reads as a file extension, so companion
+/// documents, backups, and templates are not build definitions. The
+/// `<variant>.Dockerfile` form names the target instead and takes no deny list.
 fn docker_image_variant(name: &str) -> Option<&str> {
-    name.strip_prefix("Dockerfile.")
-        .or_else(|| name.strip_suffix(".Dockerfile"))
+    if let Some(variant) = name.strip_prefix("Dockerfile.") {
+        return (!variant.is_empty()
+            && !NON_BUILD_DOCKERFILE_SUFFIXES.contains(&variant.to_ascii_lowercase().as_str()))
+        .then_some(variant);
+    }
+    name.strip_suffix(".Dockerfile")
         .filter(|variant| !variant.is_empty())
 }
 
 /// Suggest an identity derived from path evidence, when the path yields a usable id.
 fn path_derived_identity(relative: &Path, variant: Option<&str>) -> Option<String> {
-    let derived = variant.or_else(|| {
-        relative
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-    })?;
+    variant
+        .or_else(|| {
+            relative
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+        })
+        .and_then(usable_identity)
+}
+
+/// Accept a path segment as an id only when it can also become a Git tag.
+///
+/// Git refuses a ref component that begins with `.` or `-`, contains `..`, or
+/// ends with `.lock`, so a suggestion carrying any of those would fail at tag
+/// time rather than at resolution time.
+fn usable_identity(derived: &str) -> Option<String> {
     (!derived.is_empty()
+        && !derived.starts_with('.')
+        && !derived.starts_with('-')
+        && !derived.contains("..")
+        && !derived.ends_with(".lock")
         && derived
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character)))
@@ -2642,79 +2662,144 @@ fn path_derived_candidate(
 
 /// Emit one Terraform module candidate for a directory holding `.tf` files.
 ///
-/// The whole directory is the module, so every `.tf` file in it is evidence and
-/// `main.tf` anchors the candidate identity when it exists.
+/// The directory is the module, so the directory is the candidate path and its
+/// digest covers every `.tf` file it holds. Receipt identity therefore never
+/// depends on which files are present: adding, renaming, or deleting a `.tf`
+/// file changes the digest, never the receipt key.
 fn terraform_module_candidate(
     root: &Path,
     directory: &Path,
     sources: &BTreeSet<PathBuf>,
 ) -> Result<DiscoveryCandidate> {
-    let anchor = sources
-        .iter()
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name == TERRAFORM_ANCHOR)
-        })
-        .or_else(|| sources.iter().next())
-        .ok_or_else(|| {
-            Error::Validation(format!(
-                "Terraform module directory {} has no .tf sources",
-                directory.display()
-            ))
-        })?
-        .clone();
-    let evidence = sources
+    if sources.is_empty() {
+        return Err(Error::Validation(format!(
+            "Terraform module directory {} has no .tf sources",
+            directory.display()
+        )));
+    }
+    let members = sources
         .iter()
         .map(|path| evidence(root, path, Vec::new()))
         .collect::<Result<Vec<_>>>()?;
-    let anchor_evidence = evidence
-        .iter()
-        .find(|item| item.path == anchor)
-        .expect("anchor evidence")
-        .clone();
+    let path = if directory.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        directory.to_owned()
+    };
+    let directory_evidence = SourceEvidence {
+        path: path.clone(),
+        digest: directory_digest(&members),
+        lines: Vec::new(),
+    };
     let detector = TagOnlyArtifact::TerraformSource.detector();
-    let native_identity = path_derived_identity(&anchor, None);
+    let native_identity = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(usable_identity);
     let diagnostics = match native_identity {
         Some(_) => Vec::new(),
         None => vec![identity_not_path_derivable(
             detector,
-            directory,
-            &anchor_evidence,
+            &path,
+            &directory_evidence,
         )],
     };
-    tag_only_candidate(detector, anchor, evidence, native_identity, diagnostics)
+    let mut evidence = vec![directory_evidence];
+    evidence.extend(members);
+    tag_only_candidate(detector, path, evidence, native_identity, diagnostics)
+}
+
+/// Digest one directory over the ordered path and digest of every member file.
+fn directory_digest(members: &[SourceEvidence]) -> String {
+    let mut identity = Sha256::new();
+    for member in members {
+        identity.update(member.path.to_string_lossy().replace('\\', "/").as_bytes());
+        identity.update([0]);
+        identity.update(member.digest.as_bytes());
+        identity.update([0]);
+    }
+    format!("sha256:{:x}", identity.finalize())
+}
+
+/// Report whether a detector identifies a directory rather than a single file.
+fn directory_scoped_detector(detector: &str) -> bool {
+    detector == TagOnlyArtifact::TerraformSource.detector()
+}
+
+/// Resolve the workspace-relative directory a candidate contributes to its release unit.
+fn candidate_directory(candidate: &DiscoveryCandidate) -> PathBuf {
+    if directory_scoped_detector(&candidate.detector) {
+        return candidate.path.clone();
+    }
+    candidate
+        .path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Select the detector presentation for one ecosystem manifest.
 ///
 /// Go modules that require the Terraform Plugin Framework or SDK present as
 /// Terraform providers, which is the more specific identity for the same file.
-fn ecosystem_detector(path: &Path, adapter: Adapter) -> Result<&'static str> {
-    if adapter != Adapter::Go {
-        return Ok(detector_for(adapter));
+fn ecosystem_detector(adapter: Adapter, text: &str) -> &'static str {
+    if adapter == Adapter::Go && requires_terraform_plugin_module(text) {
+        return "terraform-provider";
     }
-    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    Ok(if requires_terraform_plugin_module(&text) {
-        "terraform-provider"
-    } else {
-        detector_for(adapter)
-    })
+    detector_for(adapter)
 }
 
 /// Report whether a `go.mod` directly requires a Terraform provider plugin module.
+///
+/// Only `require` directives count. `replace`, `exclude`, `retract`, and `tool`
+/// directives name a module without depending on it, and a `// indirect`
+/// requirement is transitive rather than direct.
 fn requires_terraform_plugin_module(text: &str) -> bool {
-    text.lines().any(|line| {
+    let mut block: Option<&str> = None;
+    for line in text.lines() {
         let line = line.trim();
-        if line.ends_with("// indirect") {
-            return false;
+        if line.is_empty() || line.starts_with("//") {
+            continue;
         }
-        let line = line.strip_prefix("require ").unwrap_or(line).trim_start();
-        TERRAFORM_PLUGIN_MODULES.iter().any(|module| {
-            line.strip_prefix(module).is_some_and(|rest| {
-                rest.is_empty() || rest.starts_with(' ') || rest.starts_with('/')
-            })
-        })
-    })
+        let requirement = match block {
+            Some(directive) => {
+                if line == ")" {
+                    block = None;
+                    continue;
+                }
+                if directive != "require" {
+                    continue;
+                }
+                line
+            }
+            None => {
+                let Some((directive, rest)) = line.split_once(char::is_whitespace) else {
+                    continue;
+                };
+                let rest = rest.trim();
+                if rest == "(" {
+                    block = Some(directive);
+                    continue;
+                }
+                if directive != "require" {
+                    continue;
+                }
+                rest
+            }
+        };
+        if requirement.ends_with("// indirect") {
+            continue;
+        }
+        if TERRAFORM_PLUGIN_MODULES.iter().any(|module| {
+            requirement
+                .strip_prefix(module)
+                .is_some_and(|tail| tail.starts_with(' ') || tail.starts_with('/'))
+        }) {
+            return true;
+        }
+    }
+    false
 }
 
 fn workspace_relative(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -2893,22 +2978,24 @@ fn adapter_for(path: &Path) -> Option<Adapter> {
     }
 }
 
-fn is_project_manifest(path: &Path, adapter: Adapter) -> Result<bool> {
+fn is_project_manifest(adapter: Adapter, text: &str) -> Result<bool> {
     if adapter != Adapter::Cargo {
         return Ok(true);
     }
-    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
     let document = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|error| Error::Validation(format!("invalid Cargo.toml: {error}")))?;
     Ok(document.get("package").is_some())
 }
 
-fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<String>)> {
-    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+fn manifest_identity(
+    path: &Path,
+    adapter: Adapter,
+    text: &str,
+) -> Result<(String, Option<String>)> {
     match adapter {
         Adapter::Npm => {
-            let value: JsonValue = serde_json::from_str(&text).map_err(|error| {
+            let value: JsonValue = serde_json::from_str(text).map_err(|error| {
                 Error::Validation(format!("invalid {}: {error}", path.display()))
             })?;
             Ok((
@@ -2936,7 +3023,7 @@ fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<St
             Ok((name.to_owned(), version))
         }
         Adapter::Pub => {
-            let value: serde_yaml::Value = serde_yaml::from_str(&text)?;
+            let value: serde_yaml::Value = serde_yaml::from_str(text)?;
             let name = value["name"]
                 .as_str()
                 .ok_or_else(|| Error::Validation(format!("{} has no name", path.display())))?;
@@ -2974,8 +3061,8 @@ fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<St
             Ok((name.to_owned(), None))
         }
         Adapter::Msbuild => {
-            let name = xml_element(&text, "PackageId")
-                .or_else(|| xml_element(&text, "AssemblyName"))
+            let name = xml_element(text, "PackageId")
+                .or_else(|| xml_element(text, "AssemblyName"))
                 .or_else(|| {
                     path.file_stem()
                         .and_then(|value| value.to_str())
@@ -2984,7 +3071,7 @@ fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<St
                 .ok_or_else(|| {
                     Error::Validation(format!("{} has no package identity", path.display()))
                 })?;
-            Ok((name, xml_element(&text, "Version")))
+            Ok((name, xml_element(text, "Version")))
         }
         Adapter::Json | Adapter::Toml | Adapter::Yaml => {
             unreachable!("generic adapters are not discovered")
@@ -2992,9 +3079,8 @@ fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<St
     }
 }
 
-fn npm_manifest_is_private(path: &Path) -> Result<bool> {
-    let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    let value: JsonValue = serde_json::from_str(&text)
+fn npm_manifest_is_private(path: &Path, text: &str) -> Result<bool> {
+    let value: JsonValue = serde_json::from_str(text)
         .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
     Ok(value["private"].as_bool() == Some(true))
 }

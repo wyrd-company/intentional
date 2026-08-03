@@ -1152,8 +1152,16 @@ fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate one exact workspace-relative discovery path.
+///
+/// A lone `.` names the workspace root directory, which directory-scoped
+/// detectors use as a candidate path. Every other path must render exactly as
+/// its own normal components so no receipt can carry a glob or a `./` prefix.
 pub(crate) fn validate_exact_discovery_path(path: &Path, description: &str) -> Result<()> {
     validate_relative_path(path, description)?;
+    if path == Path::new(".") {
+        return Ok(());
+    }
     let rendered = path.to_string_lossy();
     let normalized = path
         .components()

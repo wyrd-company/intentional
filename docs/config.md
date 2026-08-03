@@ -276,8 +276,8 @@ in their own files and take their version authority from a canonical Git tag:
 | Artifact | Detector | Evidence |
 | --- | --- | --- |
 | GitHub Action | `github-action` | `action.yml` or `action.yaml` |
-| Terraform module | `terraform-module` | a directory holding `.tf` files |
-| Terraform provider | `terraform-provider` | `go.mod` requiring a Terraform plugin module |
+| Terraform module | `terraform-module` | a directory holding `.tf` files, keyed on the directory |
+| Terraform provider | `terraform-provider` | `go.mod` with a direct `require` on a Terraform plugin module |
 | Docker/OCI image | `docker-image` | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile` |
 
 Each candidate contains source evidence, extracted identity and version when
