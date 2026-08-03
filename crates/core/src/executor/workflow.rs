@@ -1421,6 +1421,25 @@ steps:
       retention-days: 1
 "#;
 
+/// The authority transition, which also creates the draft the publication
+/// protocol depends on.
+///
+/// Creation belongs here rather than in a job of its own because this job
+/// already holds the installation token and is the last managed job that runs
+/// before the pushed tag can trigger publication. A separate creator would mint
+/// repository authority a second time to write a Release the transition could
+/// have written while its own token was still live.
+///
+/// Creation follows the atomic push in the same job for a reason a reader can
+/// otherwise talk themselves out of: a draft cannot be created for a tag the
+/// remote does not carry, and `--verify-tag` is what turns a reordering into a
+/// failure on the runner rather than a Release attached to nothing.
+///
+/// Creation is create-if-absent. `immutable-github-release` states that a
+/// failure before closure leaves a resumable draft, so a rerun of this job has
+/// to find that draft and continue. A Release that exists and is no longer a
+/// draft is the opposite case: the release already closed, and continuing would
+/// mean uploading assets onto an immutable Release, so the transition refuses.
 const RELEASE_AUTHORITY_JOB: &str = r#"
 needs:
 @NEEDS@
@@ -1471,6 +1490,19 @@ steps:
       git push --atomic origin \
         "${@ENVVAR@RELEASE_SHA}:refs/heads/${@ENVVAR@DEFAULT_BRANCH}" \
         "refs/tags/${@ENVVAR@GLOBAL_TAG}"
+  - name: Create the draft GitHub Release for the published tag
+    env:
+      GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      @ENVVAR@GLOBAL_TAG: ${{ steps.@JOB@handoff.outputs.global-tag }}
+    run: |
+      set -euo pipefail
+      if drafted="$(gh release view "${@ENVVAR@GLOBAL_TAG}" \
+        --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+        test "${drafted}" = "true"
+      else
+        gh release create "${@ENVVAR@GLOBAL_TAG}" --draft --verify-tag \
+          --title "${@ENVVAR@GLOBAL_TAG}" --notes ''
+      fi
 "#;
 
 const PUBLISH_VERIFY_JOB: &str = r#"
@@ -2809,17 +2841,21 @@ release-units:
         }
     }
 
-    /// The shell of the derived closure job, in the order a runner executes it.
-    fn closure_script(root: &Path) -> String {
-        let document: Value =
-            serde_yaml::from_str(&workflow(root, WorkflowRole::Publish)).expect("result parses");
-        document["jobs"]["intentional_close_release"]["steps"]
+    /// The shell of one derived managed job, in the order a runner executes it.
+    fn job_script(root: &Path, role: WorkflowRole, id: &str) -> String {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        document["jobs"][id]["steps"]
             .as_sequence()
-            .expect("the closure job carries steps")
+            .unwrap_or_else(|| panic!("the {id} job carries steps"))
             .iter()
             .filter_map(|step| step["run"].as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The shell of the derived closure job, in the order a runner executes it.
+    fn closure_script(root: &Path) -> String {
+        job_script(root, WorkflowRole::Publish, "intentional_close_release")
     }
 
     fn offset_within(script: &str, fragment: &str) -> usize {
@@ -2873,6 +2909,227 @@ release-units:
             offset_within(&script, "sha256sum --check") < undraft,
             "each uploaded asset is compared against its local digest before the \
              release is published: {script}"
+        );
+    }
+
+    /// The shell of the derived authority transition, in runner order.
+    fn authority_script(root: &Path) -> String {
+        job_script(root, WorkflowRole::Release, "intentional_release")
+    }
+
+    /// The derived draft-creation step, with its declared environment resolved
+    /// from the verified step outputs the job produced.
+    ///
+    /// Resolution is what binds the two halves: the step's `env:` block names
+    /// the variables and the `run:` body reads them, and a body reading a name
+    /// the block does not declare would run with an empty value on a runner.
+    /// Executing the body under exactly the declared environment is what makes
+    /// that disagreement fail here.
+    fn draft_creation(root: &Path, tag: &str) -> (String, BTreeMap<String, String>) {
+        let steps = managed_steps(root, WorkflowRole::Release)
+            .into_iter()
+            .find(|(id, _)| id == "intentional_release")
+            .expect("the authority transition is derived")
+            .1;
+        let step = steps
+            .iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("gh release create"))
+            })
+            .expect("the authority transition creates the draft Release");
+        let outputs = BTreeMap::from([
+            ("token", "stub-installation-token"),
+            ("global-tag", tag),
+            ("source-sha", "0000000000000000000000000000000000000000"),
+            ("release-sha", "1111111111111111111111111111111111111111"),
+        ]);
+        let environment = step["env"]
+            .as_mapping()
+            .expect("the creation step names its inputs")
+            .iter()
+            .map(|(key, value)| {
+                let key = key.as_str().expect("an environment name is a scalar").to_owned();
+                let value = value.as_str().expect("an environment value is a scalar");
+                let resolved = value
+                    .strip_prefix("${{ steps.")
+                    .and_then(|rest| rest.strip_suffix(" }}"))
+                    .and_then(|rest| rest.rsplit_once(".outputs."))
+                    .and_then(|(_, name)| outputs.get(name).copied())
+                    .unwrap_or_else(|| {
+                        panic!("the creation step reads {key} from a verified step output, not {value}")
+                    });
+                (key, resolved.to_owned())
+            })
+            .collect();
+        let script = step["run"]
+            .as_str()
+            .expect("the creation step runs a script")
+            .to_owned();
+        (script, environment)
+    }
+
+    /// Execute the derived draft-creation step against a stubbed `gh`.
+    ///
+    /// Returns whether the step succeeded and the command line of every `gh`
+    /// invocation it made, so a test can assert what the step did rather than
+    /// what its text contains.
+    fn run_draft_creation(root: &Path, gh: &str) -> (bool, String) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (script, environment) = draft_creation(root, "component@1.2.3");
+        let bin = root.join("draft-creation-stub");
+        std::fs::create_dir_all(&bin).expect("the stub directory is created");
+        let stub = bin.join("gh");
+        std::fs::write(&stub, gh).expect("the stub is written");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is executable");
+        let log = root.join("draft-creation-invocations");
+        let _ = std::fs::remove_file(&log);
+
+        let mut command = std::process::Command::new("bash");
+        command
+            .args(["-c", &script])
+            .env_clear()
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("GH_STUB_LOG", log.display().to_string());
+        for (key, value) in &environment {
+            command.env(key, value);
+        }
+        let output = command.output().expect("the creation step runs");
+        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
+        (output.status.success(), recorded)
+    }
+
+    /// A `gh` stub that records its arguments and answers `release view` with
+    /// `outcome`, which is either a shell fragment or a drafted state.
+    fn gh_stub(view: &str) -> String {
+        format!(
+            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{GH_STUB_LOG}}\"\n\
+             case \"$*\" in\n  *'release view'*)\n{view}\n    ;;\nesac\nexit 0\n"
+        )
+    }
+
+    // A draft cannot be created for a tag the remote does not yet carry, so the
+    // creation step is only correct downstream of the atomic push. Order is
+    // asserted by relative offset rather than by presence because a step that
+    // exists in the wrong place reads as harmless in review and fails on a
+    // release runner, after the branch has already moved.
+    #[test]
+    fn creates_the_draft_release_only_after_the_tag_is_pushed() {
+        let workspace = workspace("workflow-draft-creation-order");
+        converge(workspace.root(), WorkflowRole::Release);
+        let script = authority_script(workspace.root());
+
+        assert!(
+            offset_within(&script, "git push --atomic")
+                < offset_within(&script, "gh release create"),
+            "the global release tag is published before a draft is created for it: {script}"
+        );
+    }
+
+    // The draft names the tag the handoff verification proved, taken from the
+    // same verified step outputs the push consumes. `github.ref_name` and the
+    // configured template are both ambient values that agree with the verified
+    // identity right up until they do not, and a draft created for the wrong
+    // tag is a Release the closure job cannot find.
+    #[test]
+    fn binds_the_verified_release_tag_to_the_draft_creation_step() {
+        let workspace = workspace("workflow-draft-creation-identity");
+        converge(workspace.root(), WorkflowRole::Release);
+        let steps = managed_steps(workspace.root(), WorkflowRole::Release)
+            .into_iter()
+            .find(|(id, _)| id == "intentional_release")
+            .expect("the authority transition is derived")
+            .1;
+
+        let (verifier, action) = steps
+            .iter()
+            .find_map(|step| {
+                let (name, _) = intentional_action(step)?;
+                (name == "verify-handoff")
+                    .then(|| (step["id"].as_str().expect("the step is addressable"), name))
+            })
+            .expect("the authority transition verifies the handoff through the Action");
+        let creation = steps
+            .iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("gh release create"))
+            })
+            .expect("the authority transition creates the draft Release");
+
+        let consumed = creation["env"]
+            .as_mapping()
+            .expect("the creation step names its inputs")
+            .values()
+            .filter_map(Value::as_str)
+            .filter_map(|value| {
+                value
+                    .strip_prefix(&format!("${{{{ steps.{verifier}.outputs."))?
+                    .strip_suffix(" }}")
+                    .map(str::to_owned)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            consumed,
+            ["global-tag".to_owned()]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            "the creation step reads the released tag from the verifying step"
+        );
+        assert!(
+            action_outputs(&action).contains("global-tag"),
+            "{action} declares the verified tag identity the creation step reads"
+        );
+    }
+
+    // `immutable-github-release` states that a failure before closure leaves a
+    // resumable draft, so creation is create-if-absent and a rerun continues
+    // against the draft it already made. The step is executed rather than read:
+    // a conditional that looks right and creates a second Release anyway is the
+    // failure this proves cannot happen.
+    #[test]
+    fn resumes_an_existing_draft_rather_than_creating_a_second_release() {
+        let workspace = workspace("workflow-draft-creation-rerun");
+        converge(workspace.root(), WorkflowRole::Release);
+
+        let (created, invocations) = run_draft_creation(
+            workspace.root(),
+            &gh_stub("    printf 'release absent\\n' >&2\n    exit 1"),
+        );
+        assert!(created, "the first run creates the draft: {invocations}");
+        assert!(
+            invocations.contains("release create") && invocations.contains("--draft"),
+            "the first run creates the Release as a draft: {invocations}"
+        );
+
+        let (resumed, invocations) =
+            run_draft_creation(workspace.root(), &gh_stub("    printf 'true\\n'"));
+        assert!(resumed, "a rerun against an existing draft succeeds");
+        assert!(
+            !invocations.contains("release create"),
+            "a rerun against an existing draft creates nothing: {invocations}"
+        );
+    }
+
+    // The other existing-Release case is not resumable. A Release that is no
+    // longer a draft has already been closed and frozen, so continuing would
+    // carry the transition on toward publishers that upload onto an immutable
+    // Release. Refusing here is what keeps create-if-absent from meaning
+    // continue-regardless.
+    #[test]
+    fn refuses_to_continue_when_the_release_for_the_tag_is_already_published() {
+        let workspace = workspace("workflow-draft-creation-published");
+        converge(workspace.root(), WorkflowRole::Release);
+
+        let (continued, invocations) =
+            run_draft_creation(workspace.root(), &gh_stub("    printf 'false\\n'"));
+        assert!(
+            !continued,
+            "the transition refuses a Release that is no longer a draft: {invocations}"
         );
     }
 
