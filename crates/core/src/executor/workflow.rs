@@ -357,6 +357,14 @@ fn reconcile(
     mut document: Document,
     contract: &WorkflowContract,
 ) -> std::result::Result<String, Diagnostic> {
+    // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
+    // Expanding them first means adding a required trigger never discards the
+    // repository's own.
+    if let Some(current) = document.get(&["on"]).map_err(unparsable)? {
+        if let Some(expanded) = expanded_triggers(&current) {
+            document.set(&["on"], &expanded).map_err(unparsable)?;
+        }
+    }
     for (path, required) in &contract.triggers {
         let path = path.iter().map(String::as_str).collect::<Vec<_>>();
         let current = document.get(&path).map_err(unparsable)?;
@@ -410,6 +418,23 @@ fn unparsable(error: Error) -> Diagnostic {
         "workflow-unparsable",
         format!("the workflow could not be reconciled: {error}"),
     )
+}
+
+/// Expand shorthand trigger syntax into the equivalent mapping.
+fn expanded_triggers(current: &Value) -> Option<Value> {
+    let names = match current {
+        Value::String(name) => vec![name.clone()],
+        Value::Sequence(names) => names
+            .iter()
+            .map(|name| name.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()?,
+        _ => return None,
+    };
+    let mut mapping = serde_yaml::Mapping::new();
+    for name in names {
+        mapping.insert(Value::String(name), Value::Null);
+    }
+    Some(Value::Mapping(mapping))
 }
 
 /// The value a trigger entry needs, or `None` when the repository already satisfies it.
@@ -1211,6 +1236,26 @@ jobs:
             2,
             "the global release tag joins the repository's own: {tags:?}"
         );
+    }
+
+    #[test]
+    fn expands_shorthand_triggers_instead_of_discarding_them() {
+        let workspace = workspace("workflow-shorthand");
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non: [ push, issues ]\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Release);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Release))
+                .expect("result parses");
+        let triggers = document["on"].as_mapping().expect("trigger mapping");
+        for trigger in ["push", "issues", "workflow_dispatch"] {
+            assert!(
+                triggers.contains_key(Value::String(trigger.to_owned())),
+                "{trigger} survives shorthand expansion: {triggers:?}"
+            );
+        }
     }
 
     #[test]
