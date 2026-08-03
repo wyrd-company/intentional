@@ -2498,3 +2498,50 @@ fn evidence_assemble_requires_its_workflow_identity() {
             "GITHUB_REPOSITORY identifies the assembling workflow run",
         ));
 }
+
+#[test]
+fn evidence_contribute_rejects_a_malformed_run_attempt() {
+    let repo = TestRepo::new();
+    repo.write("value.yml", "outcome: clean\n");
+    repo.cli_with_env(&[("GITHUB_JOB", "scan"), ("GITHUB_RUN_ATTEMPT", "second")])
+        .args([
+            "evidence",
+            "contribute",
+            "--namespace",
+            "assessment",
+            "--value-file",
+            "value.yml",
+            "--output",
+            "contribution",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "GITHUB_RUN_ATTEMPT must be a whole number",
+        ));
+}
+
+#[test]
+fn evidence_assemble_rejects_a_malformed_run_identifier() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    let mut environment = assembly_environment();
+    environment.retain(|(key, _)| *key != "GITHUB_RUN_ID");
+    environment.push(("GITHUB_RUN_ID", "run-42"));
+    repo.cli_with_env(&environment)
+        .args([
+            "evidence",
+            "assemble",
+            "--input",
+            "artifacts",
+            "--output",
+            "release-evidence",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "GITHUB_RUN_ID must be a whole number",
+        ));
+}

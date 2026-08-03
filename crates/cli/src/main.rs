@@ -294,8 +294,8 @@ fn evidence_contribute(root: &std::path::Path, args: ContributeArgs) -> Result<(
         value_file: value_file.as_deref(),
         attachments: &attachments,
         output: &output,
-        job: &std::env::var("GITHUB_JOB").unwrap_or_else(|_| LOCAL_JOB.to_owned()),
-        run_attempt: numeric_environment("GITHUB_RUN_ATTEMPT", 1),
+        job: &optional_environment("GITHUB_JOB", LOCAL_JOB)?,
+        run_attempt: optional_numeric_environment("GITHUB_RUN_ATTEMPT", 1)?,
     })?;
     println!("bundle: {}", bundle.path.display());
     println!("manifest: {}", bundle.manifest_path.display());
@@ -318,10 +318,8 @@ fn evidence_assemble(root: &std::path::Path, args: AssembleArgs) -> Result<()> {
         workflow: WorkflowIdentity {
             repository: environment("GITHUB_REPOSITORY")?,
             workflow: environment("GITHUB_WORKFLOW")?,
-            run_id: environment("GITHUB_RUN_ID")?.parse().unwrap_or_default(),
-            run_attempt: environment("GITHUB_RUN_ATTEMPT")?
-                .parse()
-                .unwrap_or_default(),
+            run_id: numeric_environment("GITHUB_RUN_ID")?,
+            run_attempt: numeric_environment("GITHUB_RUN_ATTEMPT")?,
             commit: environment("GITHUB_SHA")?,
         },
     })?;
@@ -346,11 +344,39 @@ fn environment(name: &str) -> Result<String> {
     })
 }
 
-fn numeric_environment(name: &str, fallback: u32) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(fallback)
+/// Read a workflow variable that is absent only outside GitHub Actions.
+///
+/// A value that is present but unreadable is an error rather than a fallback,
+/// because silently substituting the local default would misattribute the
+/// contribution it identifies.
+fn optional_environment(name: &str, fallback: &str) -> Result<String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(value),
+        Err(std::env::VarError::NotPresent) => Ok(fallback.to_owned()),
+        Err(error) => bail!("{name} is set to a value this platform cannot read: {error}"),
+    }
+}
+
+/// Read a required numeric workflow variable, rejecting a present but unusable value.
+fn numeric_environment<T: std::str::FromStr>(name: &str) -> Result<T> {
+    let value = environment(name)?;
+    value
+        .parse()
+        .map_err(|_| anyhow::anyhow!("{name} must be a whole number; got {value:?}"))
+}
+
+/// Read an optional numeric workflow variable, rejecting a present but unusable value.
+///
+/// A malformed run attempt would otherwise claim attempt one, so a re-run would
+/// either collide with the first attempt's artifact name or fail to supersede it.
+fn optional_numeric_environment<T: std::str::FromStr>(name: &str, fallback: T) -> Result<T> {
+    match std::env::var(name) {
+        Err(std::env::VarError::NotPresent) => Ok(fallback),
+        Err(error) => bail!("{name} is set to a value this platform cannot read: {error}"),
+        Ok(value) => value
+            .parse()
+            .map_err(|_| anyhow::anyhow!("{name} must be a whole number; got {value:?}")),
+    }
 }
 
 fn check(root: &std::path::Path) -> Result<()> {
