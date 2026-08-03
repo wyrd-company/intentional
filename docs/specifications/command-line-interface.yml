@@ -514,6 +514,10 @@ commands:
             naming consequences of the proposed transformation, such as
             workflow-level permission scopes the safe default withdraws.
           - >-
+            The comparison reads a workflow of at most 2000 lines, for the
+            configured path and a --workflow override alike, and refuses a
+            larger one with a blocked workflow-too-large diagnostic.
+          - >-
             Without --apply the command is read-only. With --apply it changes
             only the selected workflow file.
       - name: check

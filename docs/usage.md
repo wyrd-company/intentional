@@ -272,6 +272,11 @@ Apply re-reads the workflow and refuses the transformation if the file changed
 after the patch was computed, so a stale patch never overwrites newer content.
 Use `--workflow PATH` to compare a candidate file instead of the configured one.
 
+The comparison reads workflows of at most 2000 lines, for configured and
+`--workflow` inputs alike, and refuses anything larger with a
+`workflow-too-large` diagnostic. A GitHub workflow is far smaller than that; a
+file that meets the bound is almost certainly not a workflow.
+
 A comparison can also report advisories you should read before applying it. The
 safe top-level permission default withdraws workflow-level scopes such as
 `id-token: write`; the comparison names each one it drops so a repository-owned
