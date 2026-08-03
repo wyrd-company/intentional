@@ -343,12 +343,21 @@ proposed-design:
 
     A subject's identity is the name its destinations resolve. Where the
     packager's native manifest carries that name the derivation reads it; where
-    the format has none the release-unit id stands in until the recipe that owns
-    the destination supplies the destination-native identity. That stand-in is
+    the format has none the release-unit id stands in. That stand-in is
     deliberately fail-closed rather than silent: a publisher fragment recording
     the destination-native identity disagrees with the sealed subject, and
     assembly reports it, so a format in that state cannot complete a publication
-    run until its recipe lands.
+    run until the identity is derived.
+
+    Deriving it is a change to the derivation, not a value configuration
+    supplies. The packager set is the maintained recipe catalog, so an
+    underived identity is a packager the derivation has not learned to read; an
+    identity a workspace could assert would let a release name a subject its
+    destination does not resolve, which is the disagreement the sealed subject
+    exists to catch. A recipe reaching its destination therefore refines the
+    derivation. It never resolves the disagreement from the other side by
+    recording the release-unit id in its fragment: that agrees with the seal by
+    making both sides wrong and retires the cross-check for that subject.
 
     A phase the configuration declares derives a managed tag job that runs
     `intentional tag --phase`. The before-publication job depends on every build
