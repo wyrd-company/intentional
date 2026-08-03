@@ -245,13 +245,18 @@ proposed-design:
     R is a pure function of S. Preparation requires a workspace that still
     matches S, derives R's tree from S's tree and the applied release without
     writing into the workspace, and records a fixed protocol Git identity with
-    S's commit time as both the author and committer timestamp. The global
-    release tag is the single release tag the sealed plan carries without a
-    required publication phase; every other configured tag is created later by
-    the publication workflow. The bundle is thin: it declares S as its
-    prerequisite, carries only the objects R and its tag introduce, and is
-    bounded so an untrusted handoff cannot become an unbounded object-ingestion
-    surface.
+    S's committer time as both the author and committer timestamp of R.
+    Preparation records the annotated global tag under a reserved ref rather
+    than under its rendered release tag name: tags carry version authority, so
+    writing that name before the release is accepted would change the plan a
+    repeated preparation seals. The global release tag is the single configured
+    tag that declares no required publication phase; every other configured tag
+    is created later by the publication workflow. Executor conformance reports a
+    configuration with no such tag, or with more than one, so the constraint
+    surfaces where it can be fixed rather than inside a privileged pipeline.
+    The bundle is thin: it declares S as its prerequisite, carries the objects R
+    and its tag introduce, and is bounded so an untrusted handoff cannot become
+    an unbounded object-ingestion surface.
 
     Repository-owned release gates consume the handoff and decide whether S is
     accepted after preparation but before any authority transition. The
@@ -261,18 +266,27 @@ proposed-design:
     proves the imported commit and tag objects reproduce every candidate
     identity and invariant, and only then exposes their pushable identities.
     Verification proves the transported file set is exactly the inventoried set,
-    validates the bundle and its declared heads before import, imports objects
-    with Git object checking enabled, and rebuilds the candidate from S alone in
-    a separate isolated clone so a forged manifest cannot describe its own
-    verification. It imports the verified release commit and annotated tag into
-    the privileged clone, accepting an identical existing record so a retry
-    recovers rather than conflicts. It
+    validates the bundle and its declared heads before importing it into a
+    throwaway clone with Git object checking enabled, and rebuilds the candidate
+    from S alone in a separate isolated clone so a forged manifest cannot
+    describe its own verification. Only after both clones agree does it copy the
+    proven release commit and annotated tag from the throwaway clone into the
+    privileged clone, so the privileged repository receives objects reachable
+    from refs that were already verified rather than the untrusted pack, and the
+    handoff is never read a second time. It re-reads both imported refs
+    afterwards and accepts an identical existing record so a retry recovers
+    rather than conflicts. It
     mints a short-lived GitHub App installation token and uses only the verified
     handoff Action's `source-sha`, `release-sha`, `global-tag`, and `plan-digest`
     outputs for the authority transition. It checks immediately before mutation
     that the remote default branch still equals the verified source SHA and uses
     `git push --atomic` to update the default branch to the verified release SHA
-    and publish the verified global tag. A branch race, tag mismatch,
+    and publish the verified global tag. Because verification rebuilds the
+    candidate from S, and release-unit versions are derived from annotated tags,
+    the privileged job's checkout must carry complete history and every tag. A
+    shallow or tagless checkout makes verification fail rather than succeed
+    incorrectly, so reducing that checkout is a breaking change to this protocol
+    rather than an optimization. A branch race, tag mismatch,
     non-deterministic candidate, or failed gate prevents the mutation. Manual
     and recovery invocations execute this same protocol.
 

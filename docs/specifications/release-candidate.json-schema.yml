@@ -101,6 +101,7 @@ properties:
   files:
     type: array
     minItems: 1
+    maxItems: 4096
     items:
       $ref: "#/$defs/file"
 $defs:
@@ -126,3 +127,4 @@ $defs:
       size:
         type: integer
         minimum: 0
+        maximum: 67108864

@@ -20,18 +20,29 @@ description: >-
   `release-plan.json`, the thin `release.bundle`, and the materialized release
   content of every added or modified path under `candidate/`. The manifest
   inventories every one of those files except itself, so the directory contains
-  nothing the manifest does not account for. The bundle declares exactly
+  nothing the manifest does not account for. The schema bounds the inventory at
+  4096 files of at most 64 MiB each; the bundle carries only the objects one
+  release introduces and is bounded separately at 8 MiB, by both its inventoried
+  and its observed size. The bundle declares exactly
   `refs/heads/intentional-release` for R and
   `refs/tags/intentional-global-release` for the annotated tag object; those
-  transport names are fixed and independent of the rendered tag name.
+  transport names are fixed, are independent of the rendered tag name, and are
+  produced without writing either name into the preparing workspace.
 
   R is a pure function of S. Preparation builds R's tree from S's tree and the
   applied release without touching the workspace, records the fixed protocol
   identity `Intentional <releases@intentional.foo>` as both author and
-  committer, and takes both timestamps from S's commit time at zero offset. The
-  global release tag is the single release tag the plan seals without a required
-  publication phase; a plan with no such tag, or with more than one, is a
-  configuration error rather than a release candidate.
+  committer, and uses S's committer time, at zero offset, as both the author and
+  the committer timestamp of R. Committer time is the time S entered the default
+  branch, which author time need not be, so a reimplementation of this protocol
+  must read the committer time to reproduce R. Preparation records the annotated
+  tag object under the reserved ref `refs/intentional/release/global-tag` rather
+  than under its rendered release tag name, because tags carry version authority
+  and the release is not yet accepted; the privileged job creates the release tag
+  after verification. The global release tag is the single release tag the plan
+  seals without a required publication phase; a plan with no such tag, or with
+  more than one, is a configuration error rather than a release candidate, and
+  executor conformance reports it against the configuration.
 
   The credential-free preparation Action projects `source-sha` from
   `source.commit`, `release-sha` from `release.commit`, `global-tag` from

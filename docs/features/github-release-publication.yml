@@ -47,6 +47,7 @@ world-schema:
   schema_file_authoritative: boolean
   github_output_exposed: boolean
   candidate_path: string
+  candidate_reproduces: boolean
   git_bundle_verified: boolean
   git_objects_materialized: boolean
   evidence_retry_stable: boolean
@@ -154,6 +155,21 @@ rules:
             world:
               tag_created: false
               diagnostic: Release candidate disagrees with sealed plan
+      reject-a-self-consistent-candidate-that-does-not-reproduce:
+        addresses: Release handoff verification
+        steps:
+          - given: A candidate whose manifest, inventory, changed tree, and Git bundle all agree
+            world:
+              git_bundle_verified: true
+              git_objects_materialized: true
+          - and: Its release tree carries content the accepted source commit does not produce
+            world:
+              candidate_reproduces: false
+          - when: The release handoff is verified
+          - then: The release mutation is refused
+            world:
+              tag_created: false
+              diagnostic: Release candidate does not reproduce from accepted source commit S
       verify-tag-trigger-before-publication:
         addresses: Portable release-tag verification
         steps:

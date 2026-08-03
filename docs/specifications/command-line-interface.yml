@@ -557,6 +557,9 @@ commands:
                 verified source commit, release commit, global tag, plan,
                 changed-tree evidence, materialized candidate, and a verified
                 Git bundle carrying the release commit and annotated tag objects.
+                It prints one `candidate-path`, `source-sha`, `release-sha`,
+                `global-tag`, and `plan-digest` identity line, each projected
+                from that handoff.
               machine-readable: true
           exit-codes:
             - code: 0
@@ -580,7 +583,10 @@ commands:
           - >-
             The command requires a workspace that still matches the accepted
             source commit and constructs the release commit as Git objects
-            without writing release content into that workspace.
+            without writing release content into that workspace. It records the
+            annotated global tag under a reserved ref rather than the rendered
+            release tag name, because tags carry version authority and the
+            release has not been accepted yet.
           - >-
             The output directory must be absent or empty. It receives the
             manifest, the sealed plan, the Git bundle, and the materialized
@@ -761,9 +767,13 @@ commands:
                 max: 1
         output:
           modes:
-            - name: human-readable
-              description: Prints successful handoff verification.
-              machine-readable: false
+            - name: verified-identities
+              description: >-
+                Prints one `source-sha`, `release-sha`, `global-tag`, and
+                `plan-digest` identity line, each projected from the verified
+                handoff. The identity lines are the machine-readable surface the
+                verify-handoff Action reads.
+              machine-readable: true
           exit-codes:
             - code: 0
               meaning: The handoff and deterministic candidate agree.
