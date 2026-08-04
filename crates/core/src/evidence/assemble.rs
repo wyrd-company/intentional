@@ -2832,6 +2832,9 @@ subjects: []
         .expect("fragment");
         let output = workspace.scratch().join("release-evidence");
         std::fs::write(workspace.root.join("assembly.log"), "noise\n").expect("scratch file");
+        // Directly inside the release unit, which is where a comparison scoped
+        // to the unit rather than to the reads would find it.
+        std::fs::write(workspace.root.join("component/build.log"), "noise\n").expect("build log");
         std::fs::create_dir_all(workspace.root.join("component/node_modules/left-pad"))
             .expect("installed dependency");
         std::fs::write(
