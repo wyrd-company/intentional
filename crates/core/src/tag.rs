@@ -1402,12 +1402,14 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release: { template: 'release/{version}' }
 release-units:
   component:
     path: component
     npm: {}
     tags:
-      primary: { role: primary, template: 'release/{version}' }
+      primary: { role: primary, template: '{id}@{version}' }
       staged:
         role: projection
         template: '{id}/staged@{version}'
@@ -1509,7 +1511,10 @@ phase-tags: []
 
     fn plan_phase_tags(root: &Path, phase: TagPhase, input: &Path) -> Result<TagResult> {
         let config = Config::load(root)?;
-        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
+            ("component".to_owned(), "1.0.0".to_owned()),
+        ]);
         TagResult::from_versions(
             root,
             &config,
@@ -1699,6 +1704,7 @@ phase-tags: []
         let input = stage_built_subject(&workspace, "sample-library");
         let config = Config::load(workspace.root()).expect("configuration");
         let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
             ("component".to_owned(), "1.0.0".to_owned()),
             ("library".to_owned(), "1.0.0".to_owned()),
         ]);
@@ -1783,6 +1789,7 @@ phase-tags: []
             stage_publisher_evidence(&workspace, "6666666666666666666666666666666666666666");
         let config = Config::load(workspace.root()).expect("configuration");
         let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
             ("component".to_owned(), "1.0.0".to_owned()),
             ("library".to_owned(), "1.0.0".to_owned()),
         ]);
@@ -1820,13 +1827,16 @@ phase-tags: []
         workspace.write(
             ".intentional/config.yml",
             &PHASE_CONFIG.replace(
-                "      primary: { role: primary, template: 'release/{version}' }\n",
-                "      primary: { role: primary, template: 'release/{version}', require-phase: before-publication }\n",
+                "  release: { template: 'release/{version}' }\n",
+                "  release: { template: 'release/{version}', require-phase: before-publication }\n",
             ),
         );
         let input = stage_built_subject(&workspace, "sample-library");
         let config = Config::load(workspace.root()).expect("configuration");
-        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
+            ("component".to_owned(), "1.0.0".to_owned()),
+        ]);
         let error = TagResult::from_versions(
             workspace.root(),
             &config,
@@ -1850,7 +1860,10 @@ phase-tags: []
         let workspace = phase_workspace("tag-phase-pairing");
         let input = stage_built_subject(&workspace, "sample-library");
         let config = Config::load(workspace.root()).expect("configuration");
-        let versions = BTreeMap::from([("component".to_owned(), "1.0.0".to_owned())]);
+        let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
+            ("component".to_owned(), "1.0.0".to_owned()),
+        ]);
         // Every claim a phase seals is staged rather than derivable, so a
         // phase that reaches sealing without its directory could only record
         // what its own invocation asserted.

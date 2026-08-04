@@ -1209,13 +1209,18 @@ workspace-tags:
   published:
     template: 'published/{version}'
     require-phase: after-publication
+  release:
+    template: 'component@{version}'
 release-units:
   component:
     path: component
     homebrew:
       repository: example-owner/homebrew-example
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary:
+        role: primary
+        template: 'sealed/{id}/{version}'
+        require-phase: after-publication
 "#;
 
     /// A workspace whose after-publication tag template carries a glob character.
@@ -1229,13 +1234,18 @@ workspace-tags:
   published:
     template: 'published/*{version}'
     require-phase: after-publication
+  release:
+    template: 'component@{version}'
 release-units:
   component:
     path: component
     homebrew:
       repository: example-owner/homebrew-component
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary:
+        role: primary
+        template: 'sealed/{id}/{version}'
+        require-phase: after-publication
 "#;
 
     /// A workspace whose two release units each seal their own intent.
@@ -1402,9 +1412,13 @@ release-units:
     }
 
     impl Released {
-        /// Create the after-publication phase tag sealing one evidence document.
+        /// Create the after-publication phase tags sealing one evidence document.
+        ///
+        /// The workspace tag and the release unit's own tag both declare the
+        /// after-publication phase, so a released checkout carries both.
         fn seal(&self, phase: &PhaseTagEvidence) {
             self.seal_as("published/1.0.0", phase);
+            self.seal_as("sealed/component/1.0.0", phase);
         }
 
         /// Create one named annotated phase tag carrying sealed phase evidence.

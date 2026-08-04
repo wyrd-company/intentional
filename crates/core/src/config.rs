@@ -624,31 +624,47 @@ impl Config {
             })
     }
 
-    /// Configured tags that declare no executor phase, in stable order.
+    /// Workspace tags that declare no executor phase, in stable order.
     ///
     /// The release workflow publishes exactly one annotated global release tag
     /// with the release commit, and every other configured tag declares the
     /// phase that creates it. The unphased tag is therefore the global release
     /// tag: executor conformance requires exactly one, and the publish workflow
     /// is triggered by the name it renders.
+    ///
+    /// Only workspace tags are candidates. A release plan seals the workspace
+    /// tags together with the tags of the release units that release, so a
+    /// release-unit tag is present in some plans and absent from others. A
+    /// global release tag that appears or disappears with the composition of a
+    /// release cannot trigger publication, and the defect surfaces at
+    /// preparation rather than at configuration. Executor conformance reports an
+    /// unphased release-unit tag separately; see
+    /// [`Config::unphased_release_unit_tags`].
     pub fn unphased_tags(&self) -> Vec<UnphasedTag> {
         let mut unphased = Vec::new();
-        for (release_unit_id, release_unit) in &self.release_units {
-            for (tag_id, tag) in &release_unit.tags {
-                if tag.require_phase.is_none() {
-                    unphased.push(UnphasedTag {
-                        id: Self::release_unit_tag_id(release_unit_id, tag_id),
-                        template: tag.template.replace("{id}", release_unit_id),
-                    });
-                }
-            }
-        }
         for (tag_id, tag) in &self.workspace_tags {
             if tag.require_phase.is_none() {
                 unphased.push(UnphasedTag {
                     id: Self::workspace_tag_id(tag_id),
                     template: tag.template.clone(),
                 });
+            }
+        }
+        unphased
+    }
+
+    /// Canonical ids of release-unit tags that declare no executor phase.
+    ///
+    /// These cannot be the global release tag, because no release unit is in
+    /// every release. Reporting them is what stops a configuration from passing
+    /// conformance one release at a time and failing preparation on the next.
+    pub fn unphased_release_unit_tags(&self) -> Vec<String> {
+        let mut unphased = Vec::new();
+        for (release_unit_id, release_unit) in &self.release_units {
+            for (tag_id, tag) in &release_unit.tags {
+                if tag.require_phase.is_none() {
+                    unphased.push(Self::release_unit_tag_id(release_unit_id, tag_id));
+                }
             }
         }
         unphased

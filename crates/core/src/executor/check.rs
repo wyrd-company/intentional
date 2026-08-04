@@ -142,27 +142,47 @@ fn native_packager_findings(
 /// The release workflow publishes exactly one annotated global release tag with
 /// the release commit; every other configured tag is created later by the
 /// publication workflow and declares the phase it belongs to. A configuration
-/// with no unphased tag, or with more than one, only fails once the release
-/// workflow has already accepted a source commit, so it is reported here where
-/// it can still be fixed.
+/// that cannot supply exactly one only fails once the release workflow has
+/// already accepted a source commit, so it is reported here where it can still
+/// be fixed.
+///
+/// The rule is stated over workspace tags because a release plan seals the
+/// workspace tags plus the tags of the release units that release, and only the
+/// workspace tags are in every plan. A release-unit tag that omits
+/// `require-phase` satisfies a rule counted over the whole configuration one
+/// release at a time and then fails preparation as soon as a release carries
+/// two of them, or seals nothing when a release carries none of them.
+///
+/// The two conditions are reported separately because they are separately
+/// wrong: a workspace that has not settled on its global release tag is a
+/// different defect from a release unit claiming to carry one.
 fn global_tag_findings(config: &Config) -> Vec<String> {
-    let unphased = config
+    let mut findings = Vec::new();
+    let workspace = config
         .unphased_tags()
         .into_iter()
         .map(|tag| tag.id)
         .collect::<Vec<_>>();
-    match unphased.len() {
-        1 => Vec::new(),
-        0 => vec![
-            "the release workflow publishes one annotated global release tag, but no configured tag omits require-phase; leave exactly one tag unphased"
+    match workspace.len() {
+        1 => {}
+        0 => findings.push(
+            "the release workflow publishes one annotated global release tag, but no workspace tag omits require-phase; leave exactly one workspace tag unphased"
                 .to_owned(),
-        ],
-        _ => vec![format!(
-            "the release workflow publishes one annotated global release tag, but {} configured tags omit require-phase: {}; give all but one a require-phase declaration",
-            unphased.len(),
-            unphased.join(", ")
-        )],
+        ),
+        _ => findings.push(format!(
+            "the release workflow publishes one annotated global release tag, but {} workspace tags omit require-phase: {}; give all but one a require-phase declaration",
+            workspace.len(),
+            workspace.join(", ")
+        )),
     }
+    let release_unit = config.unphased_release_unit_tags();
+    if !release_unit.is_empty() {
+        findings.push(format!(
+            "the global release tag is sealed by every release plan, so it is a workspace tag; these release-unit tags omit require-phase and are sealed only when their own release unit releases: {}; give each a require-phase declaration",
+            release_unit.join(", ")
+        ));
+    }
+    findings
 }
 
 /// Locally observable workflow conformance, using the same engine as diff and apply.
@@ -236,11 +256,13 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release: { template: '{version}' }
 release-units:
   component:
     path: component
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
 "#;
 
     const RELEASE_WORKFLOW: &str = "name: release\non: { workflow_dispatch: {} }\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";
@@ -539,33 +561,85 @@ aur:
     }
 
     #[test]
-    fn accepts_exactly_one_unphased_global_release_tag() {
+    fn accepts_exactly_one_unphased_workspace_tag() {
         let config = Config::from_yaml(CONFIG).expect("configuration");
         assert!(global_tag_findings(&config).is_empty());
     }
 
     #[test]
-    fn reports_a_configuration_with_no_unphased_global_release_tag() {
+    fn reports_a_configuration_with_no_unphased_workspace_tag() {
         let config = Config::from_yaml(&CONFIG.replace(
-            "primary: { role: primary, template: '{id}@{version}' }",
-            "primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }",
+            "  release: { template: '{version}' }",
+            "  release: { template: '{version}', require-phase: after-publication }",
         ))
         .expect("configuration");
         let findings = global_tag_findings(&config);
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0].contains("no configured tag omits require-phase"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("no workspace tag omits require-phase"));
     }
 
     #[test]
-    fn reports_competing_unphased_global_release_tags_by_name() {
+    fn reports_competing_unphased_workspace_tags_by_name() {
         let config = Config::from_yaml(&CONFIG.replace(
-            "      primary: { role: primary, template: '{id}@{version}' }\n",
-            "      primary: { role: primary, template: '{id}@{version}' }\n      mirror: { role: projection, template: 'v{id}-{version}' }\n",
+            "  release: { template: '{version}' }\n",
+            "  release: { template: '{version}' }\n  mirror: { template: 'mirror-{version}' }\n",
         ))
         .expect("configuration");
         let findings = global_tag_findings(&config);
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0].contains("release-unit/component/mirror"));
-        assert!(findings[0].contains("release-unit/component/primary"));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("workspace/mirror"), "{findings:?}");
+        assert!(findings[0].contains("workspace/release"), "{findings:?}");
+    }
+
+    /// A release-unit tag is only in the plans its own release unit joins.
+    ///
+    /// Two release units each carrying an unphased primary tag satisfies a rule
+    /// stated over "the configured tags" one release at a time, and then fails
+    /// preparation the moment a release carries both. The rule has to be stated
+    /// over the tags every plan contains, which is the workspace tags.
+    #[test]
+    fn reports_release_units_that_each_carry_an_unphased_tag() {
+        let config = Config::from_yaml(
+            &CONFIG
+                .replace(
+                    "      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }\n",
+                    "      primary: { role: primary, template: '{id}@{version}' }\n",
+                )
+                .replace(
+                    "release-units:\n",
+                    "release-units:\n  widget:\n    path: widget\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+                ),
+        )
+        .expect("configuration");
+        let findings = global_tag_findings(&config);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(
+            findings[0].contains("release-unit/component/primary"),
+            "{findings:?}"
+        );
+        assert!(
+            findings[0].contains("release-unit/widget/primary"),
+            "{findings:?}"
+        );
+    }
+
+    /// The two conjuncts fail apart, so neither stands in for the other.
+    #[test]
+    fn reports_an_unphased_release_unit_tag_beside_a_sound_workspace_tag() {
+        let config = Config::from_yaml(&CONFIG.replace(
+            "      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }\n",
+            "      primary: { role: primary, template: '{id}@{version}' }\n",
+        ))
+        .expect("configuration");
+        let findings = global_tag_findings(&config);
+        assert_eq!(
+            findings.len(),
+            1,
+            "the workspace tag is sound; only the release-unit tag is reported: {findings:?}"
+        );
+        assert!(
+            findings[0].contains("release-unit/component/primary"),
+            "{findings:?}"
+        );
     }
 }

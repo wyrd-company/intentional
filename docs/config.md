@@ -124,6 +124,20 @@ Common templates are:
   `sample-library@1.4.0`;
 - `{version}` for a single-release-unit repository or workspace release record.
 
+A repository using the GitHub executor declares exactly one workspace tag
+without `require-phase`. That tag is the global release tag: the release
+workflow publishes it with the release commit, and the publish workflow is
+triggered by the name it renders. Every other tag, workspace or release-unit,
+declares the phase that creates it.
+
+The rule is stated over workspace tags because a release plan seals the
+workspace tags together with the tags of the release units that release. A
+release-unit tag without `require-phase` is therefore present in some releases
+and absent from others, so it cannot be the tag that triggers publication.
+`intentional executor check` reports one, naming it, and a multi-release-unit
+repository adopting the executor moves its global release tag under
+`workspace-tags` rather than leaving it on a release unit.
+
 Set `require-phase` to `before-publication` or `after-publication` when the
 executor must declare the external phase before creating a tag. Set
 `tag-after` to tag ids that must already exist and agree with the planned

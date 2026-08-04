@@ -518,13 +518,19 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release:
+    template: 'release/{version}'
 release-units:
   component:
     path: component
     homebrew:
       repository: example-owner/homebrew-example
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary:
+        role: primary
+        template: '{id}@{version}'
+        require-phase: after-publication
 "#;
 
     /// A git workspace carrying one applied release and its published global tag.
@@ -579,10 +585,18 @@ release-units:
             git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
             // The release unit carries no projection, so its baseline version
             // has no file to be read from and must be stated.
-            let baseline = BTreeMap::from([(
-                "component".to_owned(),
-                semver::Version::parse("1.0.0").expect("baseline version"),
-            )]);
+            // The workspace tag carries its own version stream, so the global
+            // release tag's baseline is stated alongside the release unit's.
+            let baseline = BTreeMap::from([
+                (
+                    "component".to_owned(),
+                    semver::Version::parse("1.0.0").expect("baseline version"),
+                ),
+                (
+                    "workspace/release".to_owned(),
+                    semver::Version::parse("1.0.0").expect("baseline version"),
+                ),
+            ]);
             crate::tag::TagResult::build_baseline(&root, &baseline)
                 .expect("baseline tag set")
                 .apply(&root, false)

@@ -42,7 +42,15 @@ description: >-
   after verification. The global release tag is the single release tag the plan
   seals without a required publication phase; a plan with no such tag, or with
   more than one, is a configuration error rather than a release candidate, and
-  executor conformance reports it against the configuration.
+  executor conformance reports it against the configuration. Conformance states
+  that rule over workspace tags: a plan seals the workspace tags together with
+  the tags of the release units that release, so only a workspace tag is in
+  every plan. A release-unit tag that omits a required publication phase is in
+  the plans its own release unit joins and absent from the rest, which satisfies
+  a rule counted across the whole configuration one release at a time and then
+  seals two global tags, or none, on the next. Conformance therefore requires
+  exactly one unphased workspace tag and reports every unphased release-unit
+  tag.
 
   The credential-free preparation Action projects `source-sha` from
   `source.commit`, `release-sha` from `release.commit`, `global-tag` from

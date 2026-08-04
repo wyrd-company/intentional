@@ -452,9 +452,9 @@ pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n";
+    const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
 
-    const RECORD_TAG_ID: &str = "release-unit/widget/primary";
+    const RECORD_TAG_ID: &str = "workspace/release";
 
     /// A git workspace carrying one applied release and its published global tag.
     ///
@@ -507,7 +507,12 @@ pub(crate) mod tests {
             write(&root, ".intentional/intents/.keep", "");
             git(&root, &["add", "-A"]);
             git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
-            crate::tag::TagResult::build_baseline(&root, &BTreeMap::new())
+            // A workspace tag carries its own version stream, so the baseline
+            // states where that stream starts rather than deriving it from a
+            // release unit.
+            let baseline =
+                BTreeMap::from([(RECORD_TAG_ID.to_owned(), "1.0.0".parse().expect("version"))]);
+            crate::tag::TagResult::build_baseline(&root, &baseline)
                 .expect("baseline tag set")
                 .apply(&root, false)
                 .expect("record baseline tags");
@@ -829,35 +834,36 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn requires_exactly_one_configured_tag_without_a_phase() {
+    fn requires_exactly_one_workspace_tag_without_a_phase() {
         let workspace = ReleasedWorkspace::new();
         write(
             &workspace.root,
             ".intentional/config.yml",
             &CONFIG.replace(
-                "        template: '{version}'\n",
-                "        template: '{version}'\n        require-phase: after-publication\n",
+                "  release:\n    template: '{version}'\n",
+                "  release:\n    template: '{version}'\n    require-phase: after-publication\n",
             ),
         );
         let error = workspace
             .verify()
-            .expect_err("no unphased tag is configured");
+            .expect_err("no unphased workspace tag is configured");
         assert!(error.to_string().contains("configures none"), "{error}");
 
         write(
             &workspace.root,
             ".intentional/config.yml",
-            &format!(
-                "{CONFIG}      mirror:\n        role: projection\n        template: '{{version}}-mirror'\n"
+            &CONFIG.replace(
+                "  release:\n    template: '{version}'\n",
+                "  mirror:\n    template: '{version}-mirror'\n  release:\n    template: '{version}'\n",
             ),
         );
         let error = workspace
             .verify()
-            .expect_err("two unphased tags are configured");
+            .expect_err("two unphased workspace tags are configured");
         assert!(
             error
                 .to_string()
-                .contains("configures release-unit/widget/mirror, release-unit/widget/primary"),
+                .contains("configures workspace/mirror, workspace/release"),
             "{error}"
         );
     }

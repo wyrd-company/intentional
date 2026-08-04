@@ -1562,6 +1562,9 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release:
+    template: 'release/{version}'
 release-units:
   component:
     path: component
@@ -1572,7 +1575,10 @@ release-units:
         pointer: /version
         mode: committed
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary:
+        role: primary
+        template: '{id}@{version}'
+        require-phase: after-publication
 "#;
 
     /// Version the fixture's first release recorded for its release unit.
@@ -1616,7 +1622,13 @@ release-units:
             git(&root, &["config", "user.email", "fixture@example.invalid"]);
             git(&root, &["add", "-A"]);
             git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
-            crate::tag::TagResult::build_baseline(&root, &BTreeMap::new())
+            // The workspace tag carries its own version stream, so the global
+            // release tag's baseline is stated rather than projected.
+            let baseline = BTreeMap::from([(
+                "workspace/release".to_owned(),
+                semver::Version::parse(PREVIOUS_VERSION).expect("baseline version"),
+            )]);
+            crate::tag::TagResult::build_baseline(&root, &baseline)
                 .expect("baseline tag set")
                 .apply(&root, false)
                 .expect("record baseline tags");

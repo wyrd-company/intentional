@@ -1281,6 +1281,9 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release:
+    template: 'release/{version}'
 release-units:
   component:
     path: component
