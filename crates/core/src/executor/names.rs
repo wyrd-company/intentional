@@ -221,7 +221,10 @@ pub fn oci_subject(supplied: &SuppliedName<'_>) -> Result<String, String> {
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
             })
     };
-    if !name.is_empty() && name.len() <= MAX_OCI_SUBJECT && name.split('/').all(component) {
+    // No separate emptiness check: `"".split('/')` yields one empty component
+    // and `component` is false on its first conjunct, so the component rule
+    // already rejects the empty name for every caller.
+    if name.len() <= MAX_OCI_SUBJECT && name.split('/').all(component) {
         Ok(name.to_owned())
     } else {
         Err(refusal(

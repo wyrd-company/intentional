@@ -4568,6 +4568,25 @@ aur:
                     CleanClientMode::Public,
                     "the present document records the mode its recipe fixes"
                 );
+                // The retrieval client is routed separately from the packager
+                // because for an OCI destination the two are different
+                // programs. For a language registry they are the same program,
+                // and that used to be true by construction: one value was
+                // printed twice and could not disagree. Splitting them made it
+                // a caller argument, so the identity that was structural is
+                // asserted here instead of assumed.
+                let packager = observed
+                    .packager
+                    .as_ref()
+                    .expect("a present observation names its packager");
+                assert_eq!(
+                    packager.id, publisher,
+                    "the present document names the packager whose recipe wrote it"
+                );
+                assert_eq!(
+                    retrieval.client, publisher,
+                    "a language registry is retrieved by the packager itself, so the routed client cannot name a program that never ran"
+                );
                 let subject = observed
                     .subject
                     .expect("a present observation has a subject");
@@ -5015,6 +5034,21 @@ release-units:
     /// it to something machine-established; the conversion has to enumerate the
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
+    ///
+    /// **The roster covers three of the five packagers, not all of them.** The
+    /// sentinel configuration derives npm, Cargo and the two OCI packagers; it
+    /// derives no GoReleaser publication, so this gate reads no Homebrew or AUR
+    /// `run:` body and four categories of repository-supplied value have no row
+    /// here: the tap repository's owner and name, the Go module path, the
+    /// per-unit tag templates' literal affixes, and the configured gate job
+    /// ids. Splicing a tap destination into a promote body is caught today, but
+    /// by that recipe's own test rather than by this class gate.
+    ///
+    /// That limit is stated rather than closed because closing it means
+    /// deriving a fifth and sixth publication here, which is the same work 180
+    /// does when it establishes this list from the derivation instead of from a
+    /// fixture. A copy of this gate inherits the limit, not a claim of
+    /// completeness.
     ///
     /// Each row carries a token as well as a value, and the gate rejects both
     /// the folded value and any four-character window of the token, forwards or
@@ -7582,17 +7616,22 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
 
             /// Run it with an index annotating a version of its own.
             fn run_with_annotation(&self, version: &str, annotated: &str) -> Outcome {
-                self.execute(version, annotated, "", true)
+                self.execute(version, annotated, "", true, SUBJECT_DIGEST)
             }
 
             /// Run it where one client misbehaved in a named way.
             fn run_with_drift(&self, version: &str, drift: &str) -> Outcome {
-                self.execute(version, version, drift, true)
+                self.execute(version, version, drift, true, SUBJECT_DIGEST)
             }
 
             /// Run it where the packager attached no attestation at all.
             fn run_unattested(&self, version: &str) -> Outcome {
-                self.execute(version, version, "", false)
+                self.execute(version, version, "", false, SUBJECT_DIGEST)
+            }
+
+            /// Run it against a seal that recorded the given version and digest.
+            fn run_with_seal(&self, version: &str, digest: &str) -> Outcome {
+                self.execute(version, version, "", true, digest)
             }
 
             fn execute(
@@ -7601,6 +7640,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 annotated: &str,
                 drift: &str,
                 attested: bool,
+                digest: &str,
             ) -> Outcome {
                 let root = self.workspace.root();
                 let temp = root.join("runner-temp");
@@ -7617,7 +7657,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                     write_layout(&bytes, annotated, attested);
                 }
 
-                let step = publish_step(root, &self.job, &temp, version);
+                let step = publish_step(root, &self.job, &temp, version, digest);
                 let verified = step.verified.clone();
                 let mut command = std::process::Command::new("bash");
                 command
@@ -7684,7 +7724,13 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
         /// The environment is read from the step's own `env:` mapping, so a value
         /// the derivation stopped routing -- or started spelling differently -- is
         /// absent here rather than supplied by the test.
-        fn publish_step(root: &Path, job: &str, temp: &Path, version: &str) -> PublishStep {
+        fn publish_step(
+            root: &Path,
+            job: &str,
+            temp: &Path,
+            version: &str,
+            digest: &str,
+        ) -> PublishStep {
             let document: Value = serde_yaml::from_str(&workflow(root, WorkflowRole::Publish))
                 .expect("workflow parses");
             let steps = document["jobs"][job]["steps"]
@@ -7705,7 +7751,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 .map(|(name, value)| {
                     (
                         name.as_str().expect("env name").to_owned(),
-                        expression(value.as_str().expect("env value"), temp, version),
+                        expression(value.as_str().expect("env value"), temp, version, digest),
                     )
                 })
                 .collect();
@@ -7724,7 +7770,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 .map(|(name, value)| {
                     (
                         name.as_str().expect("input name").to_owned(),
-                        expression(value.as_str().expect("input value"), temp, version),
+                        expression(value.as_str().expect("input value"), temp, version, digest),
                     )
                 })
                 .collect();
@@ -7741,12 +7787,12 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
         /// are resolved as that job's outputs rather than supplied to the body
         /// directly: a recipe that stopped reading them from the seal reads
         /// nothing here.
-        fn expression(value: &str, temp: &Path, version: &str) -> String {
+        fn expression(value: &str, temp: &Path, version: &str, digest: &str) -> String {
             if value.contains(".outputs.version") {
                 return version.to_owned();
             }
             if value.contains(".outputs.digest") {
-                return SUBJECT_DIGEST.to_owned();
+                return digest.to_owned();
             }
             value
                 .replace("${{ runner.temp }}", &temp.display().to_string())
@@ -8336,6 +8382,7 @@ done
                 DOCKERHUB_JOB,
                 Path::new("/runner-temp"),
                 "1.2.3",
+                SUBJECT_DIGEST,
             );
             assert_eq!(
                 step.env
@@ -8357,6 +8404,7 @@ done
                 GHCR_JOB,
                 Path::new("/runner-temp"),
                 "1.2.3",
+                SUBJECT_DIGEST,
             );
             assert_eq!(
                 step.env
@@ -8490,6 +8538,27 @@ done
             );
         }
 
+        /// A seal that recorded no version or no digest publishes nothing.
+        ///
+        /// `set -u` catches a variable the derivation never routed. These catch
+        /// the state one step further in: a routed variable that arrived empty,
+        /// which is what a build job that produced no output leaves behind.
+        /// Both are separately falsifiable, so both are run.
+        #[test]
+        fn refuses_a_seal_that_carries_no_version_or_no_digest() {
+            for (label, version, digest) in [
+                ("oci-empty-version", "", SUBJECT_DIGEST),
+                ("oci-empty-digest", "1.2.3", ""),
+            ] {
+                let recipe = Recipe::new(label, DOCKERHUB_JOB);
+                let outcome = recipe.run_with_seal(version, digest);
+                assert!(
+                    !outcome.status.success(),
+                    "a seal carrying version {version:?} and digest {digest:?} publishes nothing"
+                );
+            }
+        }
+
         /// A subject the derivation cannot name never reaches a destination.
         #[test]
         fn refuses_to_derive_a_publication_whose_subject_it_cannot_name() {
@@ -8585,6 +8654,7 @@ done
                 DOCKERHUB_JOB,
                 Path::new("/runner-temp"),
                 "1.2.3",
+                SUBJECT_DIGEST,
             );
             assert_eq!(
                 step.env
@@ -8632,6 +8702,7 @@ done
                 DOCKERHUB_JOB,
                 Path::new("/runner-temp"),
                 "1.2.3",
+                SUBJECT_DIGEST,
             );
             assert_eq!(
                 step.env
@@ -8783,13 +8854,21 @@ done
             let comparison =
                 compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("runs");
             assert_eq!(comparison.status, ComparisonStatus::Blocked);
-            assert!(
-                comparison
-                    .diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic.code == "destination-not-overridable"),
-                "{:?}",
-                comparison.diagnostics
+            // The refusal is about a value an author typed, so it names the key
+            // they typed it into rather than the unit that contains it. Round 2
+            // required that placement; asserting only the code would leave the
+            // whole of `StepsRefusal::path` -- the field, its constructor, and
+            // the fallback that reads it -- changing nothing any test can see.
+            let refusal = comparison
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "destination-not-overridable")
+                .unwrap_or_else(|| panic!("{:?}", comparison.diagnostics));
+            let unit = configured_release_unit(workspace.root());
+            assert_eq!(
+                refusal.path.as_deref(),
+                Some(format!("release-units.{unit}.oci.ghcr.repository").as_str()),
+                "the diagnostic points at the line to edit"
             );
         }
 
