@@ -16,6 +16,7 @@
 
 use crate::config::{Config, UnphasedTag};
 use crate::error::{Error, Result};
+use crate::plan::ReleasePlan;
 use crate::release::build::build_candidate;
 use crate::release::git::{self, GitCommand};
 use semver::Version;
@@ -52,6 +53,12 @@ pub struct VerifiedReleaseTag {
     pub global_tag_object: String,
     /// Digest sealed inside the release plan the tag binds.
     pub plan_digest: String,
+    /// The release plan this verification rebuilt from the accepted source commit.
+    ///
+    /// The reproduction already seals it against the digest the published tag
+    /// binds, so a consumer reading it is reading a plan derived from S and
+    /// proved against the tag, not a document some other job transported.
+    pub plan: ReleasePlan,
     /// Version the reproduced plan assigns each release unit.
     ///
     /// The reproduction already rebuilds the plan from S, so the version this
@@ -92,13 +99,19 @@ pub fn verify_release_tag(root: &Path) -> Result<VerifiedReleaseTag> {
             ))
         })?
         .clone();
-    let versions = reproduce_release(root, &release, &tree, &source, &tag, &plan_digest)?;
+    let plan = reproduce_release(root, &release, &tree, &source, &tag, &plan_digest)?;
+    let versions = plan
+        .release_units
+        .iter()
+        .map(|unit| (unit.id.clone(), unit.new_version.clone()))
+        .collect();
     Ok(VerifiedReleaseTag {
         source,
         release,
         global_tag: tag.name,
         global_tag_object: tag.object,
         plan_digest,
+        plan,
         versions,
     })
 }
@@ -331,7 +344,7 @@ fn reproduce_release(
     source: &str,
     tag: &AnnotatedTag,
     plan_digest: &str,
-) -> Result<BTreeMap<String, String>> {
+) -> Result<ReleasePlan> {
     if tag.target != release {
         return Err(Error::Validation(format!(
             "the global release tag {} targets {}, not the checked-out release commit {release}",
@@ -373,12 +386,7 @@ fn reproduce_release(
             tag.name
         )));
     }
-    Ok(built
-        .plan
-        .release_units
-        .iter()
-        .map(|unit| (unit.id.clone(), unit.new_version.clone()))
-        .collect())
+    Ok(built.plan)
 }
 
 /// Create an isolated clone that already contains the accepted source commit.
@@ -725,6 +733,60 @@ pub(crate) mod tests {
             requested, projected,
             "the Action requests exactly the identities the command projects"
         );
+    }
+
+    /// Reproduction supplies every identity a prepared handoff would carry.
+    ///
+    /// This is the question that decides whether evidence assembly needs a
+    /// handoff input at all. A `release-candidate.yml` states S, R, the global
+    /// tag's name, object and target, the sealed plan digest, and transports the
+    /// plan itself. Verification derives all seven from the checkout it proves,
+    /// so the handoff would be restating what reproduction already establishes.
+    ///
+    /// The tag's target is not a seventh value: reproduction refuses a tag that
+    /// targets anything but the released commit, so the target *is* R.
+    #[test]
+    fn reproduces_every_identity_a_prepared_handoff_would_state() {
+        let workspace = ReleasedWorkspace::new();
+        let verified = workspace.verify().expect("verified release tag");
+
+        assert_eq!(verified.source, workspace.source, "S");
+        assert_eq!(verified.release, workspace.release, "R");
+        assert_eq!(verified.global_tag, workspace.tag_name, "the tag name");
+        assert_eq!(
+            verified.global_tag_object, workspace.tag_object,
+            "the tag object"
+        );
+        assert_eq!(
+            verified.plan_digest, workspace.plan_digest,
+            "the plan digest"
+        );
+
+        // The plan is the one the tag seals, and it is sealed over its own
+        // payload, so a consumer can bind evidence to it without transporting
+        // a document alongside.
+        assert_eq!(verified.plan.digest, workspace.plan_digest);
+        verified
+            .plan
+            .verify_digest()
+            .expect("the reproduced plan seals its own payload");
+        assert_eq!(
+            verified.plan.payload_digest().expect("recompute"),
+            workspace.plan_digest,
+            "the digest is recomputable from the reproduced payload"
+        );
+
+        // The global tag the configuration names is a tag this plan seals, which
+        // is the lookup evidence assembly performs against the handoff today.
+        let configured = global_release_tag(&Config::load(&workspace.root).expect("config"))
+            .expect("one global release tag");
+        let sealed = verified
+            .plan
+            .tags
+            .iter()
+            .find(|tag| tag.id == configured.id)
+            .expect("the reproduced plan seals the configured global release tag");
+        assert_eq!(sealed.name, verified.global_tag);
     }
 
     #[test]
