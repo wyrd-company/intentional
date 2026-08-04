@@ -427,7 +427,8 @@ const STRICT_MODE: &str = "      set -euo pipefail\n";
 const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
         mkdir -p "${RUNNER_TEMP}/@JOB@npm-probe"
         if @ENVVAR@VIEW="$(cd "${RUNNER_TEMP}/@JOB@npm-probe" \
-          && npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
+          && env -i "${@ENVVAR@ALLOWED[@]}" \
+            npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
             "${@ENVVAR@SCOPE_ARGUMENTS[@]}" 2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
           printf '%s' "${@ENVVAR@VIEW}"
           return 0
@@ -441,8 +442,25 @@ const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
 
 /// The probe helper together with the scope arguments it reads.
 fn const_probe() -> String {
-    format!("{NPM_SCOPE_ARGUMENTS}{NPM_HOLDS}")
+    format!("{NPM_ALLOWED}{NPM_SCOPE_ARGUMENTS}{NPM_HOLDS}")
 }
+
+/// The environment the npm probe is given, in place of the one it would inherit.
+///
+/// npm reads `npm_config_*` from the process environment and a project `.npmrc`
+/// from the working directory, and a repository controls both: the first
+/// through its own workflow's top-level `env:`, which convergence preserves on
+/// purpose, and the second through a file in the checkout. The probe decides
+/// whether a first publication reaches a long-lived token, so both are cleared
+/// — the working directory by running elsewhere, the environment by naming what
+/// may be in it.
+///
+/// `HOME` is in the list because the user configuration the authenticate step
+/// wrote is the credential this destination legitimately presents. `PATH` and
+/// `HOME` are the runner's process contract, as they are on the Cargo side, and
+/// a repository that redirects them has redirected the whole job.
+const NPM_ALLOWED: &str = r#"      @ENVVAR@ALLOWED=(PATH="${PATH}" HOME="${HOME}")
+"#;
 
 /// The scope registry a scoped name's probe states for itself.
 ///
@@ -672,11 +690,11 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         let variable = format!("CARGO_REGISTRIES_{}_TOKEN", environment_fragment(&name));
         (name, variable)
     };
-    // A crates.io retrieval records the public consumer path, so the resolve
-    // that performs it withholds the publish credential the authenticate step
-    // exported. An alternate registry's retrieval is the authenticated one it
-    // records, and needs the credential to read the index at all.
-    let withheld = crates_io.then_some(token_variable.as_str());
+    // A crates.io retrieval records the public consumer path, so the probe's
+    // environment simply does not name the publish credential. An alternate
+    // registry's retrieval is the authenticated one it records, and cannot read
+    // its index without that credential, so there it is named.
+    let carried = (!crates_io).then_some(token_variable.as_str());
     // An alternate registry resolves only if the probe is told where its index
     // is, and the probe inherits nothing. The index is therefore read here,
     // from the one file that declares it, and validated like every other value
@@ -713,7 +731,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         subject_environment(context),
         STRICT_MODE,
         if crates_io {
-            cargo_resolve(withheld)
+            cargo_resolve(carried)
         } else {
             String::new()
         },
@@ -730,7 +748,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(context.working_directory),
         subject_environment(context),
         STRICT_MODE,
-        cargo_resolve(withheld),
+        cargo_resolve(carried),
         CARGO_PUBLISH,
     ));
 
@@ -743,7 +761,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
-        cargo_resolve(withheld),
+        cargo_resolve(carried),
         CARGO_READBACK,
     ));
     Ok(steps)
@@ -757,54 +775,67 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// indexed it, and fetching that dependency downloads the published `.crate`
 /// through the same path a consumer uses.
 ///
-/// The probe inherits no configuration from the repository it is releasing.
-/// Earlier it copied the workspace's whole `.cargo/config.toml`, because an
-/// alternate registry name has to resolve somehow, and that made every key in
-/// that file an input to a decision that unlocks a long-lived credential:
-/// `[net] offline` and `[source] replace-with` both make cargo report a crate
-/// it did not look for using the words it uses for a crate that does not
-/// exist, and `[registries.crates-io] index` redirects the lookup outright.
-/// Closing those one at a time is a losing game — each key is a different
-/// route to one misclassification. So the probe is built rather than inherited:
-/// the only thing that crosses is the alternate registry's index, read and
-/// validated at derivation and passed as the environment variable cargo reads
-/// for exactly that. A probe with no configuration cannot be redirected by
-/// configuration.
+/// The probe answers a question that decides whether a long-lived credential is
+/// reached and whether an immutable version is submitted, so what it reads has
+/// to be what derivation chose. Cargo reads from two places, and both were
+/// routes into that decision: a configuration file discovered by walking up
+/// from the working directory, and the process environment. Four keys across
+/// those two — `[net] offline`, `[source] replace-with`,
+/// `[registries.crates-io] index`, and the `CARGO_REGISTRIES_*_INDEX` variable
+/// a repository can set in its own workflow's top-level `env:` — each produce
+/// the same misclassification by a different route, and each was closed
+/// separately before this.
+///
+/// So the probe is given an environment rather than allowed to inherit one.
+/// `env -i` clears it and the variables named here are put back: a variable
+/// nobody thought of cannot arrive, which is the property route-by-route
+/// closure never had. Two of them, `PATH` and `HOME`, are the runner's own
+/// process contract rather than derived values — the client binary and the
+/// toolchain are found through them — and a repository that redirects those has
+/// redirected every step of the job rather than this probe. That is the exact
+/// extent of what is still inherited, and it is stated rather than implied.
+///
+/// The publish credential is simply not in the list where the retrieval records
+/// the public consumer path, so withholding it is no longer a step. A
+/// destination whose recipe records an authenticated retrieval has its token in
+/// the list, because there the consumer path is the authenticated one and the
+/// index cannot be read without it.
 ///
 /// The three outcomes are distinct. Cargo reports a crate the index does not
 /// carry differently from a fetch it could not perform, and only the first is
 /// evidence of absence; treating both as absence routes a transient failure
 /// into the bootstrap credential. The network is forced on for the same reason
-/// the configuration is not inherited: an offline resolution reports absence in
-/// the words absence uses, so the condition is removed rather than parsed.
-///
-/// The resolve also drops the publish credential where the retrieval it
-/// performs records the public consumer path. Reading an index and downloading
-/// a crate from crates.io does not present that token, but that is a fact about
-/// cargo rather than a property of this step, and unsetting it makes the
-/// recorded claim structural the way the npm side's scratch configuration does.
-/// A destination whose recipe records an authenticated retrieval keeps its
-/// credential, because there the consumer path is the authenticated one.
-fn cargo_resolve(withheld: Option<&str>) -> String {
-    let withhold = withheld.map_or_else(String::new, |variable| format!("env -u {variable} "));
+/// the environment is cleared: an offline resolution reports absence in the
+/// words absence uses, so the condition is removed rather than parsed.
+fn cargo_resolve(carried: Option<&str>) -> String {
+    let carry = carried.map_or_else(String::new, |variable| {
+        format!(
+            r#"
+      if [ -n "${{{variable}:-}}" ]; then
+        @ENVVAR@ALLOWED+=({variable}="${{{variable}}}")
+      fi"#
+        )
+    });
     format!(
         r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
-      @ENVVAR@REGISTRY_INDEX=()
+      @ENVVAR@ALLOWED=(PATH="${{PATH}}" HOME="${{HOME}}" CARGO_NET_OFFLINE=false)
+      if [ -n "${{RUSTUP_HOME:-}}" ]; then
+        @ENVVAR@ALLOWED+=(RUSTUP_HOME="${{RUSTUP_HOME}}")
+      fi
       if [ -n "${{@ENVVAR@REGISTRY_NAME:-}}" ]; then
         @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${{@ENVVAR@REGISTRY_NAME}}")
-        @ENVVAR@REGISTRY_INDEX=("${{@ENVVAR@REGISTRY_INDEX_VARIABLE}}=${{@ENVVAR@REGISTRY_INDEX_URL}}")
-      fi
+        @ENVVAR@ALLOWED+=("${{@ENVVAR@REGISTRY_INDEX_VARIABLE}}=${{@ENVVAR@REGISTRY_INDEX_URL}}")
+      fi{carry}
       @ENVVAR@resolve() {{
         rm -rf "$1"
         mkdir -p "$1"
-        cargo new --quiet --lib "$1/probe" >/dev/null
+        env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
+          cargo new --quiet --lib "$1/probe" >/dev/null
         if ( cd "$1/probe" \
-          && {withhold}env "${{@ENVVAR@REGISTRY_INDEX[@]}}" \
-            CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+          && env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
             cargo add --quiet "${{@ENVVAR@REGISTRY_ARGUMENTS[@]}}" \
             "${{@ENVVAR@SUBJECT_IDENTITY}}@=${{@ENVVAR@VERSION}}" \
-          && {withhold}env "${{@ENVVAR@REGISTRY_INDEX[@]}}" \
-            CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+          && env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
             cargo fetch --quiet ) > "$1/log" 2>&1; then
           return 0
         fi

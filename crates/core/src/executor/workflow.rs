@@ -4015,10 +4015,27 @@ release-units:
         // its update notice there routinely. A silent stub is what let a helper
         // that merged the two streams pass -- the merged value was only ever
         // exercised against a client that had nothing to say.
+        // The stub records beside itself rather than through a variable the
+        // harness sets. A probe that is given an allowlisted environment does
+        // not carry the harness's variables into the client, and a stub that
+        // needed one would go silent exactly when the allowlist started
+        // working -- which is a stub reporting on the harness rather than on
+        // the derivation.
         std::fs::write(
             &path,
             format!(
-                "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${{STUB_LOG}}\"\necho '{client} warn Unknown env config \"registry-scope\"' >&2\n{script}\nexit 0\n"
+                "#!/usr/bin/env bash\n@ARGUMENTS@\n@ENVIRONMENT@\necho '{client} warn Unknown env config \"registry-scope\"' >&2\n{script}\nexit 0\n"
+            )
+            .replace(
+                "@ARGUMENTS@",
+                &format!(
+                    "printf '%s\\n' \"$*\" >> \"{}\"",
+                    directory.join("calls.log").display()
+                ),
+            )
+            .replace(
+                "@ENVIRONMENT@",
+                &format!("env >> \"{}\"", directory.join("env.log").display()),
             ),
         )
         .expect("stub written");
@@ -4030,6 +4047,16 @@ release-units:
         directory.to_path_buf()
     }
 
+    /// Everything one stub client was called with, one invocation per line.
+    fn stub_calls(stubs: &Path) -> String {
+        std::fs::read_to_string(stubs.join("calls.log")).unwrap_or_default()
+    }
+
+    /// Every environment one stub client was invoked in.
+    fn stub_environment(stubs: &Path) -> String {
+        std::fs::read_to_string(stubs.join("env.log")).unwrap_or_default()
+    }
+
     /// Run one derived step's script with a stub client ahead of it on PATH.
     fn run_step(
         step: &Value,
@@ -4037,8 +4064,6 @@ release-units:
         temporary: &Path,
         extra: &[(&str, &str)],
     ) -> (bool, String) {
-        let log = temporary.join("stub.log");
-        std::fs::write(&log, "").expect("stub log");
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -4051,7 +4076,6 @@ release-units:
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
-            .env("STUB_LOG", &log)
             .env("HOME", temporary)
             .env("RUNNER_TEMP", temporary)
             .env("GITHUB_WORKSPACE", temporary)
@@ -4066,10 +4090,7 @@ release-units:
             command.env(key, value);
         }
         let output = command.output().expect("the derived script runs");
-        (
-            output.status.success(),
-            std::fs::read_to_string(&log).unwrap_or_default(),
-        )
+        (output.status.success(), stub_calls(stubs))
     }
 
     /// Every value a maintained recipe reads out of the repository it releases.
@@ -4143,17 +4164,39 @@ release-units:
     /// Each value below is one an author types and derivation then carries into
     /// a workflow. They are legal names, deliberately: the boundary refuses the
     /// hostile ones, and this fixture is about where the accepted ones end up.
-    fn sentinel_workspace(label: &str) -> Workspace {
+    fn sentinel_workspace(label: &str, prefix: Option<&str>) -> Workspace {
         let workspace = Workspace::new(label);
+        let configured = prefix.map_or_else(String::new, |prefix| format!("  prefix: {prefix}\n"));
         workspace
             .write(
                 ".intentional/config.yml",
-                r#"$schema: https://intentional.foo/schemas/config.yml
+                &SENTINEL_CONFIG.replace("@PREFIX@\n", &configured),
+            )
+            .write(
+                ".cargo/config.toml",
+                "[registries.sentinelregistry]\nindex = \"sparse+https://sentinelindex.example/idx/\"\n",
+            )
+            .write(
+                "sentinelpath/package.json",
+                r#"{"name":"@sentinelscope/sentinelpackage","version":"1.0.0"}"#,
+            )
+            .write(
+                "sentinelpath/Cargo.toml",
+                "[package]\nname = \"sentinelcrate\"\nversion = \"1.0.0\"\npublish = [\"sentinelregistry\"]\n",
+            )
+            .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
+            .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
+        workspace
+    }
+
+    /// Configuration whose every author-typed value is distinctive.
+    const SENTINEL_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
 workspace-tags:
   release:
     template: 'sentineltagprefix{version}sentineltagsuffix'
 github:
+@PREFIX@
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
@@ -4174,24 +4217,7 @@ release-units:
         role: projection
         template: '{id}/published@{version}'
         require-phase: after-publication
-"#,
-            )
-            .write(
-                ".cargo/config.toml",
-                "[registries.sentinelregistry]\nindex = \"sparse+https://sentinelindex.example/idx/\"\n",
-            )
-            .write(
-                "sentinelpath/package.json",
-                r#"{"name":"@sentinelscope/sentinelpackage","version":"1.0.0"}"#,
-            )
-            .write(
-                "sentinelpath/Cargo.toml",
-                "[package]\nname = \"sentinelcrate\"\nversion = \"1.0.0\"\npublish = [\"sentinelregistry\"]\n",
-            )
-            .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
-            .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
-        workspace
-    }
+"#;
 
     /// Every value the sentinel workspace supplies, and where an author types it.
     ///
@@ -4218,9 +4244,35 @@ release-units:
         ("SENTINELCARGOSECRET", "the Cargo token-secret name"),
     ];
 
+    /// Every managed job of one derived workflow, found without knowing the prefix.
+    ///
+    /// `managed_steps` recognises a managed job by its identifier, which begins
+    /// with the configured prefix. That is right for the tests that assert what
+    /// a prefix does, and wrong for a gate: a repository that configures any
+    /// prefix but the default makes every such sweep inspect nothing and report
+    /// clean. The ownership sentinel is the step id derivation reserves
+    /// independently of the prefix precisely so ownership survives a prefix
+    /// change, so it is what a gate recognises a managed job by.
+    fn sentinel_jobs(root: &Path, role: WorkflowRole) -> Vec<(String, Vec<Value>)> {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        document["jobs"]
+            .as_mapping()
+            .expect("jobs")
+            .iter()
+            .filter_map(|(id, body)| {
+                let id = id.as_str()?;
+                let steps = body.get("steps")?.as_sequence()?;
+                steps
+                    .iter()
+                    .any(|step| step.get("id").and_then(Value::as_str) == Some(OWNERSHIP_SENTINEL))
+                    .then(|| (id.to_owned(), steps.clone()))
+            })
+            .collect()
+    }
+
     /// Every `run:` body a managed job of one derived workflow carries.
     fn managed_shell_bodies(root: &Path, role: WorkflowRole) -> Vec<(String, String)> {
-        managed_steps(root, role)
+        sentinel_jobs(root, role)
             .into_iter()
             .flat_map(|(id, steps)| {
                 steps.into_iter().filter_map(move |step| {
@@ -4230,6 +4282,25 @@ release-units:
                 })
             })
             .collect()
+    }
+
+    /// Everything the managed jobs of one derived workflow carry, as text.
+    ///
+    /// Scoped to managed jobs rather than the whole document, because a
+    /// repository-owned job is not where a derived value reaching a workflow
+    /// would show up, and searching the document lets one role's content
+    /// satisfy a claim about another's.
+    fn managed_job_text(root: &Path, role: WorkflowRole) -> String {
+        sentinel_jobs(root, role)
+            .into_iter()
+            .map(|(id, steps)| {
+                format!(
+                    "{id}\n{}",
+                    serde_yaml::to_string(&Value::Sequence(steps)).unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     // A probe decides whether a long-lived credential is reached and whether an
@@ -4246,7 +4317,7 @@ release-units:
     // it not be used.
     #[test]
     fn resolves_through_a_probe_that_inherits_no_repository_configuration() {
-        let workspace = sentinel_workspace("workflow-probe-isolation");
+        let workspace = sentinel_workspace("workflow-probe-isolation", None);
         converge(workspace.root(), WorkflowRole::Publish);
         let temporary = workspace.root().join("runner");
         std::fs::create_dir_all(&temporary).expect("runner directory");
@@ -4285,11 +4356,20 @@ release-units:
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
-            .env("STUB_LOG", temporary.join("stub.log"))
             .env("RUNNER_TEMP", &temporary)
             // The released repository declares a registry index, and a probe
             // that inherited this file would inherit every other key in it too.
-            .env("GITHUB_WORKSPACE", workspace.root());
+            .env("GITHUB_WORKSPACE", workspace.root())
+            // A repository's own workflow may declare a top-level `env:`, and
+            // convergence preserves it deliberately, so GitHub applies it to
+            // every managed job. These are that block arriving: the same keys
+            // the configuration file route used, by the one route left.
+            .env(
+                "CARGO_REGISTRIES_CRATES_IO_INDEX",
+                format!("sparse+https://{HOSTILE_ENVIRONMENT}/index/"),
+            )
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("CARGO_HOME", format!("/{HOSTILE_ENVIRONMENT}/home"));
         for (key, value) in step_environment(&cargo_step) {
             command.env(
                 key,
@@ -4305,6 +4385,10 @@ release-units:
         assert!(
             !probe.join("probe/.cargo/config.toml").exists(),
             "the probe carries no configuration of the repository it releases"
+        );
+        assert!(
+            !stub_environment(&stubs).contains(HOSTILE_ENVIRONMENT),
+            "the Cargo probe ran with a variable the repository put in the job's environment"
         );
         assert!(
             !body.contains("GITHUB_WORKSPACE"),
@@ -4331,10 +4415,11 @@ release-units:
         let stubs = stub_client(
             &temporary.join("npm"),
             "npm",
-            "pwd >> \"${STUB_LOG}\"; echo 'sha512-x'",
+            &format!(
+                "pwd >> \"{}\"; echo 'sha512-x'",
+                temporary.join("npm").join("calls.log").display()
+            ),
         );
-        let log = temporary.join("stub.log");
-        std::fs::write(&log, "").expect("stub log");
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -4350,8 +4435,15 @@ release-units:
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
-            .env("STUB_LOG", &log)
-            .env("RUNNER_TEMP", &temporary);
+            .env("RUNNER_TEMP", &temporary)
+            .env(
+                "npm_config_registry",
+                format!("https://{HOSTILE_ENVIRONMENT}"),
+            )
+            .env(
+                "npm_config_userconfig",
+                format!("/{HOSTILE_ENVIRONMENT}/npmrc"),
+            );
         for (key, value) in step_environment(&npm_step) {
             command.env(
                 key,
@@ -4364,7 +4456,7 @@ release-units:
             "the probe runs against a stub client: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
+        let recorded = stub_calls(&stubs);
         assert!(
             !recorded
                 .lines()
@@ -4383,7 +4475,14 @@ release-units:
             )),
             "the probe names the registry serving its scope: {recorded}"
         );
+        assert!(
+            !stub_environment(&stubs).contains(HOSTILE_ENVIRONMENT),
+            "the npm probe ran with a variable the repository put in the job's environment"
+        );
     }
+
+    /// A value no derivation produces, recognisable wherever it surfaces.
+    const HOSTILE_ENVIRONMENT: &str = "repository-supplied.example";
 
     // The refusal test below proves a hostile value cannot be derived. It does
     // not prove that an accepted one stays out of shell source, and those are
@@ -4406,28 +4505,62 @@ release-units:
     // surfaces is its own task.
     #[test]
     fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
-        let workspace = sentinel_workspace("workflow-supplied-values");
-        for role in WorkflowRole::ALL {
-            converge(workspace.root(), role);
-            for (job, body) in managed_shell_bodies(workspace.root(), role) {
-                for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
-                    assert!(
-                        !body.contains(supplied),
-                        "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
-                    );
+        // A gate that inspects nothing reports clean, so how much it inspected
+        // is measured rather than assumed -- and measured under a configured
+        // prefix as well as the default, because the identifier a managed job
+        // carries changes with the prefix and the sentinel step id does not.
+        // Establishing that by deriving both is the point: asserting it would
+        // be the same class of claim the gate exists to stop.
+        let mut swept = Vec::new();
+        for prefix in [None, Some("acme")] {
+            let workspace = sentinel_workspace(
+                &format!("workflow-supplied-values-{}", prefix.unwrap_or("default")),
+                prefix,
+            );
+            let mut counts = Vec::new();
+            for role in WorkflowRole::ALL {
+                converge(workspace.root(), role);
+                let bodies = managed_shell_bodies(workspace.root(), role);
+                counts.push((role, bodies.len()));
+                for (job, body) in bodies {
+                    for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+                        assert!(
+                            !body.contains(supplied),
+                            "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
+                        );
+                    }
                 }
             }
+
+            // Every value is proved to have reached the managed jobs of some
+            // role. Searching the whole document would let a repository-owned
+            // job satisfy the claim, and searching both roles together lets one
+            // role's content stand in for the other's.
+            let managed = WorkflowRole::ALL
+                .into_iter()
+                .map(|role| managed_job_text(workspace.root(), role))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+                assert!(
+                    managed.contains(supplied),
+                    "{origin} never reached a managed job, so its absence from a shell body proves nothing"
+                );
+            }
+            swept.push(counts);
         }
 
-        let derived = WorkflowRole::ALL
-            .into_iter()
-            .map(|role| workflow(workspace.root(), role))
-            .collect::<Vec<_>>()
-            .join("\n");
-        for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+        let [default, prefixed] = swept.as_slice() else {
+            panic!("both prefixes were derived");
+        };
+        assert_eq!(
+            default, prefixed,
+            "the sweep finds the same managed shell under a configured prefix as under the default"
+        );
+        for (role, count) in default {
             assert!(
-                derived.contains(supplied),
-                "{origin} never reached the derived workflows, so its absence from a shell body proves nothing"
+                *count > 0,
+                "the {role} workflow contributes managed shell for the sweep to read"
             );
         }
     }
@@ -4686,23 +4819,21 @@ release-units:
     }
 
     // Cargo spells "the index does not carry this crate" and "I did not look,
-    // because I was told not to go online" with the same words, and the probe
-    // copies the workspace's own cargo configuration into itself -- so a
-    // repository carrying `[net] offline = true` could make every probe report
-    // absence for a crate the registry has held for years, and the authenticate
-    // step would then write the long-lived token into the job. Telling the two
-    // messages apart is not possible; refusing to be offline is. The same
-    // resolve withholds the publish credential where the recorded retrieval is
-    // the public one, so that claim is structural rather than a fact about how
-    // cargo happens to authenticate index reads.
+    // because I was told not to go online" with the same words, so the probe
+    // refuses to be offline rather than trying to tell the two apart. That
+    // setting, and every other the probe runs under, now come from one place:
+    // the environment is cleared and rebuilt from an allowlist, so what is
+    // asserted is the contents of that list and that every client invocation
+    // runs under it. A variable the list does not name cannot reach the client,
+    // which is the property four rounds of key-by-key closure never had.
     #[test]
-    fn resolves_online_and_without_the_credential_a_public_retrieval_may_not_use() {
-        for (label, workspace, manifest, withholds) in [
+    fn resolves_under_an_allowlisted_environment_that_forces_the_network_on() {
+        for (label, workspace, manifest, carries) in [
             (
                 "the crates.io primary",
                 workspace("workflow-cargo-online-primary"),
                 "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
-                Some("CARGO_REGISTRY_TOKEN"),
+                None,
             ),
             (
                 "a configured alternate registry",
@@ -4715,47 +4846,64 @@ release-units:
                     workspace
                 },
                 "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
-                None,
+                Some("CARGO_REGISTRIES_EXAMPLE_REGISTRY_TOKEN"),
             ),
         ] {
             workspace.write("component/Cargo.toml", manifest);
             converge(workspace.root(), WorkflowRole::Publish);
-            let steps = publisher_steps(workspace.root(), PRIMARY_TARGET);
-            let resolvers = steps
-                .iter()
-                .filter_map(|step| step.get("run").and_then(Value::as_str))
-                .filter(|body| body.contains("cargo add"))
+            let bodies = publisher_steps(workspace.root(), PRIMARY_TARGET)
+                .into_iter()
+                .filter_map(|step| step.get("run").and_then(Value::as_str).map(str::to_owned))
+                .filter(|body| body.contains("INTENTIONAL_resolve()"))
                 .collect::<Vec<_>>();
             assert!(
-                !resolvers.is_empty(),
+                !bodies.is_empty(),
                 "{label} resolves its destination through cargo"
             );
-            for body in resolvers {
-                for command in ["cargo add", "cargo fetch"] {
-                    let invocation = body
+            for body in bodies {
+                let allowlist = body
+                    .split_once("INTENTIONAL_resolve()")
+                    .map(|(head, _)| head)
+                    .expect("the allowlist is built before the resolve uses it");
+                assert!(
+                    allowlist.contains("CARGO_NET_OFFLINE=false"),
+                    "{label} forces the probe online: {allowlist}"
+                );
+                match carries {
+                    Some(variable) => assert!(
+                        allowlist.contains(variable),
+                        "{label} carries the credential its recorded retrieval uses: {allowlist}"
+                    ),
+                    None => assert!(
+                        !allowlist.contains("_TOKEN"),
+                        "{label} names no publish credential its public retrieval may not use: {allowlist}"
+                    ),
+                }
+
+                // Every client invocation runs under the list. One that did not
+                // would inherit the job's environment, which is where a
+                // repository's own workflow-level `env:` arrives.
+                let (_, resolve) = body
+                    .split_once("INTENTIONAL_resolve()")
+                    .expect("the resolve is a shell function");
+                for command in ["cargo new", "cargo add", "cargo fetch"] {
+                    let invocation = resolve
                         .split_once(command)
                         .map(|(head, _)| head)
-                        .expect("the resolve runs the command");
+                        .unwrap_or_else(|| panic!("{label} runs {command}"));
                     let preamble = invocation
                         .rsplit("&&")
                         .next()
                         .unwrap_or_default()
-                        .to_owned()
-                        + invocation.rsplit('\n').next().unwrap_or_default();
+                        .to_owned();
                     assert!(
-                        preamble.contains("CARGO_NET_OFFLINE=false"),
-                        "{label} forces {command} online: {preamble:?}"
+                        preamble.contains("env -i \"${INTENTIONAL_ALLOWED[@]}\""),
+                        "{label} runs {command} under the allowlist: {preamble:?}"
                     );
-                    match withholds {
-                        Some(variable) => assert!(
-                            preamble.contains(&format!("env -u {variable}")),
-                            "{label} withholds {variable} from {command}: {preamble:?}"
-                        ),
-                        None => assert!(
-                            !preamble.contains("env -u"),
-                            "{label} keeps the credential its recorded retrieval uses: {preamble:?}"
-                        ),
-                    }
+                    assert!(
+                        preamble.contains("CARGO_HOME=\"$1/home\""),
+                        "{label} gives {command} a scratch CARGO_HOME: {preamble:?}"
+                    );
                 }
             }
         }
@@ -4828,7 +4976,6 @@ release-units:
                         std::env::var("PATH").unwrap_or_default()
                     ),
                 )
-                .env("STUB_LOG", temporary.join("stub.log"))
                 .env("RUNNER_TEMP", &temporary)
                 .env("INTENTIONAL_REGISTRY", "https://registry.example");
             let output = command.output().expect("the probe runs");
