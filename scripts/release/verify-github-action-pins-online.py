@@ -51,6 +51,9 @@ DECLARATION = ROOT / "github-action-pins.yml"
 #: file must match one of these, and a line matching none of them fails the
 #: run. There is no second recogniser to agree with, so there is no shared
 #: assumption for an edit to slip between.
+#: `IGNORED` admits tab-indented blank and comment lines even though YAML
+#: forbids tab indentation. That disagreement fails loudly when the declaration
+#: reaches the YAML consumer; it cannot make the consumer accept a partial table.
 IGNORED = re.compile(r"[ \t]*(#.*)?")
 SEQUENCE_KEY = re.compile(r"actions:")
 HEADER = re.compile(r"  - constant: ([A-Z][A-Z0-9_]*)")
