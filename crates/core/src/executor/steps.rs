@@ -693,8 +693,15 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     // A crates.io retrieval records the public consumer path, so the probe's
     // environment simply does not name the publish credential. An alternate
     // registry's retrieval is the authenticated one it records, and cannot read
-    // its index without that credential, so there it is named.
-    let carried = (!crates_io).then_some(token_variable.as_str());
+    // its index without that credential, so there it is named -- through `env:`
+    // and read indirectly, like every other repository-derived name, rather
+    // than written into the script. A derived name is still a name a repository
+    // supplied, and a case transform on the way to a script is not a boundary.
+    let carried = if crates_io {
+        String::new()
+    } else {
+        token_variable.clone()
+    };
     // An alternate registry resolves only if the probe is told where its index
     // is, and the probe inherits nothing. The index is therefore read here,
     // from the one file that declares it, and validated like every other value
@@ -713,9 +720,10 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         })?
     };
     let registry_environment = format!(
-        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n      @ENVVAR@REGISTRY_INDEX_VARIABLE: {}\n      @ENVVAR@REGISTRY_INDEX_URL: {}\n",
+        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n      @ENVVAR@CARRIED_TOKEN: {}\n      @ENVVAR@REGISTRY_INDEX_VARIABLE: {}\n      @ENVVAR@REGISTRY_INDEX_URL: {}\n",
         scalar(registry),
         scalar(&registry_name),
+        scalar(&carried),
         // Named only where there is a registry to name. crates.io resolves
         // through cargo's own default, so a variable derived for it would be
         // an empty registry's spelling rather than anything cargo reads.
@@ -737,11 +745,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(&token_variable),
         subject_environment(context),
         STRICT_MODE,
-        if crates_io {
-            cargo_resolve(carried)
-        } else {
-            String::new()
-        },
+        if crates_io { CARGO_RESOLVE } else { "" },
         if crates_io {
             CARGO_TRUSTED_AUTHENTICATION
         } else {
@@ -755,7 +759,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(context.working_directory),
         subject_environment(context),
         STRICT_MODE,
-        cargo_resolve(carried),
+        CARGO_RESOLVE,
         CARGO_PUBLISH,
     ));
 
@@ -768,7 +772,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
-        cargo_resolve(carried),
+        CARGO_RESOLVE,
         CARGO_READBACK,
     ));
     Ok(steps)
@@ -814,35 +818,28 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// into the bootstrap credential. The network is forced on for the same reason
 /// the environment is cleared: an offline resolution reports absence in the
 /// words absence uses, so the condition is removed rather than parsed.
-fn cargo_resolve(carried: Option<&str>) -> String {
-    let carry = carried.map_or_else(String::new, |variable| {
-        format!(
-            r#"
-      if [ -n "${{{variable}:-}}" ]; then
-        @ENVVAR@ALLOWED+=({variable}="${{{variable}}}")
-      fi"#
-        )
-    });
-    format!(
-        r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
-      @ENVVAR@ALLOWED=(PATH="${{PATH}}" HOME="${{HOME}}" CARGO_NET_OFFLINE=false)
-      if [ -n "${{RUSTUP_HOME:-}}" ]; then
-        @ENVVAR@ALLOWED+=(RUSTUP_HOME="${{RUSTUP_HOME}}")
+const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
+      @ENVVAR@ALLOWED=(PATH="${PATH}" HOME="${HOME}" CARGO_NET_OFFLINE=false)
+      if [ -n "${RUSTUP_HOME:-}" ]; then
+        @ENVVAR@ALLOWED+=(RUSTUP_HOME="${RUSTUP_HOME}")
       fi
-      if [ -n "${{@ENVVAR@REGISTRY_NAME:-}}" ]; then
-        @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${{@ENVVAR@REGISTRY_NAME}}")
-        @ENVVAR@ALLOWED+=("${{@ENVVAR@REGISTRY_INDEX_VARIABLE}}=${{@ENVVAR@REGISTRY_INDEX_URL}}")
-      fi{carry}
-      @ENVVAR@resolve() {{
+      if [ -n "${@ENVVAR@REGISTRY_NAME:-}" ]; then
+        @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${@ENVVAR@REGISTRY_NAME}")
+        @ENVVAR@ALLOWED+=("${@ENVVAR@REGISTRY_INDEX_VARIABLE}=${@ENVVAR@REGISTRY_INDEX_URL}")
+      fi
+      if [ -n "${@ENVVAR@CARRIED_TOKEN:-}" ] && [ -n "${!@ENVVAR@CARRIED_TOKEN:-}" ]; then
+        @ENVVAR@ALLOWED+=("${@ENVVAR@CARRIED_TOKEN}=${!@ENVVAR@CARRIED_TOKEN}")
+      fi
+      @ENVVAR@resolve() {
         rm -rf "$1"
         mkdir -p "$1"
-        env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
+        env -i "${@ENVVAR@ALLOWED[@]}" CARGO_HOME="$1/home" \
           cargo new --quiet --lib "$1/probe" >/dev/null
         if ( cd "$1/probe" \
-          && env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
-            cargo add --quiet "${{@ENVVAR@REGISTRY_ARGUMENTS[@]}}" \
-            "${{@ENVVAR@SUBJECT_IDENTITY}}@=${{@ENVVAR@VERSION}}" \
-          && env -i "${{@ENVVAR@ALLOWED[@]}}" CARGO_HOME="$1/home" \
+          && env -i "${@ENVVAR@ALLOWED[@]}" CARGO_HOME="$1/home" \
+            cargo add --quiet "${@ENVVAR@REGISTRY_ARGUMENTS[@]}" \
+            "${@ENVVAR@SUBJECT_IDENTITY}@=${@ENVVAR@VERSION}" \
+          && env -i "${@ENVVAR@ALLOWED[@]}" CARGO_HOME="$1/home" \
             cargo fetch --quiet ) > "$1/log" 2>&1; then
           return 0
         fi
@@ -851,10 +848,8 @@ fn cargo_resolve(carried: Option<&str>) -> String {
         fi
         cat "$1/log" >&2
         return 2
-      }}
-"#
-    )
-}
+      }
+"#;
 
 /// crates.io trusted publishing with a protected first-publication path.
 ///

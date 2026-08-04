@@ -4246,6 +4246,15 @@ release-units:
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
     ///
+    /// The comparison the gate applies is a case-folded substring, which
+    /// recognises a value carried verbatim or through a case transform. Other
+    /// value-preserving transforms would evade it -- percent-encoding,
+    /// whitespace normalisation, path-component splitting -- and none of them
+    /// appears in this derivation. A new one is answered here, either by
+    /// widening the comparison or by routing the value through `env:` so that
+    /// no comparison is needed, which is what the one case transform this
+    /// derivation used to apply was answered with.
+    ///
     /// One repository-supplied value is deliberately absent, and its absence is
     /// checked rather than asserted. The configured `prefix` *is* spliced into
     /// managed shell -- `${RUNNER_TEMP}/<prefix>npm-error` and every other
@@ -4314,6 +4323,47 @@ release-units:
         ),
     ];
 
+    /// Whether one shell body carries one repository-supplied value.
+    ///
+    /// Compared without case. A value that reaches shell through a case
+    /// transform is exactly as exploitable -- every shell metacharacter
+    /// survives one -- and this derivation applies `to_ascii_uppercase` to a
+    /// repository-supplied value on its way to a variable name, so the evading
+    /// form is one the code produces rather than a hypothetical.
+    ///
+    /// Case is the transform this closes and it is not the only one a value
+    /// could survive: percent-encoding, whitespace normalisation and
+    /// path-component splitting would each carry a value into shell in a form
+    /// this comparison does not recognise. None of them appears in this
+    /// derivation today, and the roster is where a new one has to be answered
+    /// -- either by widening this comparison or by routing the value through
+    /// `env:` so no comparison is needed. Stating the boundary is the point: a
+    /// substring check is a recogniser, not a proof, and the property it stands
+    /// in for is that values are routed rather than written.
+    fn splices(body: &str, value: &str) -> bool {
+        body.to_ascii_lowercase()
+            .contains(&value.to_ascii_lowercase())
+    }
+
+    // The comparison above has no live instance to catch, because the one
+    // transform this derivation applies is now routed through `env:` instead.
+    // A recogniser with nothing to recognise is a rule that cannot fail, so it
+    // is exercised directly: a value reaching shell uppercased is the form the
+    // gate would otherwise have read as absent.
+    #[test]
+    fn recognises_a_spliced_value_that_survived_a_case_transform() {
+        let body = "INTENTIONAL_ALLOWED+=(CARGO_REGISTRIES_SENTINELREGISTRY_TOKEN=\"x\")";
+        assert!(
+            splices(body, "sentinelregistry"),
+            "a value spliced in another case is still spliced"
+        );
+        assert!(splices("--registry sentinelregistry", "sentinelregistry"));
+        assert!(!splices(
+            "--registry \"${INTENTIONAL_REGISTRY_NAME}\"",
+            "sentinelregistry"
+        ));
+    }
+
     /// Every managed job of one derived workflow, found without knowing the prefix.
     ///
     /// `managed_steps` recognises a managed job by its identifier, which begins
@@ -4364,8 +4414,15 @@ release-units:
     fn managed_surfaces(root: &Path, role: WorkflowRole) -> (String, String) {
         let mut expressions = String::new();
         let mut plain = String::new();
-        for (id, steps) in sentinel_jobs(root, role) {
-            let mut text = format!("{id}\n");
+        for (_, steps) in sentinel_jobs(root, role) {
+            // The job identifier is deliberately not part of any surface. It is
+            // built by `identifier`, which reduces a value to what GitHub
+            // accepts, so a value that survives into an identifier has been
+            // transformed rather than carried -- and a reach claim satisfied by
+            // one is satisfied by something other than the routing it is about.
+            // 149 found exactly this: deleting a value's routed `env:` row left
+            // its gate green because the job id still spelled it.
+            let mut text = String::new();
             for step in steps {
                 let mut step = step;
                 if let Some(mapping) = step.as_mapping_mut() {
@@ -4732,7 +4789,7 @@ release-units:
                 for (job, body) in &bodies {
                     for (supplied, origin, _) in REPOSITORY_SUPPLIED_VALUES {
                         assert!(
-                            !body.contains(supplied),
+                            !splices(body, supplied),
                             "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
                         );
                     }
@@ -4766,6 +4823,25 @@ release-units:
                         (expressions, plain)
                     },
                 );
+            // A reach claim is about routing, so the surface it is checked
+            // against must not contain the one place a value survives without
+            // being routed. A job identifier is built by `identifier`, which
+            // reduces a value to what GitHub accepts, so a value found there
+            // was transformed rather than carried -- and 149 found its gate
+            // satisfied by exactly that after the routed row was deleted. The
+            // expression surface is exempt because `needs.<job>` is a real
+            // reference to a job rather than a place a value landed, and no
+            // roster row is checked against it for a value of that shape.
+            for (role, _) in SENTINEL_JOBS {
+                let (_, plain) = managed_surfaces(workspace.root(), role);
+                for (id, _) in sentinel_jobs(workspace.root(), role) {
+                    assert!(
+                        !plain.contains(&id),
+                        "{id} is part of the surface a routed value's reach is checked against"
+                    );
+                }
+            }
+
             for (supplied, origin, surface) in REPOSITORY_SUPPLIED_VALUES {
                 let (text, other, name) = match surface {
                     Surface::Expression => (&expressions, &plain, "a workflow expression"),
@@ -5101,23 +5177,31 @@ release-units:
             // passed the name through would name something no shell can set and
             // no client reads, and the alternate-registry path would fail on a
             // runner with neither a credential nor an index.
-            let declared = publisher_steps(workspace.root(), PRIMARY_TARGET)
-                .iter()
-                .filter_map(|step| {
-                    step_environment(step)
-                        .get("INTENTIONAL_REGISTRY_INDEX_VARIABLE")
-                        .cloned()
-                })
-                .collect::<BTreeSet<_>>();
+            let declared = |key: &str| {
+                publisher_steps(workspace.root(), PRIMARY_TARGET)
+                    .iter()
+                    .filter_map(|step| step_environment(step).get(key).cloned())
+                    .collect::<BTreeSet<_>>()
+            };
             assert_eq!(
-                declared,
-                [match carries {
-                    Some(_) => "CARGO_REGISTRIES_EXAMPLE_REGISTRY_INDEX".to_owned(),
-                    None => String::new(),
-                }]
+                declared("INTENTIONAL_REGISTRY_INDEX_VARIABLE"),
+                [carries
+                    .map(|_| "CARGO_REGISTRIES_EXAMPLE_REGISTRY_INDEX".to_owned())
+                    .unwrap_or_default()]
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
                 "{label} names the index variable cargo reads for it"
+            );
+            // The credential is named where the recorded retrieval is the
+            // authenticated one and nowhere else, and it is named in `env:`
+            // rather than in the script, so a case transform on the way to a
+            // shell body has nothing to transform.
+            assert_eq!(
+                declared("INTENTIONAL_CARRIED_TOKEN"),
+                [carries.map(str::to_owned).unwrap_or_default()]
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+                "{label} carries only the credential its recorded retrieval uses"
             );
             for body in bodies {
                 let allowlist = body
@@ -5128,16 +5212,10 @@ release-units:
                     allowlist.contains("CARGO_NET_OFFLINE=false"),
                     "{label} forces the probe online: {allowlist}"
                 );
-                match carries {
-                    Some(variable) => assert!(
-                        allowlist.contains(variable),
-                        "{label} carries the credential its recorded retrieval uses: {allowlist}"
-                    ),
-                    None => assert!(
-                        !allowlist.contains("_TOKEN"),
-                        "{label} names no publish credential its public retrieval may not use: {allowlist}"
-                    ),
-                }
+                assert!(
+                    allowlist.contains("${INTENTIONAL_CARRIED_TOKEN}"),
+                    "{label} reads the carried credential's name rather than spelling it: {allowlist}"
+                );
 
                 // Every client invocation runs under the list. One that did not
                 // would inherit the job's environment, which is where a
