@@ -122,9 +122,19 @@ proposed-design:
     Package Registry without replacing npmjs.
 
     Homebrew configuration contains the tap repository. Intentional derives the
-    formula identity and packager from release-unit evidence. RPM, APT, and AUR
-    use their native package configuration together with their explicit empty
-    or target-specific adapter mapping.
+    formula identity and packager from release-unit evidence. AUR uses its
+    native package configuration together with its explicit empty or
+    target-specific adapter mapping.
+
+    RPM and APT read the package they distribute from native packager
+    configuration and everything about where it goes from their own mapping,
+    because their formats define no destination to derive one from. Each mapping
+    names the repository-owned delivery step, the base URL its consumers read,
+    the public signing key that authenticates its index, the retrieval mode its
+    destination admits, the observation deadline its arrangement requires, and
+    the index coordinates the format needs: a suite and component for APT, a
+    channel for RPM. A mapping missing any of these is a semantic configuration
+    failure, because each one is a thing no evidence can supply.
 
     Every concrete publisher target supports a target-scoped `omit` list when
     its maintained recipe defines attached components. An adapter-level `omit`
@@ -152,7 +162,10 @@ proposed-design:
     Missing and ambiguous matches are semantic configuration failures. A recipe
     fixes generated jobs and steps, permissions, authentication, packaging,
     promotion, attached metadata, provenance, signing, readback, consumer
-    retrieval, retry policy, and evidence shape.
+    retrieval, retry policy, and evidence shape. A format that defines no
+    publishing protocol leaves its recipe no destination to fix; such a recipe
+    fixes every one of these except delivery, and its configuration supplies the
+    destination that delivery reaches.
 
   native-packager-contract: |-
     Initialization can propose or create the baseline native configuration
@@ -574,8 +587,9 @@ proposed-design:
     point at a release; their destination is a repository, and their publisher
     job promotes the generated files into it. An RPM and a Debian package are
     the released bytes themselves; they are GitHub-hosted deliverables, so the
-    managed upload job places them on the draft Release and their consumers
-    resolve them there.
+    managed upload job places them on the draft Release, and their publisher
+    job resolves them from there before delivering them to a system-package
+    repository.
 
     The packager decides which files are which, and the derivation reads that
     rather than listing extensions the packager could add to. What the packager
@@ -652,6 +666,74 @@ proposed-design:
     A rerun that finds a destination already carrying this release commits
     nothing and still succeeds, because destination readback decides whether a
     publication is present rather than whether a step wrote.
+
+  system-package-distribution: |-
+    An APT repository and an RPM repository are directories of files served over
+    HTTPS. Neither format defines a publishing protocol: no command uploads a
+    package, and no destination answers one. Publication is writing files,
+    regenerating an index, signing it, and serving the result, and every part of
+    that is the arrangement of whoever runs the repository. There is no
+    destination a maintained recipe could aim at, which is why these two
+    publishers reach one no other adapter does — the destination is supplied by
+    the repository that configures the publication.
+
+    What both formats do define is what a published repository looks like from
+    outside, and that is the half a maintained recipe owns. The recipe resolves
+    the package from the draft Release, establishes that it is the package this
+    release built, hands it to the repository's own delivery step, reads the
+    signed index back, retrieves the package the way a consumer does, and
+    records the result. Only delivery varies, and only delivery is configured.
+
+    Configuration supplies the delivery step, the repository's base URL, the
+    public half of the key that signs its index, and the observation deadline.
+    The delivery step is a repository-owned composite Action or reusable
+    workflow named by path, which the derived job invokes. It is not an editable
+    region of a derived file: reconciliation rewrites what it derives, so an
+    edited body is either overwritten or turns every reconciliation into a
+    merge. Naming a path keeps the delivery code in a file its own repository
+    reviews and tests, and keeps the derived job regenerable. Whatever authority
+    that step presents is the repository's own and is declared where the step
+    is; the publisher job holds `contents: read` and mints nothing.
+
+    Establishing the package precedes delivery, because a step that delivered
+    first would have nothing left to refuse. The recipe reads identity out of
+    the package itself — `dpkg-deb` for a Debian package, `rpm` for an RPM — and
+    requires the name, version, and architecture it reports to equal the ones
+    the release sealed, against the digest the draft-asset handoff carries. A
+    package whose own metadata disagrees with the release never reaches a
+    destination.
+
+    Readback walks the format's published chain from the configured key, so what
+    it proves is what a client would prove. For APT the recipe retrieves
+    `dists/<suite>/InRelease`, verifies its signature with the configured key,
+    and follows the digest it carries for `<component>/binary-<architecture>/Packages`
+    to the package list, then requires a stanza whose package, version, and
+    SHA-256 are the ones just delivered. For RPM it retrieves
+    `repodata/repomd.xml` with its detached signature, verifies that signature,
+    follows the checksum `repomd.xml` records for its primary metadata, and
+    requires an entry whose name, version, architecture, and checksum agree. An
+    index served without a signature the configured key verifies is not a
+    readback, because an unsigned list of packages is a file somebody served
+    rather than a statement the repository stands behind.
+
+    Consumer retrieval installs the package through the format's ordinary client
+    under a scratch configuration holding only the configured key and the
+    configured repository: `apt` against the base URL, suite, and component, and
+    `dnf` against a repository definition that verifies both package and
+    repository signatures. Both retrievals digest what they retrieved and
+    compare it with the sealed subject.
+
+    The delivery step is required to have run without error and nothing more.
+    Whether it wrote the index itself or started something that will reach it
+    later is not a distinction this recipe can observe, and not one it needs:
+    no destination reports its own publication, which is why every adapter
+    reads its destination rather than trusting an accepted write. The
+    observation deadline is configured rather than fixed, because the
+    arrangement that determines it belongs to the repository. Reaching the
+    deadline reports that the publication was not observed, which is the honest
+    claim — a repository that has not yet indexed the package and one whose
+    delivery failed after the step returned are indistinguishable from outside,
+    and the failure is retryable so that a rerun reads again.
 
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write
@@ -887,12 +969,17 @@ proposed-design:
     evidence says so rather than claiming a public retrieval nobody could
     perform or omitting the consumer check entirely. Its retrieval runs after
     publication in a separate job whose job-scoped `GITHUB_TOKEN` grants
-    `packages: read` and cannot publish. The maintained recipe for
-    each destination fixes which of the three retrieval modes its evidence may
-    record, so a recipe never chooses between reporting its retrieval faithfully
-    and passing verification. Each adapter defines a
-    bounded eventual-consistency policy containing retryable pending responses,
-    intervals, backoff, and a deadline. A missing or not-yet-indexed result
+    `packages: read` and cannot publish. Which of the three retrieval modes an
+    evidence fragment may record is fixed before the retrieval runs, so a
+    recipe never chooses between reporting its retrieval faithfully and passing
+    verification. A recipe whose destination it knows fixes the mode itself. A
+    system-package recipe reaches a destination its configuration supplies, and
+    that configuration fixes the mode instead, because whether a repository
+    serves an anonymous client is a property of the repository rather than of
+    the format. Each adapter defines a bounded eventual-consistency policy
+    containing retryable pending responses, intervals, backoff, and a deadline,
+    and an adapter whose destination is configured takes its deadline from that
+    configuration. A missing or not-yet-indexed result
     remains pending until the deadline, while an observable identity, checksum,
     or digest conflict fails immediately. A deadline produces a retryable
     workflow failure. On rerun, the adapter reads before writing, accepts an
