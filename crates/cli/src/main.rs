@@ -1685,6 +1685,17 @@ mod generated_invocations {
             ["verify", "release-tag", "2"],
             "a numeric argument is not a file descriptor"
         );
+
+        // Digits that end a longer word are part of that word, however tightly
+        // the redirection follows. Surrendering them would truncate the value
+        // reaching the parser rather than drop a descriptor.
+        let attached = body_invocations("intentional evidence contribute --namespace ns2>log");
+        assert_eq!(attached.len(), 1, "{attached:?}");
+        assert_eq!(
+            attached[0][1..],
+            ["evidence", "contribute", "--namespace", "ns2"],
+            "a word ending in digits keeps them"
+        );
     }
 
     #[test]
