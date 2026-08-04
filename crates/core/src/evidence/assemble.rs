@@ -2535,6 +2535,40 @@ subjects: []
         );
     }
 
+    /// An ignored file is not a file the release was supposed to carry.
+    ///
+    /// The refusal is stated in the command contract as excluding ignored
+    /// files, and an exclusion nothing exercises is where a refusal quietly
+    /// becomes total. Nothing assembly reads can be ignored and still belong to
+    /// the release, so an ignored path changes no read it performs.
+    #[test]
+    fn assembles_beside_a_file_the_repository_ignores() {
+        let workspace = ReleasedWorkspace::with(
+            CONFIG,
+            &[
+                (
+                    "component/package.json",
+                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                ),
+                (".gitignore", "*.log\n"),
+            ],
+            "component",
+        );
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_phase(&workspace, &input);
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment(&workspace, "component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::write(workspace.root.join("assembly.log"), "noise\n").expect("ignored file");
+
+        assemble(&request(&workspace, &input, &output))
+            .expect("an ignored file is not a file the release never carried");
+    }
+
     /// A file the release never carried is refused too.
     ///
     /// The other half of a dirty tree. An untracked file does not replace a
