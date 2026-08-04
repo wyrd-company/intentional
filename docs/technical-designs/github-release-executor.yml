@@ -727,8 +727,9 @@ proposed-design:
     the step proceeds. Derivation therefore establishes the shape of both names
     and stops. The derived job reads each resolved secret before it invokes
     delivery and fails on an empty one, naming the input whose secret did not
-    resolve and never the value it read. The two cases this cannot separate, a
-    secret the repository never set and one it set empty, have the same answer:
+    resolve and never any value it read, the ones that resolved included. The
+    two cases this cannot separate, a secret the repository never set and one
+    it set empty, have the same answer:
     an empty credential is not a credential, and delivery must not be handed one
     and left to discover it.
 
