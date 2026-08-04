@@ -217,6 +217,20 @@ mod tests {
             "a$(id)",
             "a`id`",
             "a'b",
+            // A name is passed as its own argument vector element in several
+            // places, and a leading hyphen there is an option rather than a
+            // name. These carry no character the charsets refuse, so the
+            // leading-character rule is the only thing standing between them
+            // and a command line -- which is why they are listed separately
+            // from the values that would also fail on their contents.
+            "-oProxyCommand",
+            "--registry",
+            "-rf",
+            // Every one of these ecosystems refuses a name beginning with its
+            // own punctuation, so a name that starts with one is not a name
+            // this recipe could publish under.
+            ".hidden",
+            "_private",
             "-oProxyCommand=id",
             "",
         ] {
