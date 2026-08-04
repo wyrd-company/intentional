@@ -843,6 +843,41 @@ mod tests {
     }
 
     #[test]
+    fn moves_a_keep_chomped_scalars_trailing_blank_lines_out_of_the_entry() {
+        let source = "jobs:\n  a:\n    script: |+\n      make build\n\n";
+        let mut document = Document::parse(source).expect("parses");
+        assert_eq!(
+            document
+                .get(&["jobs", "a", "script"])
+                .expect("script")
+                .expect("present")
+                .as_str()
+                .expect("scalar"),
+            "make build\n\n",
+            "`|+` keeps its trailing blank line as content before the edit"
+        );
+
+        document
+            .set(&["jobs", "b"], &value("runs-on: x\n"))
+            .expect("inserts after the last entry");
+        assert_eq!(
+            document.text(),
+            "jobs:\n  a:\n    script: |+\n      make build\n  b:\n    runs-on: x\n\n",
+            "the blank line is treated as the container's, so the new entry lands above it"
+        );
+        assert_eq!(
+            document
+                .get(&["jobs", "a", "script"])
+                .expect("script")
+                .expect("present")
+                .as_str()
+                .expect("scalar"),
+            "make build\n",
+            "the scalar loses the blank line it kept: the accepted `|+` tradeoff"
+        );
+    }
+
+    #[test]
     fn refuses_to_rebuild_a_container_holding_a_key_it_cannot_render() {
         let mut document = Document::parse("settings: { 1: one, true: yes }\n").expect("parses");
         let error = document
