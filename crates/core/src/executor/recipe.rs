@@ -288,15 +288,26 @@ pub struct PublicationSelection {
     pub diagnostics: Vec<String>,
 }
 
+/// Whether one release unit's publications are resolved at all.
+///
+/// A suspended release unit does not release, so it cannot publish, and a unit
+/// that configures no publisher has nothing to resolve. The selection skips
+/// both without opening anything, so this is also the predicate that decides
+/// which units' probe files are ever read — and evidence assembly proves
+/// exactly those reads against the release commit. Two callers asking the same
+/// question differently is how the reader comes to name fewer paths than the
+/// selection opens, which is a gap no test of either side alone can see.
+pub fn selects_publications(release_unit: &ReleaseUnitConfig) -> bool {
+    release_unit.disposition == ReleaseUnitDisposition::Managed
+        && !release_unit.publishers().is_empty()
+}
+
 /// Resolve every configured publication, collecting each failure instead of
 /// stopping at the first, so one run reports every unresolved target.
 pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationSelection> {
     let mut selection = PublicationSelection::default();
     for (id, release_unit) in &config.release_units {
-        // A suspended release unit does not release, so it cannot publish.
-        if release_unit.disposition != ReleaseUnitDisposition::Managed
-            || release_unit.publishers().is_empty()
-        {
+        if !selects_publications(release_unit) {
             continue;
         }
         let capabilities = match derive_capabilities(root, release_unit) {
@@ -568,17 +579,14 @@ pub fn capability_set(evidence: &[CapabilityEvidence]) -> BTreeSet<Capability> {
     evidence.iter().map(|item| item.capability).collect()
 }
 
-/// The file inside a release unit each capability probe opens by name.
+/// The file inside a release unit one capability probe opens by name.
 ///
-/// One list rather than five literals, because a consumer that has to know
-/// which paths a derivation reads — evidence assembly proves each of them
+/// Named here rather than beside each probe, because a consumer that must know
+/// which paths the derivation reads — evidence assembly proves each of them
 /// against the release commit before trusting what it derived — would
-/// otherwise restate the names beside the probes that use them, and a probe
-/// added later would leave that restatement silently short.
-/// The file one capability probe opens inside a release unit.
-///
-/// Matched exhaustively rather than looked up, so a capability added later
-/// cannot compile without naming the file its probe opens.
+/// otherwise restate the names, and a probe added later would leave that
+/// restatement silently short. Matched exhaustively, so a capability added
+/// later cannot compile without naming the file its probe opens.
 pub const fn probe_file(capability: Capability) -> &'static str {
     match capability {
         Capability::NodePackage => "package.json",
@@ -599,9 +607,7 @@ pub const fn probe_file(capability: Capability) -> &'static str {
 pub fn publication_probe_paths(config: &Config) -> BTreeSet<PathBuf> {
     let mut paths = BTreeSet::new();
     for release_unit in config.release_units.values() {
-        if release_unit.disposition != ReleaseUnitDisposition::Managed
-            || release_unit.publishers().is_empty()
-        {
+        if !selects_publications(release_unit) {
             continue;
         }
         for capability in Capability::ALL {
@@ -1042,6 +1048,92 @@ release-units:
                 .is_empty(),
             "native package evidence alone never creates publication intent"
         );
+    }
+
+    /// The reader names every path the selection opens, for every unit.
+    ///
+    /// `publication_probe_paths` exists so evidence assembly can prove what the
+    /// selection read, and the two agree only if they skip the same release
+    /// units. Sharing `selects_publications` makes them agree by construction,
+    /// but construction is what a later edit undoes, and neither side's own
+    /// tests can see the divergence: the selection would open probe files the
+    /// reader never names, the comparison would pass over paths nobody
+    /// compared, and every assertion on either side would stay green.
+    ///
+    /// Held here by outcome rather than by inspection. A workspace carrying
+    /// every probe file for a publishing unit, a suspended one and one with no
+    /// publisher, with exactly the named paths deleted, must resolve to what an
+    /// empty workspace resolves to. A reader that skipped a unit the selection
+    /// probes would leave that unit's files in place, and the two results
+    /// would differ.
+    #[test]
+    fn names_every_path_the_selection_opens() {
+        const UNITS: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  published:
+    path: published
+    npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  suspended:
+    path: suspended
+    disposition: suspended
+    npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  unpublished:
+    path: unpublished
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+        let config = Config::from_yaml(UNITS).expect("fixture config");
+        let stocked = Workspace::new("probe-paths-stocked");
+        let bare = Workspace::new("probe-paths-bare");
+        for unit in ["published", "suspended", "unpublished"] {
+            for capability in Capability::ALL {
+                stocked.write(
+                    &format!("{unit}/{}", probe_file(capability)),
+                    match capability {
+                        Capability::NodePackage => {
+                            "{\"name\":\"example-component\",\"version\":\"1.0.0\"}"
+                        }
+                        Capability::RustCrate => {
+                            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n"
+                        }
+                        Capability::GoApplication => "module example.test/component\n",
+                        Capability::RunnableImage => "FROM scratch\n",
+                        Capability::DevContainerFeature => "{\"id\":\"example\"}\n",
+                    },
+                );
+            }
+            for name in Packager::GoReleaser.configuration_paths() {
+                stocked.write(&format!("{unit}/{name}"), "builds:\n  - main: ./cmd/tool\n");
+            }
+        }
+        for path in publication_probe_paths(&config) {
+            let path = stocked.root().join(path);
+            if path.is_file() {
+                std::fs::remove_file(&path).expect("remove a named path");
+            }
+        }
+
+        let stripped = resolve_publications(stocked.root(), &config).expect("resolves");
+        let empty = resolve_publications(bare.root(), &config).expect("resolves");
+        assert_eq!(
+            (identities(&stripped.selected), stripped.diagnostics),
+            (identities(&empty.selected), empty.diagnostics),
+            "the selection opens a probe file the reader does not name"
+        );
+    }
+
+    /// Publication identities, in the order the selection produced them.
+    fn identities(selected: &[SelectedPublication]) -> Vec<String> {
+        selected.iter().map(SelectedPublication::identity).collect()
     }
 
     /// Every capability the derivation can produce is one this module lists.
