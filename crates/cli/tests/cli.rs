@@ -2622,7 +2622,6 @@ fn assembly_environment() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Stage one contribution through the CLI and place it under its transport name.
 /// Write one fixture file at an absolute path outside the repository.
 fn write_outside(path: &Path, contents: &str) {
     if let Some(parent) = path.parent() {
@@ -2631,6 +2630,7 @@ fn write_outside(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write fixture file");
 }
 
+/// Stage one contribution through the CLI and place it under its transport name.
 fn contribute_artifact(repo: &TestRepo, namespace: &str, job: &str, attempt: &str) -> PathBuf {
     let staged = repo
         .outside(&format!("staging/{namespace}-{job}-{attempt}"))

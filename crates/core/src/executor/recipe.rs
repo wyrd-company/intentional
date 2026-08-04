@@ -559,6 +559,58 @@ pub fn capability_set(evidence: &[CapabilityEvidence]) -> BTreeSet<Capability> {
     evidence.iter().map(|item| item.capability).collect()
 }
 
+/// The file inside a release unit each capability probe opens by name.
+///
+/// One list rather than five literals, because a consumer that has to know
+/// which paths a derivation reads — evidence assembly proves each of them
+/// against the release commit before trusting what it derived — would
+/// otherwise restate the names beside the probes that use them, and a probe
+/// added later would leave that restatement silently short.
+pub const CAPABILITY_PROBES: [(Capability, &str); 5] = [
+    (Capability::NodePackage, "package.json"),
+    (Capability::RustCrate, "Cargo.toml"),
+    (Capability::GoApplication, "go.mod"),
+    (Capability::RunnableImage, "Dockerfile"),
+    (Capability::DevContainerFeature, "devcontainer-feature.json"),
+];
+
+/// The file one capability probe opens inside a release unit.
+const fn probe_file(capability: Capability) -> &'static str {
+    let mut index = 0;
+    while index < CAPABILITY_PROBES.len() {
+        if CAPABILITY_PROBES[index].0 as u8 == capability as u8 {
+            return CAPABILITY_PROBES[index].1;
+        }
+        index += 1;
+    }
+    panic!("every capability probes one file")
+}
+
+/// Every path the publication selection opens, relative to the workspace root.
+///
+/// A consumer that must prove what the selection read needs the paths before
+/// the selection runs, and needs them from here rather than from a list of its
+/// own. The Go discovery walks for `*.go` files rather than opening one by
+/// name, so a caller widens this set with those; every other read is a fixed
+/// name under a release unit.
+pub fn publication_probe_paths(config: &Config) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    for release_unit in config.release_units.values() {
+        if release_unit.disposition != ReleaseUnitDisposition::Managed
+            || release_unit.publishers().is_empty()
+        {
+            continue;
+        }
+        for (_, name) in CAPABILITY_PROBES {
+            paths.insert(release_unit.path.join(name));
+        }
+        for name in Packager::GoReleaser.configuration_paths() {
+            paths.insert(release_unit.path.join(name));
+        }
+    }
+    paths
+}
+
 /// Derive every publishable capability of one release unit from its native evidence.
 pub fn derive_capabilities(
     root: &Path,
@@ -566,43 +618,54 @@ pub fn derive_capabilities(
 ) -> Result<Vec<CapabilityEvidence>> {
     let mut derived = Vec::new();
     let unit = &release_unit.path;
-    if node_package_is_publishable(root, &unit.join("package.json"))? {
+    if node_package_is_publishable(root, &unit.join(probe_file(Capability::NodePackage)))? {
         derived.push(capability_evidence(
             root,
             Capability::NodePackage,
-            unit.join("package.json"),
+            unit.join(probe_file(Capability::NodePackage)),
         )?);
     }
-    if cargo_manifest(root, &unit.join("Cargo.toml"))?
+    if cargo_manifest(root, &unit.join(probe_file(Capability::RustCrate)))?
         .is_some_and(|manifest| manifest.publishable())
     {
         derived.push(capability_evidence(
             root,
             Capability::RustCrate,
-            unit.join("Cargo.toml"),
+            unit.join(probe_file(Capability::RustCrate)),
         )?);
     }
-    if root.join(unit).join("go.mod").is_file()
+    if root
+        .join(unit)
+        .join(probe_file(Capability::GoApplication))
+        .is_file()
         && main_package_directory(&root.join(unit))?.is_some()
     {
         derived.push(capability_evidence(
             root,
             Capability::GoApplication,
-            unit.join("go.mod"),
+            unit.join(probe_file(Capability::GoApplication)),
         )?);
     }
-    if root.join(unit).join("Dockerfile").is_file() {
+    if root
+        .join(unit)
+        .join(probe_file(Capability::RunnableImage))
+        .is_file()
+    {
         derived.push(capability_evidence(
             root,
             Capability::RunnableImage,
-            unit.join("Dockerfile"),
+            unit.join(probe_file(Capability::RunnableImage)),
         )?);
     }
-    if root.join(unit).join("devcontainer-feature.json").is_file() {
+    if root
+        .join(unit)
+        .join(probe_file(Capability::DevContainerFeature))
+        .is_file()
+    {
         derived.push(capability_evidence(
             root,
             Capability::DevContainerFeature,
-            unit.join("devcontainer-feature.json"),
+            unit.join(probe_file(Capability::DevContainerFeature)),
         )?);
     }
     Ok(derived)

@@ -5,7 +5,7 @@
 
 //! Deterministic assembly of one final release-evidence bundle.
 
-use crate::config::Config;
+use crate::config::{Config, CONFIG_PATH};
 use crate::error::{Error, Result};
 use crate::evidence::contribution::{
     namespace_hash, parse_artifact_name, ContributionArtifactName, ContributionManifest,
@@ -14,7 +14,7 @@ use crate::evidence::contribution::{
 };
 use crate::evidence::identity::{fragment_disagreements, phase_disagreements, proved_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
-use crate::executor::recipe::{resolve_publications, SelectedPublication};
+use crate::executor::recipe::{publication_probe_paths, resolve_publications, SelectedPublication};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use crate::release::git::GitCommand;
 use serde::{Deserialize, Serialize};
@@ -470,7 +470,6 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         )));
     }
 
-    require_proved_working_tree(request.root, &mut findings);
     let config = Config::load(request.root)?;
     let selection = resolve_publications(request.root, &config)?;
     findings.extend(selection.diagnostics);
@@ -490,6 +489,12 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         }
     };
     if let Some(proved) = &proved {
+        require_proved_reads(
+            request.root,
+            &proved.identity.release_commit,
+            &config,
+            &mut findings,
+        );
         reconcile_publications(&proved.plan, &selection.selected, &mut findings);
     }
     let (release, sealed) = match proved {
@@ -864,7 +869,7 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
     findings
 }
 
-/// Refuse a working tree that is not the one reproduction proved.
+/// Refuse a checkout whose files are not the ones the release published.
 ///
 /// Reproduction proves the *committed* tree at the release commit, and every
 /// other read assembly performs — the configuration, and each manifest the
@@ -875,50 +880,149 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
 /// `.intentional/config.yml` and shift the expected publication set to
 /// anything at all.
 ///
-/// Both halves of a dirty tree are refused, because both replace a proved
-/// read. A modified or deleted tracked path substitutes a file the release did
-/// not carry at that path; an untracked file supplies one the release did not
-/// carry at all, which is what turns an unresolvable release unit into a
-/// selected publication. Ignored files are not refused, because nothing
-/// assembly reads can be ignored and still be part of the release.
+/// The question asked is deliberately not *is this checkout dirty*. That
+/// question is answered by rules that are not part of the proved tree and are
+/// writable by any step in the job: an entry in `.git/info/exclude` never
+/// appears in the working tree at all, and an untracked `.gitignore` whose
+/// pattern is `*` silences the whole sweep including itself. An oracle outside
+/// R cannot establish a property of R.
 ///
-/// Refusing is the whole repair rather than half of one: with the working tree
-/// held to R, the configuration assembly reads *is* the configuration at the
-/// proved release commit, which is what the design and the command contract
-/// both state.
-fn require_proved_working_tree(root: &Path, findings: &mut Vec<String>) {
-    let status = match GitCommand::new(root)
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .run()
-    {
-        Ok(status) => status,
-        Err(error) => {
-            findings.push(format!(
+/// The question asked instead is *are the files I am about to read the files
+/// the release published*, path by path, against the blob the release commit
+/// carries. Ignore rules cannot hide a content mismatch on a path opened by
+/// name, so the class closes rather than one input at a time. Restricting the
+/// comparison to what assembly reads is also what keeps a refusal from firing
+/// on repository state assembly never opens.
+///
+/// The paths come from `publication_probe_paths`, beside the probes that open
+/// them, rather than from a list restated here that a later probe would leave
+/// short. Go discovery is the one read that opens files by pattern rather than
+/// by name, so its `*.go` sources are added from both sides — the release
+/// commit and the disk — and a source file present on only one of them is a
+/// difference like any other.
+fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &mut Vec<String>) {
+    let mut paths = publication_probe_paths(config);
+    paths.insert(PathBuf::from(CONFIG_PATH));
+    for release_unit in config.release_units.values() {
+        paths.extend(go_sources(root, release, &release_unit.path));
+    }
+
+    let mut differing = Vec::new();
+    for path in &paths {
+        match read_differs(root, release, path) {
+            Ok(true) => differing.push(path.display().to_string()),
+            Ok(false) => {}
+            Err(error) => findings.push(format!(
                 "the assembling checkout cannot be compared with the release it sits on: {error}"
-            ));
-            return;
+            )),
         }
-    };
-    let text = match status.text() {
-        Ok(text) => text,
-        Err(error) => {
-            findings.push(format!(
-                "the assembling checkout cannot be compared with the release it sits on: {error}"
-            ));
-            return;
-        }
-    };
-    let dirty: Vec<&str> = text
-        .lines()
-        .filter_map(|line| line.get(3..))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .collect();
-    if !dirty.is_empty() {
+    }
+    if !differing.is_empty() {
         findings.push(format!(
-            "the assembling working tree is not the released tree; reproduction proves the commit, and assembly reads these paths from disk: {}",
-            dirty.join(", ")
+            "the assembling checkout does not carry the files the release published; assembly reads these paths, and they differ from the release commit: {}",
+            differing.join(", ")
         ));
+    }
+}
+
+/// Whether one path assembly reads differs from the release commit.
+///
+/// Absent on both sides is not a difference: most probes ask about a file the
+/// release unit never had, and a probe that found nothing at the release commit
+/// and finds nothing now read the same thing both times.
+fn read_differs(root: &Path, release: &str, path: &Path) -> Result<bool> {
+    let published = blob_at(root, release, path)?;
+    let present = disk_blob(root, path)?;
+    Ok(published != present)
+}
+
+/// Identity of the blob one commit carries at a path, if it carries one.
+fn blob_at(root: &Path, release: &str, path: &Path) -> Result<Option<String>> {
+    let reference = format!("{release}:{}", path.display());
+    let output = GitCommand::new(root)
+        .args(["rev-parse", "--verify", "--quiet", &reference])
+        .output()?;
+    if !output.succeeded() {
+        return Ok(None);
+    }
+    Ok(Some(output.line()?))
+}
+
+/// Identity the file on disk would have as a blob, if it is there to read.
+///
+/// Hashed without filters, because the bytes assembly reads are the bytes on
+/// disk. A checkout filter that rewrites content on the way out would make a
+/// file assembly reads differ from the one the release published, and that is
+/// the difference this refuses rather than the one it forgives.
+fn disk_blob(root: &Path, path: &Path) -> Result<Option<String>> {
+    if !root.join(path).is_file() {
+        return Ok(None);
+    }
+    let output = GitCommand::new(root)
+        .args([
+            "hash-object",
+            "--no-filters",
+            "--",
+            &path.display().to_string(),
+        ])
+        .output()?;
+    if !output.succeeded() {
+        return Err(Error::Git(output.diagnostic()));
+    }
+    Ok(Some(output.line()?))
+}
+
+/// Every Go source under one release unit, as the commit and the disk have it.
+///
+/// Go discovery walks directories for `*.go` files and reads the ones it finds,
+/// so the paths it opens cannot be named in advance. Taking the union of both
+/// sides makes a source the release never published a difference, which is what
+/// a directory appearing on disk alone would otherwise achieve quietly.
+fn go_sources(root: &Path, release: &str, unit: &Path) -> BTreeSet<PathBuf> {
+    let mut sources = BTreeSet::new();
+    let listing = GitCommand::new(root)
+        .args([
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            release,
+            "--",
+            &unit.display().to_string(),
+        ])
+        .output();
+    if let Ok(listing) = listing {
+        if listing.succeeded() {
+            if let Ok(text) = listing.text() {
+                sources.extend(
+                    text.split('\0')
+                        .filter(|name| name.ends_with(".go"))
+                        .map(PathBuf::from),
+                );
+            }
+        }
+    }
+    collect_go_sources(&root.join(unit), unit, &mut sources);
+    sources
+}
+
+/// Add every Go source on disk beneath one directory.
+fn collect_go_sources(directory: &Path, relative: &Path, sources: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let child = relative.join(&name);
+        let path = entry.path();
+        if path.is_dir() {
+            collect_go_sources(&path, &child, sources);
+        } else if child.extension().is_some_and(|extension| extension == "go") {
+            sources.insert(child);
+        }
     }
 }
 
@@ -1901,9 +2005,10 @@ phase-tags: []
             None,
             &[("report.json", "trusted")],
         );
-        std::fs::write(workspace.root.join("secret.txt"), "secret").expect("secret");
+        let secret = workspace.scratch().join("secret.txt");
+        std::fs::write(&secret, "secret").expect("secret");
         for (name, file) in [
-            ("report.json", "../../secret.txt"),
+            ("report.json", "../../../scratch/secret.txt"),
             ("../escape.json", "attachments/../escape.json"),
             ("/etc/passwd", "attachments//etc/passwd"),
         ] {
@@ -1915,7 +2020,7 @@ phase-tags: []
             )
             .expect("manifest");
             let output = workspace
-                .root
+                .scratch()
                 .join(format!("release-evidence-{}", name.len()));
             let error =
                 assemble(&request(&workspace, &input, &output)).expect_err("traversal rejected");
@@ -1923,6 +2028,10 @@ phase-tags: []
             assert!(
                 message.contains("unusable Release asset name") || message.contains("instead of"),
                 "{message}"
+            );
+            assert!(
+                !message.contains("does not carry the files the release published"),
+                "the traversal is the only thing wrong with this run: {message}"
             );
             assert!(!output.exists(), "a rejected assembly writes nothing");
         }
@@ -2492,7 +2601,7 @@ subjects: []
         assert!(assembly.evidence_path.is_file());
     }
 
-    /// A dirty checkout is refused, not silently believed.
+    /// A read the release never published is refused, not silently believed.
     ///
     /// Reproduction proves the committed tree; the configuration and every
     /// manifest the publication selection consults are read from disk. This is
@@ -2501,12 +2610,12 @@ subjects: []
     /// `.intentional/config.yml` on disk selects no publication for a release
     /// whose committed configuration selects one.
     ///
-    /// Without the working-tree check it assembles successfully and writes a
-    /// complete statement with an empty `release-units` section — a true
-    /// document about a release that did not happen, which is the failure the
+    /// Without the comparison it assembles successfully and writes a complete
+    /// statement with an empty `release-units` section — a true document about
+    /// a release that did not happen, which is the failure the
     /// affirmative-evidence rule exists to prevent.
     #[test]
-    fn refuses_a_working_tree_whose_configuration_the_release_never_carried() {
+    fn refuses_a_configuration_the_release_never_published() {
         let workspace = workspace();
         let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2519,10 +2628,11 @@ subjects: []
         .expect("drifted configuration");
 
         let error = assemble(&request(&workspace, &input, &output))
-            .expect_err("a working tree the release never carried is refused");
+            .expect_err("a configuration the release never published is refused");
         let message = error.to_string();
         assert!(
-            message.contains("the assembling working tree is not the released tree"),
+            message
+                .contains("the assembling checkout does not carry the files the release published"),
             "{message}"
         );
         assert!(
@@ -2535,25 +2645,88 @@ subjects: []
         );
     }
 
-    /// An ignored file is not a file the release was supposed to carry.
+    /// A file at a path assembly reads that the release never published.
     ///
-    /// The refusal is stated in the command contract as excluding ignored
-    /// files, and an exclusion nothing exercises is where a refusal quietly
-    /// becomes total. Nothing assembly reads can be ignored and still belong to
-    /// the release, so an ignored path changes no read it performs.
+    /// The other half. This does not replace a proved read; it adds one. A
+    /// release unit that carried no Cargo manifest at the release commit
+    /// derives no Rust capability, and a manifest appearing on disk is how an
+    /// unresolvable publication becomes a selected one. The comparison covers
+    /// it because the path is one the capability probe opens by name, whether
+    /// or not the release commit has anything there.
     #[test]
-    fn assembles_beside_a_file_the_repository_ignores() {
-        let workspace = ReleasedWorkspace::with(
-            CONFIG,
-            &[
-                (
-                    "component/package.json",
-                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
-                ),
-                (".gitignore", "*.log\n"),
-            ],
-            "component",
+    fn refuses_a_file_at_a_path_it_reads_that_the_release_never_published() {
+        let workspace = workspace();
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::write(
+            workspace.root.join("component/Cargo.toml"),
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
+        )
+        .expect("manifest the release never published");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a file at a path it reads that the release never published is refused");
+        let message = error.to_string();
+        assert!(
+            message
+                .contains("the assembling checkout does not carry the files the release published"),
+            "{message}"
         );
+        assert!(
+            message.contains("component/Cargo.toml"),
+            "the diagnostic names the path: {message}"
+        );
+    }
+
+    /// An ignore rule cannot hide a difference on a path assembly reads.
+    ///
+    /// This is the input that closed the previous repair. Asking git whether
+    /// the checkout is dirty delegates the answer to rules that live outside
+    /// the proved tree: `.git/info/exclude` is not in the working tree at all,
+    /// and any step in the assembling job can write it. Here it names the very
+    /// path whose drift the release would otherwise be closed against.
+    ///
+    /// Comparing the path's bytes to the blob the release commit carries does
+    /// not consult those rules, so the exclusion buys nothing.
+    #[test]
+    fn refuses_a_difference_an_ignore_rule_conceals() {
+        let workspace = workspace();
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::write(
+            workspace.root.join(".git/info/exclude"),
+            "*\n.intentional/config.yml\n",
+        )
+        .expect("repository-local exclude");
+        std::fs::write(
+            workspace.root.join(".intentional/config.yml"),
+            UNPUBLISHED_CONFIG,
+        )
+        .expect("drifted configuration");
+        std::fs::write(workspace.root.join(".gitignore"), "*\n").expect("self-matching ignore");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("an ignore rule cannot conceal a difference on a path assembly reads");
+        assert!(
+            error.to_string().contains(".intentional/config.yml"),
+            "{error}"
+        );
+    }
+
+    /// Repository state assembly never opens is not the release's business.
+    ///
+    /// The refusal is scoped to what assembly reads, not to whether the
+    /// checkout is tidy. A build artefact, a scratch file, an editor backup —
+    /// none of them change a read assembly performs, and refusing on them would
+    /// convert a cosmetic repository condition into a release that cannot be
+    /// closed after everything is already published.
+    #[test]
+    fn assembles_beside_files_it_never_reads() {
+        let workspace = workspace();
         let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
@@ -2563,41 +2736,19 @@ subjects: []
         )
         .expect("fragment");
         let output = workspace.scratch().join("release-evidence");
-        std::fs::write(workspace.root.join("assembly.log"), "noise\n").expect("ignored file");
+        std::fs::write(workspace.root.join("assembly.log"), "noise\n").expect("scratch file");
+        std::fs::create_dir_all(workspace.root.join("component/node_modules/left-pad"))
+            .expect("installed dependency");
+        std::fs::write(
+            workspace
+                .root
+                .join("component/node_modules/left-pad/package.json"),
+            "{\n  \"name\": \"left-pad\"\n}\n",
+        )
+        .expect("installed manifest");
 
         assemble(&request(&workspace, &input, &output))
-            .expect("an ignored file is not a file the release never carried");
-    }
-
-    /// A file the release never carried is refused too.
-    ///
-    /// The other half of a dirty tree. An untracked file does not replace a
-    /// proved read; it adds a file to the tree assembly reads, and the
-    /// publication selection opens paths the configuration names rather than a
-    /// fixed list. Refusing it is what makes "the configuration at the proved
-    /// release commit" exact rather than approximate: every path assembly
-    /// reads is a path the release commit carries, with the content it carried.
-    #[test]
-    fn refuses_a_working_tree_carrying_a_file_the_release_never_carried() {
-        let workspace = workspace();
-        let input = workspace.scratch().join("artifacts");
-        std::fs::create_dir_all(&input).expect("artifacts");
-        stage_intending(&workspace, &input, "  []\n");
-        let output = workspace.scratch().join("release-evidence");
-        std::fs::write(workspace.root.join("component/npm-shrinkwrap.json"), "{}\n")
-            .expect("untracked manifest");
-
-        let error = assemble(&request(&workspace, &input, &output))
-            .expect_err("a file the release never carried is refused");
-        let message = error.to_string();
-        assert!(
-            message.contains("the assembling working tree is not the released tree"),
-            "{message}"
-        );
-        assert!(
-            message.contains("component/npm-shrinkwrap.json"),
-            "the diagnostic names the file the release never carried: {message}"
-        );
+            .expect("files assembly never reads are not differences");
     }
 
     /// Unanimous fragments are not evidence of the release being closed.

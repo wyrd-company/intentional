@@ -916,12 +916,14 @@ commands:
             publication configured for it publishes nothing this release sealed.
           - >-
             The configuration and the manifests the publication selection
-            consults are read from the working tree, so a working tree that is
-            not the tree the release published is refused: any modified tracked
-            path, or any file the release commit does not carry, is reported
-            with the paths that differ. Ignored files are not reported. With
-            the tree held to the release commit, the configuration read is the
-            configuration at the proved release commit.
+            consults are read from the working tree, so each of those reads is
+            proved against the release commit: for every path assembly opens,
+            the bytes on disk are compared with the blob that commit carries,
+            and a path that differs or exists on only one side is reported with
+            every other path that differs. Whether the checkout is otherwise
+            dirty is not asked, so files assembly never opens are not reported.
+            With every read held to the release commit, the configuration read
+            is the configuration at the proved release commit.
           - >-
             The output directory is the complete assembly handoff. Its
             intentional-evidence.yml is the schema-backed release evidence and

@@ -1016,16 +1016,30 @@ proposed-design:
     rebuilt from.
 
     Reproduction proves a commit, and the configuration and every manifest the
-    publication selection consults are read from the working tree, so assembly
-    additionally refuses a working tree that is not the tree the release
-    published. Both a modified tracked path and a file the release commit does
-    not carry are refused, because both change what assembly reads without
-    changing anything reproduction inspects; ignored files are not, because
-    nothing assembly reads can be ignored and still belong to the release. With
-    the tree held to the release commit, the configuration read is the
-    configuration at the proved release commit, and a job checked out at
-    another ref, or at the right ref with edited files, is refused outright
-    rather than silently shifting what assembly expects.
+    publication selection consults are read from the working tree. Assembly
+    therefore proves each of those reads separately: for every path it opens it
+    compares the bytes on disk with the blob the release commit carries, and
+    refuses when a path differs or exists on only one side. The paths come from
+    the selection itself, beside the probes that open them, so a probe added
+    later is covered by the same comparison. Go discovery is the one read that
+    opens files by pattern rather than by name, so its sources are taken from
+    both the release commit and the disk and a source present on only one of
+    them is a difference like any other.
+
+    What is deliberately not asked is whether the checkout is dirty. That
+    question is answered by rules outside the proved tree and writable by any
+    step in the job — a repository-local exclude file never appears in the
+    working tree, and an ignore file whose pattern matches everything silences
+    a whole-tree sweep including itself. An ignore rule cannot hide a content
+    mismatch on a path opened by name, so comparing reads closes the class
+    rather than one input at a time. Scoping the comparison to what assembly
+    reads is also what keeps repository state assembly never opens — a build
+    directory, a scratch file — from converting a cosmetic condition into a
+    release that cannot be closed. With every read held to the release commit,
+    the configuration read is the configuration at the proved release commit,
+    and a job checked out at another ref, or at the right ref with edited
+    files, is refused outright rather than silently shifting what assembly
+    expects.
 
     Evidence is not the only thing the draft carries. The GitHub-hosted
     deliverables are placed there before any publisher runs, by the managed
