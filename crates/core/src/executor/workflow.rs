@@ -5053,7 +5053,7 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 20] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 22] = [
         (
             "qhwzru",
             "qhwzru",
@@ -5169,6 +5169,23 @@ release-units:
             "nkwzdt",
             "nkwzdt",
             "the GHCR repository name",
+            Surface::Plain,
+        ),
+        // The global tag template's literal affixes. The Buildx build command
+        // extracts the released version from the ref that triggered the run, so
+        // these reach a build shell as values it reads; they were spliced into
+        // that shell once, which is why they are named here rather than trusted
+        // to stay routed.
+        (
+            "tzbrmk",
+            "tzbrmk",
+            "the global release tag prefix",
+            Surface::Plain,
+        ),
+        (
+            "dnwlpq",
+            "dnwlpq",
+            "the global release tag suffix",
             Surface::Plain,
         ),
     ];
