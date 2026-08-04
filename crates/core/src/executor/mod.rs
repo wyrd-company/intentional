@@ -154,30 +154,38 @@ release-units:
     #[must_use]
     pub fn derived_workflows(label: &str) -> Vec<(crate::config::WorkflowRole, String)> {
         let workspace = managed_workspace(label);
-        let root = workspace.root();
+        derive_workflows_under(workspace.root())
+    }
+
+    /// Derive both managed workflows in a workspace someone else owns.
+    ///
+    /// Every way a derivation can fail arrives at one panic, so the diagnostic
+    /// is wired once and one test reaches it. Reporting each failure at its own
+    /// site left the wiring provable nowhere.
+    fn derive_workflows_under(root: &Path) -> Vec<(crate::config::WorkflowRole, String)> {
         crate::config::WorkflowRole::ALL
             .into_iter()
             .map(|role| {
-                let comparison = super::compare_workflow(root, role, None)
+                let derived = derive_role(root, role)
                     .unwrap_or_else(|error| panic!("{}", derivation_failure(root, role, &error)));
-                assert_eq!(
-                    comparison.status,
-                    super::ComparisonStatus::Different,
-                    "the {role} contract must derive: {:?}",
-                    comparison.diagnostics
-                );
-                let applied = comparison
-                    .apply()
-                    .unwrap_or_else(|error| panic!("{}", derivation_failure(root, role, &error)));
-                assert!(applied.applied);
-                (
-                    role,
-                    std::fs::read_to_string(root.join(&applied.path)).unwrap_or_else(|error| {
-                        panic!("{}", derivation_failure(root, role, &error))
-                    }),
-                )
+                (role, derived)
             })
             .collect()
+    }
+
+    /// Reconcile one role and read back what the repository would receive.
+    fn derive_role(root: &Path, role: crate::config::WorkflowRole) -> crate::Result<String> {
+        let comparison = super::compare_workflow(root, role, None)?;
+        assert_eq!(
+            comparison.status,
+            super::ComparisonStatus::Different,
+            "the {role} contract must derive: {:?}",
+            comparison.diagnostics
+        );
+        let applied = comparison.apply()?;
+        assert!(applied.applied);
+        let path = root.join(&applied.path);
+        std::fs::read_to_string(&path).map_err(|error| crate::Error::io(&path, error))
     }
 
     /// Why one role's derivation did not finish.
@@ -207,7 +215,9 @@ release-units:
 
     #[cfg(test)]
     mod tests {
-        use super::{derivation_failure, workspace_directory_name, Workspace};
+        use super::{
+            derivation_failure, derive_workflows_under, workspace_directory_name, Workspace,
+        };
         use crate::config::WorkflowRole;
 
         /// The defect the CLI handoff fixtures were exposed to: one label,
@@ -226,6 +236,12 @@ release-units:
             );
         }
 
+        /// Smoke check with no witness, kept for the isolation assertion only.
+        ///
+        /// Distinctness over real `Workspace::new` calls holds without the
+        /// sequence number nearly every time, so no mutation kills this alone.
+        /// The uniqueness guard above and the collision refusal below are what
+        /// carry the property; this one carries none of it.
         #[test]
         fn two_workspaces_under_one_label_own_separate_roots() {
             let first = Workspace::new("shared-label");
@@ -263,6 +279,35 @@ release-units:
                 missing.contains("removed while the derivation was running"),
                 "{missing}"
             );
+        }
+
+        /// Which role failed is half of what makes the diagnostic actionable:
+        /// one role deriving and the other not is a different defect from
+        /// neither deriving.
+        #[test]
+        fn a_derivation_failure_names_the_role_that_failed() {
+            let workspace = Workspace::new("derivation-role");
+            let release = derivation_failure(workspace.root(), WorkflowRole::Release, &"io error");
+            let publish = derivation_failure(workspace.root(), WorkflowRole::Publish, &"io error");
+            assert!(
+                release.contains(&WorkflowRole::Release.to_string()),
+                "{release}"
+            );
+            assert!(
+                publish.contains(&WorkflowRole::Publish.to_string()),
+                "{publish}"
+            );
+            assert_ne!(release, publish, "the two roles read alike: {release}");
+        }
+
+        /// The wiring the residual claim rests on: a derivation that cannot
+        /// complete reports through the diagnostic rather than through a bare
+        /// `expect`, at whichever step gives out first.
+        #[test]
+        #[should_panic(expected = "the fixture workspace root is")]
+        fn a_derivation_that_cannot_complete_reports_through_the_diagnostic() {
+            let workspace = Workspace::new("derivation-unwired");
+            let _ = derive_workflows_under(workspace.root());
         }
     }
 }

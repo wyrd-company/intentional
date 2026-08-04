@@ -1421,21 +1421,30 @@ release-units:
     /// Attempts the racing harness makes before it concludes nothing raced.
     ///
     /// The bound caps the test's runtime. It is not a sample size the result
-    /// depends on: the probe answers a removal in one syscall, so no number of
-    /// attempts can observe one.
+    /// depends on: the probe does not retry, so a removal it sees is resolved on
+    /// the spot and one observation settles the question. What the bound has to
+    /// be large enough for is the harness's own liveness check, which needs the
+    /// competitor to be caught publishing at least once.
     const RACING_ATTEMPTS: usize = 20_000;
 
     /// Run one probe against a file another thread keeps taking away.
     ///
-    /// The competitor rewrites and removes the file continuously, so the window
-    /// between the probe's existence check and its read is reopened for every
-    /// attempt. Any error the probe returns is the defect: the file was there,
-    /// then it was not, which is the interleaving a concurrently dropped fixture
-    /// workspace produces.
+    /// The competitor publishes and withdraws the file continuously, so the
+    /// window between the probe's existence check and its read is reopened for
+    /// every attempt. Any error the probe returns is the defect: the file was
+    /// there, then it was not, which is the interleaving a concurrently dropped
+    /// fixture workspace produces.
+    ///
+    /// Absence is also what a competitor that never publishes produces, and it
+    /// is what every filesystem call here would produce if it started failing,
+    /// because each one is discarded. `present` distinguishes the two: the run
+    /// has to catch the file published at least once, or the race it reports
+    /// surviving was never run.
     fn under_removal<T>(
         label: &str,
         file: &str,
         probe: impl Fn(&Path, &Path) -> Result<T>,
+        present: impl Fn(&T) -> bool,
         contents: &str,
     ) {
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -1464,16 +1473,29 @@ release-units:
         };
 
         let relative = Path::new(file);
-        let outcome = (0..RACING_ATTEMPTS)
-            .map(|_| probe(&root, relative))
-            .find(std::result::Result::is_err);
+        let mut observed_present = 0_usize;
+        let mut failure = None;
+        for _ in 0..RACING_ATTEMPTS {
+            match probe(&root, relative) {
+                Ok(answer) if present(&answer) => observed_present += 1,
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
 
         stop.store(true, Ordering::Relaxed);
         competitor.join().expect("the competing thread finishes");
 
-        if let Some(Err(error)) = outcome {
+        if let Some(error) = failure {
             panic!("{file} was removed while the probe ran and became a failure: {error:?}");
         }
+        assert!(
+            observed_present > 0,
+            "the competitor never published {file}, so no removal was ever raced and this run proves nothing"
+        );
     }
 
     /// The window the CLI handoff fixtures fell into, opened on purpose.
@@ -1483,6 +1505,7 @@ release-units:
             "cargo-manifest-removal-race",
             "Cargo.toml",
             cargo_manifest,
+            std::option::Option::is_some,
             "[package]\nname = \"raced-component\"\nversion = \"1.0.0\"\n",
         );
     }
@@ -1494,6 +1517,7 @@ release-units:
             "package-manifest-removal-race",
             "package.json",
             node_package_is_publishable,
+            |publishable| *publishable,
             r#"{"name":"raced-component","version":"1.0.0"}"#,
         );
     }
