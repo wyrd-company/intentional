@@ -6591,7 +6591,7 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 28] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 30] = [
         (
             "qhwzru",
             "qhwzru",
@@ -6696,6 +6696,27 @@ release-units:
             "phqvrb",
             "the Docker Hub repository name",
             Surface::Plain,
+        ),
+        // The Docker Hub credential names. They are config-supplied, they pass
+        // the same identifier validator as their npm and Cargo twins, and they
+        // land on the same expression surface -- so they are rostered for the
+        // same reason those two are. Injection through them is closed at
+        // configuration load by the identifier grammar; what these rows hold is
+        // *reach*, that each still arrives on the surface it is claimed to
+        // arrive on and on no other. A row asserting they cannot carry an
+        // injection would be documentation counted as a guard, because no input
+        // reaches the splice check in the state it forbids.
+        (
+            "KLXVBRQ",
+            "KLXVBRQ",
+            "the Docker Hub username-variable name",
+            Surface::Expression,
+        ),
+        (
+            "WZDNGPT",
+            "WZDNGPT",
+            "the Docker Hub token-secret name",
+            Surface::Expression,
         ),
         (
             "mwbqjt",
@@ -7141,6 +7162,32 @@ release-units:
                         .as_str()
                         .map(|body| (id.clone(), body.to_owned()))
                 })
+            })
+            .collect()
+    }
+
+    /// How many `run:` bodies each managed job of one derived workflow carries.
+    ///
+    /// A second walk of the same input, so the sweep above is held to an
+    /// equality rather than to a floor. `managed_shell_bodies` flattens every
+    /// job's steps into one stream and recognises a body by `run` holding a
+    /// string; this indexes the document by each managed job's own identifier
+    /// and recognises a step by carrying the `run` key at all. A sweep narrowed
+    /// to the first body of each job -- the shape a `flat_map`/`filter_map`
+    /// slipping to `find_map` produces -- satisfies every floor anyone would
+    /// think to write, including non-emptiness, and disagrees with this.
+    fn managed_shell_body_counts(root: &Path, role: WorkflowRole) -> BTreeMap<String, usize> {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        sentinel_jobs(root, role)
+            .into_iter()
+            .map(|(id, _)| {
+                let carried = document["jobs"][&id]["steps"]
+                    .as_sequence()
+                    .expect("a managed job carries steps")
+                    .iter()
+                    .filter(|step| step.get("run").is_some())
+                    .count();
+                (id, carried)
             })
             .collect()
     }
@@ -7995,6 +8042,71 @@ release-units:
     // same class on the OCI surface and closed it this way, and the values and
     // the fixture here are this surface's. A gate shared across the recipe
     // surfaces is its own task.
+    //
+    // # What forces each list this gate reads
+    //
+    // A list is self-forcing exactly when the derived side of its equality is
+    // built without consulting the list. A list compared against something
+    // filtered through itself cannot fail in the direction that matters, and a
+    // green suite over such a list is evidence of nothing. Each list here is
+    // classified by that test, and where the answer is "nothing enumerates
+    // this", that is written down rather than left to be inferred from silence.
+    //
+    // - `SENTINEL_JOBS`. **Self-forcing.** Its derived side is `sentinel_jobs`,
+    //   which recognises a managed job by the ownership sentinel and knows
+    //   nothing about the list. A managed job entering or leaving derivation
+    //   fails the enumeration until it is written down.
+    // - The publisher span of the swept shell. **Self-forcing, and there is no
+    //   list.** The expected side is `resolve_publications` over the same
+    //   workspace -- production's own resolution, reading the configuration
+    //   rather than the workflow -- and the read side parses swept job
+    //   identifiers by the shape `publication_job_id` builds. The two sides
+    //   share the sentinel workspace and nothing else. Narrowing the sweep
+    //   moves only the read side; narrowing production's resolution removes the
+    //   publish jobs themselves and fails `SENTINEL_JOBS`, which reads neither.
+    // - The per-job `run:` body count. **Self-forcing.** `managed_shell_bodies`
+    //   flattens steps and reads `run` as a string; `managed_shell_body_counts`
+    //   indexes the document by job identifier and counts the `run` key. Two
+    //   walks, one input, an equality rather than a floor.
+    // - `REPOSITORY_SUPPLIED_VALUES`. **Not self-forcing, and nothing
+    //   enumerates its domain.** The domain is "values an author typed into
+    //   this fixture that derivation reads", and no production surface
+    //   enumerates it: derivation reads configuration, native manifests, a
+    //   Cargo registry table and a GoReleaser document through separate paths,
+    //   and a value's *origin* is not a property any of them carries. Each row
+    //   still carries a falsifiable reach assertion, so a row that stopped
+    //   being true fails; what nothing catches is a row never written. Epic
+    //   task 180 owns the conversion and it has to enumerate the derivation's
+    //   repository-read sites, as the roster's own header states.
+    // - `CLOSED_AT_THE_BOUNDARY`. **Not self-forcing; the enumerator exists and
+    //   does not fit.** `nfpm` formats are a fixed declared vocabulary, but only
+    //   `archlinux` names a package the format's own name does not spell, so
+    //   only that row can tell a mapped value from a passed-through one. An
+    //   equality against the format vocabulary would be an equality three of
+    //   whose four members cannot witness the property. The row is held instead
+    //   by a two-sided assertion -- declared spelling absent, derived literal
+    //   present -- which is what makes a relaxed closure fail here.
+    // - `ABSENT_FROM_MANAGED_CONTENT`. **Not self-forcing; no enumerator
+    //   exists.** Its domain is "supplied values that reach nothing", which is
+    //   defined by absence and so has no positive enumeration to compare
+    //   against. Each row is falsifiable in the direction that matters: a value
+    //   routed into managed content fires the row and is forced onto the
+    //   roster. A value that should have been listed and never was is not
+    //   caught, and cannot be by anything short of the roster's own conversion.
+    //
+    // # Publisher kinds this gate does not read, and why
+    //
+    // `recipe::catalog()` names seven publisher kinds and this configuration
+    // resolves five. `PublisherKind::Rpm` and `PublisherKind::Apt` are the two
+    // it does not, and they derive no privileged shell for anything to read:
+    // configuring either blocks derivation with `maintained-recipe-underived`,
+    // proved at `refuses_a_publication_whose_maintained_recipe_is_not_derived`.
+    // So this is not the "three of five" shortfall one notch further out. There
+    // is no rpm or apt promote body in existence to sweep. When a maintained
+    // recipe derives one for this configuration, the publisher-span equality
+    // above holds the sweep to reading its shell, because that equality's
+    // expected side is production's resolution rather than anything written
+    // down here -- the same property the sweep-narrowing mutation exercises.
     #[test]
     fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
         // How much the gate inspected is established before any rule is
@@ -8036,6 +8148,26 @@ release-units:
                     !bodies.is_empty(),
                     "the {role} workflow contributes managed shell for the sweep to read"
                 );
+                // How much of each job the sweep read, against a count of the
+                // same jobs' bodies taken by a different walk. Non-emptiness
+                // above is a floor and a floor cannot see a sweep that reads
+                // one body per job and stops -- which is a whole promote body
+                // per publication going uninspected while every other rule
+                // here still passes.
+                let mut read = managed_shell_body_counts(workspace.root(), role)
+                    .into_keys()
+                    .map(|id| (id, 0usize))
+                    .collect::<BTreeMap<_, _>>();
+                for (job, _) in &bodies {
+                    *read
+                        .get_mut(job)
+                        .unwrap_or_else(|| panic!("{job} is a managed job")) += 1;
+                }
+                assert_eq!(
+                    read,
+                    managed_shell_body_counts(workspace.root(), role),
+                    "the {role} sweep reads every `run:` body of every managed job, not a body per job"
+                );
                 counts.push((role, bodies.len()));
                 swept_shell.extend(
                     bodies
@@ -8056,16 +8188,42 @@ release-units:
             // shell. Three of the five packagers is what this gate read until
             // the fixture derived a GoReleaser publication, and it reported
             // clean the whole time.
-            const PACKAGERS: [&str; 5] = ["npm", "cargo", "oci", "homebrew", "aur"];
-            let packagers = swept_shell
+            //
+            // Neither side of this equality is a list of packagers. The
+            // expected side is `resolve_publications`, production's own
+            // resolution of this same workspace, which knows nothing about the
+            // sweep; the read side parses each swept job identifier by the
+            // shape `publication_job_id` builds -- `publish_<unit>_<publisher>_
+            // <target>` -- rather than filtering its segments through an
+            // expectation. A constant filtered through itself cannot fail: the
+            // read side could never hold anything the constant did not, so
+            // dropping a packager from it left the whole suite green, and
+            // narrowing the sweep and the constant together left both Go
+            // promote bodies unread and still green.
+            let expected_publishers = resolve_publications(
+                workspace.root(),
+                &Config::load(workspace.root()).expect("configuration loads"),
+            )
+            .expect("publications resolve")
+            .selected
+            .iter()
+            .map(|publication| publication.publisher.as_str().to_owned())
+            .collect::<BTreeSet<_>>();
+            let read_publishers = swept_shell
                 .iter()
-                .flat_map(|(_, job, _)| job.split('_'))
-                .filter(|segment| PACKAGERS.contains(segment))
+                .filter_map(|(_, job, _)| {
+                    let (subject, _target) = job
+                        .strip_prefix(&reserved)?
+                        .strip_prefix("publish_")?
+                        .rsplit_once('_')?;
+                    let (_unit, publisher) = subject.rsplit_once('_')?;
+                    Some(publisher.to_owned())
+                })
                 .collect::<BTreeSet<_>>();
             assert_eq!(
-                packagers,
-                PACKAGERS.into_iter().collect::<BTreeSet<_>>(),
-                "the shell this rule reads spans every packager, so a rule stated over it is stated over all of them"
+                read_publishers,
+                expected_publishers,
+                "the shell this rule reads spans every publisher this configuration resolves, so a rule stated over it is stated over all of them"
             );
 
             // And the other half of the same question, about the roster this
