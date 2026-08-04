@@ -36,16 +36,17 @@ description: >-
   depended on an asset of the still-draft GitHub Release and retrieved those
   bytes through the authenticated GitHub API. `authenticated-registry` means the
   destination admits no anonymous read at all, so its normal client path is an
-  authenticated one and the recipe drove that path with the credential it always
-  requires. What that mode establishes is bounded by which credential the recipe
-  held: a maintained recipe retrieves with the credential it already has, which
-  is the publishing one, so the claim is that a holder of that credential can
-  retrieve the release rather than that an arbitrary reader can. A destination
-  whose read access is narrower than its write access is not distinguished by
-  this mode. The verification command records the observed mode unchanged and
-  refuses any mode but the one the destination's maintained recipe fixes, so a
-  public destination cannot claim an authenticated check it did not perform and
-  a destination that serves no anonymous client cannot claim a public one.
+  authenticated one and the recipe drove that path with a credential whose
+  authority bounds what the observation proves. The GitHub Package Registry
+  recipe retrieves in a separate job whose job-scoped `GITHUB_TOKEN` has
+  `packages: read` and no package-write authority. It therefore proves that a
+  consumer-equivalent reader can retrieve the published package. A maintained
+  recipe that instead reuses a publishing credential proves only that a holder
+  of that credential can retrieve the release. The verification command records
+  the observed mode unchanged and refuses any mode but the one the destination's
+  maintained recipe fixes, so a public destination cannot claim an authenticated
+  check it did not perform and a destination that serves no anonymous client
+  cannot claim a public one.
 
   `retrieval.client` and `retrieval.version` describe the client that performed
   the retrieval, not the release it retrieved: the consumer tool the recipe

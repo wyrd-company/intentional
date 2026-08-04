@@ -450,13 +450,19 @@ proposed-design:
     written whether or not the invocation created a tag, so a retried
     publication reaches assembly with the evidence the release carries.
 
-    Between receiving the subject and verifying the publication, a publisher job
-    runs the repository-local steps its maintained recipe derives: registry
+    Between receiving the subject and verifying the publication, managed jobs
+    run the repository-local steps their maintained recipe derives: registry
     authentication, promotion, destination readback, and the pre-closure
-    consumer retrieval. Those steps hold the publisher credentials, so they are
-    `run:` bodies rather than Intentional-owned Actions, and every value they
-    read arrives through `env:` because an expression expanded inside a script
-    is substitution into shell source. A name a repository supplies is
+    consumer retrieval. GitHub Package Registry separates the last two steps
+    into a downstream retrieval job. Its job-scoped `GITHUB_TOKEN` has
+    `packages: read`, while the publisher job retains `packages: write`, so the
+    client that reads the package cannot publish one. The retrieval job depends
+    directly on both the publisher and build jobs, and consumes the version and
+    digest the build projected. Other recipes keep their steps in one publisher
+    job when no separate authority boundary is required. These steps are `run:`
+    bodies rather than Intentional-owned Actions, and every value they read
+    arrives through `env:` because an expression expanded inside a script is
+    substitution into shell source. A name a repository supplies is
     substitution into shell source for the same reason, so a configured registry
     or secret identifier is validated at derivation and reaches its command as a
     quoted variable. Their one output is the schema-backed publication
@@ -496,9 +502,9 @@ proposed-design:
     third packaging fails the release rather than shipping quietly — is the
     honest ceiling for a packager with no upload-only path.
 
-    Each publisher job then runs `intentional verify publication` with explicit
-    release-unit and publisher identity and the target selector required by the
-    adapter. The command produces the
+    The last managed job for each publication then runs `intentional verify
+    publication` with explicit release-unit and publisher identity and the
+    target selector required by the adapter. The command produces the
     schema-backed publisher evidence fragment consumed by
     `intentional evidence assemble`.
 
@@ -838,7 +844,8 @@ proposed-design:
     instead of passing as a promotion.
 
     An OCI destination's consumer path is public, so its clean-client retrieval
-    runs with an empty credential store: it resolves the release, retrieves the
+    runs with a scratch `DOCKER_CONFIG` whose credential store is empty: it
+    resolves the release, retrieves the
     subject's own bytes, and checks that those bytes hash to the digest the
     destination published. Resolution alone would leave a destination that
     serves a tag publicly but refuses its content indistinguishable from one
@@ -867,7 +874,9 @@ proposed-design:
     destination that admits no anonymous read at all, GitHub Package Registry
     among the maintained ones, has an authenticated normal client path, and its
     evidence says so rather than claiming a public retrieval nobody could
-    perform or omitting the consumer check entirely. The maintained recipe for
+    perform or omitting the consumer check entirely. Its retrieval runs after
+    publication in a separate job whose job-scoped `GITHUB_TOKEN` grants
+    `packages: read` and cannot publish. The maintained recipe for
     each destination fixes which of the three retrieval modes its evidence may
     record, so a recipe never chooses between reporting its retrieval faithfully
     and passing verification. Each adapter defines a

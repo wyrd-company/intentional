@@ -39,8 +39,8 @@ mod templates;
 use templates::{
     build_command, job, render_list, toolchain_steps, OCI_TITLE_LABEL, PUBLISH_ASSEMBLE_JOB,
     PUBLISH_BUILD_JOB, PUBLISH_CLOSE_JOB, PUBLISH_HANDOFF_STEP, PUBLISH_PHASE_TAG_JOB,
-    PUBLISH_PUBLISHER_JOB, PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP, PUBLISH_VERIFY_JOB,
-    RELEASE_AUTHORITY_JOB, RELEASE_PREPARE_JOB,
+    PUBLISH_PUBLISHER_JOB, PUBLISH_RETRIEVAL_JOB, PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP,
+    PUBLISH_VERIFY_JOB, PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB, RELEASE_PREPARE_JOB,
 };
 
 /// Pinned identities and the scalar renderer the recipe modules share.
@@ -954,7 +954,6 @@ fn publish_contract(
                 &format!("jobs.{id}"),
             )]);
         }
-        publisher_jobs.push(id.clone());
         let subject = subjects
             .iter()
             .find(|subject| subject.covers(publication))
@@ -986,18 +985,34 @@ fn publish_contract(
             .iter()
             .find(|consumer| consumer.publication.identity() == publication.identity())
             .map(|_| identifier(&publication.identity()));
-        jobs.push((
-            id,
-            publisher_job(
-                root,
-                namespaces,
-                &needs,
-                publication,
-                subject,
-                config,
-                handoff.as_deref(),
-            ),
-        ));
+        let derived = publication_jobs(
+            root,
+            namespaces,
+            &needs,
+            publication,
+            subject,
+            config,
+            handoff.as_deref(),
+        )
+        .map_err(|diagnostic| vec![diagnostic])?;
+        jobs.push((id.clone(), Ok(derived.publisher)));
+        if let Some(retrieval) = derived.retrieval {
+            let retrieval_id = retrieval_job_id(namespaces, publication);
+            if !identities.insert(retrieval_id.clone()) {
+                return Err(vec![WorkflowDiagnostic::at(
+                    "job-identifier-collision",
+                    format!(
+                        "publication {} derives managed job {retrieval_id}, which another publication already claims",
+                        publication.identity()
+                    ),
+                    &format!("jobs.{retrieval_id}"),
+                )]);
+            }
+            publisher_jobs.push(retrieval_id.clone());
+            jobs.push((retrieval_id, Ok(retrieval)));
+        } else {
+            publisher_jobs.push(id);
+        }
     }
 
     // The after-publication tag seals the completed fragments, so it follows
@@ -1351,6 +1366,17 @@ fn publication_job_id(namespaces: &PrefixNamespaces, publication: &SelectedPubli
     )
 }
 
+/// Managed job identifier for one consumer retrieval separated from publication.
+fn retrieval_job_id(namespaces: &PrefixNamespaces, publication: &SelectedPublication) -> String {
+    format!(
+        "{}retrieve_{}_{}_{}",
+        namespaces.job,
+        identifier(&publication.release_unit),
+        publication.publisher.as_str(),
+        identifier(&publication.target)
+    )
+}
+
 /// Reduce an arbitrary configured id to a GitHub job identifier fragment.
 fn identifier(value: &str) -> String {
     value
@@ -1587,8 +1613,16 @@ fn phase_tag_job(
     )
 }
 
-/// Publisher job derived from one resolved publication and its recipe.
-fn publisher_job(
+/// Jobs derived from one resolved publication and its authority boundaries.
+struct PublicationJobs {
+    /// Destination mutation under the authority publication requires.
+    publisher: Value,
+    /// Consumer retrieval under narrower authority, when the destination permits it.
+    retrieval: Option<Value>,
+}
+
+/// Publisher job and any separately authorised retrieval job for one publication.
+fn publication_jobs(
     root: &Path,
     namespaces: &PrefixNamespaces,
     needs: &[String],
@@ -1596,7 +1630,7 @@ fn publisher_job(
     subject: &DistinctSubject,
     config: &Config,
     handoff_slug: Option<&str>,
-) -> std::result::Result<Value, WorkflowDiagnostic> {
+) -> std::result::Result<PublicationJobs, WorkflowDiagnostic> {
     let unit = &config.release_units[&publication.release_unit];
     // An omitted selector is what chooses an adapter's configured primary
     // destination, so a primary publication passes the Action an empty selector
@@ -1639,9 +1673,29 @@ fn publisher_job(
             .unwrap_or_else(|| format!("release-units.{}", publication.release_unit));
         WorkflowDiagnostic::at(refusal.code, refusal.message, &path)
     })?;
+    let verification = |handoff: &str| {
+        PUBLISH_VERIFY_STEPS
+            .replace(
+                "@VERIFY_NAME@",
+                &scalar(&format!("Verify the {identity} publication")),
+            )
+            .replace(
+                "@FRAGMENT_NAME@",
+                &scalar(&format!("Upload the {identity} evidence fragment")),
+            )
+            .replace("@RELEASE_UNIT@", &scalar(&publication.release_unit))
+            .replace("@PUBLISHER@", &scalar(publication.publisher.as_str()))
+            .replace("@TARGET@", &scalar(&target))
+            .replace("@OBSERVATION@", &scalar(&observation))
+            .replace("@OUTPUT@", &scalar(&evidence))
+            .replace("@HANDOFF@", &scalar(handoff))
+            .replace("@SLUG@", &slug)
+    };
+    let subject_name = scalar(&format!("Download the built {} subject", subject.identity));
+    let publisher_steps = recipe.publisher;
+    let retrieval_steps = recipe.retrieval;
     let mut substitutions = vec![
         ("@NEEDS@", render_list(needs)),
-        ("@SLUG@", slug.clone()),
         ("@SUBJECT_SLUG@", subject.slug.clone()),
     ];
     // A draft-dependent publisher's fragment records what it retrieved from the
@@ -1653,6 +1707,9 @@ fn publisher_job(
     // consumer path reads no draft asset receives none, and the Action turns an
     // empty input into an absent option rather than an empty path.
     let handoff = handoff_slug.map_or_else(String::new, |slug| handoff_file(namespaces, slug));
+    let publisher_verification = retrieval_steps
+        .as_ref()
+        .map_or_else(|| verification(&handoff), |_| String::new());
     let handoff_step = handoff_slug.map_or_else(String::new, |slug| {
         format!(
             "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
@@ -1668,35 +1725,44 @@ fn publisher_job(
         // could name another entry's placeholder. They cannot: the renderer
         // refuses a value that names a later substitution, which is what makes
         // this position a free choice rather than a contract.
-        ("@RECIPE_STEPS@", recipe),
-        ("@HANDOFF@", scalar(&handoff)),
-        (
-            "@SUBJECT_NAME@",
-            scalar(&format!("Download the built {} subject", subject.identity)),
-        ),
-        (
-            "@VERIFY_NAME@",
-            scalar(&format!("Verify the {identity} publication")),
-        ),
-        (
-            "@FRAGMENT_NAME@",
-            scalar(&format!("Upload the {identity} evidence fragment")),
-        ),
-        ("@RELEASE_UNIT@", scalar(&publication.release_unit)),
-        ("@PUBLISHER@", scalar(publication.publisher.as_str())),
-        ("@TARGET@", scalar(&target)),
-        ("@OBSERVATION@", scalar(&observation)),
-        ("@OUTPUT@", scalar(&evidence)),
+        ("@RECIPE_STEPS@", publisher_steps),
+        ("@SUBJECT_NAME@", subject_name.clone()),
         ("@PERMISSIONS@", publisher_permissions(publication)),
+        ("@VERIFY_STEPS@", publisher_verification),
     ]);
-    job(
+    let publisher = job(
         PUBLISH_PUBLISHER_JOB,
         namespaces,
         &substitutions
             .iter()
             .map(|(placeholder, value)| (*placeholder, value.as_str()))
             .collect::<Vec<_>>(),
-    )
+    )?;
+    let retrieval = retrieval_steps
+        .map(|retrieval| {
+            let retrieval_needs = vec![
+                publication_job_id(namespaces, publication),
+                format!("{}build_{}", namespaces.job, subject.slug),
+            ];
+            let retrieval_needs = render_list(&retrieval_needs);
+            let retrieval_verification = verification("");
+            job(
+                PUBLISH_RETRIEVAL_JOB,
+                namespaces,
+                &[
+                    ("@NEEDS@", retrieval_needs.as_str()),
+                    ("@SUBJECT_SLUG@", subject.slug.as_str()),
+                    ("@SUBJECT_NAME@", subject_name.as_str()),
+                    ("@RETRIEVAL_STEPS@", retrieval.as_str()),
+                    ("@VERIFY_STEPS@", retrieval_verification.as_str()),
+                ],
+            )
+        })
+        .transpose()?;
+    Ok(PublicationJobs {
+        publisher,
+        retrieval,
+    })
 }
 
 /// Values one packager's build command reads from its step environment.
@@ -2858,8 +2924,11 @@ aur:
             let publishers = job_ids(&jobs, "intentional_publish_");
             assert!(!publishers.is_empty(), "{label} derives a publisher job");
             for publisher in publishers {
-                let handoff = job_steps(&jobs, &publisher)
-                    .iter()
+                let retrieval = publisher.replace("intentional_publish_", "intentional_retrieve_");
+                let handoff = [publisher.as_str(), retrieval.as_str()]
+                    .into_iter()
+                    .filter(|id| jobs.contains_key(Value::String((*id).to_owned())))
+                    .flat_map(|id| job_steps(&jobs, id))
                     .find_map(|step| {
                         step["with"]["draft-handoff"]
                             .as_str()
@@ -5660,12 +5729,25 @@ exit 0
         workspace
     }
 
-    /// Steps of one managed publisher job, by publication identity fragment.
+    /// Publication and retrieval steps for one managed destination.
     fn publisher_steps(root: &Path, target: &str) -> Vec<Value> {
         managed_steps(root, WorkflowRole::Publish)
             .into_iter()
-            .find(|(id, _)| id.ends_with(target))
-            .unwrap_or_else(|| panic!("a publisher job for {target} is derived"))
+            .filter(|(id, _)| {
+                id.ends_with(target)
+                    && (id.starts_with("intentional_publish_")
+                        || id.starts_with("intentional_retrieve_"))
+            })
+            .flat_map(|(_, steps)| steps)
+            .collect()
+    }
+
+    /// One managed job's steps, addressed by its complete job id.
+    fn managed_job_steps(root: &Path, expected: &str) -> Vec<Value> {
+        managed_steps(root, WorkflowRole::Publish)
+            .into_iter()
+            .find(|(id, _)| id == expected)
+            .unwrap_or_else(|| panic!("managed job {expected} is derived"))
             .1
     }
 
@@ -6755,6 +6837,7 @@ release-units:
                 "publish_rtwzlf_oci_ghcr",
                 "publish_wpdklc_aur_primary",
                 "publish_wpdklc_homebrew_primary",
+                "retrieve_qhwzru_npm_github",
                 "tag_after_publication",
                 "tag_before_publication",
                 // Task 179's deliverable-upload job comes into the sweep here
@@ -8387,6 +8470,123 @@ release-units:
                 "the {target} retrieval runs under that configuration rather than the job's"
             );
         }
+    }
+
+    /// Witness: `@example-owner/example-component` publishes to GitHub Package
+    /// Registry under write authority, then a distinct downstream job retrieves
+    /// it under read authority using the build job's projected subject facts.
+    #[test]
+    fn isolates_github_package_retrieval_in_a_read_scoped_job() {
+        let workspace = npm_workspace("workflow-github-package-reader");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let publisher = "intentional_publish_component_npm_github";
+        let retrieval = "intentional_retrieve_component_npm_github";
+        let build = "intentional_build_component_npm";
+        let publisher_job = jobs
+            .get(Value::String(publisher.to_owned()))
+            .expect("the write-scoped publisher job is derived");
+        let retrieval_job = jobs
+            .get(Value::String(retrieval.to_owned()))
+            .expect("the read-scoped retrieval job is derived");
+
+        assert_eq!(
+            publisher_job["permissions"]["packages"].as_str(),
+            Some("write")
+        );
+        assert_eq!(
+            retrieval_job["permissions"]["packages"].as_str(),
+            Some("read")
+        );
+        let retrieval_needs = retrieval_job["needs"]
+            .as_sequence()
+            .expect("retrieval names its dependencies");
+        for dependency in [publisher, build] {
+            assert!(
+                retrieval_needs.contains(&Value::String(dependency.to_owned())),
+                "retrieval reads only after {dependency} completes"
+            );
+        }
+
+        let publishing = managed_job_steps(workspace.root(), publisher);
+        let retrieving = managed_job_steps(workspace.root(), retrieval);
+        assert!(
+            publishing
+                .iter()
+                .all(|step| !step_environment(step).contains_key("INTENTIONAL_OBSERVATION")),
+            "the write-scoped job carries no consumer retrieval"
+        );
+        let readback = retrieving
+            .iter()
+            .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+            .expect("the read-scoped job performs consumer retrieval");
+        let environment = step_environment(readback);
+        assert_eq!(
+            environment
+                .get("INTENTIONAL_GITHUB_PACKAGES_TOKEN")
+                .map(String::as_str),
+            Some("${{ secrets.GITHUB_TOKEN }}")
+        );
+        for (variable, output) in [
+            ("INTENTIONAL_VERSION", "version"),
+            ("INTENTIONAL_SUBJECT_DIGEST", "digest"),
+        ] {
+            assert_eq!(
+                environment.get(variable).map(String::as_str),
+                Some(format!("${{{{ needs.{build}.outputs.{output} }}}}").as_str()),
+                "retrieval reads the subject {output} the build job projected"
+            );
+        }
+    }
+
+    /// Witness: the read-scoped job for `@example-owner/example-component`
+    /// receives `read-job-token`. Stub npm records the scratch configuration
+    /// consumed by the emitted `npm pack` invocation.
+    #[test]
+    fn github_package_reader_invokes_npm_with_its_read_scoped_job_token() {
+        let workspace = npm_workspace("workflow-github-package-reader-invocation");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let readback = managed_job_steps(
+            workspace.root(),
+            "intentional_retrieve_component_npm_github",
+        )
+        .into_iter()
+        .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+        .expect("the retrieval job reads the package back");
+        let environment = step_environment(&readback);
+        let temporary = workspace.root().join("github-package-reader");
+        let subject = environment["INTENTIONAL_SUBJECT"]
+            .replace("${{ runner.temp }}", &temporary.display().to_string());
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        let tarball = Path::new(&subject).join("subject.tgz");
+        std::fs::write(&tarball, "sealed package bytes").expect("sealed package");
+        let observed = temporary.join("observed-npmrc");
+        let stub = format!(
+            "case \"$1\" in\n  view) printf 'sha512-'; openssl dgst -sha512 -binary '{}' | base64 -w0; printf '\\n'; exit 0 ;;\n  pack) cp '{}' \"$(pwd)/example-component-1.0.0.tgz\"; cp \"$npm_config_userconfig\" '{}'; exit 0 ;;\n  --version) printf '11.5.1\\n'; exit 0 ;;\nesac",
+            tarball.display(),
+            tarball.display(),
+            observed.display(),
+        );
+        let stubs = stub_client(&temporary.join("stubs"), "npm", &stub);
+        let (succeeded, calls) = run_step(
+            &readback,
+            &stubs,
+            &temporary,
+            &[
+                ("INTENTIONAL_GITHUB_PACKAGES_TOKEN", "read-job-token"),
+                ("INTENTIONAL_VERSION", "1.0.0"),
+                ("INTENTIONAL_SUBJECT_DIGEST", "unused-build-digest"),
+            ],
+        );
+        assert!(
+            succeeded,
+            "read-scoped retrieval succeeds against stub npm: {calls}"
+        );
+        let npmrc = std::fs::read_to_string(observed).expect("stub npm consumed scratch npmrc");
+        assert!(
+            npmrc.contains(":_authToken=read-job-token"),
+            "the emitted npm invocation consumes the read-scoped job token"
+        );
     }
 
     // Cargo spells "the index does not carry this crate" and "I did not look,

@@ -71,6 +71,14 @@ pub(super) struct RecipeContext<'a> {
     pub root: &'a std::path::Path,
 }
 
+/// Repository-local steps divided by the authority their job requires.
+pub(super) struct RecipeSteps {
+    /// Steps that authenticate and publish, and normally also retrieve.
+    pub publisher: String,
+    /// Consumer retrieval isolated from publish authority when required.
+    pub retrieval: Option<String>,
+}
+
 /// Every process variable a maintained recipe's probe inherits.
 ///
 /// The list is the whole of what survives `env -i`, and it is one list rather
@@ -250,19 +258,40 @@ impl StepsRefusal {
 /// one. Their recipes are owned by separate tasks working from a common base,
 /// and a shared arm makes one edit each of them has to make into one edit they
 /// have to make together.
-pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
-    steps_for(context).map(|steps| steps.replace("@INHERITED@", &inherited_environment()))
+pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
+    steps_for(context).map(|steps| RecipeSteps {
+        publisher: steps
+            .publisher
+            .replace("@INHERITED@", &inherited_environment()),
+        retrieval: steps
+            .retrieval
+            .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
+    })
 }
 
 /// One publication's recipe steps before the shared placeholders are rendered.
-fn steps_for(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let identity = context.publication.identity();
     let underivable = |message: String| StepsRefusal::underivable(&identity, &message);
     match context.publication.packager {
         Packager::Npm => npm_steps(context).map_err(underivable),
-        Packager::Cargo => cargo_steps(context).map_err(underivable),
-        Packager::GoReleaser => goreleaser_steps(context),
-        Packager::Buildx | Packager::DevContainerCli => oci_steps(context),
+        Packager::Cargo => cargo_steps(context)
+            .map(RecipeSteps::together)
+            .map_err(underivable),
+        Packager::GoReleaser => goreleaser_steps(context).map(RecipeSteps::together),
+        Packager::Buildx | Packager::DevContainerCli => {
+            oci_steps(context).map(RecipeSteps::together)
+        }
+    }
+}
+
+impl RecipeSteps {
+    /// Keep a recipe in one job when publication and retrieval share authority.
+    fn together(publisher: String) -> Self {
+        Self {
+            publisher,
+            retrieval: None,
+        }
     }
 }
 
@@ -612,7 +641,7 @@ const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
 "#;
 
 /// npm recipe: trusted publishing, promotion of the built tarball, and readback.
-fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let primary = context.publication.target == PRIMARY_TARGET;
     let identity = context.publication.identity();
     let registry = if primary {
@@ -717,7 +746,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         },
     ));
 
-    steps.push_str(&format!(
+    let readback = format!(
         "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{scope_environment}{}{}{}{}    run: |\n{}{}{}{}",
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
@@ -738,8 +767,16 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         } else {
             NPM_RETRIEVE_AUTHENTICATED
         }),
-    ));
-    Ok(steps)
+    );
+    if primary {
+        steps.push_str(&readback);
+        Ok(RecipeSteps::together(steps))
+    } else {
+        Ok(RecipeSteps {
+            publisher: steps,
+            retrieval: Some(readback),
+        })
+    }
 }
 
 /// Shell every recipe step opens with.

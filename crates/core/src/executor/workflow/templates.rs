@@ -661,7 +661,35 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@HANDOFF_STEP@@RECIPE_STEPS@  - name: @VERIFY_NAME@
+@HANDOFF_STEP@@RECIPE_STEPS@@VERIFY_STEPS@"#;
+
+/// Retrieval job whose workflow token can read GitHub Packages but cannot publish.
+pub(super) const PUBLISH_RETRIEVAL_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+permissions:
+  contents: read
+  packages: read
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: @SUBJECT_NAME@
+    uses: @DOWNLOAD@
+    with:
+      name: @JOB@subject-@SUBJECT_SLUG@
+      path: ${{ runner.temp }}/@JOB@subject
+@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
+
+/// Verify one observation and upload the resulting publisher-evidence fragment.
+pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@
     uses: @VERIFY_PUBLICATION_ACTION@
     with:
       release-unit: @RELEASE_UNIT@
