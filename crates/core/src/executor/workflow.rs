@@ -6191,7 +6191,7 @@ github:
 @PREFIX@
   workflows:
     release: { path: .github/workflows/release.yml }
-    publish: { path: .github/workflows/publish.yml }
+    publish: { path: .github/workflows/publish.yml, gates: [ wzrjkd ] }
 release-units:
   jdmcvx:
     path: bgqnwt
@@ -6224,7 +6224,7 @@ release-units:
     tags:
       staged:
         role: primary
-        template: '{id}/staged@{version}'
+        template: '{id}/hqvzdn@{version}'
         require-phase: before-publication
   qhwzru:
     path: vkjmtd
@@ -6271,20 +6271,18 @@ release-units:
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
     ///
-    /// **The roster covers three of the five packagers, not all of them.** The
-    /// sentinel configuration derives npm, Cargo and the two OCI packagers; it
-    /// derives no GoReleaser publication, so this gate reads no Homebrew or AUR
-    /// `run:` body and four categories of repository-supplied value have no row
-    /// here: the tap repository's owner and name, the Go module path, the
-    /// per-unit tag templates' literal affixes, and the configured gate job
-    /// ids. Splicing a tap destination into a promote body is caught today, but
-    /// by that recipe's own test rather than by this class gate.
+    /// **The roster covers all five packagers.** The sentinel configuration
+    /// derives npm, Cargo, both OCI destinations and a GoReleaser publication,
+    /// so the sweep reads Homebrew and AUR promote bodies as well. That the
+    /// last two were absent was not a stated limit doing its job: three Go
+    /// values were routed correctly and nothing had ever looked at them, and a
+    /// fourth reached the AUR clone URL registered on no roster at all, which a
+    /// human noticed and no gate did.
     ///
-    /// That limit is stated rather than closed because closing it means
-    /// deriving a fifth and sixth publication here, which is the same work 180
-    /// does when it establishes this list from the derivation instead of from a
-    /// fixture. A copy of this gate inherits the limit, not a claim of
-    /// completeness.
+    /// Two values are supplied and read and still hold no row, and they are
+    /// written down in `ABSENT_FROM_MANAGED_CONTENT` rather than left out,
+    /// because "no row" is also what an unnoticed value looks like. So is a
+    /// value closed at its boundary, in `CLOSED_AT_THE_BOUNDARY`.
     ///
     /// Each row carries a token as well as a value, and the gate rejects both
     /// the folded value and any four-character window of the token, forwards or
@@ -6296,9 +6294,25 @@ release-units:
     /// case-transformed, and nothing else. It does not recognise truncation,
     /// windowing or reversal: those keep a run of the value without keeping the
     /// value, and a check anchored on the whole value passes over them. That is
-    /// what the window check is for. It is not a general answer either -- a
-    /// transform that re-alphabets the value, percent-encoding or a hash, keeps
-    /// no run for either check to find.
+    /// what the window check is for. It is not a general answer either. Both
+    /// checks look for a run of the value's own characters, so a transform that
+    /// **re-alphabets** the value leaves neither of them anything to find.
+    ///
+    /// **Percent-encoding is the re-alphabeting case to expect, and it has a
+    /// live route.** A recipe that builds a registry path or an API URL out of
+    /// a repository-supplied name has every reason to encode it, and an encoded
+    /// name is still executable text: `%3B` decodes at the far end, and the
+    /// characters that make encoding necessary are exactly the ones that make
+    /// splicing dangerous. The sentinel values are alphanumeric, so encoding
+    /// them is the identity and no fixture here can witness the gap. What is
+    /// owed when a recipe starts encoding is therefore stated rather than
+    /// checked: encode at the boundary and roster the encoded form as its own
+    /// row -- the same answer the npm scope and the uppercased variable
+    /// spelling already take -- or route the value through `env:` so the
+    /// encoding happens on the runner and no spelling reaches the text at all.
+    /// A hash is the other re-alphabeting transform, and it is safe for the
+    /// opposite reason: its output carries none of the value's characters, so
+    /// there is nothing left to interpret.
     ///
     /// Both checks depend on the token being opaque. A window of a token
     /// spelled from the derivation's own vocabulary collides with the
@@ -6467,7 +6481,12 @@ release-units:
             "the Go release-unit identifier",
             Surface::Plain,
         ),
-        ("xnrjgb", "xnrjgb", "the Go release-unit path", Surface::Plain),
+        (
+            "xnrjgb",
+            "xnrjgb",
+            "the Go release-unit path",
+            Surface::Plain,
+        ),
         (
             "svqtwm",
             "svqtwm",
@@ -6494,6 +6513,66 @@ release-units:
             "jgtxpz",
             "the Arch package name, normalised by the -bin rule",
             Surface::Plain,
+        ),
+    ];
+
+    /// Repository-supplied values closed at the boundary, and what closed them.
+    ///
+    /// A value whose role is *selection* among a finite set the derivation owns
+    /// is answered by replacing it with its selection and refusing the unmapped
+    /// case. It never reaches a sink, so it owes no routing and no escaping --
+    /// and it therefore has no row on the roster above, which is the problem
+    /// this list exists to solve. An absent row and a closed row look identical
+    /// today. They diverge the moment someone adds a pass-through fallback to
+    /// the match -- `_ => Some(format)`, a convenience, a relaxation to unblock
+    /// a new packager -- at which point the value becomes repository text
+    /// reaching derived shell with nothing registered and nothing looking.
+    ///
+    /// So the closure's refusal is load-bearing forever, and each row states
+    /// three things: the value an author declares, the literal derivation
+    /// replaces it with, and where the refusal that makes the match closed is
+    /// proved. The gate asserts the declared spelling is absent from managed
+    /// shell *and* the derived literal is present in it, because absent-because-
+    /// closed and absent-because-nothing-derived read alike.
+    ///
+    /// `archlinux` is the only declared nfpm format that can witness this.
+    /// `rpm`, `deb` and `apk` name packages spelled the same way, so a
+    /// derivation that mapped them and one that passed them through emit the
+    /// same text; an Arch package is `.pkg.tar.zst`, so only that row can tell
+    /// the two apart.
+    ///
+    /// Each row is spelled in the sink's own shape -- `*.<extension>`, the
+    /// `find` predicate the formats are consumed by -- rather than as the bare
+    /// declared word. The bare word collides: the AUR promote body clones from
+    /// `aur.archlinux.org`, which is derivation vocabulary and not a repository
+    /// value at all. This is the same collision the roster's tokens are chosen
+    /// opaque to avoid, and a closed value cannot be given an opaque spelling
+    /// because the declaration is a fixed vocabulary.
+    const CLOSED_AT_THE_BOUNDARY: [(&str, &str, &str); 1] = [(
+        "*.archlinux",
+        "*.pkg.tar.zst",
+        "refuses_an_nfpm_format_it_cannot_recognise_as_a_native_package",
+    )];
+
+    /// Repository-supplied values that reach no managed content at all.
+    ///
+    /// A value the sentinel workspace supplies and derivation reads, which
+    /// nonetheless lands on no surface a managed job carries. It cannot take a
+    /// roster row, because a roster row asserts reach and there is nothing to
+    /// reach; and it cannot simply be left out, because "no row" is what an
+    /// unnoticed value looks like. So each is written down with the assertion
+    /// its absence supports: absent from managed shell, and absent from both
+    /// managed surfaces. A change that routes one of these into a step brings
+    /// it into managed content, fires the row, and forces it onto the roster
+    /// with a surface named -- which is the entry this list exists to guard.
+    const ABSENT_FROM_MANAGED_CONTENT: [(&str, &str); 2] = [
+        (
+            "hqvzdn",
+            "a per-unit tag template's literal affix, which reaches the sealed plan and no derived job",
+        ),
+        (
+            "wzrjkd",
+            "the configured gate job id, which reaches a managed job's `needs:` and nothing a step carries; reach is deliberately not checked against job identifiers, so it can hold no roster row",
         ),
     ];
 
@@ -6546,14 +6625,15 @@ release-units:
     /// form is one the code produces rather than a hypothetical.
     ///
     /// Case is the transform this closes and it is not the only one a value
-    /// could survive: percent-encoding, whitespace normalisation and
-    /// path-component splitting would each carry a value into shell in a form
-    /// this comparison does not recognise. None of them appears in this
-    /// derivation today, and the roster is where a new one has to be answered
-    /// -- either by widening this comparison or by routing the value through
-    /// `env:` so no comparison is needed. Stating the boundary is the point: a
-    /// substring check is a recogniser, not a proof, and the property it stands
-    /// in for is that values are routed rather than written.
+    /// could survive. Transforms that keep a contiguous run of the value --
+    /// truncation, windowing, reversal, whitespace trimming, path-component
+    /// splitting -- are answered by the window check beside this one. Transforms
+    /// that re-alphabet it, percent-encoding above all, are answered by neither,
+    /// and the roster states what is owed when a recipe starts applying one.
+    ///
+    /// Stating the boundary is the point: a substring check is a recogniser,
+    /// not a proof, and the property it stands in for is that values are routed
+    /// rather than written.
     fn splices(body: &str, value: &str) -> bool {
         carries(body, value)
     }
@@ -7645,6 +7725,7 @@ release-units:
             );
             let reserved = prefix.map_or("intentional_".to_owned(), |prefix| format!("{prefix}_"));
             let mut counts = Vec::new();
+            let mut swept_shell: Vec<(WorkflowRole, String, String)> = Vec::new();
             for (role, expected) in SENTINEL_JOBS {
                 converge(workspace.root(), role);
                 let swept = sentinel_jobs(workspace.root(), role)
@@ -7670,39 +7751,120 @@ release-units:
                     "the {role} workflow contributes managed shell for the sweep to read"
                 );
                 counts.push((role, bodies.len()));
+                swept_shell.extend(
+                    bodies
+                        .into_iter()
+                        .map(|(job, body)| (role, job.clone(), body)),
+                );
+            }
+            shell_counts.push(counts);
 
-                for (job, body) in &bodies {
-                    for (supplied, token, origin, _) in REPOSITORY_SUPPLIED_VALUES {
-                        assert!(
-                            !splices(body, supplied),
-                            "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
-                        );
-                        // A contiguous run of the value's distinctive token is
-                        // what survives truncation, windowing and reversal --
-                        // the transforms a case-folded substring cannot see. A
-                        // fixture value is alphanumeric, so a surviving window
-                        // of one looks harmless; the production value is
-                        // whatever a repository wrote, and a four-character
-                        // window of `";id;` is the original injection again.
-                        if let Some(window) = windows(token).find(|window| carries(body, window)) {
-                            panic!(
-                                "the {role} workflow carries {window:?}, a window of {origin}, into {job}'s shell:\n{body}"
-                            );
-                        }
+            // What the loop below is about to consume, checked for the
+            // homogeneity that would make it prove nothing -- on the derived
+            // artifact rather than on the fixture constants, because the
+            // fixture can be diverse while the shell reaching this loop is not.
+            //
+            // A sweep whose bodies all come from one packager cannot witness a
+            // rule about every packager, and the job enumeration above would
+            // still agree, because those jobs exist whether or not they carry
+            // shell. Three of the five packagers is what this gate read until
+            // the fixture derived a GoReleaser publication, and it reported
+            // clean the whole time.
+            const PACKAGERS: [&str; 5] = ["npm", "cargo", "oci", "homebrew", "aur"];
+            let packagers = swept_shell
+                .iter()
+                .flat_map(|(_, job, _)| job.split('_'))
+                .filter(|segment| PACKAGERS.contains(segment))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                packagers,
+                PACKAGERS.into_iter().collect::<BTreeSet<_>>(),
+                "the shell this rule reads spans every packager, so a rule stated over it is stated over all of them"
+            );
+
+            // And the other half of the same question, about the roster this
+            // loop consumes rather than the shell it reads. Windowing is only
+            // meaningful over tokens that do not window each other: a token
+            // spelled from a neighbour's characters makes one row's window
+            // check answerable by another row's value, which is indistinguish-
+            // able from the check working. `MTDLGW` and `mtdlgw` are one value
+            // in two spellings and are compared without case throughout, so
+            // they are the one pair excluded.
+            for (_, token, origin, _) in REPOSITORY_SUPPLIED_VALUES {
+                for (_, other, elsewhere, _) in REPOSITORY_SUPPLIED_VALUES {
+                    if token.eq_ignore_ascii_case(other) {
+                        continue;
                     }
-                    // The prefix is the one repository-supplied value managed
-                    // shell may carry, and the exception is only honest if
-                    // what is spliced is the configured prefix rather than a
-                    // constant that happens to match the default.
-                    if prefix.is_some() {
-                        assert!(
-                            !body.contains("intentional_"),
-                            "{job}'s shell carries the default prefix under a configured one:\n{body}"
+                    assert!(
+                        !windows(token).any(|window| carries(other, &window)),
+                        "{origin}'s token windows into {elsewhere}'s, so neither row's window check answers for itself"
+                    );
+                }
+            }
+
+            for (role, job, body) in &swept_shell {
+                for (supplied, token, origin, _) in REPOSITORY_SUPPLIED_VALUES {
+                    assert!(
+                        !splices(body, supplied),
+                        "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
+                    );
+                    // A contiguous run of the value's distinctive token is
+                    // what survives truncation, windowing and reversal --
+                    // the transforms a case-folded substring cannot see. A
+                    // fixture value is alphanumeric, so a surviving window
+                    // of one looks harmless; the production value is
+                    // whatever a repository wrote, and a four-character
+                    // window of `";id;` is the original injection again.
+                    if let Some(window) = windows(token).find(|window| carries(body, window)) {
+                        panic!(
+                            "the {role} workflow carries {window:?}, a window of {origin}, into {job}'s shell:\n{body}"
                         );
                     }
                 }
+                // A value whose role is selection among literals the derivation
+                // owns is closed at the boundary rather than routed, so it must
+                // be absent from shell entirely -- not routed into it. The row
+                // exists because a closed value has no roster row otherwise,
+                // and an absent row and a closed row look identical right up to
+                // the moment someone adds a pass-through fallback.
+                for (declared, derived, refusal) in CLOSED_AT_THE_BOUNDARY {
+                    assert!(
+                        !carries(body, declared),
+                        "{job}'s shell carries {declared:?}, which derivation is supposed to have replaced with {derived:?}; the closure at {refusal} has been relaxed:\n{body}"
+                    );
+                }
+                for (value, origin) in ABSENT_FROM_MANAGED_CONTENT {
+                    assert!(
+                        !carries(body, value),
+                        "{job}'s shell carries {origin}; give it a roster row naming the surface it now lands on:\n{body}"
+                    );
+                }
+                // The prefix is the one repository-supplied value managed
+                // shell may carry, and the exception is only honest if
+                // what is spliced is the configured prefix rather than a
+                // constant that happens to match the default.
+                if prefix.is_some() {
+                    assert!(
+                        !body.contains("intentional_"),
+                        "{job}'s shell carries the default prefix under a configured one:\n{body}"
+                    );
+                }
             }
-            shell_counts.push(counts);
+
+            // A closed value's absence proves nothing unless the literal it was
+            // closed to is present: absent-because-closed and absent-because-
+            // nothing-derived read alike, and the second is what a narrowed
+            // fixture produces.
+            let shell = swept_shell
+                .iter()
+                .map(|(_, _, body)| body.as_str())
+                .collect::<String>();
+            for (declared, derived, _) in CLOSED_AT_THE_BOUNDARY {
+                assert!(
+                    carries(&shell, derived),
+                    "no managed shell carries {derived:?}, so {declared:?} being absent from it says nothing about the closure"
+                );
+            }
 
             // Reach is checked on the surfaces the sweep read, with shell
             // removed, and against the surface the roster names. Searching the
@@ -7765,6 +7927,18 @@ release-units:
                         "{origin} is written into a managed job's own content rather than referenced through the secrets context"
                     );
                 }
+            }
+
+            // The values with no row, held to the absence that is their reason
+            // for having none. Each is supplied by the same fixture and read by
+            // the same derivation as every rostered value, so this firing means
+            // a value has entered managed content unregistered -- the shape
+            // task 148 shipped and a human, not a gate, happened to notice.
+            for (value, origin) in ABSENT_FROM_MANAGED_CONTENT {
+                assert!(
+                    !carries(&plain, value) && !carries(&expressions, value),
+                    "{origin} now reaches managed content; give it a roster row naming the surface it lands on"
+                );
             }
         }
 
