@@ -19,8 +19,11 @@ use crate::release::candidate::{ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST};
 use std::path::Path;
 
 /// What one prepared release-candidate handoff tells assembly about its release.
+///
+/// Named for the handoff rather than for the release, because preparation has
+/// its own `PreparedRelease` describing what it wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedRelease {
+pub struct PreparedHandoff {
     /// Release identity every accepted document must agree with.
     pub identity: ReleaseIdentity,
     /// Sealed release plan the handoff transports.
@@ -40,7 +43,7 @@ pub struct PreparedRelease {
 /// the one the manifest claims. Only the middle step derives a digest rather
 /// than asserting one, and it is what makes every later comparison against this
 /// identity a comparison with something the release sealed.
-pub fn prepared_release(directory: &Path) -> Result<PreparedRelease> {
+pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
     let manifest = directory.join(RELEASE_CANDIDATE_MANIFEST);
     let text = std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
     let candidate = ReleaseCandidate::from_yaml(&text).map_err(|error| {
@@ -74,7 +77,7 @@ pub fn prepared_release(directory: &Path) -> Result<PreparedRelease> {
         )));
     }
 
-    Ok(PreparedRelease {
+    Ok(PreparedHandoff {
         identity: ReleaseIdentity {
             source_commit: candidate.source.commit,
             release_commit: candidate.release.commit,
@@ -222,9 +225,14 @@ pub(crate) mod test_support {
 
     /// The exact bytes the handoff transports as its sealed plan.
     pub(crate) fn sealed_plan_bytes() -> String {
-        sealed_plan()
-            .to_canonical_json()
-            .expect("the fixture plan serializes")
+        // Preparation writes the canonical JSON followed by a newline, so the
+        // fixture transports exactly what a real handoff transports.
+        format!(
+            "{}\n",
+            sealed_plan()
+                .to_canonical_json()
+                .expect("the fixture plan serializes")
+        )
     }
 
     /// Digest sealed inside the release plan the handoff transports.

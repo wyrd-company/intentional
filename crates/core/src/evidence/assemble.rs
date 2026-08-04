@@ -2696,13 +2696,68 @@ subjects: []
         .expect("fragment");
         let output = workspace.root().join("release-evidence");
         let absent = workspace.root().join("absent-handoff");
-        let error = assemble(&request(&workspace, &absent, &input, &output))
-            .expect_err("an absent handoff is refused");
+        let mut request = request(&workspace, &absent, &input, &output);
+        // A second, unrelated problem is staged so the run has something else
+        // to report. An unreadable handoff is a finding rather than an early
+        // return, so both reach one diagnostic.
+        request.workflow.run_id = 0;
+        let error = assemble(&request).expect_err("an absent handoff is refused");
+        let message = error.to_string();
         assert!(
-            error
-                .to_string()
-                .contains("the prepared release candidate does not identify the release"),
-            "{error}"
+            message.contains("the prepared release candidate does not identify the release"),
+            "{message}"
+        );
+        assert!(
+            message.contains("run identifier is missing"),
+            "every observable problem is reported in one run: {message}"
+        );
+    }
+
+    /// What the plan reconciliation does not prove about the checkout.
+    ///
+    /// A release plan seals versions and tags, not publication destinations, so
+    /// a checkout that differs only in publisher settings within one released
+    /// release unit changes what assembly expects while agreeing with the plan
+    /// completely. Assembly reports the expectation it could not meet, and says
+    /// nothing about the sealed plan, because the plan is not what disagreed.
+    #[test]
+    fn a_checkout_differing_only_in_publisher_settings_still_agrees_with_the_sealed_plan() {
+        let workspace = Workspace::new("assemble-plan-blind-spot");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    npm: {}\n",
+                    "    npm:\n      additional-targets:\n        github: {}\n",
+                ),
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("the added publication has no evidence");
+        let message = error.to_string();
+        assert!(
+            message.contains("publisher evidence for component/npm/github is missing"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("sealed release plan"),
+            "the sealed plan agrees with this checkout; the binding does not reach it: {message}"
         );
     }
 
