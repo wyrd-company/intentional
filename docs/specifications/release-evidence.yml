@@ -7,7 +7,14 @@ description: >-
   directory beside an `attachments/` directory containing accepted contributed
   files. The statement is attached to the draft GitHub Release and frozen when that
   Release is published. It identifies S, R, the global tag and tag object, the
-  sealed plan, and the producing GitHub workflow run. Its deterministic
+  sealed plan, and the producing GitHub workflow run. That release identity is
+  read from the prepared release-candidate handoff assembly is given, which is
+  the artifact the privileged publication job verified before it pushed R and
+  the annotated global tag. It is not derived from the publisher evidence
+  fragments and not from the assembling job's checkout, so a repository that
+  configures no publication still produces a complete statement, and a fragment
+  identifying some other release is refused however many other fragments agree
+  with it. Its deterministic
   release-unit sections contain the complete accepted publisher-evidence
   fragments. Repository-owned contribution values appear unchanged under their
   isolated namespaces without interpretation by Intentional. The separate
@@ -19,7 +26,9 @@ validation-criteria: >-
   exact asset digest and producing workflow, its release identity matches the
   immutable GitHub Release, and assembly confirms exactly one expected fragment
   for every configured publisher target with no unexpected identities or
-  semantic disagreement with applicable phase-tag evidence. Assembly also
+  semantic disagreement with applicable phase-tag evidence. A release that
+  configures no publisher target expects no fragment and conforms with an empty
+  `release-units` section; its identity requirements do not weaken. Assembly also
   verifies that `contribution-attachments` and its output directory contain exactly
   the accepted contributed files. `intentional
   verify release VERSION` performs durable-record verification; its `--live`

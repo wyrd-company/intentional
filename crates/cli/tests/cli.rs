@@ -2428,6 +2428,46 @@ destination-aliases: []
 phase-tags: []
 "#;
 
+/// The prepared handoff every assembling test binds its evidence to.
+///
+/// Its identities are the ones `EVIDENCE_FRAGMENT` records, so an assembly that
+/// succeeds here does so because the fragment and the handoff name one release.
+const EVIDENCE_CANDIDATE: &str = r#"$schema: https://intentional.foo/schemas/release-candidate/v1
+contract: github-release-candidate-1
+source:
+  commit: 1111111111111111111111111111111111111111
+release:
+  commit: 2222222222222222222222222222222222222222
+  parent: 1111111111111111111111111111111111111111
+  tree: 6666666666666666666666666666666666666666
+plan:
+  file: release-plan.json
+  digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+  sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
+global-tag:
+  id: workspace/release
+  name: release/1.0.0
+  object: 3333333333333333333333333333333333333333
+  target: 2222222222222222222222222222222222222222
+changed-tree:
+  - path: package.json
+    status: modified
+    digest: sha256:8888888888888888888888888888888888888888888888888888888888888888
+git-bundle:
+  file: release.bundle
+  sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
+  heads:
+    - refs/heads/intentional-release
+    - refs/tags/intentional-global-release
+files:
+  - path: release-plan.json
+    sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
+    size: 256
+  - path: release.bundle
+    sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
+    size: 512
+"#;
+
 fn assembly_environment() -> Vec<(&'static str, &'static str)> {
     vec![
         ("GITHUB_REPOSITORY", "example-owner/example-repository"),
@@ -2539,12 +2579,15 @@ fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
     repo.write("value.yml", "outcome: clean\n");
     repo.write("report.json", "{\"ok\":true}");
     repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
     contribute_artifact(&repo, "assessment", "scan", "1");
 
     repo.cli_with_env(&assembly_environment())
         .args([
             "evidence",
             "assemble",
+            "--candidate",
+            "candidate",
             "--input",
             "artifacts",
             "--output",
@@ -2576,11 +2619,14 @@ fn evidence_assemble_requires_its_workflow_identity() {
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
     repo.cli()
         .env_remove("GITHUB_REPOSITORY")
         .args([
             "evidence",
             "assemble",
+            "--candidate",
+            "candidate",
             "--input",
             "artifacts",
             "--output",
@@ -2621,6 +2667,7 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
+    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
     let mut environment = assembly_environment();
     environment.retain(|(key, _)| *key != "GITHUB_RUN_ID");
     environment.push(("GITHUB_RUN_ID", "run-42"));
@@ -2628,6 +2675,8 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
         .args([
             "evidence",
             "assemble",
+            "--candidate",
+            "candidate",
             "--input",
             "artifacts",
             "--output",

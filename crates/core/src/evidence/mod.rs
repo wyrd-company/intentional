@@ -7,6 +7,7 @@
 
 pub mod assemble;
 pub mod contribution;
+pub mod identity;
 pub mod phase;
 
 use crate::error::{Error, Result};

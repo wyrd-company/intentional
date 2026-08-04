@@ -844,6 +844,27 @@ commands:
         summary: Assemble publisher fragments and contributions into final release evidence.
         mode: non-interactive
         options:
+          - name: candidate
+            flags:
+              - --candidate
+            kind: option
+            description: >-
+              Prepared release-candidate handoff directory identifying the
+              release being closed. Its manifest is the authority for source
+              commit S, release commit R, the annotated global tag name, object,
+              and target, and the sealed plan digest. Assembly refuses a handoff
+              that is absent, unreadable, or fails the release-candidate
+              manifest's own structural rules, and refuses any publisher or
+              phase document that identifies a different release, naming each
+              identity component that disagreed with its expected and observed
+              values.
+            required: true
+            repeatable: false
+            value:
+              type: directory
+              arity:
+                min: 1
+                max: 1
           - name: input
             flags:
               - --input
@@ -888,12 +909,20 @@ commands:
                 check.
         examples:
           - >-
-            intentional evidence assemble --input evidence-artifacts --output
-            release-evidence
+            intentional evidence assemble --candidate release-candidate --input
+            evidence-artifacts --output release-evidence
         notes:
           - >-
             The credential-free assemble-evidence Action wraps this command and
             defines no GitHub step outputs.
+          - >-
+            The release identity comes from the prepared candidate handoff, not
+            from the evidence fragments and not from the assembling job's
+            checkout. A release that configures no publication therefore
+            assembles a complete statement, because naming the release no longer
+            depends on a publisher having run. The statement's identity contract
+            is unchanged: it still records the annotated global tag object,
+            which the handoff manifest carries.
           - >-
             The output directory is the complete assembly handoff. Its
             intentional-evidence.yml is the schema-backed release evidence and

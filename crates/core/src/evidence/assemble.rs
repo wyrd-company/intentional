@@ -12,6 +12,7 @@ use crate::evidence::contribution::{
     ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX, CONTRIBUTION_MANIFEST,
     CONTRIBUTION_SCHEMA,
 };
+use crate::evidence::identity::{candidate_identity, identity_disagreements};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
 use crate::executor::recipe::resolve_publications;
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
@@ -429,6 +430,8 @@ impl ReleaseEvidence {
 pub struct AssembleRequest<'a> {
     /// Workspace whose configuration determines the expected publications.
     pub root: &'a Path,
+    /// Prepared release-candidate handoff identifying the release being closed.
+    pub candidate: &'a Path,
     /// Directory containing downloaded evidence artifacts.
     pub input: &'a Path,
     /// Directory the closed bundle is written into.
@@ -477,9 +480,19 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         .map(|publication| publication.identity())
         .collect();
 
+    let release = match candidate_identity(request.candidate) {
+        Ok(identity) => Some(identity),
+        Err(error) => {
+            findings.push(format!(
+                "the prepared release candidate does not identify the release: {error}"
+            ));
+            None
+        }
+    };
+
     let scan = scan_input(request.input, &mut findings)?;
     let release_units = accept_publisher_evidence(&scan.publishers, &expected, &mut findings);
-    let release = release_identity(&scan, &mut findings);
+    bind_publisher_evidence(&scan, release.as_ref(), &mut findings);
     compare_phase_evidence(
         &scan,
         release.as_ref(),
@@ -841,36 +854,34 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
     findings
 }
 
-/// Determine the one release identity every fragment agrees on.
-fn release_identity(scan: &ScannedInput, findings: &mut Vec<String>) -> Option<ReleaseIdentity> {
-    let mut identity: Option<ReleaseIdentity> = None;
+/// Require every publisher fragment to identify the prepared release.
+///
+/// The release identity comes from the prepared candidate handoff rather than
+/// from the fragments, so a fragment is measured against an authority it did
+/// not produce. Comparing the fragments only with each other would let them
+/// agree unanimously about a release that was never the one being closed, and
+/// would leave a release with no configured publications unable to name itself
+/// at all.
+fn bind_publisher_evidence(
+    scan: &ScannedInput,
+    release: Option<&ReleaseIdentity>,
+    findings: &mut Vec<String>,
+) {
+    let Some(release) = release else {
+        return;
+    };
     for (path, fragment) in &scan.publishers {
-        let candidate = ReleaseIdentity {
-            source_commit: fragment.source_commit.clone(),
-            release_commit: fragment.release_commit.clone(),
-            global_tag: fragment.global_tag.clone(),
-            plan_digest: fragment.plan_digest.clone(),
-        };
-        match &identity {
-            None => identity = Some(candidate),
-            Some(accepted) if accepted == &candidate => {}
-            Some(_) => findings.push(format!(
-                "{} disagrees with other evidence about the release identity",
-                path.display()
-            )),
-        }
+        findings.extend(identity_disagreements(
+            &path.display().to_string(),
+            release,
+            &ReleaseIdentity {
+                source_commit: fragment.source_commit.clone(),
+                release_commit: fragment.release_commit.clone(),
+                global_tag: fragment.global_tag.clone(),
+                plan_digest: fragment.plan_digest.clone(),
+            },
+        ));
     }
-    if identity.is_none() {
-        // Only publisher evidence carries the annotated global tag object the
-        // statement binds, so an assembly without one cannot identify its
-        // release at all.
-        findings.push(
-            "no publisher evidence identifies the release; final evidence requires at least one \
-             accepted publisher fragment"
-                .to_owned(),
-        );
-    }
-    identity
 }
 
 /// Reject phase-tag evidence that disagrees with the accepted release identity.
@@ -1267,11 +1278,12 @@ mod tests {
         found
     }
 
-    const SOURCE: &str = "1111111111111111111111111111111111111111";
-    const RELEASE: &str = "2222222222222222222222222222222222222222";
-    const TAG_OBJECT: &str = "3333333333333333333333333333333333333333";
-    const PLAN_DIGEST: &str =
-        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    // Every identity in this module is the prepared handoff's, so a fixture
+    // cannot agree with itself while disagreeing with the release under test.
+    use crate::evidence::identity::test_support::{
+        candidate, PLAN_DIGEST, RELEASE, SOURCE, TAG_NAME, TAG_OBJECT,
+    };
+
     const SUBJECT_DIGEST: &str =
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
 
@@ -1288,6 +1300,24 @@ release-units:
   component:
     path: component
     npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#;
+
+    /// The same repository with every publisher removed.
+    ///
+    /// Only the publisher block differs from `CONFIG`, so a release that
+    /// assembles under this configuration and not under that one differs by
+    /// publication and by nothing else.
+    const UNPUBLISHED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
     tags:
       primary: { role: primary, template: '{id}@{version}' }
 "#;
@@ -1321,7 +1351,7 @@ target: {target}
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag:
-  name: release/1.0.0
+  name: {TAG_NAME}
   object: {TAG_OBJECT}
   target: {RELEASE}
 plan-digest: {PLAN_DIGEST}
@@ -1390,13 +1420,19 @@ phase-tags: []
         output
     }
 
+    /// One assembly request against the prepared handoff staged for it.
+    ///
+    /// The handoff is written here rather than by each test, so no test can
+    /// assemble without one and every test binds to the same prepared release.
     fn request<'a>(
         workspace: &'a Workspace,
+        handoff: &'a Path,
         input: &'a Path,
         output: &'a Path,
     ) -> AssembleRequest<'a> {
         AssembleRequest {
             root: workspace.root(),
+            candidate: handoff,
             input,
             output,
             workflow: workflow(),
@@ -1433,14 +1469,20 @@ phase-tags: []
         );
 
         let output = workspace.root().join("release-evidence");
-        let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
+        let assembly = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.release,
             ReleaseIdentity {
                 source_commit: SOURCE.to_owned(),
                 release_commit: RELEASE.to_owned(),
                 global_tag: TagIdentity {
-                    name: "release/1.0.0".to_owned(),
+                    name: TAG_NAME.to_owned(),
                     object: TAG_OBJECT.to_owned(),
                     target: RELEASE.to_owned(),
                 },
@@ -1466,7 +1508,13 @@ phase-tags: []
         assert!(output.join(RELEASE_EVIDENCE_FILE).is_file());
 
         let repeat = workspace.root().join("release-evidence-repeat");
-        let second = assemble(&request(&workspace, &input, &repeat)).expect("assembly repeats");
+        let second = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &repeat,
+        ))
+        .expect("assembly repeats");
         assert_eq!(
             std::fs::read_to_string(&assembly.evidence_path).expect("first"),
             std::fs::read_to_string(&second.evidence_path).expect("second"),
@@ -1496,7 +1544,13 @@ phase-tags: []
             &[],
         );
         let output = workspace.root().join("release-evidence");
-        let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
+        let assembly = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.contributions["producer-defined"],
             serde_yaml::from_str::<serde_yaml::Value>(contributed).expect("value")
@@ -1535,7 +1589,13 @@ phase-tags: []
         std::fs::write(first.join(CONTRIBUTION_MANIFEST), "not: [a, manifest\n").expect("corrupt");
 
         let output = workspace.root().join("release-evidence");
-        let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
+        let assembly = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.contributions["assessment"],
             serde_yaml::from_str::<serde_yaml::Value>("attempt: 2\n").expect("value")
@@ -1571,8 +1631,13 @@ phase-tags: []
             &[],
         );
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("collision rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("collision rejected");
         assert!(error.to_string().contains("is claimed by jobs"), "{error}");
         assert!(!output.exists(), "a rejected assembly writes nothing");
     }
@@ -1606,8 +1671,13 @@ phase-tags: []
             &[("report.json", "second")],
         );
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("collision rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("collision rejected");
         assert!(
             error
                 .to_string()
@@ -1638,7 +1708,13 @@ phase-tags: []
         );
         std::fs::write(bundle.join("attachments/report.json"), "tampered").expect("tamper");
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output)).expect_err("tamper rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("tamper rejected");
         assert!(
             error
                 .to_string()
@@ -1656,7 +1732,13 @@ phase-tags: []
             &[("notes.txt", "present")],
         );
         std::fs::remove_file(missing.join("attachments/notes.txt")).expect("remove");
-        let error = assemble(&request(&workspace, &input, &output)).expect_err("missing rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("missing rejected");
         assert!(
             error
                 .to_string()
@@ -1700,8 +1782,13 @@ phase-tags: []
             let output = workspace
                 .root()
                 .join(format!("release-evidence-{}", name.len()));
-            let error =
-                assemble(&request(&workspace, &input, &output)).expect_err("traversal rejected");
+            let error = assemble(&request(
+                &workspace,
+                &candidate(&workspace),
+                &input,
+                &output,
+            ))
+            .expect_err("traversal rejected");
             let message = error.to_string();
             assert!(
                 message.contains("unusable Release asset name") || message.contains("instead of"),
@@ -1722,8 +1809,13 @@ phase-tags: []
         )
         .expect("fragment");
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("fragments rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("fragments rejected");
         let message = error.to_string();
         assert!(
             message.contains("unexpected publisher evidence component/cargo/primary"),
@@ -1752,8 +1844,13 @@ phase-tags: []
         )
         .expect("fragment");
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("duplicate rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("duplicate rejected");
         assert!(
             error.to_string().contains("was supplied more than once"),
             "{error}"
@@ -1782,8 +1879,13 @@ phase-tags: []
         )
         .expect("fragment");
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("a rebuild is rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a rebuild is rejected");
         assert!(
             error
                 .to_string()
@@ -1810,7 +1912,7 @@ phase-tags: []
 phase: before-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
-global-tag: release/1.0.0
+global-tag: {TAG_NAME}
 plan-digest: {PLAN_DIGEST}
 subjects:
   - release-unit: component
@@ -1826,8 +1928,13 @@ intended-destinations:
         )
         .expect("phase evidence");
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("disagreement rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("disagreement rejected");
         assert!(
             error.to_string().contains("while") && error.to_string().contains("sealed"),
             "{error}"
@@ -1859,8 +1966,13 @@ intended-destinations:
         .expect("fragment");
 
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output))
-            .expect_err("a declared phase that sealed nothing is refused");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a declared phase that sealed nothing is refused");
         assert!(
             error.to_string().contains(
                 "declares before-publication release tags but no sealed before-publication evidence"
@@ -1877,7 +1989,13 @@ intended-destinations:
             ),
         )
         .expect("phase evidence");
-        assemble(&request(&workspace, &input, &output)).expect("the sealed phase completes it");
+        assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("the sealed phase completes it");
     }
 
     // A fragment whose subject identity the phase never sealed is compared
@@ -1904,8 +2022,13 @@ intended-destinations:
         .expect("phase evidence");
 
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output))
-            .expect_err("an unsealed subject identity is refused");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("an unsealed subject identity is refused");
         assert!(
             error
                 .to_string()
@@ -1920,7 +2043,7 @@ intended-destinations:
 phase: before-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
-global-tag: release/1.0.0
+global-tag: {TAG_NAME}
 plan-digest: {PLAN_DIGEST}
 subjects:
   - release-unit: component
@@ -1957,7 +2080,7 @@ intended-destinations:
 phase: after-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
-global-tag: release/1.0.0
+global-tag: {TAG_NAME}
 plan-digest: {PLAN_DIGEST}
 subjects: []
 publisher-evidence:
@@ -1970,7 +2093,13 @@ publisher-evidence:
         )
         .expect("after evidence");
         let output = workspace.root().join("release-evidence");
-        assemble(&request(&workspace, &input, &output)).expect("agreeing phase evidence assembles");
+        assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("agreeing phase evidence assembles");
     }
 
     #[test]
@@ -1992,7 +2121,13 @@ publisher-evidence:
         )
         .expect("before evidence");
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output)).expect_err("intent rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("intent rejected");
         let message = error.to_string();
         assert!(
             message.contains("intends publication component/cargo/primary"),
@@ -2025,7 +2160,7 @@ publisher-evidence:
 phase: after-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
-global-tag: release/1.0.0
+global-tag: {TAG_NAME}
 plan-digest: {PLAN_DIGEST}
 subjects: []
 publisher-evidence:
@@ -2035,7 +2170,13 @@ publisher-evidence:
         )
         .expect("after evidence");
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output)).expect_err("seal rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("seal rejected");
         assert!(
             error.to_string().contains(
                 "seals publisher evidence component/npm/primary that differs from the accepted"
@@ -2102,7 +2243,7 @@ publisher-evidence:
 phase: {phase}
 source-commit: {SOURCE}
 release-commit: {RELEASE}
-global-tag: release/1.0.0
+global-tag: {TAG_NAME}
 plan-digest: {PLAN_DIGEST}
 subjects: []
 {tail}"#
@@ -2111,7 +2252,7 @@ subjects: []
             .expect("phase evidence");
             let output = workspace.root().join("release-evidence");
             let error =
-                assemble(&request(&workspace, &input, &output)).expect_err("omission rejected");
+                assemble(&request(&workspace, &candidate(&workspace), &input, &output)).expect_err("omission rejected");
             assert!(error.to_string().contains(expected), "{label}: {error}");
             assert!(!output.exists(), "{label}: a rejected assembly writes nothing");
         }
@@ -2141,8 +2282,13 @@ subjects: []
         )
         .expect("phase evidence");
         let output = workspace.root().join("release-evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("silent drop rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("silent drop rejected");
         assert!(
             error
                 .to_string()
@@ -2151,17 +2297,109 @@ subjects: []
         );
     }
 
+    /// A repository that configures no publisher at all still releases.
+    ///
+    /// Publishing is opt-in, so this is the first state of every adopter: a
+    /// release commit, a global tag, a GitHub Release, and nothing published.
+    /// Such a release still wants a durable evidence statement, and the
+    /// statement's identity contract does not weaken to get one.
     #[test]
-    fn requires_publisher_evidence_to_identify_the_release() {
-        let workspace = workspace("assemble-unidentified");
+    fn assembles_a_release_that_configures_no_publications() {
+        let workspace = Workspace::new("assemble-no-publications");
+        workspace
+            .write(".intentional/config.yml", UNPUBLISHED_CONFIG)
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         let output = workspace.root().join("release-evidence");
-        let error = assemble(&request(&workspace, &input, &output)).expect_err("rejected");
+        let assembly = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("a publication-less release assembles");
+        assert_eq!(
+            assembly.evidence.release,
+            ReleaseIdentity {
+                source_commit: SOURCE.to_owned(),
+                release_commit: RELEASE.to_owned(),
+                global_tag: TagIdentity {
+                    name: TAG_NAME.to_owned(),
+                    object: TAG_OBJECT.to_owned(),
+                    target: RELEASE.to_owned(),
+                },
+                plan_digest: PLAN_DIGEST.to_owned(),
+            },
+            "the prepared candidate identifies the release when no publisher can"
+        );
+        assert!(
+            assembly.evidence.release_units.is_empty(),
+            "a release that publishes nothing records no publisher evidence"
+        );
+        assert!(assembly.evidence_path.is_file());
+    }
+
+    /// Unanimous fragments are not evidence of the release being closed.
+    ///
+    /// Every fragment here agrees with every other fragment about a release,
+    /// which is exactly what an assembly bound only to its own inputs would
+    /// accept. They are refused because they disagree with the prepared
+    /// candidate, and the diagnostic names the component that disagreed.
+    #[test]
+    fn refuses_fragments_that_agree_with_each_other_and_not_with_the_prepared_release() {
+        let workspace = workspace("assemble-unanimous");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        let elsewhere = "7".repeat(40);
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary").replace(
+                &format!("release-commit: {RELEASE}"),
+                &format!("release-commit: {elsewhere}"),
+            ),
+        )
+        .expect("fragment");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a fragment about another release is refused");
+        let message = error.to_string();
+        assert!(message.contains("records release-commit"), "{message}");
+        assert!(message.contains(&elsewhere), "{message}");
+        assert!(message.contains(RELEASE), "{message}");
+        assert!(
+            !message.contains("records source-commit"),
+            "only the component that disagreed is reported: {message}"
+        );
+    }
+
+    /// Assembly refuses to identify a release from a handoff it was not given.
+    #[test]
+    fn refuses_assembly_without_a_prepared_release_candidate() {
+        let workspace = workspace("assemble-no-candidate");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let output = workspace.root().join("release-evidence");
+        let absent = workspace.root().join("absent-handoff");
+        let error = assemble(&request(&workspace, &absent, &input, &output))
+            .expect_err("an absent handoff is refused");
         assert!(
             error
                 .to_string()
-                .contains("no publisher evidence identifies the release"),
+                .contains("the prepared release candidate does not identify the release"),
             "{error}"
         );
     }
@@ -2186,7 +2424,13 @@ subjects: []
             &[],
         );
         let output = workspace.root().join("release-evidence");
-        let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
+        let assembly = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect("assembly succeeds");
         assert_eq!(assembly.evidence.contributions.len(), 1);
         assert!(assembly.evidence.contributions.contains_key("assessment"));
     }
@@ -2204,8 +2448,13 @@ subjects: []
         let output = workspace.root().join("release-evidence");
         std::fs::create_dir_all(&output).expect("output");
         std::fs::write(output.join(RELEASE_EVIDENCE_FILE), "stale").expect("stale evidence");
-        let error =
-            assemble(&request(&workspace, &input, &output)).expect_err("populated output rejected");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("populated output rejected");
         assert!(error.to_string().contains("is not empty"), "{error}");
         assert_eq!(
             std::fs::read_to_string(output.join(RELEASE_EVIDENCE_FILE)).expect("stale"),
@@ -2225,7 +2474,8 @@ subjects: []
         )
         .expect("fragment");
         let output = workspace.root().join("release-evidence");
-        let mut request = request(&workspace, &input, &output);
+        let handoff = candidate(&workspace);
+        let mut request = request(&workspace, &handoff, &input, &output);
         request.workflow.repository = "example-owner".to_owned();
         request.workflow.commit = "abc".to_owned();
         request.workflow.run_id = 0;
