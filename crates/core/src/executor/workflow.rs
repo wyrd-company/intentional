@@ -1772,12 +1772,15 @@ fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::templates::{APP_TOKEN_ACTION, DOWNLOAD_ARTIFACT_ACTION, UPLOAD_ARTIFACT_ACTION};
+    use super::templates::{
+        ACTION_REPOSITORY, APP_TOKEN_ACTION, CHECKOUT_ACTION, DOWNLOAD_ARTIFACT_ACTION,
+        GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION, SETUP_QEMU_ACTION, UPLOAD_ARTIFACT_ACTION,
+    };
     use super::*;
     use crate::evidence::assemble::CleanClientMode;
     use crate::executor::fixture::Workspace;
     use crate::publication::observation::ObservationState;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
@@ -1796,6 +1799,136 @@ release-units:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
       staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
 "#;
+
+    #[test]
+    fn binds_external_action_constants_to_the_authored_declarations() {
+        let declaration: Value = serde_yaml::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../github-action-pins.yml"
+            ))
+            .expect("the authored external Action pin declaration exists"),
+        )
+        .expect("the Action pin declaration parses");
+        let declared = declaration["actions"].as_sequence().expect("actions table");
+        let declared_names = declared
+            .iter()
+            .map(|entry| entry["constant"].as_str().expect("constant name"))
+            .collect::<BTreeSet<_>>();
+
+        let source = include_str!("workflow/templates.rs");
+        let source_names = source
+            .lines()
+            .filter_map(|line| {
+                let declaration = line.split("const ").nth(1)?;
+                let name = declaration.split(':').next()?;
+                name.ends_with("_ACTION").then_some(name)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            declared_names, source_names,
+            "the table and constants enumerate each other"
+        );
+
+        let constants = [
+            ("CHECKOUT_ACTION", CHECKOUT_ACTION),
+            ("APP_TOKEN_ACTION", APP_TOKEN_ACTION),
+            ("DOWNLOAD_ARTIFACT_ACTION", DOWNLOAD_ARTIFACT_ACTION),
+            ("UPLOAD_ARTIFACT_ACTION", UPLOAD_ARTIFACT_ACTION),
+            ("SETUP_BUILDX_ACTION", SETUP_BUILDX_ACTION),
+            ("SETUP_QEMU_ACTION", SETUP_QEMU_ACTION),
+            ("GORELEASER_INSTALL_ACTION", GORELEASER_INSTALL_ACTION),
+            ("SETUP_CRANE_ACTION", SETUP_CRANE_ACTION),
+            ("COSIGN_INSTALLER_ACTION", COSIGN_INSTALLER_ACTION),
+        ]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            constants.keys().copied().collect::<BTreeSet<_>>(),
+            source_names
+        );
+        for name in source_names {
+            let visibility = if matches!(name, "SETUP_CRANE_ACTION" | "COSIGN_INSTALLER_ACTION") {
+                "pub(in crate::executor)"
+            } else {
+                "pub(super)"
+            };
+            assert!(
+                source.contains(&format!("{visibility} const {name}:")),
+                "{name} retains its declared visibility {visibility}"
+            );
+        }
+        for entry in declared {
+            let name = entry["constant"].as_str().expect("constant name");
+            let expected = format!(
+                "{}@{}",
+                entry["repository"].as_str().expect("repository"),
+                entry["commit"].as_str().expect("commit")
+            );
+            assert_eq!(
+                constants[name], expected,
+                "{name} agrees with the authored pin"
+            );
+        }
+    }
+
+    #[test]
+    fn derives_only_declared_complete_external_action_commits() {
+        let declaration: Value =
+            serde_yaml::from_str(include_str!("../../../../github-action-pins.yml"))
+                .expect("Action pins parse");
+        let declared = declaration["actions"]
+            .as_sequence()
+            .expect("actions table")
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}@{}",
+                    entry["repository"].as_str().expect("repository"),
+                    entry["commit"].as_str().expect("commit")
+                )
+            })
+            .collect::<BTreeSet<_>>();
+
+        for (fixture, workspace) in [
+            ("base", workspace("workflow-action-pins-base")),
+            ("goreleaser", go_workspace("workflow-action-pins-go")),
+            (
+                "buildx",
+                two_destination_workspace("workflow-action-pins-buildx"),
+            ),
+        ] {
+            for role in WorkflowRole::ALL {
+                converge(workspace.root(), role);
+                let document: Value = serde_yaml::from_str(&workflow(workspace.root(), role))
+                    .expect("derived workflow parses");
+                for (job_id, job) in document["jobs"].as_mapping().expect("jobs") {
+                    let Some(job_id) = job_id.as_str().filter(|id| id.starts_with("intentional_"))
+                    else {
+                        continue;
+                    };
+                    for step in job["steps"].as_sequence().expect("managed job steps") {
+                        let Some(action) = step.get("uses").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        if action.starts_with(ACTION_REPOSITORY) {
+                            continue;
+                        }
+                        let (_, commit) = action.rsplit_once('@').expect("Action has a revision");
+                        assert!(
+                            commit.len() == 40
+                                && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                            "{fixture} {role} {job_id} uses a complete commit identity: {action}"
+                        );
+                        assert!(
+                            declared.contains(action),
+                            "{fixture} {role} {job_id} uses the declared identity: {action}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     const REPOSITORY_RELEASE_WORKFLOW: &str = r#"# maintained by the repository
 name: release

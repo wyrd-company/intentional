@@ -1,0 +1,29 @@
+# ---
+# relationships:
+#   implements: github-release-executor
+#   verifies: github-action-pins
+# ---
+name: GitHub Action pin evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/github-action-pins.yml"
+      - "github-action-pins.yml"
+      - "scripts/release/verify-github-action-pins-online.py"
+      - "crates/core/src/executor/workflow/templates.rs"
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-tags:
+    name: Resolve declared tags
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare upstream tags with declared commits
+        run: scripts/release/verify-github-action-pins-online.py
