@@ -651,7 +651,7 @@ fn global_tag_name(config: &Config, version: &str) -> Result<String> {
     match unphased.as_slice() {
         [tag] => Ok(tag.template.replace("{version}", version)),
         _ => Err(Error::Validation(format!(
-            "configuration declares {} tags without an executor phase; exactly one is the global release tag",
+            "configuration declares {} workspace tags without an executor phase; exactly one workspace tag is the global release tag",
             unphased.len()
         ))),
     }

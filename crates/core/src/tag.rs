@@ -1237,7 +1237,7 @@ fn tag_message(
 ///
 /// The bindings are read from the repository rather than from the caller: R is
 /// the commit being tagged, S is its sole parent, and the global tag is the one
-/// configured tag that declares no phase. A phase tag that trusted supplied
+/// workspace tag that declares no phase. A phase tag that trusted supplied
 /// identities could bind a release to a history it never had.
 fn sealed_phase_evidence(
     root: &Path,
@@ -1275,10 +1275,25 @@ fn sealed_phase_evidence(
     let unphased = config.unphased_tags();
     let [global] = unphased.as_slice() else {
         if input.is_some() {
-            return Err(Error::Validation(format!(
-                "sealing staged phase evidence requires exactly one configured tag without require-phase to bind it to; configuration declares {}",
-                unphased.len()
-            )));
+            let release_unit = config.unphased_release_unit_tags();
+            return Err(match unphased.len() {
+                0 if release_unit.is_empty() => Error::Validation(
+                    "sealing staged phase evidence requires exactly one workspace tag without require-phase to bind it to; this workspace declares none"
+                        .to_owned(),
+                ),
+                0 => Error::Validation(format!(
+                    "sealing staged phase evidence requires exactly one workspace tag without require-phase to bind it to; no workspace tag omits require-phase, and these release-unit tags omit it: {}",
+                    release_unit.join(", ")
+                )),
+                _ => Error::Validation(format!(
+                    "sealing staged phase evidence requires exactly one workspace tag without require-phase to bind it to; these workspace tags omit require-phase: {}",
+                    unphased
+                        .iter()
+                        .map(|tag| tag.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )),
+            });
         }
         return Ok(None);
     };
@@ -1850,7 +1865,7 @@ phase-tags: []
         assert!(
             error
                 .to_string()
-                .contains("exactly one configured tag without require-phase"),
+                .contains("exactly one workspace tag without require-phase"),
             "{error}"
         );
     }

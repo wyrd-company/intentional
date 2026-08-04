@@ -790,14 +790,14 @@ fn publish_contract(
     gates: &[String],
 ) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
     let mut diagnostics = Vec::new();
-    // The global release tag is the one configured tag that declares no
-    // executor phase, whether it is a workspace tag or a release-unit tag.
-    // Executor conformance requires exactly one; a configuration that has not
-    // settled on one cannot state what triggers publication.
+    // The global release tag is the one workspace tag that declares no executor
+    // phase. Executor conformance requires exactly one; a configuration that has
+    // not settled on one cannot state what triggers publication.
     let unphased = config.unphased_tags();
-    // The one unphased tag is the global release tag this workflow is triggered
-    // by, so its literal affixes are derivation-time knowledge and a recipe
-    // that needs the released version extracts it exactly rather than guessing.
+    // The one unphased workspace tag is the global release tag this workflow is
+    // triggered by, so its literal affixes are derivation-time knowledge and a
+    // recipe that needs the released version extracts it exactly rather than
+    // guessing.
     let global_tag = unphased
         .first()
         .map_or_else(String::new, |tag| tag.template.clone());
@@ -806,14 +806,40 @@ fn publish_contract(
         .map(|tag| Value::String(tag.template.replace("{version}", "*")))
         .collect::<Vec<_>>();
     if unphased.len() != 1 {
-        diagnostics.push(WorkflowDiagnostic::at(
-            "release-tag-undefined",
-            format!(
-                "the publish workflow is triggered by the one annotated global release tag, but {} configured tags omit require-phase",
-                unphased.len()
-            ),
-            "release-units",
-        ));
+        match unphased.len() {
+            0 => {
+                diagnostics.push(WorkflowDiagnostic::at(
+                    "release-tag-undefined",
+                    "the publish workflow is triggered by the one annotated global release tag, but no workspace tag omits require-phase; leave exactly one workspace tag unphased"
+                        .to_owned(),
+                    "workspace-tags",
+                ));
+                let release_unit = config.unphased_release_unit_tags();
+                if !release_unit.is_empty() {
+                    diagnostics.push(WorkflowDiagnostic::at(
+                        "release-tag-undefined",
+                        format!(
+                            "the global release tag is sealed by every release plan, so it is a workspace tag; these release-unit tags omit require-phase and are sealed only when their own release unit releases: {}; give each a require-phase declaration",
+                            release_unit.join(", ")
+                        ),
+                        "release-units",
+                    ));
+                }
+            }
+            _ => diagnostics.push(WorkflowDiagnostic::at(
+                "release-tag-undefined",
+                format!(
+                    "the publish workflow is triggered by the one annotated global release tag, but {} workspace tags omit require-phase: {}; give all but one a require-phase declaration",
+                    unphased.len(),
+                    unphased
+                        .iter()
+                        .map(|tag| tag.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                "workspace-tags",
+            )),
+        }
     }
     let selection = resolve_publications(root, config).map_err(|error| {
         vec![WorkflowDiagnostic::new(
@@ -5718,7 +5744,60 @@ exit 0
             compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert_eq!(comparison.diagnostics[0].code, "release-tag-undefined");
+        assert_eq!(
+            comparison.diagnostics[0].path.as_deref(),
+            Some("workspace-tags")
+        );
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("no workspace tag omits require-phase"),
+            "{}",
+            comparison.diagnostics[0].message
+        );
         assert!(comparison.output_digest.is_none());
+    }
+
+    #[test]
+    fn blocks_publication_when_only_a_release_unit_tag_omits_require_phase() {
+        let workspace = workspace("workflow-release-unit-tag");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG
+                .replace(
+                    "workspace-tags:\n  release:\n    template: '{version}'\n",
+                    "",
+                )
+                .replace("require-phase: after-publication", ""),
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics.len(), 2);
+        assert_eq!(comparison.diagnostics[0].code, "release-tag-undefined");
+        assert_eq!(
+            comparison.diagnostics[0].path.as_deref(),
+            Some("workspace-tags")
+        );
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("no workspace tag omits require-phase"),
+            "{}",
+            comparison.diagnostics[0].message
+        );
+        assert_eq!(comparison.diagnostics[1].code, "release-tag-undefined");
+        assert_eq!(
+            comparison.diagnostics[1].path.as_deref(),
+            Some("release-units")
+        );
+        assert!(
+            comparison.diagnostics[1]
+                .message
+                .contains("release-unit/component/primary"),
+            "{}",
+            comparison.diagnostics[1].message
+        );
     }
 
     #[test]

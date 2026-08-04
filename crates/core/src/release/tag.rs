@@ -8,7 +8,7 @@
 //! The initial publication job runs inside a checkout of the released commit
 //! with complete history and every tag present, and it holds no credentials.
 //! It therefore proves the release from the repository alone: it resolves the
-//! one configured tag that declares no publication phase, requires that tag to
+//! one workspace tag that declares no publication phase, requires that tag to
 //! be an annotated tag targeting the checked-out commit, reads the Intentional
 //! record the tag carries, and rebuilds the whole candidate from the sole
 //! parent so the tag, tree, plan digest, projections, changelogs, and consumed
@@ -107,23 +107,33 @@ struct AnnotatedTag {
     fields: BTreeMap<String, String>,
 }
 
-/// The single configured tag that declares no publication phase.
+/// The single workspace tag that declares no publication phase.
 ///
-/// Every other configured tag is created later by the publication workflow, so
-/// the unphased tag is the one release identity a publication run can already
-/// observe, and the constraint is reported here rather than left to fail inside
-/// a privileged job.
+/// Every other tag, workspace or release-unit, is created later by the
+/// publication workflow, so the unphased workspace tag is the one release
+/// identity a publication run can already observe, and the constraint is
+/// reported here rather than left to fail inside a privileged job.
 fn global_release_tag(config: &Config) -> Result<UnphasedTag> {
-    let mut unphased = config.unphased_tags();
-    match unphased.len() {
-        1 => Ok(unphased.remove(0)),
-        0 => Err(Error::Validation(
-            "the GitHub executor requires one configured tag without require-phase as the global release tag; this workspace configures none"
-                .to_owned(),
-        )),
+    let mut workspace = config.unphased_tags();
+    match workspace.len() {
+        1 => Ok(workspace.remove(0)),
+        0 => {
+            let release_unit = config.unphased_release_unit_tags();
+            if release_unit.is_empty() {
+                Err(Error::Validation(
+                    "the GitHub executor requires one workspace tag without require-phase as the global release tag; this workspace declares none"
+                        .to_owned(),
+                ))
+            } else {
+                Err(Error::Validation(format!(
+                    "the GitHub executor requires one workspace tag without require-phase as the global release tag; no workspace tag omits require-phase, and these release-unit tags omit it: {}",
+                    release_unit.join(", ")
+                )))
+            }
+        }
         _ => Err(Error::Validation(format!(
-            "the GitHub executor requires exactly one configured tag without require-phase as the global release tag; this workspace configures {}",
-            unphased
+            "the GitHub executor requires exactly one workspace tag without require-phase as the global release tag; these workspace tags omit require-phase: {}",
+            workspace
                 .iter()
                 .map(|tag| tag.id.as_str())
                 .collect::<Vec<_>>()
@@ -834,6 +844,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn rejects_configuration_with_no_unphased_tags_anywhere() {
+        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\n    require-phase: after-publication\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
+        let message = verify_config_error(CONFIG);
+        assert!(message.contains("declares none"), "{message}");
+        assert!(!message.contains("release-unit"), "{message}");
+    }
+
+    #[test]
+    fn rejects_configuration_with_unphased_release_unit_tags_but_no_workspace_tag() {
+        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  intentional:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n";
+        let message = verify_config_error(CONFIG);
+        assert!(
+            message.contains("no workspace tag omits require-phase"),
+            "{message}"
+        );
+        assert!(message.contains("release-unit/intentional/primary"), "{message}");
+        assert!(!message.contains("declares none"), "{message}");
+    }
+
+    #[test]
     fn requires_exactly_one_workspace_tag_without_a_phase() {
         let workspace = ReleasedWorkspace::new();
         write(
@@ -847,7 +877,7 @@ pub(crate) mod tests {
         let error = workspace
             .verify()
             .expect_err("no unphased workspace tag is configured");
-        assert!(error.to_string().contains("configures none"), "{error}");
+        assert!(error.to_string().contains("declares none"), "{error}");
 
         write(
             &workspace.root,
@@ -863,8 +893,19 @@ pub(crate) mod tests {
         assert!(
             error
                 .to_string()
-                .contains("configures workspace/mirror, workspace/release"),
+                .contains("workspace tags omit require-phase: workspace/mirror, workspace/release"),
             "{error}"
         );
+    }
+
+    fn verify_config_error(config_yaml: &str) -> String {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path().join("workspace");
+        std::fs::create_dir_all(root.join(".intentional")).expect("create config directory");
+        std::fs::write(root.join(".intentional/config.yml"), config_yaml).expect("write config");
+        git(&root, &["init", "--quiet", "--initial-branch=main"]);
+        verify_release_tag(&root)
+            .expect_err("configuration is invalid")
+            .to_string()
     }
 }
