@@ -11,7 +11,7 @@ branding:
 
 inputs:
   candidate:
-    description: "Prepared release-candidate handoff directory identifying the release being closed"
+    description: "Prepared release-candidate handoff directory carrying the manifest and the sealed release plan the release is bound to"
     required: true
   input:
     description: "Directory containing downloaded publisher, phase-tag, and contribution artifacts"

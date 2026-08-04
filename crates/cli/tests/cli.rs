@@ -5,8 +5,8 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    canonical_json, initialize, Adapter, CandidateResolution, Generator, InitPlan, InitState,
-    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
+    canonical_json, initialize, Adapter, Bump, CandidateResolution, Generator, InitPlan, InitState,
+    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan, TagPhase, TagRole,
 };
 use predicates::prelude::*;
 use serde::Serialize;
@@ -2393,7 +2393,10 @@ release-units:
       primary: { role: primary, template: '{id}@{version}' }
 "#;
 
-const EVIDENCE_FRAGMENT: &str = r#"$schema: https://intentional.foo/schemas/publisher-evidence/v1
+fn evidence_fragment() -> String {
+    let plan_digest = evidence_plan().digest;
+    format!(
+        r#"$schema: https://intentional.foo/schemas/publisher-evidence/v1
 contract: publisher-evidence-1
 release-unit: sample-library
 publisher: npm
@@ -2404,7 +2407,7 @@ global-tag:
   name: release/1.0.0
   object: 3333333333333333333333333333333333333333
   target: 2222222222222222222222222222222222222222
-plan-digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
+plan-digest: {plan_digest}
 subject:
   kind: npm-package
   identity: sample-library
@@ -2426,13 +2429,77 @@ clean-client:
   digest: sha512-example
 destination-aliases: []
 phase-tags: []
-"#;
+"#
+    )
+}
 
 /// The prepared handoff every assembling test binds its evidence to.
 ///
 /// Its identities are the ones `EVIDENCE_FRAGMENT` records, so an assembly that
 /// succeeds here does so because the fragment and the handoff name one release.
-const EVIDENCE_CANDIDATE: &str = r#"$schema: https://intentional.foo/schemas/release-candidate/v1
+/// The sealed release plan the prepared handoff transports.
+///
+/// Built and sealed here rather than written down, so the handoff cannot state
+/// a digest the plan it ships does not have.
+fn evidence_plan() -> ReleasePlan {
+    let mut plan = ReleasePlan {
+        digest: String::new(),
+        contract: "contract-1".to_owned(),
+        generator: Generator {
+            tool: "intentional".to_owned(),
+            version: "0.0.0".to_owned(),
+        },
+        channel: None,
+        release_units: vec![PlanReleaseUnit {
+            id: "sample-library".to_owned(),
+            old_version: "0.9.0".to_owned(),
+            new_version: "1.0.0".to_owned(),
+            bump: Bump::Minor,
+            contributing_intent_ids: Vec::new(),
+            tag_ids: vec!["release-unit/sample-library/primary".to_owned()],
+            release_notes: "## 1.0.0\n".to_owned(),
+        }],
+        tags: vec![
+            PlanTag {
+                id: "release-unit/sample-library/primary".to_owned(),
+                name: "sample-library@1.0.0".to_owned(),
+                version: "1.0.0".to_owned(),
+                release_unit: Some("sample-library".to_owned()),
+                role: Some(TagRole::Primary),
+                require_phase: Some(TagPhase::BeforePublication),
+                tag_after: Vec::new(),
+            },
+            PlanTag {
+                id: "workspace/release".to_owned(),
+                name: "release/1.0.0".to_owned(),
+                version: "1.0.0".to_owned(),
+                release_unit: None,
+                role: None,
+                require_phase: None,
+                tag_after: Vec::new(),
+            },
+        ],
+        tag_order: vec![
+            "release-unit/sample-library/primary".to_owned(),
+            "workspace/release".to_owned(),
+        ],
+    };
+    plan.digest = plan.payload_digest().expect("the fixture plan seals");
+    plan
+}
+
+/// Stage the prepared release-candidate handoff every assembling test binds to.
+fn stage_evidence_candidate(repo: &TestRepo) {
+    let plan = evidence_plan();
+    let bytes = plan.to_canonical_json().expect("plan bytes");
+    let sha256 = format!("sha256:{:x}", Sha256::digest(bytes.as_bytes()));
+    let size = bytes.len();
+    let digest = &plan.digest;
+    repo.write("candidate/release-plan.json", &bytes);
+    repo.write(
+        "candidate/release-candidate.yml",
+        &format!(
+            r#"$schema: https://intentional.foo/schemas/release-candidate/v1
 contract: github-release-candidate-1
 source:
   commit: 1111111111111111111111111111111111111111
@@ -2442,8 +2509,8 @@ release:
   tree: 6666666666666666666666666666666666666666
 plan:
   file: release-plan.json
-  digest: sha256:4444444444444444444444444444444444444444444444444444444444444444
-  sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
+  digest: {digest}
+  sha256: {sha256}
 global-tag:
   id: workspace/release
   name: release/1.0.0
@@ -2461,12 +2528,15 @@ git-bundle:
     - refs/tags/intentional-global-release
 files:
   - path: release-plan.json
-    sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
-    size: 256
+    sha256: {sha256}
+    size: {size}
   - path: release.bundle
     sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
     size: 512
-"#;
+"#
+        ),
+    );
+}
 
 fn assembly_environment() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -2578,8 +2648,8 @@ fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write("value.yml", "outcome: clean\n");
     repo.write("report.json", "{\"ok\":true}");
-    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
-    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
+    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
+    stage_evidence_candidate(&repo);
     contribute_artifact(&repo, "assessment", "scan", "1");
 
     repo.cli_with_env(&assembly_environment())
@@ -2618,8 +2688,8 @@ fn evidence_assemble_requires_its_workflow_identity() {
     let repo = TestRepo::new();
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
-    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
+    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
+    stage_evidence_candidate(&repo);
     repo.cli()
         .env_remove("GITHUB_REPOSITORY")
         .args([
@@ -2666,8 +2736,8 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
     let repo = TestRepo::new();
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write("artifacts/publisher/evidence.yml", EVIDENCE_FRAGMENT);
-    repo.write("candidate/release-candidate.yml", EVIDENCE_CANDIDATE);
+    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
+    stage_evidence_candidate(&repo);
     let mut environment = assembly_environment();
     environment.retain(|(key, _)| *key != "GITHUB_RUN_ID");
     environment.push(("GITHUB_RUN_ID", "run-42"));

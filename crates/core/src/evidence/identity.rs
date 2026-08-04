@@ -13,15 +13,34 @@
 
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{ReleaseIdentity, TagIdentity};
+use crate::evidence::digest_bytes;
+use crate::plan::ReleasePlan;
 use crate::release::candidate::{ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST};
 use std::path::Path;
 
-/// Read the release identity the prepared candidate handoff declares.
+/// What one prepared release-candidate handoff tells assembly about its release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedRelease {
+    /// Release identity every accepted document must agree with.
+    pub identity: ReleaseIdentity,
+    /// Sealed release plan the handoff transports.
+    pub plan: ReleasePlan,
+}
+
+/// Read the release the prepared candidate handoff was prepared for.
 ///
 /// The manifest is parsed through its own closed validation rather than picked
 /// apart field by field, so a handoff that is internally inconsistent is
 /// refused here instead of supplying assembly with half an identity.
-pub fn candidate_identity(directory: &Path) -> Result<ReleaseIdentity> {
+///
+/// The plan digest the manifest states is then held to the plan the handoff
+/// actually transports, in three steps that fail independently: the transported
+/// bytes are the ones the manifest inventoried, the plan's own seal still
+/// recomputes over its payload, and the digest that recomputation produces is
+/// the one the manifest claims. Only the middle step derives a digest rather
+/// than asserting one, and it is what makes every later comparison against this
+/// identity a comparison with something the release sealed.
+pub fn prepared_release(directory: &Path) -> Result<PreparedRelease> {
     let manifest = directory.join(RELEASE_CANDIDATE_MANIFEST);
     let text = std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
     let candidate = ReleaseCandidate::from_yaml(&text).map_err(|error| {
@@ -30,15 +49,43 @@ pub fn candidate_identity(directory: &Path) -> Result<ReleaseIdentity> {
             manifest.display()
         ))
     })?;
-    Ok(ReleaseIdentity {
-        source_commit: candidate.source.commit,
-        release_commit: candidate.release.commit,
-        global_tag: TagIdentity {
-            name: candidate.global_tag.name,
-            object: candidate.global_tag.object,
-            target: candidate.global_tag.target,
+
+    let plan_path = directory.join(&candidate.plan.file);
+    let bytes = std::fs::read(&plan_path).map_err(|error| Error::io(&plan_path, error))?;
+    let transported = digest_bytes(&bytes);
+    if transported != candidate.plan.sha256 {
+        return Err(Error::Validation(format!(
+            "the handoff transports {} as {transported}, which its manifest inventories as {}",
+            candidate.plan.file, candidate.plan.sha256
+        )));
+    }
+    let plan: ReleasePlan = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::Validation(format!(
+            "the handoff's sealed release plan {} is not a release plan: {error}",
+            plan_path.display()
+        ))
+    })?;
+    plan.verify_digest()?;
+    if plan.digest != candidate.plan.digest {
+        return Err(Error::Validation(format!(
+            "the release candidate identifies the release by plan-digest {}, but the sealed \
+             release plan it transports seals {}",
+            candidate.plan.digest, plan.digest
+        )));
+    }
+
+    Ok(PreparedRelease {
+        identity: ReleaseIdentity {
+            source_commit: candidate.source.commit,
+            release_commit: candidate.release.commit,
+            global_tag: TagIdentity {
+                name: candidate.global_tag.name,
+                object: candidate.global_tag.object,
+                target: candidate.global_tag.target,
+            },
+            plan_digest: candidate.plan.digest,
         },
-        plan_digest: candidate.plan.digest,
+        plan,
     })
 }
 
@@ -99,7 +146,10 @@ pub(crate) fn identity_disagreements(
 /// fixture cannot agree with itself while disagreeing with the handoff.
 #[cfg(test)]
 pub(crate) mod test_support {
+    use crate::evidence::digest_bytes;
     use crate::executor::fixture::Workspace;
+    use crate::model::{Bump, TagPhase, TagRole};
+    use crate::plan::{Generator, PlanReleaseUnit, PlanTag, ReleasePlan};
     use crate::release::candidate::{
         RELEASE_BUNDLE_FILE, RELEASE_CANDIDATE_CONTRACT, RELEASE_CANDIDATE_MANIFEST,
         RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
@@ -114,12 +164,83 @@ pub(crate) mod test_support {
     pub(crate) const TAG_OBJECT: &str = "3333333333333333333333333333333333333333";
     /// Rendered global tag name.
     pub(crate) const TAG_NAME: &str = "release/1.0.0";
-    /// Digest sealed inside the release plan.
-    pub(crate) const PLAN_DIGEST: &str =
-        "sha256:4444444444444444444444444444444444444444444444444444444444444444";
+    /// Release unit the fixture releases and publishes.
+    pub(crate) const RELEASE_UNIT: &str = "component";
+
+    /// The sealed release plan the fixture handoff transports.
+    ///
+    /// Assembly reads the plan's contract and the release units it releases.
+    /// The tags are carried because a real plan carries them: exactly one tag
+    /// without a required phase, which is the global release tag the manifest
+    /// names.
+    pub(crate) fn sealed_plan() -> ReleasePlan {
+        let mut plan = ReleasePlan {
+            digest: String::new(),
+            contract: "contract-1".to_owned(),
+            generator: Generator {
+                tool: "intentional".to_owned(),
+                version: "0.0.0".to_owned(),
+            },
+            channel: None,
+            release_units: vec![PlanReleaseUnit {
+                id: RELEASE_UNIT.to_owned(),
+                old_version: "0.9.0".to_owned(),
+                new_version: "1.0.0".to_owned(),
+                bump: Bump::Minor,
+                contributing_intent_ids: Vec::new(),
+                tag_ids: vec![format!("release-unit/{RELEASE_UNIT}/primary")],
+                release_notes: "## 1.0.0\n".to_owned(),
+            }],
+            tags: vec![
+                PlanTag {
+                    id: format!("release-unit/{RELEASE_UNIT}/primary"),
+                    name: format!("{RELEASE_UNIT}@1.0.0"),
+                    version: "1.0.0".to_owned(),
+                    release_unit: Some(RELEASE_UNIT.to_owned()),
+                    role: Some(TagRole::Primary),
+                    require_phase: Some(TagPhase::BeforePublication),
+                    tag_after: Vec::new(),
+                },
+                PlanTag {
+                    id: "workspace/release".to_owned(),
+                    name: TAG_NAME.to_owned(),
+                    version: "1.0.0".to_owned(),
+                    release_unit: None,
+                    role: None,
+                    require_phase: None,
+                    tag_after: Vec::new(),
+                },
+            ],
+            tag_order: vec![
+                format!("release-unit/{RELEASE_UNIT}/primary"),
+                "workspace/release".to_owned(),
+            ],
+        };
+        plan.digest = plan.payload_digest().expect("the fixture plan seals");
+        plan
+    }
+
+    /// The exact bytes the handoff transports as its sealed plan.
+    pub(crate) fn sealed_plan_bytes() -> String {
+        sealed_plan()
+            .to_canonical_json()
+            .expect("the fixture plan serializes")
+    }
+
+    /// Digest sealed inside the release plan the handoff transports.
+    ///
+    /// Derived from the plan rather than written down, so a fixture cannot
+    /// state a digest the plan it ships does not have.
+    pub(crate) fn plan_digest() -> String {
+        sealed_plan().digest
+    }
 
     /// Render the handoff manifest of the one prepared release under test.
     pub(crate) fn candidate_manifest() -> String {
+        let plan_digest = plan_digest();
+        let plan_bytes = sealed_plan_bytes();
+        let plan_sha256 = digest_bytes(plan_bytes.as_bytes());
+        let plan_size = plan_bytes.len();
         format!(
             r#"$schema: {RELEASE_CANDIDATE_SCHEMA}
 contract: {RELEASE_CANDIDATE_CONTRACT}
@@ -131,15 +252,15 @@ release:
   tree: 6666666666666666666666666666666666666666
 plan:
   file: {RELEASE_PLAN_FILE}
-  digest: {PLAN_DIGEST}
-  sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
+  digest: {plan_digest}
+  sha256: {plan_sha256}
 global-tag:
   id: workspace/release
   name: {TAG_NAME}
   object: {TAG_OBJECT}
   target: {RELEASE}
 changed-tree:
-  - path: component/package.json
+  - path: {RELEASE_UNIT}/package.json
     status: modified
     digest: sha256:8888888888888888888888888888888888888888888888888888888888888888
 git-bundle:
@@ -150,8 +271,8 @@ git-bundle:
     - refs/tags/intentional-global-release
 files:
   - path: {RELEASE_PLAN_FILE}
-    sha256: sha256:7777777777777777777777777777777777777777777777777777777777777777
-    size: 256
+    sha256: {plan_sha256}
+    size: {plan_size}
   - path: {RELEASE_BUNDLE_FILE}
     sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
     size: 512
@@ -161,10 +282,15 @@ files:
 
     /// Write that handoff beneath a workspace and return its directory.
     pub(crate) fn candidate(workspace: &Workspace) -> PathBuf {
-        workspace.write(
-            &format!("handoff/{RELEASE_CANDIDATE_MANIFEST}"),
-            &candidate_manifest(),
-        );
+        workspace
+            .write(
+                &format!("handoff/{RELEASE_CANDIDATE_MANIFEST}"),
+                &candidate_manifest(),
+            )
+            .write(
+                &format!("handoff/{RELEASE_PLAN_FILE}"),
+                &sealed_plan_bytes(),
+            );
         workspace.root().join("handoff")
     }
 }
@@ -172,7 +298,7 @@ files:
 #[cfg(test)]
 mod tests {
     use super::test_support::{
-        candidate_manifest, PLAN_DIGEST, RELEASE, SOURCE, TAG_NAME, TAG_OBJECT,
+        candidate_manifest, plan_digest, RELEASE, SOURCE, TAG_NAME, TAG_OBJECT,
     };
     use super::*;
     use crate::executor::fixture::Workspace;
@@ -186,7 +312,7 @@ mod tests {
                 object: TAG_OBJECT.to_owned(),
                 target: RELEASE.to_owned(),
             },
-            plan_digest: PLAN_DIGEST.to_owned(),
+            plan_digest: plan_digest(),
         }
     }
 
@@ -195,7 +321,7 @@ mod tests {
         let workspace = Workspace::new("candidate-identity");
         let directory = super::test_support::candidate(&workspace);
         assert_eq!(
-            candidate_identity(&directory).expect("identity"),
+            prepared_release(&directory).expect("identity").identity,
             identity()
         );
     }
@@ -213,7 +339,7 @@ mod tests {
                 &format!("  target: {SOURCE}"),
             ),
         );
-        let error = candidate_identity(&workspace.root().join("handoff"))
+        let error = prepared_release(&workspace.root().join("handoff"))
             .expect_err("an inconsistent handoff is refused");
         assert!(
             error
@@ -226,7 +352,7 @@ mod tests {
     #[test]
     fn refuses_a_handoff_that_is_not_there() {
         let workspace = Workspace::new("candidate-identity-absent");
-        let error = candidate_identity(workspace.root()).expect_err("an absent handoff is refused");
+        let error = prepared_release(workspace.root()).expect_err("an absent handoff is refused");
         assert!(
             error.to_string().contains(RELEASE_CANDIDATE_MANIFEST),
             "{error}"

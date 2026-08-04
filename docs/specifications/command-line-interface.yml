@@ -850,14 +850,20 @@ commands:
             kind: option
             description: >-
               Prepared release-candidate handoff directory identifying the
-              release being closed. Its manifest is the authority for source
-              commit S, release commit R, the annotated global tag name, object,
-              and target, and the sealed plan digest. Assembly refuses a handoff
-              that is absent, unreadable, or fails the release-candidate
-              manifest's own structural rules, and refuses any publisher or
-              phase document that identifies a different release, naming each
-              identity component that disagreed with its expected and observed
-              values.
+              release being closed, carrying both its manifest and the sealed
+              release plan the manifest inventories. The manifest is the
+              authority for source commit S, release commit R, the annotated
+              global tag name, object, and target, and the sealed plan digest.
+              Assembly refuses a handoff that is absent, unreadable, or fails
+              the release-candidate manifest's own structural rules; a handoff
+              whose transported plan file is absent, is not a release plan, or
+              digests to something other than the bytes the manifest
+              inventories; a plan whose own seal no longer recomputes over its
+              payload; and a manifest whose claimed plan digest is not the one
+              the transported plan seals, naming both digests. It then refuses
+              any publisher or phase document that identifies a different
+              release, naming each identity component that disagreed with its
+              expected and observed values.
             required: true
             repeatable: false
             value:
@@ -923,6 +929,22 @@ commands:
             depends on a publisher having run. The statement's identity contract
             is unchanged: it still records the annotated global tag object,
             which the handoff manifest carries.
+          - >-
+            The plan digest every accepted fragment agrees on is the digest the
+            supplied sealed plan itself determines, recomputed from the plan's
+            payload rather than read from any document's assertion. Fragments
+            that agree unanimously with each other and with the manifest are
+            still refused when that digest is not the sealed plan's.
+          - >-
+            The expected publication set is derived from the assembling
+            workspace's configuration and reconciled against the sealed plan.
+            The plan and the configuration must name one interpretation
+            contract, the plan must release every release unit the
+            configuration selects a publication for, and the configuration must
+            declare every release unit the plan releases. This binds the
+            expectation to the sealed plan; it does not prove the assembling
+            job's checkout is R, because a plan seals versions and tags rather
+            than publication destinations.
           - >-
             The output directory is the complete assembly handoff. Its
             intentional-evidence.yml is the schema-backed release evidence and

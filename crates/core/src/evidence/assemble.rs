@@ -12,9 +12,9 @@ use crate::evidence::contribution::{
     ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX, CONTRIBUTION_MANIFEST,
     CONTRIBUTION_SCHEMA,
 };
-use crate::evidence::identity::{candidate_identity, identity_disagreements};
+use crate::evidence::identity::{identity_disagreements, prepared_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
-use crate::executor::recipe::resolve_publications;
+use crate::executor::recipe::{resolve_publications, SelectedPublication};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -480,8 +480,8 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         .map(|publication| publication.identity())
         .collect();
 
-    let release = match candidate_identity(request.candidate) {
-        Ok(identity) => Some(identity),
+    let prepared = match prepared_release(request.candidate) {
+        Ok(prepared) => Some(prepared),
         Err(error) => {
             findings.push(format!(
                 "the prepared release candidate does not identify the release: {error}"
@@ -489,6 +489,10 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
             None
         }
     };
+    if let Some(prepared) = &prepared {
+        reconcile_publications(&config, &prepared.plan, &selection.selected, &mut findings);
+    }
+    let release = prepared.map(|prepared| prepared.identity);
 
     let scan = scan_input(request.input, &mut findings)?;
     let release_units = accept_publisher_evidence(&scan.publishers, &expected, &mut findings);
@@ -854,6 +858,58 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
     findings
 }
 
+/// Prove the configured publications describe the release the plan sealed.
+///
+/// The expected publication set is derived from `Config::load` against the
+/// assembling job's checkout, and that checkout is not proved to be R. The
+/// sealed plan is, so the two are reconciled: they must interpret the release
+/// under one contract, the plan must release every release unit the checkout
+/// selects a publication for, and the checkout must know every release unit the
+/// plan releases. A checkout at some other ref disagrees with the plan on at
+/// least one of the three, and every disagreement is reported.
+///
+/// This binds the expectation to the sealed plan. It does not prove the
+/// checkout is R: a ref that differs only in publisher settings within one
+/// release unit changes what is expected without changing the plan, because a
+/// release plan seals versions and tags rather than destinations.
+fn reconcile_publications(
+    config: &Config,
+    plan: &crate::plan::ReleasePlan,
+    selected: &[SelectedPublication],
+    findings: &mut Vec<String>,
+) {
+    if plan.contract != config.contract {
+        findings.push(format!(
+            "the sealed release plan was written under interpretation contract {}, and the \
+             configuration assembly read uses {}",
+            plan.contract, config.contract
+        ));
+    }
+    let released: BTreeSet<&str> = plan
+        .release_units
+        .iter()
+        .map(|release_unit| release_unit.id.as_str())
+        .collect();
+    for publication in selected {
+        if !released.contains(publication.release_unit.as_str()) {
+            findings.push(format!(
+                "the configuration selects publication {}, whose release unit {} the sealed \
+                 release plan does not release",
+                publication.identity(),
+                publication.release_unit
+            ));
+        }
+    }
+    for id in &released {
+        if !config.release_units.contains_key(*id) {
+            findings.push(format!(
+                "the sealed release plan releases release unit {id}, which the configuration \
+                 assembly read does not declare"
+            ));
+        }
+    }
+}
+
 /// Require every publisher fragment to identify the prepared release.
 ///
 /// The release identity comes from the prepared candidate handoff rather than
@@ -1149,6 +1205,7 @@ mod tests {
     use super::*;
     use crate::evidence::contribution::{artifact_name, contribute, ContributionRequest};
     use crate::executor::fixture::Workspace;
+    use crate::release::candidate::{RELEASE_CANDIDATE_MANIFEST, RELEASE_PLAN_FILE};
 
     /// Published schemas that must contribute a mode enumeration.
     ///
@@ -1281,7 +1338,8 @@ mod tests {
     // Every identity in this module is the prepared handoff's, so a fixture
     // cannot agree with itself while disagreeing with the release under test.
     use crate::evidence::identity::test_support::{
-        candidate, PLAN_DIGEST, RELEASE, SOURCE, TAG_NAME, TAG_OBJECT,
+        candidate, candidate_manifest, plan_digest, sealed_plan, sealed_plan_bytes, RELEASE,
+        SOURCE, TAG_NAME, TAG_OBJECT,
     };
 
     const SUBJECT_DIGEST: &str =
@@ -1342,6 +1400,7 @@ release-units:
     }
 
     fn fragment(release_unit: &str, publisher: &str, target: &str) -> String {
+        let plan_digest = plan_digest();
         format!(
             r#"$schema: {PUBLISHER_EVIDENCE_SCHEMA}
 contract: {PUBLISHER_EVIDENCE_CONTRACT}
@@ -1354,7 +1413,7 @@ global-tag:
   name: {TAG_NAME}
   object: {TAG_OBJECT}
   target: {RELEASE}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subject:
   kind: npm-package
   identity: example-component
@@ -1486,7 +1545,7 @@ phase-tags: []
                     object: TAG_OBJECT.to_owned(),
                     target: RELEASE.to_owned(),
                 },
-                plan_digest: PLAN_DIGEST.to_owned(),
+                plan_digest: plan_digest(),
             }
         );
         assert_eq!(
@@ -1897,6 +1956,7 @@ phase-tags: []
 
     #[test]
     fn rejects_phase_tag_evidence_that_disagrees_with_publisher_evidence() {
+        let plan_digest = plan_digest();
         let workspace = workspace("assemble-phase");
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -1913,7 +1973,7 @@ phase: before-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: {TAG_NAME}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects:
   - release-unit: component
     identity: example-component
@@ -2038,13 +2098,14 @@ intended-destinations:
     }
 
     fn before_publication_evidence(version: &str, destinations: &str) -> String {
+        let plan_digest = plan_digest();
         format!(
             r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
 phase: before-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: {TAG_NAME}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects:
   - release-unit: component
     identity: example-component
@@ -2057,6 +2118,7 @@ intended-destinations:
 
     #[test]
     fn accepts_phase_tag_evidence_that_agrees_with_the_accepted_fragments() {
+        let plan_digest = plan_digest();
         let workspace = workspace("assemble-phase-agrees");
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2081,7 +2143,7 @@ phase: after-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: {TAG_NAME}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects: []
 publisher-evidence:
   - {}
@@ -2141,6 +2203,7 @@ publisher-evidence:
 
     #[test]
     fn rejects_sealed_publisher_evidence_that_differs_from_what_shipped() {
+        let plan_digest = plan_digest();
         let workspace = workspace("assemble-phase-sealed");
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2161,7 +2224,7 @@ phase: after-publication
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: {TAG_NAME}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects: []
 publisher-evidence:
   - {sealed}
@@ -2187,6 +2250,7 @@ publisher-evidence:
 
     #[test]
     fn rejects_a_phase_tag_that_omits_the_claim_its_phase_requires() {
+        let plan_digest = plan_digest();
         for (label, phase, tail, expected) in [
             (
                 "after-without-seal",
@@ -2244,7 +2308,7 @@ phase: {phase}
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 global-tag: {TAG_NAME}
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects: []
 {tail}"#
                 ),
@@ -2260,6 +2324,7 @@ subjects: []
 
     #[test]
     fn reports_phase_tag_evidence_that_does_not_identify_itself() {
+        let plan_digest = plan_digest();
         let workspace = workspace("assemble-unidentified-phase");
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2275,7 +2340,7 @@ subjects: []
 source-commit: {SOURCE}
 release-commit: {RELEASE}
 tag: release/1.0.0
-plan-digest: {PLAN_DIGEST}
+plan-digest: {plan_digest}
 subjects: []
 "#
             ),
@@ -2332,7 +2397,7 @@ subjects: []
                     object: TAG_OBJECT.to_owned(),
                     target: RELEASE.to_owned(),
                 },
-                plan_digest: PLAN_DIGEST.to_owned(),
+                plan_digest: plan_digest(),
             },
             "the prepared candidate identifies the release when no publisher can"
         );
@@ -2379,6 +2444,190 @@ subjects: []
             !message.contains("records source-commit"),
             "only the component that disagreed is reported: {message}"
         );
+    }
+
+    /// The digest the fragments agree on is the sealed plan's, recomputed.
+    ///
+    /// The handoff's manifest states a plan digest and the plan it transports
+    /// determines one. Comparing the fragments only with the manifest would
+    /// compare two asserted strings; the plan's digest is derived from the plan
+    /// payload by a different method, so the equality means something.
+    #[test]
+    fn binds_the_agreed_plan_digest_to_the_sealed_plan_it_transports() {
+        // The manifest and every fragment are moved to the same other digest,
+        // so they agree unanimously and the only input that still disagrees is
+        // the sealed plan itself. Nothing but a comparison against the plan's
+        // recomputed digest can refuse this.
+        let workspace = workspace("assemble-plan-claim");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        let elsewhere = format!("sha256:{}", "a".repeat(64));
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary").replace(&plan_digest(), &elsewhere),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest().replace(&plan_digest(), &elsewhere),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a claimed digest the sealed plan does not carry is refused");
+        let message = error.to_string();
+        assert!(message.contains(&elsewhere), "{message}");
+        assert!(message.contains(&plan_digest()), "{message}");
+    }
+
+    /// Corrupting the plan payload alone breaks the plan's own seal.
+    #[test]
+    fn refuses_a_sealed_plan_whose_seal_no_longer_covers_its_payload() {
+        let workspace = workspace("assemble-plan-payload");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        let rewritten =
+            sealed_plan_bytes().replace("\"new_version\":\"1.0.0\"", "\"new_version\":\"9.9.9\"");
+        assert_ne!(
+            rewritten,
+            sealed_plan_bytes(),
+            "the rewrite reached the plan"
+        );
+        std::fs::write(handoff.join(RELEASE_PLAN_FILE), &rewritten).expect("plan");
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest().replace(
+                &crate::evidence::digest_bytes(sealed_plan_bytes().as_bytes()),
+                &crate::evidence::digest_bytes(rewritten.as_bytes()),
+            ),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a rewritten plan is refused");
+        assert!(
+            error.to_string().contains("release plan digest mismatch"),
+            "{error}"
+        );
+    }
+
+    /// The transported plan bytes are the ones the manifest inventoried.
+    #[test]
+    fn refuses_a_sealed_plan_the_manifest_did_not_inventory() {
+        let workspace = workspace("assemble-plan-bytes");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        std::fs::write(
+            handoff.join(RELEASE_PLAN_FILE),
+            format!("{} ", sealed_plan_bytes()),
+        )
+        .expect("plan");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("plan bytes the manifest does not inventory are refused");
+        assert!(
+            error
+                .to_string()
+                .contains("which its manifest inventories as"),
+            "{error}"
+        );
+    }
+
+    /// A handoff that transports no sealed plan cannot bind anything.
+    #[test]
+    fn refuses_a_handoff_that_transports_no_sealed_plan() {
+        let workspace = workspace("assemble-plan-absent");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        let handoff = candidate(&workspace);
+        std::fs::remove_file(handoff.join(RELEASE_PLAN_FILE)).expect("remove the plan");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a handoff without its sealed plan is refused");
+        assert!(error.to_string().contains(RELEASE_PLAN_FILE), "{error}");
+    }
+
+    /// Configuration is a second input, so assembly proves the two agree.
+    ///
+    /// The expected publication set comes from the assembling job's checkout.
+    /// A checkout that selects a publication for a release unit the sealed plan
+    /// does not release is a checkout that is not describing this release.
+    #[test]
+    fn refuses_a_configuration_selecting_a_publication_the_sealed_plan_does_not_release() {
+        let workspace = Workspace::new("assemble-plan-publications");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("component", "renamed"),
+            )
+            .write(
+                "renamed/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            );
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a publication the plan does not release is refused");
+        let message = error.to_string();
+        assert!(message.contains("renamed/npm/primary"), "{message}");
+        assert!(
+            message.contains("the sealed release plan does not release"),
+            "{message}"
+        );
+    }
+
+    /// The plan and the configuration must interpret the release the same way.
+    #[test]
+    fn refuses_a_sealed_plan_written_under_another_interpretation_contract() {
+        let workspace = workspace("assemble-plan-contract");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        let mut plan = sealed_plan();
+        plan.contract = "contract-0".to_owned();
+        plan.digest = plan.payload_digest().expect("reseal");
+        let bytes = plan.to_canonical_json().expect("plan bytes");
+        std::fs::write(handoff.join(RELEASE_PLAN_FILE), &bytes).expect("plan");
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest()
+                .replace(
+                    &crate::evidence::digest_bytes(sealed_plan_bytes().as_bytes()),
+                    &crate::evidence::digest_bytes(bytes.as_bytes()),
+                )
+                .replace(&plan_digest(), &plan.digest),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a plan under another contract is refused");
+        let message = error.to_string();
+        assert!(message.contains("contract-0"), "{message}");
+        assert!(message.contains("contract-1"), "{message}");
     }
 
     /// Assembly refuses to identify a release from a handoff it was not given.

@@ -293,8 +293,12 @@ impl ReleasePlan {
         canonical_json(self)
     }
 
-    /// Verify that the embedded digest seals the complete plan payload.
-    pub fn verify_digest(&self) -> Result<()> {
+    /// Recompute the digest this plan's own payload determines.
+    ///
+    /// The result is derived from the plan's content rather than read from the
+    /// seal it carries, so a consumer comparing the two is comparing two
+    /// different methods rather than one value with itself.
+    pub fn payload_digest(&self) -> Result<String> {
         let payload = PlanPayload {
             contract: &self.contract,
             generator: &self.generator,
@@ -303,10 +307,15 @@ impl ReleasePlan {
             tags: &self.tags,
             tag_order: &self.tag_order,
         };
-        let actual = format!(
+        Ok(format!(
             "sha256:{:x}",
             Sha256::digest(canonical_json(&payload)?.as_bytes())
-        );
+        ))
+    }
+
+    /// Verify that the embedded digest seals the complete plan payload.
+    pub fn verify_digest(&self) -> Result<()> {
+        let actual = self.payload_digest()?;
         if actual != self.digest {
             return Err(Error::Validation(format!(
                 "release plan digest mismatch: expected {}, computed {actual}",

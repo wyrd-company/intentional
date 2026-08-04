@@ -14,7 +14,10 @@ description: >-
   fragments and not from the assembling job's checkout, so a repository that
   configures no publication still produces a complete statement, and a fragment
   identifying some other release is refused however many other fragments agree
-  with it. Its deterministic
+  with it. The plan digest recorded there is the digest the handoff's sealed
+  release plan determines, recomputed from that plan's payload rather than taken
+  from any document's assertion, so the statement's plan binding rests on a
+  derived value rather than on agreement between claims. Its deterministic
   release-unit sections contain the complete accepted publisher-evidence
   fragments. Repository-owned contribution values appear unchanged under their
   isolated namespaces without interpretation by Intentional. The separate
