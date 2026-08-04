@@ -98,16 +98,16 @@ def declarations(text):
     recognisers can share. An edit that moves an entry out of the shape below
     does not become invisible; it becomes the failure.
 
-    Lines are split on ``\\n``, one trailing ``\\r`` is surrendered so a CRLF
-    checkout reads the same, and a line carrying any other character some
-    reader treats as a break is refused rather than resolved one way. Matching
-    is whole-line, so nothing trails off the end of a rule unexamined.
+    The text arrives newline-normalised -- `main` reads it in text mode, so a
+    CRLF checkout is already ``\\n`` here -- and is split on ``\\n`` alone. A line
+    carrying any other character some reader treats as a break is refused
+    rather than resolved one way. Matching is whole-line, so nothing trails off
+    the end of a rule unexamined.
     """
     entries = []
     current = None
     constants = set()
     for number, line in enumerate(text.split("\n"), start=1):
-        line = line[:-1] if line.endswith("\r") else line
         found = [character for character in line if character in AMBIGUOUS_BREAKS]
         if found:
             raise Unreadable(
@@ -208,6 +208,9 @@ def resolve(repository, tag):
 
 def main(argv):
     declaration = Path(argv[1]) if len(argv) > 1 else DECLARATION
+    # Text mode, so universal newlines fold a CRLF checkout to the same text a
+    # LF one produces. `declarations` splits on "\n" and would otherwise refuse
+    # a file nobody edited.
     text = declaration.read_text(encoding="utf-8")
     # Completeness is discharged here, by the read itself: `declarations`
     # returns only when every line of the file was accounted for, so what
