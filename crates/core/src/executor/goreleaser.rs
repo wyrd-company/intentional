@@ -327,7 +327,11 @@ mod tests {
             });
             let project = crate::executor::names::SuppliedName {
                 origin: "component/.goreleaser.yaml project_name",
-                value: "example-project",
+                value: if declared_value.is_none() {
+                    " example-project "
+                } else {
+                    "example-project"
+                },
             };
             assert_eq!(
                 arch_package_name(declared.as_ref(), &project).expect("the package name stands"),

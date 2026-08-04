@@ -330,6 +330,31 @@ fn refusal(supplied: &SuppliedName<'_>, noun: &str, permitted: &str) -> String {
 mod tests {
     use super::*;
 
+    const ACCEPTED_ARCH_NAMES: [&str; 8] = [
+        "example-tool-bin",
+        "example2",
+        "ExampleTool",
+        "example.tool_bin",
+        "example+tool@stable",
+        "@stable",
+        "_private",
+        "+instrumented",
+    ];
+
+    #[test]
+    fn accepted_arch_fixtures_witness_digits() {
+        assert!(ACCEPTED_ARCH_NAMES
+            .iter()
+            .any(|name| name.chars().any(|character| character.is_ascii_digit())));
+    }
+
+    #[test]
+    fn accepted_arch_fixtures_witness_uppercase_letters() {
+        assert!(ACCEPTED_ARCH_NAMES
+            .iter()
+            .any(|name| name.chars().any(|character| character.is_ascii_uppercase())));
+    }
+
     fn supplied(value: &str) -> SuppliedName<'_> {
         SuppliedName {
             origin: "component",
@@ -472,14 +497,7 @@ mod tests {
             "NPM_TOKEN"
         );
         assert!(secret(Some(&supplied("1TOKEN")), "NPM_TOKEN").is_err());
-        for name in [
-            "example-tool-bin",
-            "example.tool_bin",
-            "example+tool@stable",
-            "@stable",
-            "_private",
-            "+instrumented",
-        ] {
+        for name in ACCEPTED_ARCH_NAMES {
             assert!(arch_package(&supplied(name)).is_ok(), "{name}");
         }
         for name in ["", "invalid/name", "invalid name", "-invalid", ".invalid"] {
