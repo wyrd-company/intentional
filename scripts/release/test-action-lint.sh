@@ -359,6 +359,43 @@ expect_failure_matching \
   "runs\.image uses Dockerfile\.dev, which names no file at $container/Dockerfile\.dev" \
   "$container/absent-dockerfile.yml"
 
+# GitHub builds a container action's image from a Dockerfile inside the action
+# directory. A value that resolves outside it is not the missing-file case: the
+# file is right there, and telling the author to add it or to pin a digest is
+# advice for a problem they do not have. Each of the three shapes below resolves
+# to a real file, so only containment can reject them.
+outside="$temporary/outside.Dockerfile"
+touch "$outside"
+# The gate reports where the value physically lands, so the expectation has to
+# be the resolved path too. They differ wherever the temporary directory sits
+# behind a symlink.
+outside_resolved="$(readlink -f "$outside")"
+
+container_action "escaping-relative" "../outside.Dockerfile"
+expect_failure_matching \
+  "a container action reaching above its own directory" \
+  "runs\.image uses \.\./outside\.Dockerfile, which resolves to $outside_resolved, outside the action directory $container" \
+  "$container/escaping-relative.yml"
+
+# Python's `/` discards the left operand when the right is absolute, so an
+# absolute value is not resolved against the action directory at all. Without a
+# containment check it names any file on the machine and passes.
+container_action "escaping-absolute" "$outside"
+expect_failure_matching \
+  "a container action naming an absolute path" \
+  "which resolves to $outside_resolved, outside the action directory $container" \
+  "$container/escaping-absolute.yml"
+
+# A symlink sitting inside the action directory satisfies `is_file()` while the
+# content it names is not versioned with the action. Containment closes it only
+# because both sides are resolved through their links.
+ln -s "$outside" "$container/linked.Dockerfile"
+container_action "escaping-symlink" "linked.Dockerfile"
+expect_failure_matching \
+  "a container action whose Dockerfile is a symlink out of the action directory" \
+  "runs\.image uses linked\.Dockerfile, which resolves to $outside_resolved, outside the action directory $container" \
+  "$container/escaping-symlink.yml"
+
 # Resolution is against the action document's directory, not the process working
 # directory. Running from a directory that does hold a Dockerfile must not make
 # a document that does not resolve.

@@ -248,6 +248,23 @@ def image_finding(image: str, where: str, candidate: Path) -> str:
     )
 
 
+def escape_finding(image: str, where: str, resolved: Path, directory: Path) -> str:
+    """Report a Dockerfile that resolves outside the action's own directory.
+
+    This is not the missing-file case and must not be told to add the file: the
+    file exists, and the author's problem is where it sits. It is not the digest
+    case either. GitHub builds a container action from a Dockerfile beneath the
+    directory holding the action document, so naming that directory is the whole
+    of the advice.
+    """
+
+    return (
+        f"{where} uses {image}, which resolves to {describe(resolved)}, outside "
+        f"the action directory {describe(directory)}; a container action's "
+        "Dockerfile must live under the directory holding its action document"
+    )
+
+
 def check_image(image: object, where: str, directory: Path) -> list[str]:
     """Hold a container runtime's image to the same digest rule as a step.
 
@@ -256,11 +273,18 @@ def check_image(image: object, where: str, directory: Path) -> list[str]:
     step. A Dockerfile is repository content, versioned with the action itself,
     and is the one form that needs no digest.
 
-    Which of the two a schemeless value is, is decided by resolving it against
-    the action document's own directory — the same way GitHub does. That accepts
-    every legitimately named Dockerfile rather than the subset a filename
-    convention anticipates, and it additionally catches a Dockerfile that has
-    been moved, renamed, or misspelled, which no filename check can.
+    A schemeless value is read as a Dockerfile when it resolves to an existing
+    file beneath the action document's own directory. Resolving accepts every
+    legitimately named Dockerfile rather than the subset a filename convention
+    anticipates, and it catches one that has been moved, renamed, or misspelled.
+    Requiring containment is the other half: `../elsewhere.Dockerfile`, an
+    absolute path, and a symlink pointing out of the tree all name real files
+    that are not versioned with the action, and the first two are not resolved
+    against the action directory at all — `Path.__truediv__` discards the left
+    operand when the right is absolute.
+
+    Both sides are resolved before comparison, so containment is judged on where
+    the path physically lands rather than on how it is spelled.
     """
 
     if not isinstance(image, str) or not image:
@@ -269,6 +293,9 @@ def check_image(image: object, where: str, directory: Path) -> list[str]:
     target = container_target(image)
     if target is None:
         candidate = directory / image
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(directory.resolve()):
+            return [escape_finding(image, where, resolved, directory)]
         if candidate.is_file():
             return []
         return [image_finding(image, where, candidate)]
