@@ -1733,6 +1733,53 @@ mod generated_invocations {
         body_invocations("intentional release prepare --output \"/tmp/unterminated");
     }
 
+    /// A backslash-escaped redirection operator is an argument, not an operator.
+    ///
+    /// The escape survives to `strip_redirections` intact: `shell_lines` rejoins
+    /// only a backslash at end of line, and `simple_commands` splits on
+    /// `$( && || ` ( ) | ; &` — none of which this fragment carries. So the
+    /// backslash arm is the only thing standing between `a\>b` and the `'<' |
+    /// '>'` arm, which would drop `>b` as a redirection and hand the parser an
+    /// argument the shell never passes.
+    #[test]
+    fn keeps_an_escaped_redirection_operator_inside_an_argument() {
+        let invocations =
+            body_invocations("intentional release prepare --output /tmp/a\\>b --format json");
+        assert_eq!(invocations.len(), 1, "{invocations:?}");
+        assert_eq!(
+            invocations[0][1..],
+            ["release", "prepare", "--output", "/tmp/a>b", "--format", "json"],
+            "the shell passes the escaped operator as part of the argument"
+        );
+    }
+
+    /// A backslash-escaped quote does not close the quoted span it sits in.
+    ///
+    /// The escape survives to `copy_quoted` intact: `shell_lines` rejoins only a
+    /// trailing backslash, and `simple_commands` carries no rule for `\` or `"`.
+    /// Without the escaped-quote arm the span closes at `\"`, the `>` that
+    /// follows is read as a redirection operator, and the fragment stops being
+    /// tokenizable at all.
+    #[test]
+    fn keeps_an_escaped_quote_from_closing_its_span() {
+        let invocations = body_invocations(
+            "intentional release prepare --output \"/tmp/a\\\"b>c\" --format json",
+        );
+        assert_eq!(invocations.len(), 1, "{invocations:?}");
+        assert_eq!(
+            invocations[0][1..],
+            [
+                "release",
+                "prepare",
+                "--output",
+                "/tmp/a\"b>c",
+                "--format",
+                "json"
+            ],
+            "the quoted span runs to its unescaped close, redirection and all"
+        );
+    }
+
     #[test]
     #[should_panic(expected = "outside command position")]
     fn refuses_an_invocation_reached_through_another_command() {
