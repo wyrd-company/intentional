@@ -37,7 +37,12 @@ description: >-
   bytes through the authenticated GitHub API. `authenticated-registry` means the
   destination admits no anonymous read at all, so its normal client path is an
   authenticated one and the recipe drove that path with the credential it always
-  requires. The verification command records the observed mode unchanged and
+  requires. What that mode establishes is bounded by which credential the recipe
+  held: a maintained recipe retrieves with the credential it already has, which
+  is the publishing one, so the claim is that a holder of that credential can
+  retrieve the release rather than that an arbitrary reader can. A destination
+  whose read access is narrower than its write access is not distinguished by
+  this mode. The verification command records the observed mode unchanged and
   refuses any mode but the one the destination's maintained recipe fixes, so a
   public destination cannot claim an authenticated check it did not perform and
   a destination that serves no anonymous client cannot claim a public one.

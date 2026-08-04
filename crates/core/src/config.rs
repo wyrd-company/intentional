@@ -1153,6 +1153,18 @@ fn validate_workflow_job_id(value: &str, description: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether one release-unit identifier is a workspace identifier.
+///
+/// Exposed so the publication boundary can be pinned against this rule. The two
+/// deliberately differ — this one admits `@` and `/` so a workspace can key a
+/// release unit the way a scoped package is named, and a publishing release
+/// unit is held to less because its identifier reaches a recipe's scripts and
+/// evidence. `executor::names::release_unit` states that side.
+#[cfg(test)]
+pub(crate) fn validate_release_unit_id(id: &str) -> Result<()> {
+    validate_id(id, "release unit")
+}
+
 fn validate_id(id: &str, kind: &str) -> Result<()> {
     if id.is_empty()
         || !id

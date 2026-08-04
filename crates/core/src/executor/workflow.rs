@@ -889,7 +889,7 @@ fn publish_contract(
         }
         jobs.push((
             id,
-            publisher_job(namespaces, &needs, publication, subject, config),
+            publisher_job(root, namespaces, &needs, publication, subject, config),
         ));
     }
 
@@ -1302,6 +1302,7 @@ fn phase_tag_job(
 
 /// Publisher job derived from one resolved publication and its recipe.
 fn publisher_job(
+    root: &Path,
     namespaces: &PrefixNamespaces,
     needs: &[String],
     publication: &SelectedPublication,
@@ -1341,6 +1342,7 @@ fn publisher_job(
         build_job: &format!("{}build_{}", namespaces.job, subject.slug),
         working_directory: &unit.path.display().to_string(),
         observation: &observation,
+        root,
         work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
     })
     .map_err(|message| {
@@ -3991,6 +3993,13 @@ release-units:
         }
     }
 
+    /// The one command a stub cargo has to actually perform.
+    ///
+    /// The probe creates its scratch crate and then works inside it, so a stub
+    /// that no-ops `cargo new` leaves the script with nowhere to go and the
+    /// failure looks like a classification rather than a missing directory.
+    const CARGO_NEW: &str = "case \"$1\" in new) mkdir -p \"${@: -1}\"; exit 0 ;; esac\n";
+
     /// A directory holding one stub client that answers a scripted way.
     ///
     /// The recipes decide whether to reach a long-lived credential from what a
@@ -4073,7 +4082,7 @@ release-units:
     /// through the same gap into a `sed` address; the answer is to hold every
     /// entry to the same rule and to keep the list where a new entry has to
     /// join it.
-    const REPOSITORY_SUPPLIED: [(&str, &str, &str); 4] = [
+    const REPOSITORY_SUPPLIED: [(&str, &str, &str); 5] = [
         (
             "component/Cargo.toml",
             "[package]\nname = \"@VALUE@\"\nversion = \"1.0.0\"\n",
@@ -4094,7 +4103,21 @@ release-units:
             "@RELEASE_UNIT@",
             "subject-identity-invalid",
         ),
+        (
+            ".intentional/config.yml",
+            "@TOKEN_SECRET@",
+            "recipe-underivable",
+        ),
     ];
+
+    /// Values the workspace admits and the publication boundary must refuse.
+    ///
+    /// The hostile shapes below are refused by the configuration loader long
+    /// before derivation, so a roster entry driven only by them proves nothing
+    /// about the boundary: the entry passes with the boundary's own validator
+    /// deleted. These are the shapes that reach it -- legal workspace
+    /// identifiers whose punctuation a recipe's sinks cannot carry.
+    const NARROWED: [&str; 2] = ["example-owner/component", "-rf"];
 
     /// Values that are executable text, or that reshape a document, at a sink.
     ///
@@ -4110,6 +4133,147 @@ release-units:
         "a$(id)",
     ];
 
+    /// A workspace whose every repository-supplied value is distinctive.
+    ///
+    /// Each value below is one an author types and derivation then carries into
+    /// a workflow. They are legal names, deliberately: the boundary refuses the
+    /// hostile ones, and this fixture is about where the accepted ones end up.
+    fn sentinel_workspace(label: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-1
+workspace-tags:
+  release:
+    template: 'sentineltagprefix{version}sentineltagsuffix'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  sentinelunit:
+    path: sentinelpath
+    npm:
+      token-secret: SENTINELNPMSECRET
+      additional-targets: { github: {} }
+    cargo:
+      token-secret: SENTINELCARGOSECRET
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+      published:
+        role: projection
+        template: '{id}/published@{version}'
+        require-phase: after-publication
+"#,
+            )
+            .write(
+                ".cargo/config.toml",
+                "[registries.sentinelregistry]\nindex = \"sparse+https://sentinelindex.example/idx/\"\n",
+            )
+            .write(
+                "sentinelpath/package.json",
+                r#"{"name":"@sentinelscope/sentinelpackage","version":"1.0.0"}"#,
+            )
+            .write(
+                "sentinelpath/Cargo.toml",
+                "[package]\nname = \"sentinelcrate\"\nversion = \"1.0.0\"\npublish = [\"sentinelregistry\"]\n",
+            )
+            .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
+            .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
+        workspace
+    }
+
+    /// Every value the sentinel workspace supplies, and where an author types it.
+    ///
+    /// This is the roster the gate below reads. Its purpose is that a new value
+    /// entering derivation has to join it, so it is a list rather than a
+    /// pattern: a pattern would quietly cover a route nobody had considered,
+    /// which is exactly what happened twice in this task.
+    ///
+    /// One repository-supplied value is deliberately absent, and its absence is
+    /// the point rather than an oversight. The configured `prefix` *is* spliced
+    /// into managed shell -- `${RUNNER_TEMP}/<prefix>npm-error` and every other
+    /// prefixed path -- because it names identifiers rather than carrying data,
+    /// and `config::validate_job_prefix` holds it to a GitHub job identifier
+    /// before derivation ever sees it. It is the one exception, it is validated
+    /// at its own boundary, and it is written down here so it stays one.
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str); 8] = [
+        ("sentinelunit", "the release-unit identifier"),
+        ("sentinelpath", "the release-unit path"),
+        ("@sentinelscope/sentinelpackage", "the npm package name"),
+        ("sentinelcrate", "the Cargo crate name"),
+        ("sentinelregistry", "the Cargo registry name"),
+        ("sentinelindex.example", "the Cargo registry index"),
+        ("SENTINELNPMSECRET", "the npm token-secret name"),
+        ("SENTINELCARGOSECRET", "the Cargo token-secret name"),
+    ];
+
+    /// Every `run:` body a managed job of one derived workflow carries.
+    fn managed_shell_bodies(root: &Path, role: WorkflowRole) -> Vec<(String, String)> {
+        managed_steps(root, role)
+            .into_iter()
+            .flat_map(|(id, steps)| {
+                steps.into_iter().filter_map(move |step| {
+                    step["run"]
+                        .as_str()
+                        .map(|body| (id.clone(), body.to_owned()))
+                })
+            })
+            .collect()
+    }
+
+    // The refusal test below proves a hostile value cannot be derived. It does
+    // not prove that an accepted one stays out of shell source, and those are
+    // different claims: `example-component` is a perfectly legal crate name,
+    // and the round-1 injection was a legal-looking registry name spliced into
+    // `--registry`. Validation makes a spliced value survivable; it does not
+    // make splicing safe, because the next validator to be widened re-opens
+    // every splice at once.
+    //
+    // So the second property is asserted directly, over the whole roster rather
+    // than over the routes anyone has noticed: no value an author typed appears
+    // as text in a managed `run:` body. The sentinels are also proved to have
+    // reached the workflow somewhere, because a value that never arrived is
+    // absent from every shell body for reasons that have nothing to do with
+    // this rule.
+    //
+    // The shape is task 149's, adopted rather than copied: that task hit the
+    // same class on the OCI surface and closed it this way, and the values and
+    // the fixture here are this surface's. A gate shared across the recipe
+    // surfaces is its own task.
+    #[test]
+    fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
+        let workspace = sentinel_workspace("workflow-supplied-values");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            for (job, body) in managed_shell_bodies(workspace.root(), role) {
+                for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+                    assert!(
+                        !body.contains(supplied),
+                        "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
+                    );
+                }
+            }
+        }
+
+        let derived = WorkflowRole::ALL
+            .into_iter()
+            .map(|role| workflow(workspace.root(), role))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+            assert!(
+                derived.contains(supplied),
+                "{origin} never reached the derived workflows, so its absence from a shell body proves nothing"
+            );
+        }
+    }
+
     // Every name a maintained recipe reads out of the repository reaches a
     // sink that interprets text: a shell body, a `sed` address, a YAML scalar
     // printed with `printf '"%s"'`, an argument vector. Validating per sink is
@@ -4122,19 +4286,39 @@ release-units:
     #[test]
     fn refuses_every_repository_supplied_name_that_a_sink_would_interpret() {
         for (file, template, code) in REPOSITORY_SUPPLIED {
-            for hostile in HOSTILE {
+            // A release-unit identifier meets the configuration loader first,
+            // and every hostile shape dies there. The values that reach the
+            // boundary are the ones the workspace admits, so those are what
+            // this entry is driven with.
+            let values: Vec<&str> = if template == "@RELEASE_UNIT@" {
+                NARROWED.to_vec()
+            } else {
+                HOSTILE.to_vec()
+            };
+            for hostile in values {
                 let workspace = if file == "component/package.json" {
                     npm_workspace("workflow-supplied-names")
                 } else {
                     workspace("workflow-supplied-names")
                 };
-                if file == ".intentional/config.yml" {
+                if template == "@RELEASE_UNIT@" {
                     // The release-unit identifier is a configuration key, and
-                    // it stands in as the subject identity for a packager
-                    // whose manifest names nothing.
+                    // it names every publication of that unit.
                     workspace.write(
                         ".intentional/config.yml",
-                        &CONFIG.replace("  component:", &format!("  {hostile}:")),
+                        &CONFIG.replace("  component:", &format!("  \"{hostile}\":")),
+                    );
+                } else if template == "@TOKEN_SECRET@" {
+                    // A configured secret name is spliced into a
+                    // `${{ secrets.NAME }}` expression, which is an identifier
+                    // position: a name carrying a bracket changes what the
+                    // expression evaluates rather than naming a missing secret.
+                    workspace.write(
+                        ".intentional/config.yml",
+                        &CONFIG.replace(
+                            "    cargo: {}\n",
+                            &format!("    cargo: {{ token-secret: \"{hostile}\" }}\n"),
+                        ),
                     );
                 } else {
                     workspace.write(file, &template.replace("@VALUE@", hostile));
@@ -4236,6 +4420,10 @@ release-units:
     #[test]
     fn records_an_alternate_cargo_registry_as_a_destination_without_anonymous_read() {
         let workspace = workspace("workflow-alternate-cargo-registry");
+        workspace.write(
+            ".cargo/config.toml",
+            "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+        );
         workspace.write(
             "component/Cargo.toml",
             "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
@@ -4352,7 +4540,14 @@ release-units:
             ),
             (
                 "a configured alternate registry",
-                workspace("workflow-cargo-online-alternate"),
+                {
+                    let workspace = workspace("workflow-cargo-online-alternate");
+                    workspace.write(
+                        ".cargo/config.toml",
+                        "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+                    );
+                    workspace
+                },
                 "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
                 None,
             ),
@@ -4502,16 +4697,18 @@ release-units:
             (
                 workspace("workflow-probe-cargo"),
                 "cargo",
-                "case \"$1\" in add) echo 'error: the crate could not be found in registry index' >&2; exit 1 ;; esac",
-                "case \"$1\" in add) echo 'error: failed to fetch; connection reset' >&2; exit 1 ;; esac",
-                "",
+                CARGO_NEW.to_owned()
+                    + "case \"$1\" in add) echo 'error: the crate could not be found in registry index' >&2; exit 1 ;; esac",
+                CARGO_NEW.to_owned()
+                    + "case \"$1\" in add) echo 'error: failed to fetch; connection reset' >&2; exit 1 ;; esac",
+                String::new(),
             ),
             (
                 npm_workspace("workflow-probe-npm"),
                 "npm",
-                "case \"$1\" in view) echo 'npm error code E404' >&2; exit 1 ;; esac",
-                &format!("case \"$1\" in view) echo '{inconclusive}' >&2; exit 1 ;; esac"),
-                "case \"$1\" in view) echo 'sha512-abc' ;; esac",
+                "case \"$1\" in view) echo 'npm error code E404' >&2; exit 1 ;; esac".to_owned(),
+                format!("case \"$1\" in view) echo '{inconclusive}' >&2; exit 1 ;; esac"),
+                "case \"$1\" in view) echo 'sha512-abc' ;; esac".to_owned(),
             ),
         ] {
             converge(workspace.root(), WorkflowRole::Publish);
@@ -4525,7 +4722,7 @@ release-units:
             std::fs::create_dir_all(&temporary).expect("runner directory");
             let token = [("INTENTIONAL_BOOTSTRAP_TOKEN", "a-long-lived-token")];
 
-            let stubs = stub_client(&temporary.join("absent"), client, absent);
+            let stubs = stub_client(&temporary.join("absent"), client, &absent);
             let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
             assert!(
                 succeeded,
@@ -4539,7 +4736,7 @@ release-units:
                 "the bootstrap path presents the token: {log}"
             );
 
-            let stubs = stub_client(&temporary.join("inconclusive"), client, inconclusive);
+            let stubs = stub_client(&temporary.join("inconclusive"), client, &inconclusive);
             std::fs::write(temporary.join("github.env"), "").expect("reset");
             let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
             assert!(
@@ -4557,7 +4754,7 @@ release-units:
             if present.is_empty() {
                 continue;
             }
-            let stubs = stub_client(&temporary.join("present"), client, present);
+            let stubs = stub_client(&temporary.join("present"), client, &present);
             std::fs::write(temporary.join("github.env"), "").expect("reset");
             let (succeeded, log) = run_step(&authenticate, &stubs, &temporary, &token);
             assert!(succeeded, "an existing package authenticates: {log}");

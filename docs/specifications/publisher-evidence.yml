@@ -33,7 +33,9 @@ description: >-
   retrieved those bytes through the authenticated GitHub API.
   `authenticated-registry` means the destination admits no anonymous read at
   all, so its normal client path is an authenticated one and the recipe drove
-  that path with the credential it always requires. The maintained recipe for
+  that path with the credential it always requires — the publishing credential
+  it already holds, so the claim is that a holder of that credential can
+  retrieve the release rather than that an arbitrary reader can. The maintained recipe for
   each destination fixes which mode its evidence may record, so a recipe never
   represents one check as another: draft-dependent publication never claims
   public retrieval, and a destination that serves anonymous clients never claims

@@ -32,10 +32,13 @@
 //! publication` is what decides whether that observation completes the
 //! publication, so the decision stays in one place and stays testable.
 //!
-//! A probe that did not succeed is not an answer. Every existence check
-//! separates "the destination does not hold this" from "the check did not
-//! complete", because the two are one shell exit status apart and only the
-//! first may reach a bootstrap credential.
+//! A probe that did not succeed is not an answer. Every check that gates a
+//! bootstrap credential or an immutable submission separates "the destination
+//! does not hold this" from "the check did not complete", because the two are
+//! one shell exit status apart and only the first may pass. The readback loops
+//! collapse them, deliberately: neither reaches a credential nor submits
+//! anything, and both treat an unanswered check as a publication that is not
+//! observable yet, which is what a bounded wait is for.
 
 use crate::config::ReleaseUnitConfig;
 use crate::executor::names::{self, SuppliedName};
@@ -64,6 +67,8 @@ pub(super) struct RecipeContext<'a> {
     pub observation: &'a str,
     /// Scratch directory the readback and retrieval work in.
     pub work: &'a str,
+    /// Workspace root, read for the native configuration a probe must not inherit.
+    pub root: &'a std::path::Path,
 }
 
 /// Conventional GitHub secret holding npm's bootstrap token.
@@ -123,6 +128,22 @@ fn promote_only(context: &RecipeContext<'_>, command: &str) -> String {
         scalar(&format!("Publish {}", context.publication.identity())),
         scalar(context.working_directory),
     )
+}
+
+/// Index one alternate Cargo registry is declared with, if the workspace declares one.
+///
+/// Read at derivation rather than inherited by the probe: the probe copying the
+/// whole file made every key in it an input to the decision that unlocks a
+/// bootstrap credential.
+fn cargo_registry_index(root: &std::path::Path, registry: &str) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(".cargo/config.toml")).ok()?;
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    document
+        .get("registries")?
+        .get(registry)?
+        .get("index")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Cargo's environment spelling of one configured registry name.
@@ -287,6 +308,14 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
             .as_ref(),
         NPM_TOKEN_SECRET,
     )?;
+    // The scope is taken from the identity the boundary already validated, so
+    // the probe states which registry serves it rather than letting a project
+    // configuration answer that question.
+    let scope = context
+        .subject_identity
+        .split_once('/')
+        .map_or("", |(scope, _)| scope);
+    let scope_environment = format!("      @ENVVAR@SCOPE: {}\n", scalar(scope));
     let mut steps = String::new();
 
     // Trusted publishing is an npm client capability rather than a registry
@@ -302,7 +331,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     }
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@SUBJECT_IDENTITY: {}\n{}    run: |\n{}{}{}",
+        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@SUBJECT_IDENTITY: {}\n{scope_environment}{}    run: |\n{}{}{}",
         scalar(&format!("Authenticate the {identity} publication")),
         scalar(registry),
         scalar(context.subject_identity),
@@ -312,7 +341,11 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
             "      @ENVVAR@GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n".to_owned()
         },
         STRICT_MODE,
-        if primary { NPM_HOLDS } else { "" },
+        if primary {
+            const_probe()
+        } else {
+            String::new()
+        },
         if primary {
             NPM_TRUSTED_AUTHENTICATION
         } else {
@@ -321,13 +354,13 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{}    run: |\n{}{}{}",
+        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n{scope_environment}{}    run: |\n{}{}{}",
         scalar(&format!("Publish {identity}")),
         scalar(context.working_directory),
         scalar(registry),
         subject_environment(context),
         STRICT_MODE,
-        NPM_HOLDS,
+        const_probe(),
         if primary {
             NPM_PUBLISH_PRIMARY
         } else {
@@ -336,7 +369,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     ));
 
     steps.push_str(&format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{}{}{}{}    run: |\n{}{}{}{}",
+        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{scope_environment}{}{}{}{}    run: |\n{}{}{}{}",
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
         scalar(destination),
@@ -350,7 +383,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
-        NPM_HOLDS,
+        const_probe(),
         npm_readback(if primary {
             NPM_RETRIEVE_PUBLIC
         } else {
@@ -382,9 +415,20 @@ const STRICT_MODE: &str = "      set -euo pipefail\n";
 /// integrity and write a `conflict` observation accusing the registry of
 /// publishing bytes the release did not send. The classification reads the
 /// error stream; the value returned is only ever what the registry answered.
+///
+/// The probe also inherits nothing from the repository it is releasing, for the
+/// reason its Cargo counterpart does not: npm reads a project `.npmrc` from the
+/// working directory, and a `@scope:registry` line there outranks `--registry`
+/// for a scoped name. A repository could therefore point the existence check at
+/// a registry of its choosing and have the answer decide whether a long-lived
+/// credential is reached. The probe runs from a scratch directory instead, and
+/// a scoped name carries its scope's registry explicitly, so what the check
+/// asked is what derivation chose.
 const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
-        if @ENVVAR@VIEW="$(npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
-          2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
+        mkdir -p "${RUNNER_TEMP}/@JOB@npm-probe"
+        if @ENVVAR@VIEW="$(cd "${RUNNER_TEMP}/@JOB@npm-probe" \
+          && npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
+            "${@ENVVAR@SCOPE_ARGUMENTS[@]}" 2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
           printf '%s' "${@ENVVAR@VIEW}"
           return 0
         fi
@@ -393,6 +437,23 @@ const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
           *) cat "${RUNNER_TEMP}/@JOB@npm-error" >&2 ; return 2 ;;
         esac
       }
+"#;
+
+/// The probe helper together with the scope arguments it reads.
+fn const_probe() -> String {
+    format!("{NPM_SCOPE_ARGUMENTS}{NPM_HOLDS}")
+}
+
+/// The scope registry a scoped name's probe states for itself.
+///
+/// npm resolves a scoped package through `@scope:registry` when one is
+/// configured, so naming it on the command line is what makes `--registry` mean
+/// what it says. The scope is derived from the validated package name, and it
+/// reaches the command as its own argument rather than as spliced text.
+const NPM_SCOPE_ARGUMENTS: &str = r#"      @ENVVAR@SCOPE_ARGUMENTS=()
+      if [ -n "${@ENVVAR@SCOPE:-}" ]; then
+        @ENVVAR@SCOPE_ARGUMENTS=("--${@ENVVAR@SCOPE}:registry=${@ENVVAR@REGISTRY}")
+      fi
 "#;
 
 /// Trusted-publishing authentication with a protected first-publication path.
@@ -616,10 +677,32 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     // exported. An alternate registry's retrieval is the authenticated one it
     // records, and needs the credential to read the index at all.
     let withheld = crates_io.then_some(token_variable.as_str());
+    // An alternate registry resolves only if the probe is told where its index
+    // is, and the probe inherits nothing. The index is therefore read here,
+    // from the one file that declares it, and validated like every other value
+    // that crosses from the repository into a derived script.
+    let index = if crates_io {
+        String::new()
+    } else {
+        let declared = cargo_registry_index(context.root, &registry_name).ok_or_else(|| {
+            format!(
+                "Cargo registry {registry_name:?} declares no index in .cargo/config.toml; a maintained recipe resolves an alternate registry through the index that file names"
+            )
+        })?;
+        names::registry_index(&SuppliedName {
+            origin: &format!(".cargo/config.toml registries.{registry_name}.index"),
+            value: &declared,
+        })?
+    };
     let registry_environment = format!(
-        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n",
+        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n      @ENVVAR@REGISTRY_INDEX_VARIABLE: {}\n      @ENVVAR@REGISTRY_INDEX_URL: {}\n",
         scalar(registry),
         scalar(&registry_name),
+        scalar(&format!(
+            "CARGO_REGISTRIES_{}_INDEX",
+            environment_fragment(&registry_name)
+        )),
+        scalar(&index),
     );
     let mut steps = String::new();
 
@@ -674,52 +757,54 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// indexed it, and fetching that dependency downloads the published `.crate`
 /// through the same path a consumer uses.
 ///
-/// The scratch crate copies the workspace's `.cargo/config.toml` when there is
-/// one, because an alternate registry is declared there and a crate outside the
-/// workspace would otherwise not know the name it is being asked to resolve.
+/// The probe inherits no configuration from the repository it is releasing.
+/// Earlier it copied the workspace's whole `.cargo/config.toml`, because an
+/// alternate registry name has to resolve somehow, and that made every key in
+/// that file an input to a decision that unlocks a long-lived credential:
+/// `[net] offline` and `[source] replace-with` both make cargo report a crate
+/// it did not look for using the words it uses for a crate that does not
+/// exist, and `[registries.crates-io] index` redirects the lookup outright.
+/// Closing those one at a time is a losing game — each key is a different
+/// route to one misclassification. So the probe is built rather than inherited:
+/// the only thing that crosses is the alternate registry's index, read and
+/// validated at derivation and passed as the environment variable cargo reads
+/// for exactly that. A probe with no configuration cannot be redirected by
+/// configuration.
 ///
 /// The three outcomes are distinct. Cargo reports a crate the index does not
 /// carry differently from a fetch it could not perform, and only the first is
 /// evidence of absence; treating both as absence routes a transient failure
-/// into the bootstrap credential.
+/// into the bootstrap credential. The network is forced on for the same reason
+/// the configuration is not inherited: an offline resolution reports absence in
+/// the words absence uses, so the condition is removed rather than parsed.
 ///
-/// Offline resolution is the one case where those two are spelled the same.
-/// `cargo add` under `net.offline` reports a crate it did not look for with the
-/// same words it uses for a crate the index does not carry, and the copied
-/// workspace configuration can carry `[net] offline = true`, so a repository
-/// could make every probe report absence for a crate the registry has held for
-/// years. The probe forces the network on rather than trying to tell the two
-/// messages apart, so the message that means "I did not look" cannot be
-/// produced.
-///
-/// The resolve also drops the publish credential. It is exported into
-/// `GITHUB_ENV` by the authenticate step and so is present in this process, and
-/// crates.io records a public consumer retrieval: reading an index and
-/// downloading a crate from crates.io does not present that token, but that is
-/// a fact about cargo rather than a property of this step. Unsetting it makes
-/// the recorded claim structural, the way the npm side's scratch configuration
-/// does. A destination whose recipe records an authenticated retrieval keeps
-/// its credential, because there the consumer path is the authenticated one.
+/// The resolve also drops the publish credential where the retrieval it
+/// performs records the public consumer path. Reading an index and downloading
+/// a crate from crates.io does not present that token, but that is a fact about
+/// cargo rather than a property of this step, and unsetting it makes the
+/// recorded claim structural the way the npm side's scratch configuration does.
+/// A destination whose recipe records an authenticated retrieval keeps its
+/// credential, because there the consumer path is the authenticated one.
 fn cargo_resolve(withheld: Option<&str>) -> String {
     let withhold = withheld.map_or_else(String::new, |variable| format!("env -u {variable} "));
     format!(
         r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
+      @ENVVAR@REGISTRY_INDEX=()
       if [ -n "${{@ENVVAR@REGISTRY_NAME:-}}" ]; then
         @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${{@ENVVAR@REGISTRY_NAME}}")
+        @ENVVAR@REGISTRY_INDEX=("${{@ENVVAR@REGISTRY_INDEX_VARIABLE}}=${{@ENVVAR@REGISTRY_INDEX_URL}}")
       fi
       @ENVVAR@resolve() {{
         rm -rf "$1"
         mkdir -p "$1"
         cargo new --quiet --lib "$1/probe" >/dev/null
-        mkdir -p "$1/probe/.cargo"
-        if [ -f "${{GITHUB_WORKSPACE}}/.cargo/config.toml" ]; then
-          cp "${{GITHUB_WORKSPACE}}/.cargo/config.toml" "$1/probe/.cargo/config.toml"
-        fi
         if ( cd "$1/probe" \
-          && {withhold}CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+          && {withhold}env "${{@ENVVAR@REGISTRY_INDEX[@]}}" \
+            CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
             cargo add --quiet "${{@ENVVAR@REGISTRY_ARGUMENTS[@]}}" \
             "${{@ENVVAR@SUBJECT_IDENTITY}}@=${{@ENVVAR@VERSION}}" \
-          && {withhold}CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
+          && {withhold}env "${{@ENVVAR@REGISTRY_INDEX[@]}}" \
+            CARGO_NET_OFFLINE=false CARGO_HOME="$1/home" \
             cargo fetch --quiet ) > "$1/log" 2>&1; then
           return 0
         fi

@@ -549,7 +549,19 @@ proposed-design:
     separation before submitting an immutable version. Where a client would
     report the two identically — an offline resolution and a missing package
     read the same — the recipe removes the condition rather than trying to tell
-    the messages apart, so the answer it cannot interpret cannot arise.
+    the messages apart.
+
+    Removing one such condition is not the same as removing the class. A probe
+    that inherits the released repository's own client configuration can be
+    redirected by any key in it: one makes the client answer offline, another
+    substitutes the source it reads, another replaces the index outright, and
+    each produces the same misclassification by a different route. A maintained
+    recipe's probe therefore inherits no configuration at all. What an alternate
+    destination needs in order to resolve — its registry index — is read at
+    derivation, validated like every other repository-supplied value, and passed
+    to the probe as the one thing that crosses. The same applies to a client
+    that resolves a scoped name through configuration: the probe states the
+    registry for that scope rather than letting a configuration answer it.
 
     Every name a recipe reads out of the repository it releases is validated
     where it enters the model rather than escaped where it is used. These names

