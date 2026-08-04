@@ -10,9 +10,12 @@
 # with its upstream tag, so two properties matter and neither is visible from a
 # green run against a well-formed declaration:
 #
-#   completeness -- every declared entry is read, or the run fails naming the
-#   entry it could not read. A count of what was read is not evidence of what
-#   was declared.
+#   completeness -- every LINE of the declaration is accounted for, or the run
+#   fails naming the line it could not read. A count of what was read is not
+#   evidence of what was declared, and neither is a second count agreeing with
+#   the first: both counts read the same text the same way, so an edit that
+#   changes how the text is spelled moves them together. Exhaustiveness has no
+#   second reading to agree with.
 #
 #   resilience   -- a failed `git ls-remote` is retried to a stated ceiling,
 #   and a resolved-commit DISAGREEMENT is never retried. Retrying the one real
@@ -485,6 +488,62 @@ if run_check "$directory" "$directory/pins.yml"; then
   report "$directory"
 elif ! grep -q "not a declaration this reader knows" "$directory/stderr"; then
   echo "the inline sequence was diagnosed as an empty declaration rather than an unreadable line" >&2
+  report "$directory"
+fi
+
+# A quoted scalar is the same string to YAML and a different string to a reader
+# that takes the value as written. The quotation marks would travel into the
+# resolved reference, so the value shape refuses them rather than resolving a
+# tag nobody declared.
+case_number=$((case_number + 1))
+directory="$(new_case quoted-scalar-value)"
+stub_git "$directory" "${AGREEING[@]}"
+{
+  declaration | head -n 3
+  echo '    tag: "v1.0.0"'
+  declaration | tail -n +5
+} >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected a quoted tag value to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "not a tag this reader recognises" "$directory/stderr"; then
+  echo "the quoted tag value was refused for the wrong reason" >&2
+  report "$directory"
+fi
+
+# An alias resolves elsewhere in the document. Reading it as the literal text
+# `*anchor` would resolve a repository of that name.
+case_number=$((case_number + 1))
+directory="$(new_case aliased-value)"
+stub_git "$directory" "${AGREEING[@]}"
+{
+  declaration | head -n 2
+  echo "    repository: *upstream"
+  declaration | tail -n +4
+} >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected an aliased repository value to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "not a repository this reader recognises" "$directory/stderr"; then
+  echo "the aliased repository value was refused for the wrong reason" >&2
+  report "$directory"
+fi
+
+# An abbreviated commit names whatever object currently shares that prefix, so
+# it is not a commit identity and this reader will not treat it as one.
+case_number=$((case_number + 1))
+directory="$(new_case abbreviated-commit)"
+stub_git "$directory" "${AGREEING[@]}"
+{
+  declaration | head -n 4
+  echo "    commit: 1111111"
+  declaration | tail -n +6
+} >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected an abbreviated commit to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "not a commit this reader recognises" "$directory/stderr"; then
+  echo "the abbreviated commit was refused for the wrong reason" >&2
   report "$directory"
 fi
 

@@ -16,7 +16,7 @@ reader classifies every line and refuses the file on the first line it cannot
 classify. So the guarantee is that no line of the declaration went unread, and
 it holds against any edit whatsoever, including edits that preserve the
 document's YAML meaning. What it does not do is accept YAML this grammar does
-not spell -- a flow mapping, a quoted scalar, an anchor -- and the cost of that
+not spell -- a flow mapping, a quoted scalar, an alias -- and the cost of that
 is a red check asking for the declaration to be written in the one shape,
 never a run that verified part of the table and reported success.
 
@@ -46,17 +46,36 @@ DECLARATION = ROOT / "github-action-pins.yml"
 #: assumption for an edit to slip between.
 IGNORED = re.compile(r"[ \t]*(#.*)?")
 SEQUENCE_KEY = re.compile(r"actions:")
-HEADER = re.compile(r"  - constant: (\S+)")
+HEADER = re.compile(r"  - constant: ([A-Z][A-Z0-9_]*)")
 FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
+
+#: What each field's value is allowed to be, spelled out rather than left as
+#: "anything without a space".
+#:
+#: A loose value pattern is a completeness hole wearing a field name: YAML
+#: writes the same scalar several ways, and `tag: "v1.0.0"` would otherwise be
+#: read as a tag whose name includes the quotation marks -- resolved, compared,
+#: and reported without anyone noticing the reader had understood the line
+#: differently from the parser. So each value is held to the shape that field
+#: can actually take, and a value written any other way is refused instead.
+VALUES = {
+    "repository": re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"),
+    "tag": re.compile(r"[A-Za-z0-9._+-]+"),
+    # A complete commit identity, matching the rule the offline Action lint
+    # holds every pinned reference to. An abbreviation names whatever object
+    # currently shares that prefix.
+    "commit": re.compile(r"[0-9a-f]{40}"),
+}
 
 REQUIRED_FIELDS = ("repository", "tag", "commit")
 
 #: Characters that are a line break to some readers of this file and an
 #: ordinary character to others.
 #:
-#: Measured, not assumed: PyYAML ends a line on U+2028, Python's ``splitlines``
-#: ends a line on all of these, and the YAML 1.2 grammar ends a line on none of
-#: them but ``\r`` and ``\n``. So a declaration containing one is read as
+#: Measured, not assumed: Python's ``splitlines`` ends a line on every one of
+#: these; PyYAML ends a line on U+0085, U+2028 and U+2029 and rejects the rest
+#: of them outright; the YAML 1.2 grammar ends a line on none of them. So a
+#: declaration containing one is read as
 #: different documents by different tools, and picking a side would put this
 #: reader's line model back into disagreement with somebody's parser -- the
 #: same class of divergence, one layer down, that made a pair of counts agree
@@ -139,6 +158,13 @@ def declarations(text):
             name, value = field.groups()
             if name in current:
                 raise Unreadable(number, line, f"{name} is declared twice")
+            if not VALUES[name].fullmatch(value):
+                raise Unreadable(
+                    number,
+                    line,
+                    f"this is not a {name} this reader recognises",
+                    current["constant"],
+                )
             current[name] = value
             continue
         raise Unreadable(
