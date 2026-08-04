@@ -8536,6 +8536,16 @@ release-units:
                 "after-publication tag directly follows {completed}"
             );
         }
+        let assembly_needs = jobs[Value::String("intentional_assemble_evidence".to_owned())]
+            ["needs"]
+            .as_sequence()
+            .expect("evidence assembly names its direct dependencies");
+        for completed in [publisher, retrieval] {
+            assert!(
+                assembly_needs.contains(&Value::String(completed.to_owned())),
+                "evidence assembly directly follows {completed}"
+            );
+        }
 
         let publishing = managed_job_steps(workspace.root(), publisher);
         let retrieving = managed_job_steps(workspace.root(), retrieval);
