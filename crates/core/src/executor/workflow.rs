@@ -2880,6 +2880,48 @@ aur:
         }
     }
 
+    // One publisher-job template serves every recipe, so which publications
+    // consume a draft asset is now a conditional inside it rather than a
+    // separate template. Both sides of that conditional are load-bearing: a
+    // draft-dependent publisher without a handoff is refused by `verify
+    // publication`, and a publisher that reads no draft asset supplying one is
+    // refused by the same command. Neither refusal is reachable from here, so
+    // the derivation is what has to get the answer right.
+    #[test]
+    fn names_the_draft_handoff_only_for_a_publisher_that_reads_one() {
+        for (label, workspace, draft_dependent) in [
+            ("go", go_workspace("workflow-handoff-go"), true),
+            ("npm", npm_workspace("workflow-handoff-npm"), false),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let jobs = publish_jobs(workspace.root());
+            let publishers = job_ids(&jobs, "intentional_publish_");
+            assert!(!publishers.is_empty(), "{label} derives a publisher job");
+            for publisher in publishers {
+                let handoff = job_steps(&jobs, &publisher)
+                    .iter()
+                    .find_map(|step| {
+                        step["with"]["draft-handoff"]
+                            .as_str()
+                            .map(std::borrow::ToOwned::to_owned)
+                    })
+                    .unwrap_or_else(|| panic!("{publisher} verifies its publication"));
+                assert_eq!(
+                    !handoff.is_empty(),
+                    draft_dependent,
+                    "{publisher} names the handoff its consumer path reads: {handoff:?}"
+                );
+                if draft_dependent {
+                    assert!(
+                        handoff.contains(&publisher.replace("intentional_publish_", ""))
+                            && handoff.ends_with(crate::publication::draft::DRAFT_HANDOFF_FILE),
+                        "{publisher} reads the handoff for its own publication: {handoff:?}"
+                    );
+                }
+            }
+        }
+    }
+
     // The deliverable RPM and APT distribute is the GitHub Release asset itself,
     // which the managed upload job places on the draft. Deriving a publisher job
     // before that job exists would ship a publication whose deliverable nothing
