@@ -910,10 +910,18 @@ commands:
             The plan digest every accepted fragment agrees on is the digest the
             reproduced plan's own payload determines. The global release tag and
             every published subject's version are held to what that plan seals.
-            The expected publication set is derived from the proved checkout's
+            The expected publication set is derived from the checkout's
             configuration and reconciled against the same plan: a release unit
             with publishers and no version bump is not in the plan, and a
             publication configured for it publishes nothing this release sealed.
+          - >-
+            The configuration and the manifests the publication selection
+            consults are read from the working tree, so a working tree that is
+            not the tree the release published is refused: any modified tracked
+            path, or any file the release commit does not carry, is reported
+            with the paths that differ. Ignored files are not reported. With
+            the tree held to the release commit, the configuration read is the
+            configuration at the proved release commit.
           - >-
             The output directory is the complete assembly handoff. Its
             intentional-evidence.yml is the schema-backed release evidence and

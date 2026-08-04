@@ -1013,8 +1013,18 @@ proposed-design:
     the two are bound rather than identical: reproduction proves the rebuilt
     release tree is the released tree, so the configuration at the release
     commit is the deterministic product of the configuration the plan was
-    rebuilt from. Because the configuration read is the one at the proved
-    release commit, a job checked out at any other ref is refused outright
+    rebuilt from.
+
+    Reproduction proves a commit, and the configuration and every manifest the
+    publication selection consults are read from the working tree, so assembly
+    additionally refuses a working tree that is not the tree the release
+    published. Both a modified tracked path and a file the release commit does
+    not carry are refused, because both change what assembly reads without
+    changing anything reproduction inspects; ignored files are not, because
+    nothing assembly reads can be ignored and still belong to the release. With
+    the tree held to the release commit, the configuration read is the
+    configuration at the proved release commit, and a job checked out at
+    another ref, or at the right ref with edited files, is refused outright
     rather than silently shifting what assembly expects.
 
     Evidence is not the only thing the draft carries. The GitHub-hosted

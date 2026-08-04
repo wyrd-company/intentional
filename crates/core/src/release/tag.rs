@@ -488,7 +488,6 @@ pub(crate) mod tests {
     /// released checkout, because building one from parts is what lets a test
     /// prove a release identity the repository never actually carried.
     pub(crate) struct ReleasedWorkspace {
-        #[allow(dead_code)]
         temp: tempfile::TempDir,
         pub(crate) root: PathBuf,
         /// Accepted source commit S.
@@ -520,6 +519,19 @@ pub(crate) mod tests {
     }
 
     impl ReleasedWorkspace {
+        /// A scratch directory beside the repository rather than inside it.
+        ///
+        /// Anything a test writes under `root` is an untracked file in a
+        /// released checkout, and a released checkout is refused when its
+        /// working tree is not the tree the release published. Inputs and
+        /// outputs belong outside the repository for the same reason the
+        /// derived workflow puts them under the runner's temp directory.
+        pub(crate) fn scratch(&self) -> PathBuf {
+            let scratch = self.temp.path().join("scratch");
+            std::fs::create_dir_all(&scratch).expect("create scratch directory");
+            scratch
+        }
+
         /// Author one intent, build the release, and publish its annotated global tag.
         pub(crate) fn new() -> Self {
             Self::with(
@@ -797,8 +809,9 @@ pub(crate) mod tests {
             "the digest is recomputable from the reproduced payload"
         );
 
-        // The global tag the configuration names is a tag this plan seals, which
-        // is the lookup evidence assembly performs against the handoff today.
+        // The reproduced plan seals the configured global release tag under the
+        // name the published tag carries. That is what lets evidence assembly
+        // bind the tag it records without looking the tag up itself.
         let configured = global_release_tag(&Config::load(&workspace.root).expect("config"))
             .expect("one global release tag");
         let sealed = verified

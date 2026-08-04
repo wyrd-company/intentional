@@ -16,6 +16,7 @@ use crate::evidence::identity::{fragment_disagreements, phase_disagreements, pro
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
 use crate::executor::recipe::{resolve_publications, SelectedPublication};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
+use crate::release::git::GitCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -469,6 +470,7 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
         )));
     }
 
+    require_proved_working_tree(request.root, &mut findings);
     let config = Config::load(request.root)?;
     let selection = resolve_publications(request.root, &config)?;
     findings.extend(selection.diagnostics);
@@ -860,6 +862,64 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
         findings.push(format!("{label} records an empty global tag name"));
     }
     findings
+}
+
+/// Refuse a working tree that is not the one reproduction proved.
+///
+/// Reproduction proves the *committed* tree at the release commit, and every
+/// other read assembly performs — the configuration, and each manifest the
+/// publication selection consults — opens a file on disk. Those are two
+/// different trees whenever the checkout is dirty, and nothing about the proof
+/// notices: a checkout sitting exactly on R, carrying the genuine annotated
+/// tag, reproducing cleanly, can still hand assembly a rewritten
+/// `.intentional/config.yml` and shift the expected publication set to
+/// anything at all.
+///
+/// Both halves of a dirty tree are refused, because both replace a proved
+/// read. A modified or deleted tracked path substitutes a file the release did
+/// not carry at that path; an untracked file supplies one the release did not
+/// carry at all, which is what turns an unresolvable release unit into a
+/// selected publication. Ignored files are not refused, because nothing
+/// assembly reads can be ignored and still be part of the release.
+///
+/// Refusing is the whole repair rather than half of one: with the working tree
+/// held to R, the configuration assembly reads *is* the configuration at the
+/// proved release commit, which is what the design and the command contract
+/// both state.
+fn require_proved_working_tree(root: &Path, findings: &mut Vec<String>) {
+    let status = match GitCommand::new(root)
+        .args(["status", "--porcelain", "--untracked-files=all"])
+        .run()
+    {
+        Ok(status) => status,
+        Err(error) => {
+            findings.push(format!(
+                "the assembling checkout cannot be compared with the release it sits on: {error}"
+            ));
+            return;
+        }
+    };
+    let text = match status.text() {
+        Ok(text) => text,
+        Err(error) => {
+            findings.push(format!(
+                "the assembling checkout cannot be compared with the release it sits on: {error}"
+            ));
+            return;
+        }
+    };
+    let dirty: Vec<&str> = text
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .collect();
+    if !dirty.is_empty() {
+        findings.push(format!(
+            "the assembling working tree is not the released tree; reproduction proves the commit, and assembly reads these paths from disk: {}",
+            dirty.join(", ")
+        ));
+    }
 }
 
 /// Prove the configured publications describe the release the plan sealed.
@@ -1510,7 +1570,7 @@ phase-tags: []
         attachments: &[(&str, &str)],
     ) -> PathBuf {
         let staging = workspace
-            .root
+            .scratch()
             .join(format!("staging/{namespace}-{job}-{run_attempt}"));
         std::fs::create_dir_all(&staging).expect("staging directory");
         let value_file = value.map(|text| {
@@ -1560,7 +1620,7 @@ phase-tags: []
     #[test]
     fn assembles_one_deterministic_bundle() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(input.join("publisher")).expect("publisher artifact");
         stage_phase(&workspace, &input);
         std::fs::write(
@@ -1587,7 +1647,7 @@ phase-tags: []
             &[],
         );
 
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.release,
@@ -1620,7 +1680,7 @@ phase-tags: []
         assert!(output.join("attachments/report.json").is_file());
         assert!(output.join(RELEASE_EVIDENCE_FILE).is_file());
 
-        let repeat = workspace.root.join("release-evidence-repeat");
+        let repeat = workspace.scratch().join("release-evidence-repeat");
         let second = assemble(&request(&workspace, &input, &repeat)).expect("assembly repeats");
         assert_eq!(
             std::fs::read_to_string(&assembly.evidence_path).expect("first"),
@@ -1632,7 +1692,7 @@ phase-tags: []
     #[test]
     fn preserves_arbitrary_contributor_yaml_without_interpretation() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
         std::fs::write(
@@ -1651,7 +1711,7 @@ phase-tags: []
             Some(contributed),
             &[],
         );
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.contributions["producer-defined"],
@@ -1662,7 +1722,7 @@ phase-tags: []
     #[test]
     fn selects_the_highest_attempt_of_a_retried_job() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
         std::fs::write(
@@ -1691,7 +1751,7 @@ phase-tags: []
         // A superseded attempt is ignored entirely, even when it is unusable.
         std::fs::write(first.join(CONTRIBUTION_MANIFEST), "not: [a, manifest\n").expect("corrupt");
 
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
         assert_eq!(
             assembly.evidence.contributions["assessment"],
@@ -1702,7 +1762,7 @@ phase-tags: []
     #[test]
     fn rejects_a_namespace_claimed_by_two_jobs() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -1727,7 +1787,7 @@ phase-tags: []
             Some("a: 2\n"),
             &[],
         );
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("collision rejected");
         assert!(error.to_string().contains("is claimed by jobs"), "{error}");
@@ -1737,7 +1797,7 @@ phase-tags: []
     #[test]
     fn rejects_a_release_asset_name_collision() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -1762,7 +1822,7 @@ phase-tags: []
             None,
             &[("report.json", "second")],
         );
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("collision rejected");
         assert!(
@@ -1777,7 +1837,7 @@ phase-tags: []
     #[test]
     fn rejects_a_contribution_whose_attachment_no_longer_matches_its_digest() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -1794,7 +1854,7 @@ phase-tags: []
             &[("report.json", "trusted")],
         );
         std::fs::write(bundle.join("attachments/report.json"), "tampered").expect("tamper");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output)).expect_err("tamper rejected");
         assert!(
             error
@@ -1825,7 +1885,7 @@ phase-tags: []
     #[test]
     fn rejects_attachment_paths_that_leave_the_bundle() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -1871,14 +1931,14 @@ phase-tags: []
     #[test]
     fn reports_missing_and_unexpected_publisher_evidence_in_one_run() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("unexpected.yml"),
             fragment(&workspace, "component", "cargo", "primary"),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("fragments rejected");
         let message = error.to_string();
@@ -1895,7 +1955,7 @@ phase-tags: []
     #[test]
     fn rejects_duplicate_publisher_evidence() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(input.join("first")).expect("first");
         std::fs::create_dir_all(input.join("second")).expect("second");
         std::fs::write(
@@ -1908,7 +1968,7 @@ phase-tags: []
             fragment(&workspace, "component", "npm", "primary"),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("duplicate rejected");
         assert!(
@@ -1920,7 +1980,7 @@ phase-tags: []
     #[test]
     fn rejects_two_destinations_that_describe_one_subject_differently() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("primary.yml"),
@@ -1938,7 +1998,7 @@ phase-tags: []
             ),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("a rebuild is rejected");
         assert!(
@@ -1957,7 +2017,7 @@ phase-tags: []
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
         let plan_digest = &workspace.plan_digest;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -1986,7 +2046,7 @@ intended-destinations:
             ),
         )
         .expect("phase evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("disagreement rejected");
         assert!(
@@ -2035,7 +2095,7 @@ release-units:
     #[test]
     fn refuses_assembly_when_a_declared_phase_sealed_nothing() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2043,7 +2103,7 @@ release-units:
         )
         .expect("fragment");
 
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a declared phase that sealed nothing is refused");
         assert!(
@@ -2072,7 +2132,7 @@ release-units:
     #[test]
     fn refuses_a_fragment_naming_a_subject_the_phase_did_not_seal() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2090,7 +2150,7 @@ release-units:
         )
         .expect("phase evidence");
 
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("an unsealed subject identity is refused");
         assert!(
@@ -2158,7 +2218,7 @@ intended-destinations:
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
         let plan_digest = &workspace.plan_digest;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2193,14 +2253,14 @@ publisher-evidence:
             ),
         )
         .expect("after evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         assemble(&request(&workspace, &input, &output)).expect("agreeing phase evidence assembles");
     }
 
     #[test]
     fn rejects_a_phase_tag_intent_that_disagrees_with_the_configured_publications() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2216,7 +2276,7 @@ publisher-evidence:
             ),
         )
         .expect("before evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output)).expect_err("intent rejected");
         let message = error.to_string();
         assert!(
@@ -2236,7 +2296,7 @@ publisher-evidence:
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
         let plan_digest = &workspace.plan_digest;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2263,7 +2323,7 @@ publisher-evidence:
             ),
         )
         .expect("after evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output)).expect_err("seal rejected");
         assert!(
             error.to_string().contains(
@@ -2321,7 +2381,7 @@ publisher-evidence:
             let release = &workspace.release;
             let tag_name = &workspace.tag_name;
             let plan_digest = &workspace.plan_digest;
-            let input = workspace.root.join("artifacts");
+            let input = workspace.scratch().join("artifacts");
             std::fs::create_dir_all(&input).expect("artifacts");
             std::fs::write(
                 input.join("publisher-evidence.yml"),
@@ -2342,7 +2402,7 @@ subjects: []
                 ),
             )
             .expect("phase evidence");
-            let output = workspace.root.join("release-evidence");
+            let output = workspace.scratch().join("release-evidence");
             let error =
                 assemble(&request(&workspace, &input, &output)).expect_err("omission rejected");
             assert!(error.to_string().contains(expected), "{label}: {error}");
@@ -2356,7 +2416,7 @@ subjects: []
         let source = &workspace.source;
         let release = &workspace.release;
         let plan_digest = &workspace.plan_digest;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2376,7 +2436,7 @@ subjects: []
             ),
         )
         .expect("phase evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error =
             assemble(&request(&workspace, &input, &output)).expect_err("silent drop rejected");
         assert!(
@@ -2403,12 +2463,12 @@ subjects: []
             )],
             "component",
         );
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         // The release still phases its tags, and a release that publishes
         // nothing seals a phase that intends nothing.
         stage_intending(&workspace, &input, "  []\n");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let assembly = assemble(&request(&workspace, &input, &output))
             .expect("a publication-less release assembles");
         assert_eq!(
@@ -2432,6 +2492,80 @@ subjects: []
         assert!(assembly.evidence_path.is_file());
     }
 
+    /// A dirty checkout is refused, not silently believed.
+    ///
+    /// Reproduction proves the committed tree; the configuration and every
+    /// manifest the publication selection consults are read from disk. This is
+    /// the input that separates them: a checkout sitting on the release commit,
+    /// carrying the genuine annotated tag, reproducing cleanly, whose
+    /// `.intentional/config.yml` on disk selects no publication for a release
+    /// whose committed configuration selects one.
+    ///
+    /// Without the working-tree check it assembles successfully and writes a
+    /// complete statement with an empty `release-units` section — a true
+    /// document about a release that did not happen, which is the failure the
+    /// affirmative-evidence rule exists to prevent.
+    #[test]
+    fn refuses_a_working_tree_whose_configuration_the_release_never_carried() {
+        let workspace = workspace();
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::write(
+            workspace.root.join(".intentional/config.yml"),
+            UNPUBLISHED_CONFIG,
+        )
+        .expect("drifted configuration");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a working tree the release never carried is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("the assembling working tree is not the released tree"),
+            "{message}"
+        );
+        assert!(
+            message.contains(".intentional/config.yml"),
+            "the diagnostic names the path that drifted: {message}"
+        );
+        assert!(
+            !output.exists(),
+            "no statement is written about a release the checkout does not carry"
+        );
+    }
+
+    /// A file the release never carried is refused too.
+    ///
+    /// The other half of a dirty tree. An untracked file does not replace a
+    /// proved read; it adds a file to the tree assembly reads, and the
+    /// publication selection opens paths the configuration names rather than a
+    /// fixed list. Refusing it is what makes "the configuration at the proved
+    /// release commit" exact rather than approximate: every path assembly
+    /// reads is a path the release commit carries, with the content it carried.
+    #[test]
+    fn refuses_a_working_tree_carrying_a_file_the_release_never_carried() {
+        let workspace = workspace();
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::write(workspace.root.join("component/npm-shrinkwrap.json"), "{}\n")
+            .expect("untracked manifest");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a file the release never carried is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("the assembling working tree is not the released tree"),
+            "{message}"
+        );
+        assert!(
+            message.contains("component/npm-shrinkwrap.json"),
+            "the diagnostic names the file the release never carried: {message}"
+        );
+    }
+
     /// Unanimous fragments are not evidence of the release being closed.
     ///
     /// Every fragment here agrees with every other fragment about a release,
@@ -2443,7 +2577,7 @@ subjects: []
     fn refuses_fragments_that_agree_with_each_other_and_not_with_the_proved_release() {
         let workspace = workspace();
         let release = &workspace.release;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         let elsewhere = "7".repeat(40);
         std::fs::write(
@@ -2454,7 +2588,7 @@ subjects: []
             ),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a fragment about another release is refused");
         let message = error.to_string();
@@ -2492,9 +2626,9 @@ subjects: []
             ],
             "component",
         );
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a publication the plan does not release is refused");
         let message = error.to_string();
@@ -2513,7 +2647,7 @@ subjects: []
     #[test]
     fn binds_a_published_subject_to_the_version_the_sealed_plan_assigns() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2522,7 +2656,7 @@ subjects: []
         )
         .expect("fragment");
         stage_phase(&workspace, &input);
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a subject version the plan does not assign is refused");
         let message = error.to_string();
@@ -2542,7 +2676,7 @@ subjects: []
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
         let plan_digest = &workspace.plan_digest;
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
@@ -2568,7 +2702,7 @@ intended-destinations:
             ),
         )
         .expect("phase evidence");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a phase document about another release is refused");
         let message = error.to_string();
@@ -2589,14 +2723,14 @@ intended-destinations:
     #[test]
     fn refuses_a_checkout_it_cannot_prove_and_still_reports_the_rest() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
             fragment(&workspace, "component", "npm", "primary"),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         workspace.checkout(&workspace.source.clone());
 
         let mut request = request(&workspace, &input, &output);
@@ -2616,7 +2750,7 @@ intended-destinations:
     #[test]
     fn includes_available_contributions_without_waiting_for_absent_ones() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
         std::fs::write(
@@ -2633,7 +2767,7 @@ intended-destinations:
             Some("ok: true\n"),
             &[],
         );
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let assembly = assemble(&request(&workspace, &input, &output)).expect("assembly succeeds");
         assert_eq!(assembly.evidence.contributions.len(), 1);
         assert!(assembly.evidence.contributions.contains_key("assessment"));
@@ -2642,7 +2776,7 @@ intended-destinations:
     #[test]
     fn refuses_to_assemble_into_a_populated_directory() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
         std::fs::write(
@@ -2650,7 +2784,7 @@ intended-destinations:
             fragment(&workspace, "component", "npm", "primary"),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         std::fs::create_dir_all(&output).expect("output");
         std::fs::write(output.join(RELEASE_EVIDENCE_FILE), "stale").expect("stale evidence");
         let error =
@@ -2666,14 +2800,14 @@ intended-destinations:
     #[test]
     fn rejects_an_unusable_workflow_identity() {
         let workspace = workspace();
-        let input = workspace.root.join("artifacts");
+        let input = workspace.scratch().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
             input.join("publisher-evidence.yml"),
             fragment(&workspace, "component", "npm", "primary"),
         )
         .expect("fragment");
-        let output = workspace.root.join("release-evidence");
+        let output = workspace.scratch().join("release-evidence");
         let mut request = request(&workspace, &input, &output);
         request.workflow.repository = "example-owner".to_owned();
         request.workflow.commit = "abc".to_owned();

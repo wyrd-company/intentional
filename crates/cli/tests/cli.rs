@@ -34,6 +34,20 @@ impl TestRepo {
         Self { _temp: temp, root }
     }
 
+    /// A path beside the repository rather than inside it.
+    ///
+    /// Evidence assembly refuses a working tree that is not the tree the
+    /// release published, and anything written under `root` after the release
+    /// is a file the release commit does not carry. The derived workflow puts
+    /// these under the runner's temp directory for the same reason.
+    fn outside(&self, relative: &str) -> PathBuf {
+        let path = self._temp.path().join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("scratch parent");
+        }
+        path
+    }
+
     fn write(&self, relative: &str, contents: &str) {
         let path = self.root.join(relative);
         if let Some(parent) = path.parent() {
@@ -2609,8 +2623,20 @@ fn assembly_environment() -> Vec<(&'static str, &'static str)> {
 }
 
 /// Stage one contribution through the CLI and place it under its transport name.
+/// Write one fixture file at an absolute path outside the repository.
+fn write_outside(path: &Path, contents: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("fixture parent");
+    }
+    fs::write(path, contents).expect("write fixture file");
+}
+
 fn contribute_artifact(repo: &TestRepo, namespace: &str, job: &str, attempt: &str) -> PathBuf {
-    let staged = format!("staging/{namespace}-{job}-{attempt}");
+    let staged = repo
+        .outside(&format!("staging/{namespace}-{job}-{attempt}"))
+        .to_str()
+        .expect("staging path")
+        .to_owned();
     let output = repo
         .cli_with_env(&[("GITHUB_JOB", job), ("GITHUB_RUN_ATTEMPT", attempt)])
         .args([
@@ -2633,10 +2659,10 @@ fn contribute_artifact(repo: &TestRepo, namespace: &str, job: &str, attempt: &st
         .find_map(|line| line.strip_prefix("artifact-name: "))
         .expect("contribute names its transport artifact")
         .to_owned();
-    let destination = repo.root.join("artifacts").join(&artifact);
+    let destination = repo.outside("artifacts").join(&artifact);
     fs::create_dir_all(destination.parent().expect("artifacts directory"))
         .expect("artifacts directory");
-    fs::rename(repo.root.join(&staged), &destination).expect("transport the bundle");
+    fs::rename(&staged, &destination).expect("transport the bundle");
     destination
 }
 
@@ -2709,28 +2735,33 @@ fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
     repo.write("value.yml", "outcome: clean\n");
     repo.write("report.json", "{\"ok\":true}");
     let released = release_the_fixture(&repo);
-    repo.write(
-        "artifacts/publisher/evidence.yml",
+    write_outside(
+        &repo.outside("artifacts/publisher/evidence.yml"),
         &evidence_fragment(&released),
     );
-    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
+    write_outside(
+        &repo.outside("artifacts/phase/phase.yml"),
+        &evidence_phase(&released),
+    );
     contribute_artifact(&repo, "assessment", "scan", "1");
 
+    let input = repo.outside("artifacts");
+    let output = repo.outside("release-evidence");
     repo.cli_with_env(&assembly_environment())
         .args([
             "evidence",
             "assemble",
             "--input",
-            "artifacts",
+            input.to_str().expect("input path"),
             "--output",
-            "release-evidence",
+            output.to_str().expect("output path"),
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("attachment: report.json"));
 
-    let evidence = fs::read_to_string(repo.root.join("release-evidence/intentional-evidence.yml"))
-        .expect("release evidence");
+    let evidence =
+        fs::read_to_string(output.join("intentional-evidence.yml")).expect("release evidence");
     assert!(
         evidence.contains("contract: release-evidence-1"),
         "{evidence}"
@@ -2738,9 +2769,7 @@ fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
     assert!(evidence.contains("run-id: 42"), "{evidence}");
     assert!(evidence.contains("outcome: clean"), "{evidence}");
     assert!(
-        repo.root
-            .join("release-evidence/attachments/report.json")
-            .is_file(),
+        output.join("attachments/report.json").is_file(),
         "accepted contributed files are emitted once beside the statement"
     );
 }
@@ -2751,20 +2780,25 @@ fn evidence_assemble_requires_its_workflow_identity() {
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
     let released = release_the_fixture(&repo);
-    repo.write(
-        "artifacts/publisher/evidence.yml",
+    write_outside(
+        &repo.outside("artifacts/publisher/evidence.yml"),
         &evidence_fragment(&released),
     );
-    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
+    write_outside(
+        &repo.outside("artifacts/phase/phase.yml"),
+        &evidence_phase(&released),
+    );
+    let input = repo.outside("artifacts");
+    let output = repo.outside("release-evidence");
     repo.cli()
         .env_remove("GITHUB_REPOSITORY")
         .args([
             "evidence",
             "assemble",
             "--input",
-            "artifacts",
+            input.to_str().expect("input path"),
             "--output",
-            "release-evidence",
+            output.to_str().expect("output path"),
         ])
         .assert()
         .failure()
@@ -2801,22 +2835,27 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
     let released = release_the_fixture(&repo);
-    repo.write(
-        "artifacts/publisher/evidence.yml",
+    write_outside(
+        &repo.outside("artifacts/publisher/evidence.yml"),
         &evidence_fragment(&released),
     );
-    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
+    write_outside(
+        &repo.outside("artifacts/phase/phase.yml"),
+        &evidence_phase(&released),
+    );
     let mut environment = assembly_environment();
     environment.retain(|(key, _)| *key != "GITHUB_RUN_ID");
     environment.push(("GITHUB_RUN_ID", "run-42"));
+    let input = repo.outside("artifacts");
+    let output = repo.outside("release-evidence");
     repo.cli_with_env(&environment)
         .args([
             "evidence",
             "assemble",
             "--input",
-            "artifacts",
+            input.to_str().expect("input path"),
             "--output",
-            "release-evidence",
+            output.to_str().expect("output path"),
         ])
         .assert()
         .failure()
