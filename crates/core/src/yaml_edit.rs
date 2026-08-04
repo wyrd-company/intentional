@@ -843,6 +843,26 @@ mod tests {
     }
 
     #[test]
+    fn claims_only_comment_lines_at_or_left_of_the_container_indent() {
+        assert!(
+            comment_belongs_to_container("  # closes the jobs block\n", 2),
+            "a comment at the container indent is the container's"
+        );
+        assert!(
+            comment_belongs_to_container("# a top-level note\n", 2),
+            "a comment left of the container is still the container's"
+        );
+        assert!(
+            !comment_belongs_to_container("          # tidy up afterwards\n", 2),
+            "a comment indented past the container is inside an entry's value"
+        );
+        assert!(
+            !comment_belongs_to_container("  runs-on: x\n", 2),
+            "an ordinary line is not a comment, whatever its indent"
+        );
+    }
+
+    #[test]
     fn moves_a_keep_chomped_scalars_trailing_blank_lines_out_of_the_entry() {
         let source = "jobs:\n  a:\n    script: |+\n      make build\n\n";
         let mut document = Document::parse(source).expect("parses");
