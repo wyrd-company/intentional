@@ -1094,4 +1094,12 @@ proposed-design:
     A network-only evidence workflow resolves each upstream tag on every pull
     request and push. Once merged to the default branch, it also runs every
     Monday. Each run fails when resolution no longer matches the declared
-    commit.
+    commit. What that seam detects is upstream tag mutation: a retag, a
+    force-push, a moved or deleted release tag. What it cannot detect is a
+    declaration that was wrong when it was written, because each declared tag
+    is chosen from the tags upstream already resolves to the pinned commit, so
+    their agreement is a property of how the entry was authored rather than an
+    independent confirmation of it. Offline conformance is bounded from the
+    other side, comparing two hand-maintained halves that one mistake makes
+    wrong consistently. Neither boundary is a defect in the declaration, and
+    neither is grounds to repin an entry.
