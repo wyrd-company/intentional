@@ -454,6 +454,40 @@ elif ! grep -q "declares no Action" "$directory/stderr"; then
   report "$directory"
 fi
 
+# An entry header carrying anything beyond the constant is not the header
+# shape. Reading the constant and stepping over the rest of the line is exactly
+# the partial read this reader exists to refuse.
+case_number=$((case_number + 1))
+directory="$(new_case header-with-trailing-content)"
+stub_git "$directory" "${AGREEING[@]}"
+{
+  declaration | head -n 1
+  echo "  - constant: EXAMPLE_ACTION deprecated"
+  declaration | tail -n +3
+} >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected an entry header with trailing content to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "not a declaration this reader knows" "$directory/stderr"; then
+  echo "the header with trailing content was refused for the wrong reason" >&2
+  report "$directory"
+fi
+
+# The whole table written inline after the sequence key. The key line is no
+# longer just the key, and reading it as one would step over every entry on it
+# -- reporting an empty declaration for a file that declares plenty.
+case_number=$((case_number + 1))
+directory="$(new_case inline-sequence)"
+stub_git "$directory" "${AGREEING[@]}"
+echo "actions: [{ constant: EXAMPLE_ACTION, repository: example-owner/example-action, tag: v1.0.0, commit: $EXAMPLE_COMMIT }]" >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected an inline entry sequence to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "not a declaration this reader knows" "$directory/stderr"; then
+  echo "the inline sequence was diagnosed as an empty declaration rather than an unreadable line" >&2
+  report "$directory"
+fi
+
 # A CRLF checkout reads the same declaration. One trailing carriage return is
 # surrendered per line, because YAML ends a line on CRLF too and a reader that
 # kept it would refuse a file nobody edited.
