@@ -1006,7 +1006,8 @@ mod generated_invocations {
         fragment: &str,
         arrays: &BTreeMap<String, Vec<String>>,
     ) -> Option<Vec<String>> {
-        let Ok(tokens) = shell_words::split(fragment) else {
+        let stripped = strip_redirections(fragment);
+        let Ok(tokens) = shell_words::split(&stripped) else {
             assert!(
                 !names_executable(fragment),
                 "`{fragment}` names the intentional executable but cannot be tokenized; an unclassifiable invocation must fail rather than pass"
@@ -1018,9 +1019,7 @@ mod generated_invocations {
         // that is not one is the command word.
         let command = tokens.iter().position(|token| !is_assignment(token));
         if command.is_some_and(|index| is_executable(&tokens[index])) {
-            return Some(without_redirections(
-                &tokens[command.expect("command word")..],
-            ));
+            return Some(tokens[command.expect("command word")..].to_vec());
         }
         assert!(
             !tokens.iter().any(|token| is_executable(token)),
@@ -1033,23 +1032,110 @@ mod generated_invocations {
     ///
     /// `intentional verify release-tag >/dev/null` runs a command with no
     /// arguments; handing `>/dev/null` to the parser would reject a command the
-    /// shell accepts. A bare operator also consumes the word after it.
-    fn without_redirections(tokens: &[String]) -> Vec<String> {
-        let mut kept = Vec::new();
-        let mut skip = false;
-        for token in tokens {
-            if skip {
-                skip = false;
-                continue;
+    /// shell accepts. The operator also consumes the word that names its
+    /// target, wherever the spacing puts it.
+    ///
+    /// This runs on fragment text rather than on tokens because a shell decides
+    /// redirection before it removes quotes, and tokenizing removes them first.
+    /// After tokenization `"<extra>"` and `<extra>` are the same word, so a
+    /// token-level strip drops a quoted argument the command actually receives
+    /// and reports an invocation the step does not run — silently, and green.
+    /// The dropped argument is precisely the one the parser would have rejected.
+    fn strip_redirections(fragment: &str) -> String {
+        let characters = fragment.chars().collect::<Vec<_>>();
+        let mut kept = String::new();
+        let mut index = 0;
+        while index < characters.len() {
+            let character = characters[index];
+            match character {
+                '\'' | '"' => {
+                    index = copy_quoted(&characters, index, &mut kept);
+                }
+                '\\' => {
+                    kept.push(character);
+                    index += 1;
+                    if index < characters.len() {
+                        kept.push(characters[index]);
+                        index += 1;
+                    }
+                }
+                '<' | '>' => {
+                    drop_descriptor(&mut kept);
+                    index = skip_redirection(&characters, index);
+                }
+                _ => {
+                    kept.push(character);
+                    index += 1;
+                }
             }
-            let operator = token.trim_start_matches(|character: char| character.is_ascii_digit());
-            if operator.starts_with('>') || operator.starts_with('<') {
-                skip = operator.trim_start_matches(['>', '<']).is_empty();
-                continue;
-            }
-            kept.push(token.clone());
         }
         kept
+    }
+
+    /// Copy one quoted word verbatim, returning the index after its close.
+    ///
+    /// The quoted span is copied rather than examined because nothing inside it
+    /// is an operator. An unterminated quote copies to the end, leaving the
+    /// fragment untokenizable so it is reported rather than quietly repaired.
+    fn copy_quoted(characters: &[char], start: usize, kept: &mut String) -> usize {
+        let quote = characters[start];
+        kept.push(quote);
+        let mut index = start + 1;
+        while index < characters.len() {
+            let character = characters[index];
+            kept.push(character);
+            index += 1;
+            if character == '\\' && quote == '"' && index < characters.len() {
+                kept.push(characters[index]);
+                index += 1;
+                continue;
+            }
+            if character == quote {
+                break;
+            }
+        }
+        index
+    }
+
+    /// Remove a file-descriptor number the redirection operator that follows owns.
+    ///
+    /// `2>&1` redirects descriptor two; the digits belong to the operator rather
+    /// than to the preceding word. `--count 2 >log` does not, so the digits are
+    /// surrendered only when they start a word.
+    fn drop_descriptor(kept: &mut String) {
+        let digits = kept.chars().rev().take_while(char::is_ascii_digit).count();
+        let boundary = kept.len() - digits;
+        let starts_a_word = boundary == 0 || kept[..boundary].ends_with(char::is_whitespace);
+        if digits > 0 && starts_a_word {
+            kept.truncate(boundary);
+        }
+    }
+
+    /// Skip one redirection operator and the target word it consumes.
+    fn skip_redirection(characters: &[char], start: usize) -> usize {
+        let mut index = start;
+        while index < characters.len() && matches!(characters[index], '<' | '>' | '&') {
+            index += 1;
+        }
+        while index < characters.len() && characters[index].is_whitespace() {
+            index += 1;
+        }
+        let mut quote = None;
+        while index < characters.len() {
+            let character = characters[index];
+            match quote {
+                Some(open) => {
+                    if character == open {
+                        quote = None;
+                    }
+                }
+                None if character == '\'' || character == '"' => quote = Some(character),
+                None if character.is_whitespace() => break,
+                None => {}
+            }
+            index += 1;
+        }
+        index
     }
 
     /// Whether a command word runs this binary, bare or named by a path.
@@ -1524,6 +1610,81 @@ mod generated_invocations {
                 "`{body}` is a command this binary accepts"
             );
         }
+    }
+
+    /// A quoted word a redirection operator only resembles is still an argument.
+    ///
+    /// The shell decides redirection before quote removal, so `"<extra>"` is a
+    /// word the command receives rather than a redirection the shell consumes.
+    /// A gate that drops it reports a command the step does not run, and the
+    /// argument it dropped is exactly the one the parser would have rejected.
+    #[test]
+    fn keeps_a_quoted_word_a_redirection_operator_only_resembles() {
+        for (body, argument) in [
+            ("intentional verify release-tag \"<extra>\"", "<extra>"),
+            ("intentional verify release-tag '>report'", ">report"),
+            ("intentional verify release-tag \"<\"", "<"),
+            ("intentional verify release-tag \">>out\"", ">>out"),
+        ] {
+            let invocations = body_invocations(body);
+            assert_eq!(invocations.len(), 1, "`{body}`: {invocations:?}");
+            assert_eq!(
+                invocations[0][1..],
+                ["verify", "release-tag", argument],
+                "`{body}` passes a quoted word the shell does not read as a redirection"
+            );
+            assert!(
+                parser_rejection(&invocations[0]).is_some(),
+                "`{body}` passes an argument this binary rejects"
+            );
+        }
+    }
+
+    /// A quoted word carrying a command separator is reported, not read.
+    ///
+    /// Simple commands are split on separators without regard to quoting, so a
+    /// quoted `&`, `|`, or `;` cuts the fragment before redirection stripping
+    /// sees it. That leaves a word this cannot tokenize, and the recognizer
+    /// refuses it rather than classifying half a command line. The boundary is
+    /// stated here so it stays a loud refusal rather than becoming a silent
+    /// acceptance the way the quoted redirection did.
+    #[test]
+    #[should_panic(expected = "unclassifiable invocation must fail rather than pass")]
+    fn refuses_a_quoted_word_carrying_a_command_separator() {
+        body_invocations("intentional verify release-tag \"2>&1\"");
+    }
+
+    /// Redirection is still consumed when the shell would consume it.
+    #[test]
+    fn drops_a_redirection_whose_target_is_quoted() {
+        for body in [
+            "intentional verify release-tag > \"/dev/null\"",
+            "intentional verify release-tag >'/dev/null'",
+        ] {
+            let invocations = body_invocations(body);
+            assert_eq!(invocations.len(), 1, "`{body}`: {invocations:?}");
+            assert_eq!(invocations[0][1..], ["verify", "release-tag"], "`{body}`");
+        }
+    }
+
+    /// A digit belongs to the operator only when it starts the redirection word.
+    ///
+    /// `2>log` names a descriptor the operator owns; `--phase 2 >log` ends in an
+    /// argument the command receives. Surrendering the second would drop a value
+    /// the parser validates.
+    #[test]
+    fn surrenders_a_descriptor_without_surrendering_a_numeric_argument() {
+        let descriptor = body_invocations("intentional verify release-tag 2>log");
+        assert_eq!(descriptor.len(), 1, "{descriptor:?}");
+        assert_eq!(descriptor[0][1..], ["verify", "release-tag"]);
+
+        let argument = body_invocations("intentional verify release-tag 2 >log");
+        assert_eq!(argument.len(), 1, "{argument:?}");
+        assert_eq!(
+            argument[0][1..],
+            ["verify", "release-tag", "2"],
+            "a numeric argument is not a file descriptor"
+        );
     }
 
     #[test]
