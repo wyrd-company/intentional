@@ -878,6 +878,8 @@ pub(super) const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
         > "${RUNNER_TEMP}/@JOB@inventory"
       mkdir -p "$(dirname "${@ENVVAR@HANDOFF}")"
       {
+        # $schema is a literal YAML key, not a shell expansion.
+        # shellcheck disable=SC2016
         printf '$schema: %s\n' "@HANDOFF_SCHEMA@"
         printf 'contract: %s\n' "@HANDOFF_CONTRACT@"
         printf 'repository: "%s"\n' "${@ENVVAR@REPOSITORY}"

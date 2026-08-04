@@ -39,6 +39,9 @@ pub use recipe::{
 /// enabled only by dev-dependencies, so nothing here reaches a released binary.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixture {
+    use crate::executor::recipe::{catalog, Capability, Recipe, PRIMARY_TARGET};
+    use crate::model::PublisherKind;
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     /// Directory name for one fixture workspace.
@@ -154,6 +157,166 @@ release-units:
         let workspace = managed_workspace(label);
         derive_workflows_under(workspace.root())
     }
+
+    /// Derive workflows from every maintained publication recipe.
+    ///
+    /// The recipe catalog is the source of the fixture's publication set. A
+    /// catalog entry added later therefore changes this workspace without a
+    /// second roster having to remember it.
+    #[must_use]
+    pub fn derived_recipe_workflows(label: &str) -> Vec<(crate::config::WorkflowRole, String)> {
+        let workspace = recipe_workspace(label);
+        derive_workflows_under(workspace.root())
+    }
+
+    /// Catalog entries for which workflow derivation owns complete shell steps.
+    #[must_use]
+    pub fn derived_recipes() -> Vec<Recipe> {
+        catalog()
+            .iter()
+            .copied()
+            .filter(|recipe| super::steps::recipe_is_derived(recipe.packager, recipe.publisher))
+            .collect()
+    }
+
+    /// Workspace whose release units are generated from the maintained catalog.
+    fn recipe_workspace(label: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        let mut config = String::from(
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n",
+        );
+        let derived = derived_recipes();
+        for capability in Capability::ALL {
+            let recipes = derived
+                .iter()
+                .filter(|recipe| recipe.capability == capability)
+                .collect::<Vec<_>>();
+            assert!(
+                !recipes.is_empty(),
+                "the canonical capability {capability} has a maintained recipe"
+            );
+            let id = capability.as_str();
+            config.push_str(&format!("  {id}:\n    path: {id}\n"));
+            config.push_str(&publisher_config(&recipes));
+            config.push_str(&format!(
+                "    tags:\n      staged:\n        role: primary\n        template: '{id}/staged@{{version}}'\n        require-phase: before-publication\n      published:\n        role: projection\n        template: '{id}/published@{{version}}'\n        require-phase: after-publication\n"
+            ));
+            write_capability(&workspace, capability);
+        }
+        workspace
+            .write(".intentional/config.yml", &config)
+            .write(".github/workflows/release.yml", REPOSITORY_WORKFLOW)
+            .write(".github/workflows/publish.yml", REPOSITORY_WORKFLOW);
+        workspace
+    }
+
+    /// Publisher declarations projected from one capability's catalog entries.
+    fn publisher_config(recipes: &[&crate::executor::recipe::Recipe]) -> String {
+        let publishers = recipes
+            .iter()
+            .map(|recipe| recipe.publisher)
+            .collect::<BTreeSet<_>>();
+        let mut configured = String::new();
+        for publisher in publishers {
+            let targets = recipes
+                .iter()
+                .filter(|recipe| recipe.publisher == publisher)
+                .map(|recipe| recipe.target)
+                .collect::<BTreeSet<_>>();
+            match publisher {
+                PublisherKind::Npm => {
+                    assert!(
+                        targets
+                            .iter()
+                            .all(|target| matches!(*target, PRIMARY_TARGET | "github")),
+                        "the npm fixture knows every catalog target: {targets:?}"
+                    );
+                    if targets.contains("github") {
+                        configured
+                            .push_str("    npm:\n      additional-targets:\n        github: {}\n");
+                    } else {
+                        configured.push_str("    npm: {}\n");
+                    }
+                }
+                PublisherKind::Cargo => configured.push_str("    cargo: {}\n"),
+                PublisherKind::Homebrew => {
+                    configured.push_str("    homebrew: { repository: sample-owner/sample-tap }\n")
+                }
+                PublisherKind::Rpm => configured.push_str("    rpm: {}\n"),
+                PublisherKind::Apt => configured.push_str("    apt: {}\n"),
+                PublisherKind::Aur => configured.push_str("    aur: {}\n"),
+                PublisherKind::Oci => {
+                    configured.push_str("    oci:\n");
+                    for target in targets {
+                        match target {
+                            "dockerhub" => configured.push_str(
+                                "      dockerhub: { repository: sample-owner/sample-image }\n",
+                            ),
+                            "ghcr" => configured.push_str("      ghcr: {}\n"),
+                            other => panic!("the OCI fixture knows every catalog target: {other}"),
+                        }
+                    }
+                }
+            }
+        }
+        configured
+    }
+
+    /// Native evidence from which one canonical capability is derived.
+    fn write_capability(workspace: &Workspace, capability: Capability) {
+        let root = capability.as_str();
+        match capability {
+            Capability::NodePackage => {
+                workspace.write(
+                    &format!("{root}/package.json"),
+                    r#"{"name":"@sample-owner/sample-package","version":"1.0.0"}"#,
+                );
+            }
+            Capability::RustCrate => {
+                workspace.write(
+                    &format!("{root}/Cargo.toml"),
+                    "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n",
+                );
+            }
+            Capability::GoApplication => {
+                workspace
+                    .write(
+                        &format!("{root}/go.mod"),
+                        "module example.invalid/sample-application\n",
+                    )
+                    .write(
+                        &format!("{root}/cmd/sample-application/main.go"),
+                        "package main\n\nfunc main() {}\n",
+                    )
+                    .write(&format!("{root}/.goreleaser.yaml"), RECIPE_GORELEASER);
+            }
+            Capability::RunnableImage => {
+                workspace.write(
+                    &format!("{root}/Dockerfile"),
+                    "FROM scratch\nLABEL org.opencontainers.image.title=\"sample-image\"\n",
+                );
+            }
+            Capability::DevContainerFeature => {
+                workspace.write(
+                    &format!("{root}/devcontainer-feature.json"),
+                    r#"{"id":"sample-feature","version":"1.0.0"}"#,
+                );
+            }
+        }
+    }
+
+    /// Native configuration carrying every GoReleaser destination recipe reads.
+    const RECIPE_GORELEASER: &str = r#"version: 2
+project_name: sample-application
+builds:
+  - main: ./cmd/sample-application
+brews:
+  - repository: { owner: sample-owner, name: sample-tap }
+nfpms:
+  - formats: [ rpm, deb, archlinux ]
+aur:
+  - name: sample-application-bin
+"#;
 
     /// Derive both managed workflows in a workspace someone else owns.
     ///

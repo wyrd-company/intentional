@@ -5,14 +5,19 @@
 
 //! Syntax gates for the workflows Intentional derives.
 //!
-//! These tests sit at the command-line crate boundary because they execute
-//! repository tools against generated files. `cargo test` reaches them without
-//! putting tool-process concerns into workflow derivation itself.
+//! This crate already enables core's `test-support` feature for its generated
+//! invocation tests. Keeping the external-tool gate on that same test boundary
+//! reuses the fixture without exposing it in a release build.
 
-use intentional_core::executor::{fixture::derived_workflows, OWNERSHIP_SENTINEL};
+use intentional_core::config::WorkflowRole;
+use intentional_core::executor::{
+    fixture::{derived_recipe_workflows, derived_recipes},
+    OWNERSHIP_SENTINEL,
+};
 use serde_yaml::Value;
+use std::collections::BTreeSet;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 /// Collect every `run:` body from a parsed workflow without naming its jobs.
 fn collect_run_bodies(value: &Value, bodies: &mut Vec<String>) {
@@ -36,104 +41,155 @@ fn collect_run_bodies(value: &Value, bodies: &mut Vec<String>) {
     }
 }
 
-/// Replace expressions the Actions runner resolves before invoking a shell.
-///
-/// `shellcheck` has no GitHub Actions expression evaluator. Replacing the
-/// complete `${{ ... }}` span with one shell word preserves the surrounding
-/// shell grammar while leaving expression semantics to `actionlint`, which
-/// parses them in their native context.
-fn resolve_workflow_expressions(body: &str) -> String {
-    let mut resolved = String::with_capacity(body.len());
-    let mut rest = body;
-    while let Some(start) = rest.find("${{") {
-        resolved.push_str(&rest[..start]);
-        let expression = &rest[start + 3..];
-        let Some(end) = expression.find("}}") else {
-            resolved.push_str(&rest[start..]);
-            return resolved;
-        };
-        resolved.push_str("WORKFLOW_EXPRESSION");
-        rest = &expression[end + 2..];
-    }
-    resolved.push_str(rest);
-    resolved
+/// Count authored `run:` keys independently of the YAML tree walk.
+fn textual_run_count(workflow: &str) -> usize {
+    workflow
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("run:") || line.starts_with("- run:")
+        })
+        .count()
 }
 
-#[test]
-fn workflow_expressions_are_runner_values_during_shell_parsing() {
-    assert_eq!(
-        resolve_workflow_expressions("printf '%s\\n' '${{ github.sha }}'"),
-        "printf '%s\\n' 'WORKFLOW_EXPRESSION'"
-    );
+/// External parser and the generated surface it owns.
+#[derive(Clone, Copy)]
+enum SyntaxTool {
+    Actionlint,
+    Shellcheck,
 }
 
-/// Require one local syntax tool, naming the surface its absence leaves open.
-fn require_tool(tool: &str, unchecked: &str) -> Result<(), String> {
-    match Command::new(tool)
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(format!("{tool} is missing; {unchecked} was not checked"))
+impl SyntaxTool {
+    const ALL: [Self; 2] = [Self::Actionlint, Self::Shellcheck];
+
+    const fn command(self) -> &'static str {
+        match self {
+            Self::Actionlint => "actionlint",
+            Self::Shellcheck => "shellcheck",
         }
-        Err(error) => Err(format!("cannot check whether {tool} is available: {error}")),
+    }
+
+    const fn unchecked(self) -> &'static str {
+        match self {
+            Self::Actionlint => "derived workflow syntax",
+            Self::Shellcheck => "derived run-body shell syntax",
+        }
+    }
+
+    fn unavailable(self, error: std::io::Error) -> String {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "{} is missing; {} was not checked",
+                self.command(),
+                self.unchecked()
+            )
+        } else {
+            format!("cannot run {}: {error}", self.command())
+        }
     }
 }
 
+fn actionlint(path: &std::path::Path) -> Result<Output, String> {
+    Command::new(SyntaxTool::Actionlint.command())
+        // Shell bodies are checked one by one below, so this invocation owns
+        // workflow syntax and cannot mask a skipped body extraction.
+        .arg("-shellcheck=")
+        .arg(path)
+        .output()
+        .map_err(|error| SyntaxTool::Actionlint.unavailable(error))
+}
+
+fn shellcheck(body: &str) -> Result<Output, String> {
+    let mut child = Command::new(SyntaxTool::Shellcheck.command())
+        .args(["--shell=bash", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| SyntaxTool::Shellcheck.unavailable(error))?;
+    child
+        .stdin
+        .take()
+        .expect("shellcheck stdin")
+        .write_all(body.as_bytes())
+        .expect("write shell body");
+    child
+        .wait_with_output()
+        .map_err(|error| format!("cannot finish shellcheck: {error}"))
+}
+
 #[test]
-fn missing_syntax_tool_names_the_unchecked_surface() {
-    let error = require_tool("missing-local-checker", "generated scripts")
-        .expect_err("the absent checker is reported");
+fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
+    let missing = || std::io::Error::from(std::io::ErrorKind::NotFound);
+    let messages = SyntaxTool::ALL
+        .map(|tool| tool.unavailable(missing()))
+        .into_iter()
+        .collect::<Vec<_>>();
     assert_eq!(
-        error,
-        "missing-local-checker is missing; generated scripts was not checked"
+        messages,
+        [
+            "actionlint is missing; derived workflow syntax was not checked",
+            "shellcheck is missing; derived run-body shell syntax was not checked",
+        ]
     );
+}
+
+/// Recipe identity carried by a derived publisher's shell environment.
+fn recipe_identity(step: &Value) -> Option<(String, String, String)> {
+    let environment = step["env"].as_mapping()?;
+    let value = |suffix: &str| {
+        environment.iter().find_map(|(key, value)| {
+            key.as_str()?
+                .ends_with(suffix)
+                .then(|| value.as_str().map(str::to_owned))?
+        })
+    };
+    Some((
+        value("RELEASE_UNIT")?,
+        value("PUBLISHER")?,
+        value("TARGET")?,
+    ))
 }
 
 /// Parse every workflow and every shell body the workflow derivation emits.
-///
-/// The shared fixture's configured publication makes the publisher and closure
-/// observable. Workflow roles, jobs, and `run:` bodies are extracted from the
-/// derivation rather than named in a roster.
 #[test]
 fn derived_workflows_and_their_shell_bodies_parse() {
-    let workflows = derived_workflows("derived-workflow-syntax");
+    let workflows = derived_recipe_workflows("derived-workflow-syntax");
     let directory = tempfile::tempdir().expect("temporary workflow directory");
-    require_tool("actionlint", "derived workflow syntax").unwrap_or_else(|error| panic!("{error}"));
-    require_tool("shellcheck", "derived run-body shell syntax")
-        .unwrap_or_else(|error| panic!("{error}"));
     let mut managed_jobs = Vec::new();
     let mut shell_bodies = Vec::new();
+    let mut reached_recipes = BTreeSet::new();
 
     for (role, workflow) in &workflows {
         let path = directory.path().join(format!("{role}.yml"));
         std::fs::write(&path, workflow).expect("write derived workflow");
         let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let before = shell_bodies.len();
+        collect_run_bodies(&document, &mut shell_bodies);
+        assert_eq!(
+            shell_bodies.len() - before,
+            textual_run_count(workflow),
+            "the {role} tree walk reads every run key the derived text carries"
+        );
+
         for (job, body) in document["jobs"]
             .as_mapping()
             .expect("derived workflow jobs")
         {
-            let managed = body["steps"].as_sequence().is_some_and(|steps| {
-                steps
-                    .iter()
-                    .any(|step| step["id"].as_str() == Some(OWNERSHIP_SENTINEL))
-            });
-            if managed {
-                managed_jobs.push((*role, job.as_str().expect("job id").to_owned()));
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            if steps
+                .iter()
+                .any(|step| step["id"].as_str() == Some(OWNERSHIP_SENTINEL))
+            {
+                let run_count = steps.iter().filter(|step| step["run"].is_string()).count();
+                managed_jobs.push((*role, job.as_str().expect("job id").to_owned(), run_count));
+                reached_recipes.extend(steps.iter().filter_map(recipe_identity));
             }
         }
-        collect_run_bodies(&document, &mut shell_bodies);
 
-        let output = Command::new("actionlint")
-            // Shell bodies are checked one by one below, so this invocation
-            // owns workflow syntax and cannot mask a skipped body extraction.
-            .arg("-shellcheck=")
-            .arg(&path)
-            .output()
-            .expect("run actionlint");
+        let output = actionlint(&path).unwrap_or_else(|error| panic!("{error}"));
         assert!(
             output.status.success(),
             "actionlint rejected the derived {role} workflow:\n{}{}",
@@ -142,36 +198,39 @@ fn derived_workflows_and_their_shell_bodies_parse() {
         );
     }
 
-    assert!(
-        managed_jobs.iter().any(|(_, job)| job.contains("publish_")),
-        "the fixture derives a publisher job: {managed_jobs:?}"
+    let expected_recipes = derived_recipes()
+        .iter()
+        .map(|recipe| {
+            (
+                recipe.capability.as_str().to_owned(),
+                recipe.publisher.as_str().to_owned(),
+                recipe.target.to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        reached_recipes, expected_recipes,
+        "derived managed shell reaches every maintained recipe"
     );
     assert!(
-        managed_jobs
-            .iter()
-            .any(|(_, job)| job.ends_with("close_release")),
-        "the fixture derives the closure job: {managed_jobs:?}"
+        managed_jobs.iter().any(|(role, job, bodies)| {
+            *role == WorkflowRole::Publish && job.contains("publish_") && *bodies > 0
+        }),
+        "the publish workflow derives publisher shell: {managed_jobs:?}"
     );
     assert!(
-        !shell_bodies.is_empty(),
-        "the derived workflows contribute shell bodies to parse"
+        managed_jobs.iter().any(|(role, job, bodies)| {
+            *role == WorkflowRole::Publish && job.ends_with("close_release") && *bodies > 0
+        }),
+        "the publish workflow derives closure shell: {managed_jobs:?}"
+    );
+    assert!(
+        shell_bodies.iter().all(|body| !body.contains("${{")),
+        "derived run bodies route runner expressions through env before shell parsing"
     );
 
     for (index, body) in shell_bodies.iter().enumerate() {
-        let mut child = Command::new("shellcheck")
-            .args(["--shell=bash", "-"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("run shellcheck");
-        child
-            .stdin
-            .take()
-            .expect("shellcheck stdin")
-            .write_all(resolve_workflow_expressions(body).as_bytes())
-            .expect("write shell body");
-        let output = child.wait_with_output().expect("finish shellcheck");
+        let output = shellcheck(body).unwrap_or_else(|error| panic!("{error}"));
         assert!(
             output.status.success(),
             "shellcheck rejected derived run body {index}:\n{}{}\n{body}",

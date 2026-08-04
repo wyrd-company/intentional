@@ -269,6 +269,17 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
     })
 }
 
+/// Whether workflow derivation has a complete publisher recipe for this pair.
+pub(super) const fn recipe_is_derived(packager: Packager, publisher: PublisherKind) -> bool {
+    !matches!(
+        (packager, publisher),
+        (
+            Packager::GoReleaser,
+            PublisherKind::Rpm | PublisherKind::Apt
+        )
+    )
+}
+
 /// One publication's recipe steps before the shared placeholders are rendered.
 fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let identity = context.publication.identity();
@@ -320,10 +331,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
     // would. Deriving a publisher job without one would verify a publication it
     // never performed, so the refusal names the recipe rather than the upload
     // the design has since settled and this workflow now derives.
-    if !matches!(
-        context.publication.publisher,
-        PublisherKind::Homebrew | PublisherKind::Aur
-    ) {
+    if !recipe_is_derived(context.publication.packager, context.publication.publisher) {
         return Err(StepsRefusal {
             code: "maintained-recipe-underived",
             message: format!(
@@ -1790,7 +1798,15 @@ fn oci_attached_components(publication: &SelectedPublication) -> String {
     if reads_attestation {
         body.push_str(OCI_ATTESTATION_READ);
     }
-    body.push_str("      provenance_digest=\"\"\n      for component in ${@ENVVAR@COMPONENTS}; do\n        case \"${component}\" in\n");
+    if publication
+        .components
+        .contains(&AttachedComponent::Provenance)
+    {
+        body.push_str("      provenance_digest=\"\"\n");
+    }
+    body.push_str(
+        "      for component in ${@ENVVAR@COMPONENTS}; do\n        case \"${component}\" in\n",
+    );
     for component in &publication.components {
         body.push_str(match component {
             AttachedComponent::Sbom => OCI_SBOM_ARM,
