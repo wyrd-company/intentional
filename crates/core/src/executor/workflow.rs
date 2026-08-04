@@ -6806,6 +6806,22 @@ release-units:
                 !carries(&body, token),
                 "{origin}: the verbatim check reads that same body as clean, which is why the window check exists"
             );
+
+            // The reversed arm needs its own control, and the assertion above
+            // cannot be it: the window it picks is a forward one, so dropping
+            // the reversed arm from the recogniser left this test green. Both
+            // arms are the rule, and a reversal keeps every metacharacter.
+            let backwards = &produced[produced.len() - 2];
+            assert!(
+                !character_windows(token).contains(backwards),
+                "{origin}'s reversed control window is not also a forward window, or the forward arm answers for both"
+            );
+            let reversed_body = format!("printf '%s' {backwards}");
+            assert_eq!(
+                carries_a_window(&reversed_body, token).as_ref(),
+                Some(backwards),
+                "{origin}: an interior run of the token's reversal reaching shell is recognised"
+            );
         }
     }
 
