@@ -158,8 +158,8 @@ release-units:
         crate::config::WorkflowRole::ALL
             .into_iter()
             .map(|role| {
-                let comparison =
-                    super::compare_workflow(root, role, None).expect("comparison runs");
+                let comparison = super::compare_workflow(root, role, None)
+                    .unwrap_or_else(|error| panic!("{}", derivation_failure(root, role, &error)));
                 assert_eq!(
                     comparison.status,
                     super::ComparisonStatus::Different,
