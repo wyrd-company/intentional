@@ -4,7 +4,10 @@ format: json-schema
 description: >-
   A draft-Release asset handoff is the cross-repository YAML document supplied
   to a downstream publisher that must consume GitHub-hosted deliverables before
-  immutable Release closure. It binds the source repository, draft Release,
+  immutable Release closure. The managed upload job writes one per
+  draft-dependent publication, from the draft's live asset inventory and the
+  local bytes it placed there, and transports it to that publication's
+  publisher job as its own workflow artifact. It binds the source repository, draft Release,
   global tag, S, R, and release-plan digest to one configured publisher target
   and inventories each required asset by stable GitHub asset identifier, flat
   name, size, media type, and SHA-256 digest. The receiving publisher uses a

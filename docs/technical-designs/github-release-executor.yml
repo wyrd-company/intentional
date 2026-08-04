@@ -357,13 +357,19 @@ proposed-design:
     their observations and assembly compares them against what the phase tag
     sealed.
 
-    A managed upload job depends on every build job and precedes every
-    publisher job. It is repository-local and runs inside the configured
-    protected environment, like every other job that mints write authority. It
-    mints the short-lived installation token and uploads every GitHub-hosted
-    deliverable to the draft Release, so a publisher whose consumer path
-    resolves a Release asset finds it there and no publisher job holds
-    `contents: write`.
+    A release that builds a GitHub-hosted deliverable derives a managed upload
+    job that depends on every build job and precedes every publisher job. It is
+    repository-local and runs inside the configured protected environment, like
+    every other job that mints write authority. It resolves the draft for the
+    verified global release tag once, refusing a Release that has already closed
+    or that carries another tag before any asset is written, then uploads every
+    GitHub-hosted deliverable to it, so a publisher whose consumer path resolves
+    a Release asset finds it there and no publisher job holds `contents: write`.
+    Uploading replaces what is already present, so a rerun after a partial
+    failure places its deliverables again and succeeds. A release whose every
+    deliverable reaches a registry derives no such job, because deriving one
+    would hold repository content-write authority for the duration of an upload
+    with nothing in it.
 
     That makes it an unconditional barrier between every build job and every
     publisher job: the slowest build gates the first publication. One job per
@@ -371,6 +377,28 @@ proposed-design:
     subject's asset, but it would multiply the jobs holding `contents: write`
     by the number of subjects. Fewer jobs holding repository write authority is
     worth more than publisher concurrency, so the barrier is one job.
+
+    A Release asset name is flat, so two subjects that produce one basename
+    would place one over the other and leave a handoff inventorying an
+    identifier that holds another subject's bytes. The upload refuses the
+    second rather than replacing the first, because nothing downstream of a
+    silent replacement reports it as anything but a digest disagreement at a
+    publisher.
+
+    The same job writes each draft-dependent publication's asset handoff, once
+    its assets are on the draft. The stable asset identifier a consumer resolves
+    is GitHub's and exists only after the upload, so the inventory is read back
+    from the Release rather than predicted, while the digest beside it is taken
+    from the local bytes the job uploaded: that is what makes the consumer's
+    download a proved round trip rather than agreement with whatever the Release
+    now holds. The release identity the document declares is the one the tag
+    verification job proved and projected, because a downstream publisher proves
+    each of those identities against its own checkout before it trusts an asset.
+    A deliverable the draft does not carry fails the job rather than being
+    omitted, because a handoff inventorying a subset is indistinguishable at the
+    consumer from one whose publication legitimately consumes fewer assets. Each
+    handoff travels to its publisher as its own workflow artifact, so a
+    publisher receives the document for its own publication and no other.
 
     A publisher job receives those bytes on disk and names them to its publish
     step as `<prefix>SUBJECT`. A maintained recipe's publish command consumes
@@ -524,6 +552,24 @@ proposed-design:
     the released bytes themselves; they are GitHub-hosted deliverables, so the
     managed upload job places them on the draft Release and their consumers
     resolve them there.
+
+    The packager decides which files are which, and the derivation reads that
+    rather than listing extensions the packager could add to. What the packager
+    distributes it writes at the top of its distribution tree and everything
+    else below it, so the GitHub-hosted deliverables are the files at that top
+    level: the release archives, the published checksums, and the native
+    packages. The descriptors are excluded because they live in directories.
+    The three documents the packager writes to describe its own run are named
+    and excluded, because build metadata is not something a consumer resolves
+    and a release that placed it would inventory the packager's internal state
+    as a deliverable.
+
+    Which of those a draft-dependent publication consumes is the same split
+    read from the other side. A system-package adapter consumes exactly the
+    native format it distributes, and a Homebrew formula or an Arch `PKGBUILD`
+    resolves the release archives its descriptor points at. Handing an adapter
+    the other half would make it download and digest bytes its consumer path
+    never resolves and record that as its retrieval.
 
     The packager decides the layout on both sides and the recipes read it
     rather than choosing one, so the build job installs a pinned GoReleaser
@@ -834,7 +880,8 @@ proposed-design:
     repository-local job that depends on every build job and precedes every
     publisher job. A GitHub-hosted deliverable is the release's own bytes
     reaching the release's own Release, so placing it is repository authority
-    rather than destination authority.
+    rather than destination authority. A release that builds none derives no
+    such job.
 
     Writing to a Release is not a bounded scope. GitHub has no Release
     permission: creating a Release, uploading an asset to it, and publishing it
@@ -864,9 +911,9 @@ proposed-design:
     checks; it does not claim public clean-client retrieval.
 
     That claim is proved rather than asserted. The recipe reports which bytes it
-    retrieved and their digest; the draft-asset handoff states which assets
-    belong to that publication and the canonical sha256 the release sealed for
-    each. Publication verification joins the two: it proves the handoff against
+    retrieved and their digest; the draft-asset handoff the upload job wrote
+    states which assets belong to that publication and the canonical sha256 the
+    release sealed for each. Publication verification joins the two: it proves the handoff against
     the repository and the live draft, and refuses a fragment whose retrieval
     digest no inventoried asset carries. A draft-dependent publisher verifies
     only with that handoff, and a publisher whose consumer path is public is
