@@ -488,10 +488,11 @@ fn const_probe() -> String {
 /// — the working directory by running elsewhere, the environment by naming what
 /// may be in it.
 ///
-/// `HOME` is in the list because the user configuration the authenticate step
-/// wrote is the credential this destination legitimately presents. `PATH` and
-/// `HOME` are the runner's process contract, as they are on the Cargo side, and
-/// a repository that redirects them has redirected the whole job.
+/// The members are [`INHERITED_ENVIRONMENT`], the same list the Cargo probe
+/// renders, and `HOME` matters here for a second reason: the user configuration
+/// the authenticate step wrote is the credential this destination legitimately
+/// presents. A repository cannot choose any of those values, because
+/// convergence refuses a workflow that declares them.
 const NPM_ALLOWED: &str = r#"      @ENVVAR@ALLOWED=(@INHERITED@)
 "#;
 
