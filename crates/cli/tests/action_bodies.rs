@@ -266,3 +266,102 @@ fn passes_a_supplied_selector_and_handoff_to_the_verification_command() {
         "a supplied handoff reaches the command: {arguments:?}"
     );
 }
+
+/// Run the verify-release-tag body against a stub reporting these identities.
+///
+/// The Action's own projector decides what reaches a step output, so the body
+/// is executed rather than read: the stub reports identity lines, the projector
+/// validates them, and the step's exit status and `$GITHUB_OUTPUT` are what the
+/// assertions read.
+fn projected_identities(reported: &str) -> Result<BTreeMap<String, String>, String> {
+    let document = action_document("verify-release-tag");
+    let step = action_step(&document, "verify");
+    let body = step["run"].as_str().expect("the step declares a body");
+
+    let temp = tempfile::tempdir().expect("temporary directory");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("stub directory");
+    let stub = bin.join("intentional");
+    fs::write(
+        &stub,
+        format!("#!/usr/bin/env bash\nset -euo pipefail\ncat <<'REPORTED'\n{reported}REPORTED\n"),
+    )
+    .expect("stub written");
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("stub executable");
+
+    let github_output = temp.path().join("github-output");
+    fs::write(&github_output, "").expect("step output file");
+
+    let mut environment = step_environment(&document, &step, &BTreeMap::new());
+    environment.insert(
+        "GITHUB_ACTION_PATH".to_owned(),
+        repository_root()
+            .join("actions/verify-release-tag")
+            .display()
+            .to_string(),
+    );
+    environment.insert(
+        "GITHUB_OUTPUT".to_owned(),
+        github_output.display().to_string(),
+    );
+    environment.insert(
+        "PATH".to_owned(),
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+
+    let status = Command::new("bash")
+        .arg("-c")
+        .arg(body)
+        .env_clear()
+        .envs(&environment)
+        .status()
+        .expect("the Action body runs");
+    let written = fs::read_to_string(&github_output).expect("the step output file is readable");
+    if !status.success() {
+        return Err(written);
+    }
+    Ok(written
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect())
+}
+
+/// Identity lines a verified release tag reports, with one value replaced.
+fn reported_identities(object: &str) -> String {
+    format!(
+        "source-sha: {}\nrelease-sha: {}\nglobal-tag: release/1.0.0\nglobal-tag-object: {object}\nplan-digest: sha256:{}\n",
+        "1".repeat(40),
+        "2".repeat(40),
+        "4".repeat(64),
+    )
+}
+
+/// The projected tag object is held to the shape a Git object identity has.
+///
+/// The projector is what stands between the command's report and a privileged
+/// step's `needs` expression, so the tag object gets the same check the other
+/// two Git identities get. Without it a malformed value would reach a consumer
+/// as an output, which is the failure the script exists to prevent.
+#[test]
+fn refuses_to_project_a_tag_object_that_is_not_a_git_object_identity() {
+    let projected = projected_identities(&reported_identities(&"3".repeat(40)))
+        .expect("well-formed identities");
+    assert_eq!(
+        projected.get("global-tag-object").map(String::as_str),
+        Some("3".repeat(40).as_str()),
+        "a complete Git object identity reaches the step output: {projected:?}"
+    );
+
+    for malformed in ["not-an-object", "333333", ""] {
+        let refused = projected_identities(&reported_identities(malformed));
+        assert!(
+            refused.is_err(),
+            "{malformed:?} is refused rather than projected: {refused:?}"
+        );
+    }
+}
