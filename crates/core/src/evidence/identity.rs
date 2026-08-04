@@ -36,13 +36,17 @@ pub struct PreparedHandoff {
 /// apart field by field, so a handoff that is internally inconsistent is
 /// refused here instead of supplying assembly with half an identity.
 ///
-/// The plan digest the manifest states is then held to the plan the handoff
-/// actually transports, in three steps that fail independently: the transported
-/// bytes are the ones the manifest inventoried, the plan's own seal still
-/// recomputes over its payload, and the digest that recomputation produces is
-/// the one the manifest claims. Only the middle step derives a digest rather
-/// than asserting one, and it is what makes every later comparison against this
-/// identity a comparison with something the release sealed.
+/// The manifest's claims about the release are then held to the plan the
+/// handoff actually transports, in steps that fail independently: the
+/// transported bytes are the ones the manifest inventoried; the plan's own seal
+/// still recomputes over its payload; the digest that recomputation produces is
+/// the one the manifest claims; and the global tag the manifest names is a tag
+/// that plan seals, under the name it seals it by.
+///
+/// The digest comparison reads `payload_digest` rather than the seal the plan
+/// carries, so it is a derivation set against a claim at the point of use. That
+/// keeps it non-circular on its own rather than by standing after the seal
+/// check, which a later edit could move or drop without anything noticing.
 pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
     let manifest = directory.join(RELEASE_CANDIDATE_MANIFEST);
     let text = std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
@@ -69,11 +73,40 @@ pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
         ))
     })?;
     plan.verify_digest()?;
-    if plan.digest != candidate.plan.digest {
+    let sealed = plan.payload_digest()?;
+    if sealed != candidate.plan.digest {
         return Err(Error::Validation(format!(
             "the release candidate identifies the release by plan-digest {}, but the sealed \
-             release plan it transports seals {}",
-            candidate.plan.digest, plan.digest
+             release plan it transports seals {sealed}",
+            candidate.plan.digest
+        )));
+    }
+
+    // The plan seals the tags the release creates, and the manifest names one
+    // of them as the global release tag. Reading the plan's own entry is what
+    // stops a manifest and a unanimous set of fragments from agreeing about a
+    // tag the release never sealed.
+    let tag = plan
+        .tags
+        .iter()
+        .find(|tag| tag.id == candidate.global_tag.id)
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "the release candidate names global release tag {}, which the sealed release \
+                 plan does not seal; it seals {}",
+                candidate.global_tag.id,
+                plan.tags
+                    .iter()
+                    .map(|tag| tag.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    if tag.name != candidate.global_tag.name {
+        return Err(Error::Validation(format!(
+            "the release candidate renders global release tag {} as {}, and the sealed release \
+             plan seals it as {}",
+            candidate.global_tag.id, candidate.global_tag.name, tag.name
         )));
     }
 
@@ -92,53 +125,87 @@ pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
     })
 }
 
-/// Every identity component one document must spell the same way, in order.
+/// Report each named component two documents spell differently.
 ///
-/// The comparison is component-wise rather than whole-struct so a fragment that
+/// The comparison is component-wise rather than whole-struct so a document that
 /// carries the right commits and the wrong tag object names the tag object, and
 /// so each component can fail on its own.
-pub(crate) fn identity_disagreements(
+fn disagreements(label: &str, components: &[(&str, &str, &str)]) -> Vec<String> {
+    components
+        .iter()
+        .filter(|(_, expected, observed)| expected != observed)
+        .map(|(field, expected, observed)| {
+            format!(
+                "{label} records {field} {observed:?}, but the prepared release candidate \
+                 identifies the release by {field} {expected:?}"
+            )
+        })
+        .collect()
+}
+
+/// Every identity component one publisher fragment carries.
+pub(crate) fn fragment_disagreements(
     label: &str,
     expected: &ReleaseIdentity,
     observed: &ReleaseIdentity,
 ) -> Vec<String> {
-    [
-        (
-            "source-commit",
-            &expected.source_commit,
-            &observed.source_commit,
-        ),
-        (
-            "release-commit",
-            &expected.release_commit,
-            &observed.release_commit,
-        ),
-        (
-            "global-tag.name",
-            &expected.global_tag.name,
-            &observed.global_tag.name,
-        ),
-        (
-            "global-tag.object",
-            &expected.global_tag.object,
-            &observed.global_tag.object,
-        ),
-        (
-            "global-tag.target",
-            &expected.global_tag.target,
-            &observed.global_tag.target,
-        ),
-        ("plan-digest", &expected.plan_digest, &observed.plan_digest),
-    ]
-    .into_iter()
-    .filter(|(_, expected, observed)| expected != observed)
-    .map(|(field, expected, observed)| {
-        format!(
-            "{label} records {field} {observed:?}, but the prepared release candidate identifies \
-             the release by {field} {expected:?}"
-        )
-    })
-    .collect()
+    disagreements(
+        label,
+        &[
+            (
+                "source-commit",
+                &expected.source_commit,
+                &observed.source_commit,
+            ),
+            (
+                "release-commit",
+                &expected.release_commit,
+                &observed.release_commit,
+            ),
+            (
+                "global-tag.name",
+                &expected.global_tag.name,
+                &observed.global_tag.name,
+            ),
+            (
+                "global-tag.object",
+                &expected.global_tag.object,
+                &observed.global_tag.object,
+            ),
+            (
+                "global-tag.target",
+                &expected.global_tag.target,
+                &observed.global_tag.target,
+            ),
+            ("plan-digest", &expected.plan_digest, &observed.plan_digest),
+        ],
+    )
+}
+
+/// Every identity component one phase-tag document carries.
+///
+/// A phase document records the global tag by name and never carries the tag
+/// object or its target, so four components are compared rather than six. The
+/// two it cannot carry are bound to this identity by the publisher fragments
+/// and by the sealed plan, not here, and the caller's prose must not claim
+/// otherwise.
+pub(crate) fn phase_disagreements(
+    label: &str,
+    expected: &ReleaseIdentity,
+    source_commit: &str,
+    release_commit: &str,
+    global_tag: &str,
+    plan_digest: &str,
+) -> Vec<String> {
+    disagreements(
+        label,
+        &[
+            ("source-commit", &expected.source_commit, source_commit),
+            ("release-commit", &expected.release_commit, release_commit),
+            ("global-tag.name", &expected.global_tag.name, global_tag),
+            ("plan-digest", &expected.plan_digest, plan_digest),
+        ],
+    )
 }
 
 /// The one prepared handoff every evidence test binds its documents to.
@@ -373,7 +440,7 @@ mod tests {
     /// stopped reading any single component fails here rather than passing
     /// because the components beside it still disagreed.
     #[test]
-    fn names_each_identity_component_a_document_spells_differently() {
+    fn names_each_identity_component_a_fragment_spells_differently() {
         let expected = identity();
         let elsewhere = "9".repeat(40);
         /// One named component of an identity, and how to spell it wrongly.
@@ -401,7 +468,7 @@ mod tests {
         for (field, corrupt) in corruptions {
             let mut observed = expected.clone();
             corrupt(&mut observed, &elsewhere);
-            let findings = identity_disagreements("fragment.yml", &expected, &observed);
+            let findings = fragment_disagreements("fragment.yml", &expected, &observed);
             assert_eq!(
                 findings.len(),
                 1,
@@ -413,7 +480,7 @@ mod tests {
             );
         }
         assert!(
-            identity_disagreements("fragment.yml", &expected, &expected).is_empty(),
+            fragment_disagreements("fragment.yml", &expected, &expected).is_empty(),
             "an agreeing document reports nothing"
         );
     }

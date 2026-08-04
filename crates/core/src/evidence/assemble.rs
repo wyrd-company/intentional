@@ -12,7 +12,7 @@ use crate::evidence::contribution::{
     ATTACHMENTS_DIRECTORY, CONTRIBUTION_ARTIFACT_PREFIX, CONTRIBUTION_MANIFEST,
     CONTRIBUTION_SCHEMA,
 };
-use crate::evidence::identity::{identity_disagreements, prepared_release};
+use crate::evidence::identity::{fragment_disagreements, phase_disagreements, prepared_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
 use crate::executor::recipe::{resolve_publications, SelectedPublication};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
@@ -492,11 +492,17 @@ pub fn assemble(request: &AssembleRequest<'_>) -> Result<Assembly> {
     if let Some(prepared) = &prepared {
         reconcile_publications(&config, &prepared.plan, &selection.selected, &mut findings);
     }
-    let release = prepared.map(|prepared| prepared.identity);
+    let (release, sealed) = match prepared {
+        Some(prepared) => (Some(prepared.identity), Some(prepared.plan)),
+        None => (None, None),
+    };
 
     let scan = scan_input(request.input, &mut findings)?;
     let release_units = accept_publisher_evidence(&scan.publishers, &expected, &mut findings);
     bind_publisher_evidence(&scan, release.as_ref(), &mut findings);
+    if let Some(plan) = &sealed {
+        bind_subject_versions(&scan, plan, &mut findings);
+    }
     compare_phase_evidence(
         &scan,
         release.as_ref(),
@@ -910,6 +916,42 @@ fn reconcile_publications(
     }
 }
 
+/// Require every published subject to carry the version the plan assigned it.
+///
+/// The build job derives a subject's version by reproducing the plan from the
+/// accepted source commit, so a fragment recording another version describes a
+/// build of some other release. Assembly holds the sealed plan, so it says so
+/// against the plan rather than trusting that the reproduction happened.
+fn bind_subject_versions(
+    scan: &ScannedInput,
+    plan: &crate::plan::ReleasePlan,
+    findings: &mut Vec<String>,
+) {
+    for (path, fragment) in &scan.publishers {
+        let Some(release_unit) = plan
+            .release_units
+            .iter()
+            .find(|release_unit| release_unit.id == fragment.release_unit)
+        else {
+            // A fragment for a release unit the plan does not release is
+            // already reported against the configured publication set, and
+            // saying it twice would not tell a reader anything new.
+            continue;
+        };
+        if fragment.subject.version != release_unit.new_version {
+            findings.push(format!(
+                "{} records subject {} at version {}, and the sealed release plan assigns \
+                 release unit {} version {}",
+                path.display(),
+                fragment.subject.identity,
+                fragment.subject.version,
+                fragment.release_unit,
+                release_unit.new_version
+            ));
+        }
+    }
+}
+
 /// Require every publisher fragment to identify the prepared release.
 ///
 /// The release identity comes from the prepared candidate handoff rather than
@@ -927,7 +969,7 @@ fn bind_publisher_evidence(
         return;
     };
     for (path, fragment) in &scan.publishers {
-        findings.extend(identity_disagreements(
+        findings.extend(fragment_disagreements(
             &path.display().to_string(),
             release,
             &ReleaseIdentity {
@@ -990,14 +1032,16 @@ fn compare_phase_evidence(
     };
     for (path, phase) in &scan.phases {
         let label = path.display();
-        if phase.source_commit != release.source_commit
-            || phase.release_commit != release.release_commit
-            || phase.global_tag != release.global_tag.name
-            || phase.plan_digest != release.plan_digest
-        {
-            findings.push(format!(
-                "{label} disagrees with the accepted release identity"
-            ));
+        let disagreements = phase_disagreements(
+            &label.to_string(),
+            release,
+            &phase.source_commit,
+            &phase.release_commit,
+            &phase.global_tag,
+            &phase.plan_digest,
+        );
+        if !disagreements.is_empty() {
+            findings.extend(disagreements);
             continue;
         }
         // A phase tag seals what the release was committed to before or after
@@ -2681,6 +2725,138 @@ subjects: []
         let message = error.to_string();
         assert!(message.contains("contract-0"), "{message}");
         assert!(message.contains("contract-1"), "{message}");
+    }
+
+    /// The global tag the manifest names is the one the sealed plan seals.
+    ///
+    /// The manifest and every fragment are moved to another tag name together,
+    /// so they agree unanimously and the genuine sealed plan is transported
+    /// untouched. Only a lookup into the plan's own tags can refuse this, and
+    /// without one the wrong tag name reaches the final statement.
+    #[test]
+    fn binds_the_global_tag_to_the_tag_the_sealed_plan_seals() {
+        let workspace = workspace("assemble-plan-tag");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        let elsewhere = "release/9.9.9";
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary").replace(TAG_NAME, elsewhere),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest().replace(TAG_NAME, elsewhere),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a tag name the sealed plan does not seal is refused");
+        let message = error.to_string();
+        assert!(message.contains(elsewhere), "{message}");
+        assert!(message.contains(TAG_NAME), "{message}");
+        assert!(message.contains("workspace/release"), "{message}");
+    }
+
+    /// A global tag id the sealed plan does not carry at all is refused.
+    #[test]
+    fn refuses_a_global_tag_the_sealed_plan_does_not_seal() {
+        let workspace = workspace("assemble-plan-tag-absent");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest().replace("id: workspace/release", "id: workspace/absent"),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a tag id the sealed plan does not carry is refused");
+        assert!(error.to_string().contains("workspace/absent"), "{error}");
+    }
+
+    /// A published subject carries the version its release unit was planned.
+    ///
+    /// The build job derives the version by reproducing the plan from S, so a
+    /// fragment recording another version describes a build that is not this
+    /// release's. Assembly holds the sealed plan and can say so directly.
+    #[test]
+    fn binds_a_published_subject_to_the_version_the_sealed_plan_assigns() {
+        let workspace = workspace("assemble-plan-version");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary").replace("version: 1.0.0", "version: 9.9.9"),
+        )
+        .expect("fragment");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a subject version the plan does not assign is refused");
+        let message = error.to_string();
+        assert!(message.contains("9.9.9"), "{message}");
+        assert!(message.contains("1.0.0"), "{message}");
+        assert!(message.contains("example-component"), "{message}");
+    }
+
+    /// Phase documents name the component that disagreed, as fragments do.
+    #[test]
+    fn names_the_identity_component_a_phase_document_spells_differently() {
+        let plan_digest = plan_digest();
+        let workspace = workspace("assemble-phase-component");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let elsewhere = "7".repeat(40);
+        std::fs::write(
+            input.join("phase.yml"),
+            format!(
+                r#"$schema: {PHASE_TAG_EVIDENCE_SCHEMA}
+phase: before-publication
+source-commit: {elsewhere}
+release-commit: {RELEASE}
+global-tag: {TAG_NAME}
+plan-digest: {plan_digest}
+subjects: []
+intended-destinations:
+  - release-unit: component
+    publisher: npm
+    target: primary
+"#
+            ),
+        )
+        .expect("phase evidence");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(
+            &workspace,
+            &candidate(&workspace),
+            &input,
+            &output,
+        ))
+        .expect_err("a phase document about another release is refused");
+        let message = error.to_string();
+        assert!(message.contains("records source-commit"), "{message}");
+        assert!(message.contains(&elsewhere), "{message}");
+        assert!(
+            !message.contains("records release-commit"),
+            "only the component that disagreed is reported: {message}"
+        );
     }
 
     /// Assembly refuses to identify a release from a handoff it was not given.

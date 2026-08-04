@@ -2433,10 +2433,6 @@ phase-tags: []
     )
 }
 
-/// The prepared handoff every assembling test binds its evidence to.
-///
-/// Its identities are the ones `EVIDENCE_FRAGMENT` records, so an assembly that
-/// succeeds here does so because the fragment and the handoff name one release.
 /// The sealed release plan the prepared handoff transports.
 ///
 /// Built and sealed here rather than written down, so the handoff cannot state
@@ -2489,6 +2485,9 @@ fn evidence_plan() -> ReleasePlan {
 }
 
 /// Stage the prepared release-candidate handoff every assembling test binds to.
+///
+/// Its identities are the ones `evidence_fragment` records, so an assembly that
+/// succeeds here does so because the fragment and the handoff name one release.
 fn stage_evidence_candidate(repo: &TestRepo) {
     let plan = evidence_plan();
     let bytes = plan.to_canonical_json().expect("plan bytes");

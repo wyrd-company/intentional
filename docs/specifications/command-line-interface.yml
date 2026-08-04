@@ -859,11 +859,15 @@ commands:
               whose transported plan file is absent, is not a release plan, or
               digests to something other than the bytes the manifest
               inventories; a plan whose own seal no longer recomputes over its
-              payload; and a manifest whose claimed plan digest is not the one
-              the transported plan seals, naming both digests. It then refuses
-              any publisher or phase document that identifies a different
-              release, naming each identity component that disagreed with its
-              expected and observed values.
+              payload; a manifest whose claimed plan digest is not the one the
+              transported plan seals, naming both digests; and a manifest naming
+              a global release tag the plan does not seal, or rendering a sealed
+              tag under another name. It then refuses any publisher or phase
+              document that identifies a different release, naming each identity
+              component that disagreed with its expected and observed values. A
+              publisher fragment is held to six components; a phase document
+              records the global tag by name and carries neither the tag object
+              nor its target, so it is held to the four it carries.
             required: true
             repeatable: false
             value:
@@ -935,6 +939,14 @@ commands:
             payload rather than read from any document's assertion. Fragments
             that agree unanimously with each other and with the manifest are
             still refused when that digest is not the sealed plan's.
+          - >-
+            The sealed plan is read rather than merely digested. The global
+            release tag the manifest names must be a tag that plan seals, under
+            the name it seals it by, and every published subject must carry the
+            version the plan assigns its release unit. A build job derives that
+            version by reproducing the plan from the accepted source commit, so
+            assembly states the agreement against the plan it was handed rather
+            than trusting the reproduction happened.
           - >-
             The expected publication set is derived from the assembling
             workspace's configuration and reconciled against the sealed plan.
