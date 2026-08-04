@@ -37,11 +37,12 @@ pub struct PreparedHandoff {
 /// refused here instead of supplying assembly with half an identity.
 ///
 /// The manifest's claims about the release are then held to the plan the
-/// handoff actually transports, in steps that fail independently: the
-/// transported bytes are the ones the manifest inventoried; the plan's own seal
-/// still recomputes over its payload; the digest that recomputation produces is
-/// the one the manifest claims; and the global tag the manifest names is a tag
-/// that plan seals, under the name it seals it by.
+/// handoff actually transports, in steps that fail independently and in the
+/// order they are written: the transported bytes are the ones the manifest
+/// inventoried; the digest the plan's payload determines is the one the
+/// manifest claims; the plan's own seal still recomputes over that payload; and
+/// the global tag the manifest names is a tag the plan seals, under the name it
+/// seals it by.
 ///
 /// The digest comparison reads `payload_digest` rather than the seal the plan
 /// carries, and runs before the seal is checked, so it is a derivation set
@@ -193,8 +194,9 @@ pub(crate) fn fragment_disagreements(
 ///
 /// A phase document records the global tag by name and never carries the tag
 /// object or its target, so four components are compared rather than six. The
-/// two it cannot carry are bound to this identity by the publisher fragments
-/// and by the sealed plan, not here, and the caller's prose must not claim
+/// two it cannot carry are bound to this identity by the publisher fragments,
+/// not here and not by the sealed plan, which seals a tag's name and not the
+/// annotated object a later push creates. The caller's prose must not claim
 /// otherwise.
 pub(crate) fn phase_disagreements(
     label: &str,

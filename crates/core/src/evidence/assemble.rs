@@ -933,9 +933,10 @@ fn bind_subject_versions(
             .iter()
             .find(|release_unit| release_unit.id == fragment.release_unit)
         else {
-            // A fragment for a release unit the plan does not release is
-            // already reported against the configured publication set, and
-            // saying it twice would not tell a reader anything new.
+            // Such a fragment is already reported: as an unexpected
+            // publication if the configuration does not select it, and against
+            // the sealed plan if it does. Saying it a third time here would
+            // tell a reader nothing new.
             continue;
         };
         if fragment.subject.version != release_unit.new_version {
