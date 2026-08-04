@@ -250,6 +250,24 @@ elif [[ "$ceiling" != "$convention" ]]; then
   failures=$((failures + 1))
 fi
 
+# The retry ceiling and the workflow's wall-clock bound are an agreement: every
+# declared repository may spend the full ceiling, and the job must outlast the
+# sum. Nothing else notices when one of the three numbers moves.
+case_number=$((case_number + 1))
+budget="$(grep -oE '^    timeout-minutes: [0-9]+' "$root/.github/workflows/github-action-pins.yml" | grep -oE '[0-9]+' || true)"
+delay="$(grep -oE '^DELAY_SECONDS = float\(os\.environ\.get\("[A-Z_]+", "[0-9]+"\)\)' "$check" | grep -oE '"[0-9]+"' | grep -oE '[0-9]+' || true)"
+entries="$(grep -c '^  - constant: ' "$root/github-action-pins.yml" || true)"
+if [[ -z "$budget" || -z "$delay" || "$entries" -eq 0 ]]; then
+  echo "the retry budget, delay, or entry count could not be read to hold them to each other" >&2
+  failures=$((failures + 1))
+else
+  worst_case_minutes=$(((entries * ceiling * delay + 59) / 60))
+  if [[ "$budget" -le "$worst_case_minutes" ]]; then
+    echo "the workflow allows $budget minutes but $entries repositories retrying $ceiling times at ${delay}s costs $worst_case_minutes" >&2
+    failures=$((failures + 1))
+  fi
+fi
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures of $case_number Action-pin evidence cases did not behave as stated." >&2
   exit 1

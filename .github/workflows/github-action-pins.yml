@@ -19,6 +19,11 @@ jobs:
   verify-tags:
     name: Resolve declared tags
     runs-on: ubuntu-latest
+    # Bounded retry gives every declared repository its own attempt ceiling, so
+    # a total upstream outage now costs wall-clock rather than failing fast.
+    # This bound is held above that worst case by
+    # scripts/release/test-action-pin-evidence.sh.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - name: Compare upstream tags with declared commits
