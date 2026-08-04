@@ -295,10 +295,7 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
             continue;
         }
         if content.trim_start().starts_with('#') {
-            // The mirror of the rule in `trimmed_end`: a `#` line indented past
-            // the container is script text inside the previous entry's value,
-            // so it must neither end that entry nor lead the next one.
-            if indent_of(content) <= indent {
+            if comment_belongs_to_container(content, indent) {
                 pending_comment.get_or_insert(line.start);
             }
             continue;
@@ -351,11 +348,8 @@ fn entries(text: &str, region: Range<usize>, indent: usize) -> Option<Vec<Entry>
 /// destroy a maintainer's closing comment on the next replacement — exactly the
 /// content this module exists to protect.
 ///
-/// The pull-back stops at the entry's own value. A `#` line indented past the
-/// container is script text inside a literal block scalar, not a comment about
-/// the container: `run: |` bodies routinely end in a shell comment, and
-/// treating one as a container line would splice the next entry into the middle
-/// of somebody's script.
+/// The pull-back stops at the entry's own value, as decided by
+/// `comment_belongs_to_container`.
 ///
 /// Blank lines are pulled back at any column. That is right for every chomping
 /// style but `|+`, which keeps its trailing blank lines as content; pulling
@@ -372,7 +366,8 @@ fn trimmed_end(text: &str, floor: usize, mut end: usize, indent: usize) -> usize
         let line = &text[start..end];
         let content = line.trim();
         let outside = content.is_empty()
-            || ((content.starts_with('#') || content == "...") && indent_of(line) <= indent);
+            || comment_belongs_to_container(line, indent)
+            || (content == "..." && indent_of(line) <= indent);
         if !outside {
             break;
         }
@@ -409,6 +404,31 @@ fn lines(text: &str, region: Range<usize>) -> impl Iterator<Item = Range<usize>>
         cursor = end;
         Some(line)
     })
+}
+
+/// Whether a `#` line was written about the container at `indent` rather than
+/// about the entry above it.
+///
+/// Both sites that decide comment ownership ask this one question: `entries`
+/// when a comment run may lead the next entry, and `trimmed_end` when a comment
+/// closing a mapping may belong to the mapping instead of its last entry.
+/// Writing the rule twice produced the same defect at each site in consecutive
+/// review rounds, so it is written once here.
+///
+/// The rule is sound, not a heuristic. The only thing a `#` line can be other
+/// than a comment is content inside a block scalar, and block scalar content
+/// must be indented deeper than the key introducing it. That key is an entry of
+/// this container or of one nested inside it, so it sits at or below `indent`
+/// only when it is this container's own entry — and its content therefore sits
+/// strictly right of `indent`. A `#` line at or left of `indent` can never be
+/// scalar content, so it is a comment, and no entry of the container can own it.
+///
+/// The converse is deliberately not claimed: a `#` line right of `indent` may
+/// be a genuine comment about a nested key. Attributing it to the entry that
+/// encloses it is still correct, because that entry is where a nested comment
+/// lives.
+fn comment_belongs_to_container(line: &str, indent: usize) -> bool {
+    line.trim_start().starts_with('#') && indent_of(line) <= indent
 }
 
 fn is_ignorable(content: &str) -> bool {
