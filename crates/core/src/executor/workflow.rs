@@ -2376,6 +2376,78 @@ jobs:
             .join("action.yml")
     }
 
+    /// The required inputs of an Action and the keys a step supplies it.
+    ///
+    /// An Action input is an agreement between two documents nothing joins: the
+    /// Action declares it required, and a managed step spells it in `with:`. A
+    /// step that omits one is not a parse error and not a rendering failure —
+    /// the derived workflow is still valid YAML and every structural assertion
+    /// in this module still passes over it. It fails on a runner, once, at the
+    /// end of a release.
+    ///
+    /// The sweep reads the Action documents rather than a list written here, so
+    /// an input added to any of them is covered the day it is added.
+    #[test]
+    fn supplies_every_required_input_of_every_action_it_resolves() {
+        let workspace = workspace("workflow-action-inputs");
+        let mut swept = BTreeSet::new();
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            for (id, steps) in managed_steps(workspace.root(), role) {
+                for step in &steps {
+                    let Some((name, _)) = intentional_action(step) else {
+                        continue;
+                    };
+                    swept.insert(name.clone());
+                    let supplied = step
+                        .get("with")
+                        .and_then(Value::as_mapping)
+                        .map(|with| {
+                            with.keys()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect::<BTreeSet<_>>()
+                        })
+                        .unwrap_or_default();
+                    for input in required_action_inputs(&name) {
+                        assert!(
+                            supplied.contains(&input),
+                            "{id} resolves {name}, which requires input {input}; it supplies {supplied:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            !swept.is_empty(),
+            "the derived workflows resolve this repository's Actions"
+        );
+    }
+
+    /// The inputs one published Action declares required.
+    fn required_action_inputs(name: &str) -> BTreeSet<String> {
+        let path = action_document(name);
+        let document: Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&path).expect("action document readable"),
+        )
+        .expect("action document parses");
+        document
+            .get("inputs")
+            .and_then(Value::as_mapping)
+            .map(|inputs| {
+                inputs
+                    .iter()
+                    .filter(|(_, body)| {
+                        body.get("required")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    })
+                    .filter_map(|(key, _)| key.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// The declared outputs of one published Action.
     fn action_outputs(name: &str) -> BTreeSet<String> {
         let path = action_document(name);

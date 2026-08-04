@@ -2429,10 +2429,11 @@ subjects: []
     ///
     /// Every fragment here agrees with every other fragment about a release,
     /// which is exactly what an assembly bound only to its own inputs would
-    /// accept. They are refused because they disagree with the prepared
-    /// candidate, and the diagnostic names the component that disagreed.
+    /// accept. They are refused because they disagree with the release the
+    /// checkout was proved to be, and the diagnostic names the component that
+    /// disagreed.
     #[test]
-    fn refuses_fragments_that_agree_with_each_other_and_not_with_the_prepared_release() {
+    fn refuses_fragments_that_agree_with_each_other_and_not_with_the_proved_release() {
         let workspace = workspace("assemble-unanimous");
         let release = &workspace.release;
         let input = workspace.root.join("artifacts");
