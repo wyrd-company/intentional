@@ -14,7 +14,9 @@ use crate::evidence::contribution::{
 };
 use crate::evidence::identity::{fragment_disagreements, phase_disagreements, proved_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
-use crate::executor::recipe::{publication_probe_paths, resolve_publications, SelectedPublication};
+use crate::executor::recipe::{
+    probe_file, publication_probe_paths, resolve_publications, Capability, SelectedPublication,
+};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use crate::release::git::GitCommand;
 use serde::{Deserialize, Serialize};
@@ -904,7 +906,12 @@ fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &
     let mut paths = publication_probe_paths(config);
     paths.insert(PathBuf::from(CONFIG_PATH));
     for release_unit in config.release_units.values() {
-        paths.extend(go_sources(root, release, &release_unit.path));
+        let module = release_unit
+            .path
+            .join(probe_file(Capability::GoApplication));
+        if paths.contains(&module) && matches!(read_present(root, release, &module), Ok(true)) {
+            paths.extend(go_sources(root, release, &release_unit.path));
+        }
     }
 
     let mut differing = Vec::new();
@@ -923,6 +930,16 @@ fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &
             differing.join(", ")
         ));
     }
+}
+
+/// Whether a Go module is there to make the discovery walk for sources.
+///
+/// The walk only happens for a release unit that has one, so a stray `.go`
+/// file in a repository that publishes no Go module is not a read and is not
+/// compared. Presence is asked of both sides, because a module on either one
+/// puts the walk in reach.
+fn read_present(root: &Path, release: &str, path: &Path) -> Result<bool> {
+    Ok(blob_at(root, release, path)?.is_some() || root.join(path).is_file())
 }
 
 /// Whether one path assembly reads differs from the release commit.
@@ -2714,6 +2731,44 @@ subjects: []
         assert!(
             error.to_string().contains(".intentional/config.yml"),
             "{error}"
+        );
+    }
+
+    /// A Go source the release never published is a read like any other.
+    ///
+    /// Go discovery is the one read that opens files by pattern: it walks for
+    /// `*.go` and reads what it finds, so its paths cannot be named in advance
+    /// and a source appearing on disk alone is enough to change which
+    /// directory declares the main package. The comparison takes those sources
+    /// from both sides for a release unit that has a module, which is the only
+    /// case where the walk happens at all.
+    #[test]
+    fn refuses_a_go_source_the_release_never_published() {
+        let workspace = ReleasedWorkspace::with(
+            CONFIG,
+            &[
+                (
+                    "component/package.json",
+                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                ),
+                ("component/go.mod", "module example.test/component\n"),
+            ],
+            "component",
+        );
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        let command = workspace.root.join("component/cmd/tool");
+        std::fs::create_dir_all(&command).expect("command directory");
+        std::fs::write(command.join("main.go"), "package main\n\nfunc main() {}\n")
+            .expect("source the release never published");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a Go source the release never published is refused");
+        assert!(
+            error.to_string().contains("component/cmd/tool/main.go"),
+            "the diagnostic names the source: {error}"
         );
     }
 
