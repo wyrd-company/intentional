@@ -716,10 +716,17 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@REGISTRY_NAME: {}\n      @ENVVAR@REGISTRY_INDEX_VARIABLE: {}\n      @ENVVAR@REGISTRY_INDEX_URL: {}\n",
         scalar(registry),
         scalar(&registry_name),
-        scalar(&format!(
-            "CARGO_REGISTRIES_{}_INDEX",
-            environment_fragment(&registry_name)
-        )),
+        // Named only where there is a registry to name. crates.io resolves
+        // through cargo's own default, so a variable derived for it would be
+        // an empty registry's spelling rather than anything cargo reads.
+        scalar(&if crates_io {
+            String::new()
+        } else {
+            format!(
+                "CARGO_REGISTRIES_{}_INDEX",
+                environment_fragment(&registry_name)
+            )
+        }),
         scalar(&index),
     );
     let mut steps = String::new();

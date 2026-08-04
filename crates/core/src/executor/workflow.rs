@@ -4387,6 +4387,106 @@ release-units:
         (expressions, plain)
     }
 
+    // Removing the file the probe used to copy removed the only place an
+    // alternate registry's index was written down, so derivation reads it and
+    // refuses when it is absent. That refusal is the whole of what replaced the
+    // old behaviour: without it the index derives empty, the variable is
+    // exported empty, and the failure moves from a diagnostic an author reads
+    // to a runner nobody is watching.
+    #[test]
+    fn refuses_an_alternate_registry_whose_index_the_workspace_does_not_declare() {
+        let workspace = workspace("workflow-undeclared-index");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        let diagnostic = &comparison.diagnostics[0];
+        assert_eq!(diagnostic.code, "recipe-underivable");
+        // The absence is named as an absence. Falling through to the value
+        // validator would also refuse, because an empty index is not a URL, but
+        // it would tell an author their index is malformed rather than that
+        // they never wrote one -- and the two have different fixes.
+        assert!(
+            diagnostic.message.contains("declares no index")
+                && diagnostic.message.contains(".cargo/config.toml")
+                && diagnostic.message.contains("example-registry"),
+            "the diagnostic names the registry, the file, and what is missing: {diagnostic:?}"
+        );
+
+        // Declaring it is what makes the same configuration derive.
+        workspace.write(
+            ".cargo/config.toml",
+            "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+        );
+        assert_eq!(
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+                .expect("comparison")
+                .status,
+            ComparisonStatus::Different,
+            "a declared index derives the workflow the refusal was withholding"
+        );
+    }
+
+    // Cargo has no command that uploads an existing `.crate`, so publication
+    // re-packages the sources and `cargo publish` packages once more of its
+    // own. The gate before it is what makes that survivable: it re-packages,
+    // compares against the sealed subject, and refuses to publish if the bytes
+    // differ. A published version is immutable, so the comparison has to happen
+    // before the upload rather than after it -- which is the half of the
+    // argument the doc comment spends a paragraph on and the half nothing was
+    // checking. The readback half is guarded; this one was not.
+    #[test]
+    fn refuses_to_publish_a_crate_whose_repackaging_did_not_reproduce_the_subject() {
+        let workspace = workspace("workflow-cargo-reproducibility");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let publish = publisher_steps(workspace.root(), PRIMARY_TARGET)
+            .into_iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("cargo publish"))
+            })
+            .expect("the Cargo recipe publishes");
+
+        let temporary = workspace.root().join("runner");
+        let subject = temporary.join("intentional_subject/bytes");
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        std::fs::write(
+            subject.join("example-component-1.0.0.crate"),
+            "the bytes the build sealed",
+        )
+        .expect("sealed subject");
+
+        // The stub answers the existence probe with absence, so the recipe
+        // proceeds to publish, and re-packages into bytes that differ from the
+        // sealed subject -- the drift the gate exists to catch.
+        let repackaged = temporary.join("intentional_repackage/package");
+        let stubs = stub_client(
+            &temporary.join("cargo"),
+            "cargo",
+            &format!(
+                "{CARGO_NEW}case \"$1\" in \
+                 add) echo 'error: the crate could not be found in registry index' >&2; exit 1 ;; \
+                 package) mkdir -p \"{}\"; printf 'a different packaging' > \"{}\"; exit 0 ;; \
+                 esac",
+                repackaged.display(),
+                repackaged.join("example-component-1.0.0.crate").display()
+            ),
+        );
+        let (succeeded, calls) = run_step(&publish, &stubs, &temporary, &[]);
+        assert!(
+            !succeeded,
+            "a repackaging that did not reproduce the sealed subject stops the publication"
+        );
+        assert!(
+            !calls.lines().any(|line| line.starts_with("publish")),
+            "the refusal happens before anything is submitted: {calls}"
+        );
+    }
+
     // A probe decides whether a long-lived credential is reached and whether an
     // immutable version is submitted, and it answers from what a client tells
     // it. A probe that reads the released repository's own client configuration
@@ -4993,6 +5093,31 @@ release-units:
             assert!(
                 !bodies.is_empty(),
                 "{label} resolves its destination through cargo"
+            );
+
+            // Both names cargo reads are derived from the configured registry,
+            // and the ordinary spelling of a registry carries a hyphen -- which
+            // is not a character a variable name may hold, so a derivation that
+            // passed the name through would name something no shell can set and
+            // no client reads, and the alternate-registry path would fail on a
+            // runner with neither a credential nor an index.
+            let declared = publisher_steps(workspace.root(), PRIMARY_TARGET)
+                .iter()
+                .filter_map(|step| {
+                    step_environment(step)
+                        .get("INTENTIONAL_REGISTRY_INDEX_VARIABLE")
+                        .cloned()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                declared,
+                [match carries {
+                    Some(_) => "CARGO_REGISTRIES_EXAMPLE_REGISTRY_INDEX".to_owned(),
+                    None => String::new(),
+                }]
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+                "{label} names the index variable cargo reads for it"
             );
             for body in bodies {
                 let allowlist = body

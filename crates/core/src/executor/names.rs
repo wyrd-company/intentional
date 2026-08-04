@@ -124,9 +124,18 @@ pub fn registry(supplied: &SuppliedName<'_>) -> Result<String, String> {
 /// and passed to the probe as the environment variable cargo reads for it, so
 /// the probe inherits no configuration and this one value is the whole of what
 /// crosses. It is not an identifier, so it is held to the shape of the thing it
-/// is: a fetchable index URL, spelled the way cargo spells one, over a
-/// character set that carries no shell metacharacter, no quote and no
-/// whitespace.
+/// is: a fetchable index URL, spelled the way cargo spells one, over RFC 3986's
+/// unreserved and reserved sets.
+///
+/// That set is not free of shell metacharacters — it contains `$`, `&`, `;`, a
+/// single quote and more — and claiming otherwise would be the kind of sentence
+/// a reader checks against the code and finds false. What makes those
+/// characters inert is the value's one sink: it is routed through `env:` and
+/// read only as `"${<prefix>REGISTRY_INDEX_URL}"` inside a quoted array
+/// element, never unquoted and never in command position. Whitespace and
+/// control characters are excluded outright, because those would split the
+/// element regardless of quoting. A future sink that read this value unquoted
+/// would need this rule narrowed, not merely re-read.
 pub fn registry_index(supplied: &SuppliedName<'_>) -> Result<String, String> {
     let value = supplied.value;
     let addressed = value
