@@ -49,6 +49,27 @@ pub const fn nfpm_format(publisher: PublisherKind) -> Option<&'static str> {
     }
 }
 
+/// File extension the package of one nfpm format carries.
+///
+/// `nfpms` builds whatever formats the repository declares, and the derivation
+/// has to recognise each one to tell a native package apart from a release
+/// archive. The match is closed for that reason: a format this has not learned
+/// is refused at derivation, because the alternative is a native package handed
+/// to the descriptor adapters as an archive their consumer path never resolves.
+///
+/// The extension is not always the format's own name, which is why this is a
+/// mapping rather than a spelling rule.
+pub fn nfpm_extension(format: &str) -> Option<&'static str> {
+    match format {
+        "rpm" => Some("rpm"),
+        "deb" => Some("deb"),
+        "apk" => Some("apk"),
+        "archlinux" => Some("pkg.tar.zst"),
+        "ipk" => Some("ipk"),
+        _ => None,
+    }
+}
+
 /// One release unit's native GoReleaser configuration, as far as it is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoReleaserConfig {

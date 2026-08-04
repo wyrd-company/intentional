@@ -136,16 +136,44 @@ pub(super) const fn github_hosted_deliverables(packager: Packager) -> Option<&'s
 /// points at. Handing an adapter the other half would make it download and
 /// digest bytes its consumer path never resolves and record that as its
 /// retrieval.
-pub(super) fn consumed_deliverables(publisher: PublisherKind) -> Option<String> {
-    let native = |format: &str| format!("-name '*.{format}'");
+///
+/// The descriptor adapters therefore exclude the formats the repository
+/// declared rather than the two a system-package adapter happens to
+/// distribute. `nfpms` builds five formats and a release unit is free to ask
+/// for any of them, so a fixed pair is an extension denylist over an open set
+/// -- the same shape [`github_hosted_deliverables`] avoids on the placed side,
+/// and with the same consequence when the set grows.
+///
+/// The declared formats never reach the derived shell. Each is mapped to an
+/// extension the derivation owns, and a format with no mapping is refused, so
+/// the predicate is built entirely from literals this module chose.
+pub(super) fn consumed_deliverables(
+    publisher: PublisherKind,
+    release_unit: &str,
+    nfpm_formats: &[String],
+) -> Result<Option<String>, StepsRefusal> {
+    let extension = crate::executor::goreleaser::nfpm_extension;
     match publisher {
         PublisherKind::Rpm | PublisherKind::Apt => {
-            crate::executor::goreleaser::nfpm_format(publisher).map(native)
+            Ok(crate::executor::goreleaser::nfpm_format(publisher)
+                .and_then(extension)
+                .map(|native| format!("-name '*.{native}'")))
         }
         PublisherKind::Homebrew | PublisherKind::Aur => {
-            Some("! -name '*.rpm' ! -name '*.deb'".to_owned())
+            let mut excluded = std::collections::BTreeSet::new();
+            for format in nfpm_formats {
+                let native = extension(format).ok_or_else(|| StepsRefusal {
+                    code: "nfpm-format-underived",
+                    message: format!(
+                        "release unit {release_unit} declares nfpm format {format:?}, which the derivation cannot recognise as a native package; a descriptor publisher would retrieve it as one of the release archives its formula resolves"
+                    ),
+                    path: Some(format!("release-units.{release_unit}")),
+                })?;
+                excluded.insert(format!("! -name '*.{native}'"));
+            }
+            Ok(Some(excluded.into_iter().collect::<Vec<_>>().join(" ")))
         }
-        PublisherKind::Npm | PublisherKind::Cargo | PublisherKind::Oci => None,
+        PublisherKind::Npm | PublisherKind::Cargo | PublisherKind::Oci => Ok(None),
     }
 }
 
@@ -175,10 +203,11 @@ const NPM_TRUSTED_PUBLISHING_RANGE: &str = ">=11.5.1";
 
 /// Why one publication derives no maintained recipe steps.
 ///
-/// The code travels with the message because a refusal that names an
-/// underivable recipe and a refusal that names a deliverable nothing uploads
-/// are different answers to the operator, and collapsing them into one code
-/// would make the second unreportable at the boundary that reads codes.
+/// The code travels with the message because these are different answers to the
+/// operator -- a recipe the packager's adapter could not derive, a destination
+/// its client resolves for itself, a native package format the derivation does
+/// not recognise -- and collapsing them into one code would make each
+/// unreportable at the boundary that reads codes.
 pub(super) struct StepsRefusal {
     /// Diagnostic code the workflow comparison reports this refusal under.
     pub code: &'static str,
@@ -256,11 +285,12 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
     let identity = context.publication.identity();
     // RPM and APT distribute the deliverable itself rather than a descriptor
     // that points at one, so their consumer path is the GitHub Release asset and
-    // what places it there is the managed upload job. Who performs that upload
-    // is settled; the job is not derived yet. Until it is, deriving a publisher
-    // job for these adapters would ship a publication whose deliverable nothing
-    // uploads, and giving this job the upload would take an authority the design
-    // reserves to a repository-local job inside the protected environment.
+    // the managed upload job places it there. What these adapters still lack is
+    // a maintained recipe of their own: nothing authenticates a package index,
+    // reads the destination back, or retrieves the release the way a consumer
+    // would. Deriving a publisher job without one would verify a publication it
+    // never performed, so the refusal names the recipe rather than the upload
+    // the design has since settled and this workflow now derives.
     if !matches!(
         context.publication.publisher,
         PublisherKind::Homebrew | PublisherKind::Aur
@@ -268,7 +298,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
         return Err(StepsRefusal {
             code: "deliverable-upload-underived",
             message: format!(
-                "publication {identity} distributes a GitHub-hosted deliverable, which the managed upload job places on the draft Release; that job is not derived yet, so the {} recipe would publish a deliverable nothing uploads",
+                "publication {identity} distributes a GitHub-hosted deliverable the managed upload job places on the draft Release, but no maintained {} recipe is derived to reach its package index, so the publisher job would verify a publication it never performed",
                 context.publication.publisher
             ),
             path: None,

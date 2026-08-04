@@ -930,11 +930,36 @@ fn publish_contract(
         if !crate::publication::draft::is_draft_dependent(publication.publisher) {
             continue;
         }
-        let Some(consumed) = crate::executor::steps::consumed_deliverables(publication.publisher)
-        else {
+        let Some(subject) = hosted.iter().find(|subject| subject.covers(publication)) else {
             continue;
         };
-        let Some(subject) = hosted.iter().find(|subject| subject.covers(publication)) else {
+        // Which files are native packages is what the release unit declared,
+        // not what the two system-package adapters happen to distribute, so the
+        // exclusion a descriptor adapter's handoff applies is read from the
+        // packager's own configuration.
+        let unit = &config.release_units[&publication.release_unit];
+        let declared = crate::executor::goreleaser::read(&root.join(&unit.path))
+            .map_err(|error| {
+                vec![WorkflowDiagnostic::at(
+                    "packager-configuration-unreadable",
+                    error.to_string(),
+                    &format!("release-units.{}", publication.release_unit),
+                )]
+            })?
+            .map(|native| native.nfpm_formats)
+            .unwrap_or_default();
+        let consumed = crate::executor::steps::consumed_deliverables(
+            publication.publisher,
+            &publication.release_unit,
+            &declared,
+        )
+        .map_err(|refusal| {
+            let path = refusal
+                .path
+                .unwrap_or_else(|| format!("release-units.{}", publication.release_unit));
+            vec![WorkflowDiagnostic::at(refusal.code, refusal.message, &path)]
+        })?;
+        let Some(consumed) = consumed else {
             continue;
         };
         consumers.push(DraftConsumer {
@@ -2426,6 +2451,13 @@ const PUBLISH_UPLOAD_STEP: &str = r#"  - name: @DELIVERABLE_NAME@
       touch "${@ENVVAR@LEDGER}"
       for @ENVVAR@DELIVERABLE in "${@ENVVAR@DELIVERABLES[@]}"; do
         @ENVVAR@ASSET="$(basename "${@ENVVAR@DELIVERABLE}")"
+        case "${@ENVVAR@ASSET}" in
+          ''|[-.]*|*[!A-Za-z0-9._+-]*)
+            printf 'the %s build produced Release asset name %s, which this release cannot carry: an asset name is written into a quoted handoff scalar and passed as its own argument, so it is held to letters, digits, dots, underscores, plus signs and inner hyphens\n' \
+              "${@ENVVAR@SUBJECT_IDENTITY}" "${@ENVVAR@ASSET}" >&2
+            exit 1
+            ;;
+        esac
         if grep -qxF "${@ENVVAR@ASSET}" "${@ENVVAR@LEDGER}"; then
           printf 'another subject of this release already places Release asset %s; a Release asset name is flat, so one deliverable would replace the other\n' \
             "${@ENVVAR@ASSET}" >&2
@@ -2502,6 +2534,13 @@ const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
             exit 1
           fi
           IFS=$'\t' read -r _ @ENVVAR@ID @ENVVAR@SIZE @ENVVAR@MEDIA <<<"${@ENVVAR@ENTRY}"
+          case "${@ENVVAR@MEDIA}" in
+            ''|*[!A-Za-z0-9._+/-]*)
+              printf 'draft Release asset %s declares media type %s, which this handoff cannot carry as a quoted scalar\n' \
+                "${@ENVVAR@ASSET}" "${@ENVVAR@MEDIA}" >&2
+              exit 1
+              ;;
+          esac
           printf -- '- id: %s\n' "${@ENVVAR@ID}"
           printf '  name: "%s"\n' "${@ENVVAR@ASSET}"
           printf '  size: %s\n' "${@ENVVAR@SIZE}"
@@ -3217,7 +3256,38 @@ release-units:
         require-phase: after-publication
 "#;
 
+    /// A workspace publishing a GoReleaser subject beside a registry-only one.
+    ///
+    /// The upload job's barrier is unconditional while the job itself is not, and
+    /// only a release holding both kinds of publication can tell those two apart.
+    /// A Go-only release makes every publisher a handoff consumer and a
+    /// registry-only release derives no upload job at all, so in either one a
+    /// barrier wired to the handoff and a barrier wired to the job are the same
+    /// graph.
+    fn mixed_workspace(label: &str) -> Workspace {
+        let workspace = go_workspace(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &GO_CONFIG.replace(
+                    "release-units:\n  component:\n",
+                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      staged:\n        role: primary\n        template: 'library/staged@{version}'\n        require-phase: before-publication\n  component:\n",
+                ),
+            )
+            .write(
+                "library/package.json",
+                r#"{"name":"@example-owner/example-library","version":"1.0.0"}"#,
+            );
+        workspace
+    }
+
     /// Native GoReleaser configuration declaring every pipe the recipes promote.
+    ///
+    /// The `nfpms` entry declares a third format on purpose. `nfpms` builds
+    /// whatever formats the repository asks for, and only a fixture declaring
+    /// one beyond the two the system-package adapters distribute can tell a
+    /// derivation that reads the declaration apart from one that names the two
+    /// it happens to know.
     const GORELEASER_CONFIG: &str = r#"version: 2
 project_name: example-tool
 builds:
@@ -3225,7 +3295,7 @@ builds:
 brews:
   - repository: { owner: example-org, name: homebrew-tap }
 nfpms:
-  - formats: [ rpm, deb ]
+  - formats: [ rpm, deb, apk ]
 aur:
   - name: example-tool-bin
 "#;
@@ -3593,6 +3663,51 @@ aur:
         );
     }
 
+    // The barrier is unconditional: a publisher follows the upload job whether or
+    // not it consumes a Release asset. Wiring it to the handoff instead would be
+    // invisible in a release whose every publisher consumes one, so the witness
+    // is a release that holds both kinds -- a GoReleaser subject whose publishers
+    // read the draft, beside a registry publication that never does.
+    #[test]
+    fn holds_a_registry_only_publisher_behind_the_barrier_it_reads_nothing_from() {
+        let workspace = mixed_workspace("workflow-upload-mixed");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let registry = job_ids(&jobs, "intentional_publish_library_npm");
+        assert_eq!(
+            registry.len(),
+            1,
+            "the release publishes to a registry as well: {:?}",
+            job_ids(&jobs, "intentional_publish_")
+        );
+        let registry = &registry[0];
+        assert!(
+            job_steps(&jobs, registry)
+                .iter()
+                .all(|step| step["with"]["draft-handoff"]
+                    .as_str()
+                    .is_none_or(str::is_empty)),
+            "{registry} consumes no draft asset, which is what makes it the witness"
+        );
+        assert!(
+            job_needs(&jobs, registry).contains(&UPLOAD_JOB.to_owned()),
+            "{registry} still follows the barrier: {:?}",
+            job_needs(&jobs, registry)
+        );
+
+        let consumer = job_ids(&jobs, "intentional_publish_component_homebrew");
+        assert_eq!(
+            consumer.len(),
+            1,
+            "the release also publishes a draft consumer"
+        );
+        assert!(
+            job_needs(&jobs, &consumer[0]).contains(&UPLOAD_JOB.to_owned()),
+            "the consuming publisher follows it too"
+        );
+    }
+
     // Repository write authority reaches this job the way it reaches the other
     // two transitions: inside the configured protected environment, through a
     // short-lived installation token minted in the job, and with the workflow's
@@ -3771,12 +3886,13 @@ aur:
     /// run; and the formula and package sources are descriptors their publisher
     /// jobs promote into repositories. One fixture carries all five kinds so a
     /// selection rule that admitted or dropped the wrong one is visible.
-    const GO_DISTRIBUTION: [(&str, &str); 7] = [
+    const GO_DISTRIBUTION: [(&str, &str); 8] = [
         ("example-tool_1.0.0_linux_amd64.tar.gz", "amd64 archive"),
         ("example-tool_1.0.0_linux_arm64.tar.gz", "arm64 archive"),
         ("checksums.txt", "the published checksums"),
         ("example-tool_1.0.0_amd64.deb", "the Debian package"),
         ("example-tool-1.0.0.x86_64.rpm", "the RPM package"),
+        ("example-tool_1.0.0_x86_64.apk", "the Alpine package"),
         ("artifacts.json", "[]"),
         ("homebrew/Formula/example-tool.rb", "class ExampleTool"),
     ];
@@ -3789,12 +3905,13 @@ aur:
     ];
 
     /// Deliverables the upload job places, in the order it places them.
-    const PLACED_ASSETS: [&str; 5] = [
+    const PLACED_ASSETS: [&str; 6] = [
         "checksums.txt",
         "example-tool-1.0.0.x86_64.rpm",
         "example-tool_1.0.0_amd64.deb",
         "example-tool_1.0.0_linux_amd64.tar.gz",
         "example-tool_1.0.0_linux_arm64.tar.gz",
+        "example-tool_1.0.0_x86_64.apk",
     ];
 
     /// Lay one built subject's transported bytes out where the job reads them.
@@ -3840,7 +3957,7 @@ case "$1 $2" in
       fi
       printf '%s\t%s\t%s\t%s\n' "${name}" \
         "$(( $(wc -l < "${GH_STUB_ASSETS}") + 100 ))" \
-        "$(wc -c < "${candidate}")" application/octet-stream >> "${GH_STUB_ASSETS}"
+        "$(wc -c < "${candidate}")" "${GH_STUB_MEDIA}" >> "${GH_STUB_ASSETS}"
     done
     ;;
   "api --paginate")
@@ -3858,7 +3975,8 @@ exit 0
             .setting("GH_STUB_RESOLVES", "yes")
             .setting("GH_STUB_DRAFT", "true")
             .setting("GH_STUB_TAG", UPLOAD_TAG)
-            .setting("GH_STUB_RELEASE", UPLOAD_RELEASE_ID);
+            .setting("GH_STUB_RELEASE", UPLOAD_RELEASE_ID)
+            .setting("GH_STUB_MEDIA", "application/octet-stream");
         stage_subject(
             &runner
                 .temp()
@@ -4148,6 +4266,88 @@ exit 0
         }
     }
 
+    /// A deliverable name no YAML scalar and no argument vector can carry.
+    ///
+    /// The name is a basename of whatever the packager wrote, and GoReleaser
+    /// builds its filenames from a repository-controlled `name_template`, so
+    /// this is a value the repository chooses in all but spelling.
+    const HOSTILE_ASSET: &str = "example-tool_1.0.0\"_linux_amd64.tar.gz";
+
+    // The handoff is emitted by a shell writer that prints each scalar between
+    // double quotes, so a name carrying a quote emits a document its consumer
+    // cannot parse. Refusing it in the handoff step would be too late: the
+    // upload has already spent the job's `contents: write` by then and the draft
+    // carries an asset no handoff can name. The refusal is therefore in the
+    // placing step, before the first byte reaches the Release.
+    #[test]
+    fn refuses_a_deliverable_name_no_handoff_scalar_could_carry_before_placing_it() {
+        let workspace = go_workspace("workflow-upload-hostile-name");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-hostile-name-inventory");
+        let runner = upload_runner(
+            "workflow-upload-hostile-name-runner",
+            &inventory.root().join("assets"),
+        );
+        std::fs::write(
+            runner
+                .temp()
+                .join("intentional_subject/intentional_subject-component_goreleaser/bytes")
+                .join(HOSTILE_ASSET),
+            "an archive named by a template",
+        )
+        .expect("the packager wrote the name it was told to");
+
+        let (script, environment) = upload_scripts(workspace.root(), &runner)
+            .into_iter()
+            .find(|(script, _)| script.contains("gh release upload"))
+            .expect("the job places deliverables");
+        let executed = runner.execute(&script, &environment);
+
+        assert!(
+            !executed.succeeded,
+            "the name is refused: {}",
+            executed.invocations
+        );
+        assert!(
+            !executed.invocations.contains("release upload"),
+            "nothing is placed before the name is refused: {}",
+            executed.invocations
+        );
+        assert!(
+            executed.diagnostics.contains("Release asset name"),
+            "the refusal names what it refused: {:?}",
+            executed.diagnostics
+        );
+    }
+
+    // The media type is GitHub's rather than the packager's, and it reaches the
+    // same double-quoted scalar. A draft serving one the document cannot carry
+    // fails the job rather than leaving a handoff its consumer rejects three
+    // jobs later, naming the publisher instead of the transport.
+    #[test]
+    fn refuses_a_media_type_the_handoff_document_could_not_carry() {
+        let workspace = go_workspace("workflow-upload-hostile-media");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-hostile-media-inventory");
+        let runner = upload_runner(
+            "workflow-upload-hostile-media-runner",
+            &inventory.root().join("assets"),
+        )
+        .setting("GH_STUB_MEDIA", "application/gzip\"");
+
+        let executed = run_upload_job(workspace.root(), &runner);
+        assert!(
+            !executed.succeeded,
+            "the media type is refused: {}",
+            executed.invocations
+        );
+        assert!(
+            executed.diagnostics.contains("media type"),
+            "the refusal names what it refused: {:?}",
+            executed.diagnostics
+        );
+    }
+
     // A Release asset name is flat, so two subjects producing one basename would
     // place one over the other and the loser's handoff would inventory an
     // identifier holding the winner's bytes. Nothing about that is loud: the
@@ -4310,6 +4510,20 @@ exit 0
             "the packager's own build metadata and its descriptors are not deliverables"
         );
 
+        // The formats come from the fixture's own packager configuration rather
+        // than from a list this test also chose, so a derivation that stopped
+        // reading the declaration cannot agree with the assertion by making both
+        // sides name the same two formats.
+        let workspace = go_workspace("deliverable-selection-declaration");
+        let declared = crate::executor::goreleaser::read(&workspace.root().join("component"))
+            .expect("the packager configuration is readable")
+            .expect("the release unit declares one")
+            .nfpm_formats;
+        assert!(
+            declared.len() > 2,
+            "the fixture declares a format beyond the two the adapters distribute: {declared:?}"
+        );
+
         for (publisher, expected) in [
             (
                 PublisherKind::Rpm,
@@ -4328,8 +4542,11 @@ exit 0
                 CONSUMED_ASSETS.map(str::to_owned).to_vec(),
             ),
         ] {
-            let consumed = crate::executor::steps::consumed_deliverables(publisher)
-                .unwrap_or_else(|| panic!("{publisher} consumes a Release asset"));
+            let consumed =
+                crate::executor::steps::consumed_deliverables(publisher, "component", &declared)
+                    .map_err(|refusal| refusal.message)
+                    .unwrap_or_else(|message| panic!("{publisher}: {message}"))
+                    .unwrap_or_else(|| panic!("{publisher} consumes a Release asset"));
             assert_eq!(
                 selected(
                     &subject,
@@ -4344,10 +4561,41 @@ exit 0
 
         for registry in [PublisherKind::Npm, PublisherKind::Cargo, PublisherKind::Oci] {
             assert!(
-                crate::executor::steps::consumed_deliverables(registry).is_none(),
+                crate::executor::steps::consumed_deliverables(registry, "component", &declared)
+                    .map_err(|refusal| refusal.message)
+                    .expect("a registry publisher reads no declaration")
+                    .is_none(),
                 "{registry} resolves its subject from a registry"
             );
         }
+    }
+
+    // A native package the derivation cannot recognise would reach a descriptor
+    // adapter's handoff as one of the release archives its formula resolves,
+    // which is the disagreement the split exists to prevent. It is refused at
+    // derivation instead, where the diagnostic names the format and the file the
+    // author has to edit.
+    #[test]
+    fn refuses_an_nfpm_format_it_cannot_recognise_as_a_native_package() {
+        let workspace = go_workspace("workflow-nfpm-unknown");
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace("[ rpm, deb, apk ]", "[ rpm, deb, msi ]"),
+        );
+        let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+            .expect("comparison runs");
+
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        let diagnostic = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "nfpm-format-underived")
+            .unwrap_or_else(|| panic!("the format is refused: {:?}", comparison.diagnostics));
+        assert!(
+            diagnostic.message.contains("\"msi\"")
+                && diagnostic.path == Some("release-units.component".to_owned()),
+            "the refusal names the format and where it was declared: {diagnostic:?}"
+        );
     }
 
     /// Names the derived `find` predicates select from one staged subject.
@@ -4370,12 +4618,52 @@ exit 0
             .collect()
     }
 
+    /// The line numbers of every non-zero `exit` one shell body takes.
+    ///
+    /// A zero exit is a success path rather than a refusal, and asking it for a
+    /// diagnostic would make the convention mean something it does not say.
+    fn refusals(body: &str) -> Vec<usize> {
+        body.lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.trim()
+                    .strip_prefix("exit ")
+                    .is_some_and(|status| status.trim() != "0" && !status.trim().is_empty())
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Whether one refusal writes to standard error inside its own branch.
+    ///
+    /// The walk stops at the statement that opened the branch, which is the
+    /// first line indented less than the `exit` itself. That boundary is what
+    /// makes this a pairing rather than a count: a message written anywhere else
+    /// in the body -- above the branch, in a neighbouring branch, at the top of
+    /// the script -- is outside the walk and does not answer for this refusal.
+    fn reports_its_cause(body: &str, refusal: usize) -> bool {
+        let lines = body.lines().collect::<Vec<_>>();
+        let indent = |line: &str| line.len() - line.trim_start().len();
+        let depth = indent(lines[refusal]);
+        lines[..refusal]
+            .iter()
+            .rev()
+            .take_while(|line| line.trim().is_empty() || indent(line) >= depth)
+            .any(|line| line.contains(">&2"))
+    }
+
     // One diagnostic convention across all three `gh`-driven Release writers.
     // A privileged step that exits non-zero with an empty log is the one case an
     // operator has to diagnose under time pressure, and a bare `test` under
-    // `set -e` is exactly that. The counts are exact rather than a presence
-    // check: a body with four refusals and three messages passes any check that
-    // only asks whether the body ever writes to standard error.
+    // `set -e` is exactly that.
+    //
+    // Each refusal is paired with a message in its own branch rather than
+    // counted against the body's total. Two counts move independently: deleting
+    // one refusal's message and adding an unrelated one at the top of the script
+    // keeps them equal while the refusal exits with an empty log, which is the
+    // failure this exists to remove. The swept totals are still exact, so a
+    // refusal that stops being derived fails here rather than shrinking the
+    // surface this claims to cover.
     #[test]
     fn reports_the_cause_of_every_refusal_in_the_release_writing_steps() {
         let workspace = go_workspace("workflow-release-writer-diagnostics");
@@ -4383,6 +4671,7 @@ exit 0
             converge(workspace.root(), role);
         }
         let mut swept = 0_usize;
+        let mut paired = 0_usize;
         for (role, job) in [
             (WorkflowRole::Release, "intentional_release"),
             (WorkflowRole::Publish, UPLOAD_JOB),
@@ -4401,11 +4690,19 @@ exit 0
                     continue;
                 }
                 swept += 1;
-                assert_eq!(
-                    body.matches("exit 1").count(),
-                    body.matches(">&2").count(),
-                    "every refusal in {job} reports what it refused: {body}"
+                let taken = refusals(body);
+                assert!(
+                    !taken.is_empty(),
+                    "a `gh`-driven step of {job} refuses nothing at all: {body}"
                 );
+                for refusal in &taken {
+                    assert!(
+                        reports_its_cause(body, *refusal),
+                        "the refusal on line {} of {job} exits with an empty log:\n{body}",
+                        refusal + 1
+                    );
+                }
+                paired += taken.len();
                 for line in body.lines().map(str::trim) {
                     assert!(
                         !line.starts_with("test "),
@@ -4418,16 +4715,20 @@ exit 0
             swept, 6,
             "every `gh`-driven step of all three Release writers is swept"
         );
+        assert_eq!(
+            paired, 18,
+            "every refusal those steps derive is paired, not only the ones a defect happens to reach"
+        );
     }
 
     // The deliverable RPM and APT distribute is the GitHub Release asset itself,
-    // which the managed upload job places on the draft. Deriving a publisher job
-    // before that job exists would ship a publication whose deliverable nothing
-    // uploads, and the refusal has to say that rather than something the design
-    // has since answered: a reader who is told the ownership is unsettled looks
-    // for a decision that was already made.
+    // and the managed upload job now places it. What is still missing is their
+    // own maintained recipe, so the refusal has to say that: a reader told the
+    // deliverable reaches nothing goes looking for an upload that is already
+    // there, and a reader told the ownership is unsettled goes looking for a
+    // decision that was already made.
     #[test]
-    fn refuses_a_publication_whose_deliverable_nothing_uploads() {
+    fn refuses_a_publication_whose_maintained_recipe_is_not_derived() {
         for publisher in ["rpm", "apt"] {
             let workspace = go_workspace("workflow-go-unsettled");
             workspace.write(
@@ -4453,9 +4754,15 @@ exit 0
                 diagnostic.message
             );
             assert!(
-                diagnostic.message.contains("the managed upload job")
-                    && diagnostic.message.contains("not derived yet"),
-                "the refusal names the job that is missing rather than an open question: {}",
+                diagnostic.message.contains("no maintained")
+                    && diagnostic.message.contains("recipe is derived"),
+                "the refusal names what is missing rather than what has since landed: {}",
+                diagnostic.message
+            );
+            assert!(
+                !diagnostic.message.contains("nothing uploads")
+                    && !diagnostic.message.contains("is not derived yet"),
+                "the refusal does not send an operator looking for the upload job: {}",
                 diagnostic.message
             );
         }

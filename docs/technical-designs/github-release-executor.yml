@@ -385,6 +385,13 @@ proposed-design:
     silent replacement reports it as anything but a digest disagreement at a
     publisher.
 
+    A packager names its files from templates a repository controls, and each
+    name is written into a quoted scalar of the handoff and passed as its own
+    argument, so a name outside what those carry is refused before anything is
+    placed. Refusing it while writing the document would be too late: the job
+    has spent its repository write authority by then and the draft holds an
+    asset no handoff can name.
+
     The same job writes each draft-dependent publication's asset handoff, once
     its assets are on the draft. The stable asset identifier a consumer resolves
     is GitHub's and exists only after the upload, so the inventory is read back
@@ -570,6 +577,16 @@ proposed-design:
     resolves the release archives its descriptor points at. Handing an adapter
     the other half would make it download and digest bytes its consumer path
     never resolves and record that as its retrieval.
+
+    Which files are native packages is read from the formats the release unit
+    declared rather than from the two formats the system-package adapters
+    distribute, because the packager builds any of the formats it supports and a
+    fixed pair is a denylist over a growing set. Each declared format is
+    recognised by the derivation and mapped to the extension its package
+    carries; a format the derivation does not recognise is refused where the
+    diagnostic names the file that declared it, because the alternative is a
+    native package handed to a descriptor adapter as one of the archives its
+    formula resolves.
 
     The packager decides the layout on both sides and the recipes read it
     rather than choosing one, so the build job installs a pinned GoReleaser
