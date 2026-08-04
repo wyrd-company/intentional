@@ -1426,44 +1426,77 @@ release-units:
     /// not a sample size the result depends on.
     const RACING_ATTEMPTS: usize = 20_000;
 
-    /// The window the CLI handoff fixtures fell into, opened on purpose.
+    /// Run one probe against a file another thread keeps taking away.
     ///
-    /// One thread removes and rewrites the manifest while the probe reads it.
-    /// Before the fix this surfaces the removal as a missing-file error and the
-    /// test fails; after it, a manifest that has gone is the absent case and no
-    /// interleaving can fail.
-    #[test]
-    fn a_manifest_removed_while_the_probe_runs_is_absent_rather_than_an_error() {
+    /// The competitor rewrites and removes the file continuously, so the window
+    /// between the probe's existence check and its read is reopened for every
+    /// attempt. Any error the probe returns is the defect: the file was there,
+    /// then it was not, which is the interleaving a concurrently dropped fixture
+    /// workspace produces.
+    fn under_removal<T>(
+        label: &str,
+        file: &str,
+        probe: impl Fn(&Path, &Path) -> Result<T>,
+        contents: &str,
+    ) {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
 
-        let workspace = Workspace::new("manifest-removal-race");
+        let workspace = Workspace::new(label);
         let root = workspace.root().to_path_buf();
-        let manifest = root.join("Cargo.toml");
+        let path = root.join(file);
         let stop = Arc::new(AtomicBool::new(false));
+        let staged = root.join("staged-contents");
+        std::fs::write(&staged, contents).expect("stage the contents the competitor publishes");
         let competitor = {
             let stop = Arc::clone(&stop);
-            let manifest = manifest.clone();
+            let staged = staged.clone();
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    let _ = std::fs::write(
-                        &manifest,
-                        "[package]\nname = \"raced-component\"\nversion = \"1.0.0\"\n",
-                    );
-                    let _ = std::fs::remove_file(&manifest);
+                    // Published by rename and withdrawn by removal, so the probe
+                    // sees the file whole or not at all. Writing in place would
+                    // let the probe read a truncated file and fail on malformed
+                    // contents, which is a different defect from this one.
+                    let scratch = path.with_extension("staging");
+                    let _ = std::fs::copy(&staged, &scratch);
+                    let _ = std::fs::rename(&scratch, &path);
+                    let _ = std::fs::remove_file(&path);
                 }
             })
         };
 
+        let relative = Path::new(file);
         let outcome = (0..RACING_ATTEMPTS)
-            .map(|_| cargo_manifest(&root, Path::new("Cargo.toml")))
+            .map(|_| probe(&root, relative))
             .find(std::result::Result::is_err);
 
         stop.store(true, Ordering::Relaxed);
         competitor.join().expect("the competing thread finishes");
 
         if let Some(Err(error)) = outcome {
-            panic!("a manifest removed while the probe ran was reported as a failure: {error:?}");
+            panic!("{file} was removed while the probe ran and became a failure: {error:?}");
         }
+    }
+
+    /// The window the CLI handoff fixtures fell into, opened on purpose.
+    #[test]
+    fn a_cargo_manifest_removed_while_the_probe_runs_is_absent_rather_than_an_error() {
+        under_removal(
+            "cargo-manifest-removal-race",
+            "Cargo.toml",
+            cargo_manifest,
+            "[package]\nname = \"raced-component\"\nversion = \"1.0.0\"\n",
+        );
+    }
+
+    /// The same window, in the probe that shares the check-then-read shape.
+    #[test]
+    fn a_package_manifest_removed_while_the_probe_runs_is_absent_rather_than_an_error() {
+        under_removal(
+            "package-manifest-removal-race",
+            "package.json",
+            node_package_is_publishable,
+            r#"{"name":"raced-component","version":"1.0.0"}"#,
+        );
     }
 }

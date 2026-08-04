@@ -220,6 +220,10 @@ release-units:
                 first, second,
                 "a workspace name may not take its uniqueness from the label or the clock"
             );
+            assert!(
+                first.contains("shared-label"),
+                "the label still says what the workspace is for: {first}"
+            );
         }
 
         #[test]
@@ -244,6 +248,14 @@ release-units:
             let workspace = Workspace::new("derivation-diagnostic");
             let present = derivation_failure(workspace.root(), WorkflowRole::Release, &"io error");
             assert!(present.contains("root is present"), "{present}");
+            assert!(
+                present.contains(&workspace.root().display().to_string()),
+                "the diagnostic names the root it examined: {present}"
+            );
+            assert!(
+                present.contains("io error"),
+                "the diagnostic carries the failure it explains: {present}"
+            );
 
             let removed = workspace.root().join("gone");
             let missing = derivation_failure(&removed, WorkflowRole::Release, &"io error");
