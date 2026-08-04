@@ -4850,6 +4850,96 @@ aur:
         (output.status.success(), stub_calls(stubs))
     }
 
+    /// Execute a language-packager readback for a destination that remains
+    /// unresolved through its deadline, and load the observation it emits.
+    fn unresolved_readback_observation(
+        workspace: &Workspace,
+        client: &str,
+        stub: &str,
+        subject_extension: &str,
+    ) -> crate::publication::observation::PublicationObservation {
+        converge(workspace.root(), WorkflowRole::Publish);
+        let readback = publisher_steps(workspace.root(), PRIMARY_TARGET)
+            .into_iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Read "))
+            })
+            .expect("the publisher has a readback step");
+        let environment = step_environment(&readback);
+        let temporary = workspace.root().join("unresolved-readback");
+        let subject = environment["INTENTIONAL_SUBJECT"]
+            .replace("${{ runner.temp }}", &temporary.display().to_string());
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        std::fs::write(
+            Path::new(&subject).join(format!("subject.{subject_extension}")),
+            "sealed subject bytes",
+        )
+        .expect("sealed subject");
+        let stubs = stub_client(&temporary.join("stubs"), client, stub);
+        let (succeeded, calls) = run_step(
+            &readback,
+            &stubs,
+            &temporary,
+            &[("INTENTIONAL_DEADLINE", "0")],
+        );
+        assert!(
+            succeeded,
+            "an unresolved {client} destination is reported through an observation; calls: {calls}"
+        );
+        let observation = environment["INTENTIONAL_OBSERVATION"]
+            .replace("${{ runner.temp }}", &temporary.display().to_string());
+        crate::publication::observation::PublicationObservation::load(Path::new(&observation))
+            .unwrap_or_else(|error| panic!("the {client} readback wrote an observation: {error}"))
+    }
+
+    fn assert_pending_without_components(
+        observation: &crate::publication::observation::PublicationObservation,
+        packager: &str,
+    ) {
+        assert_eq!(
+            observation.state,
+            ObservationState::Pending,
+            "the accepted {packager} publication has not become observable"
+        );
+        assert!(
+            observation.build_provenance.is_empty(),
+            "a pending {packager} observation carries no build-provenance block"
+        );
+        assert!(
+            observation.attached_metadata.is_empty(),
+            "a pending {packager} observation carries no attached-metadata block"
+        );
+        assert!(
+            observation.destination_aliases.is_empty(),
+            "a pending {packager} observation carries no destination-aliases block"
+        );
+    }
+
+    /// Witness: npmjs never resolves @example-owner/example-component@1.0.0
+    /// before the readback deadline.
+    #[test]
+    fn reports_an_npm_destination_that_never_resolves_as_pending() {
+        let workspace = npm_workspace("workflow-npm-readback-unresolved");
+        let observation = unresolved_readback_observation(&workspace, "npm", "exit 1", "tgz");
+        assert_pending_without_components(&observation, "npm");
+    }
+
+    /// Witness: crates.io never resolves example-component@1.0.0 before the
+    /// readback deadline.
+    #[test]
+    fn reports_a_cargo_destination_that_never_resolves_as_pending() {
+        let workspace = workspace("workflow-cargo-readback-unresolved");
+        let observation = unresolved_readback_observation(
+            &workspace,
+            "cargo",
+            &format!("{CARGO_NEW}exit 1"),
+            "crate",
+        );
+        assert_pending_without_components(&observation, "Cargo");
+    }
+
     /// Every value a maintained recipe reads out of the repository it releases.
     ///
     /// This is the list the boundary rule is written against, so it is written
