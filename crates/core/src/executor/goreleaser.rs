@@ -234,11 +234,16 @@ pub fn arch_package_name(
     let supplied = declared
         .filter(|supplied| !supplied.value.trim().is_empty())
         .unwrap_or(project);
-    if supplied.value.contains("{{") {
-        return Ok(suffix_arch_package(supplied.value));
-    }
-    let name = crate::executor::names::arch_package(supplied)?;
+    let name = crate::executor::names::arch_package(&crate::executor::names::SuppliedName {
+        origin: supplied.origin,
+        value: supplied.value.trim(),
+    })?;
     Ok(suffix_arch_package(&name))
+}
+
+/// Whether one native package declaration invokes GoReleaser's template language.
+pub fn is_templated_name(name: &str) -> bool {
+    name.contains("{{")
 }
 
 fn suffix_arch_package(name: &str) -> String {
@@ -279,10 +284,17 @@ pub fn module_path(directory: &Path) -> Result<Option<String>> {
 /// fallback is a total function's last arm rather than a value a real
 /// publication depends on.
 pub fn subject_identity(directory: &Path) -> Result<Option<String>> {
-    if let Some(config) = read(directory)? {
-        if let Some(name) = config.project_name {
-            return Ok(Some(name));
-        }
+    let config = read(directory)?;
+    subject_identity_from(directory, config.as_ref())
+}
+
+/// Resolve the subject identity from native evidence already read by a caller.
+pub fn subject_identity_from(
+    directory: &Path,
+    config: Option<&GoReleaserConfig>,
+) -> Result<Option<String>> {
+    if let Some(name) = config.and_then(|config| config.project_name.as_ref()) {
+        return Ok(Some(name.clone()));
     }
     Ok(module_path(directory)?.and_then(|module| {
         module
@@ -306,6 +318,7 @@ mod tests {
         for (declared_value, expected) in [
             (Some("example-tool"), "example-tool-bin"),
             (Some("example-tool-bin"), "example-tool-bin"),
+            (Some(" example-tool "), "example-tool-bin"),
             (None, "example-project-bin"),
         ] {
             let declared = declared_value.map(|value| crate::executor::names::SuppliedName {

@@ -466,7 +466,9 @@ fn select_one(
         // The Arch User Repository resolves a package by name, and GoReleaser's
         // own configuration is where that name lives: explicitly under `aur`,
         // and otherwise as the binary package of the declared project.
-        (None, PublisherKind::Aur) => aur_package(root, release_unit)?,
+        (None, PublisherKind::Aur) => {
+            aur_package(root, release_unit, &format!("{id}/{publisher}/{target}"))?
+        }
         (None, _) if configured.destination_required => {
             return Err(Error::Validation(format!(
                 "configured target {id}/{publisher}/{target} requires an explicit repository; its destination identity is not derivable"
@@ -721,10 +723,16 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
 /// project name and then suffixes every name with `-bin` unless it already ends
 /// that way. Reading the declaration verbatim would name a package that does not
 /// exist, so the same rule the packager applies is applied here.
-fn aur_package(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Option<String>> {
+fn aur_package(
+    root: &Path,
+    release_unit: &ReleaseUnitConfig,
+    identity: &str,
+) -> Result<Option<String>> {
     let directory = root.join(&release_unit.path);
     let config = crate::executor::goreleaser::read(&directory)?;
-    let Some(project) = crate::executor::goreleaser::subject_identity(&directory)? else {
+    let Some(project) =
+        crate::executor::goreleaser::subject_identity_from(&directory, config.as_ref())?
+    else {
         return Ok(None);
     };
     let path = release_unit.path.join(
@@ -753,6 +761,15 @@ fn aur_package(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Option<S
             origin: &declared_origin,
             value,
         });
+    if declared
+        .as_ref()
+        .is_some_and(|supplied| crate::executor::goreleaser::is_templated_name(supplied.value))
+    {
+        return Err(Error::Validation(format!(
+            "{identity} cannot publish templated aur[0].name in {}; maintained Arch publication requires a literal package name",
+            path.display()
+        )));
+    }
     let project = crate::executor::names::SuppliedName {
         origin: &project_origin,
         value: &project,
@@ -1417,6 +1434,26 @@ release-units:
             error
                 .to_string()
                 .contains("component/.goreleaser.yaml aur[0].name is not an Arch package name"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_templated_arch_package_before_it_becomes_a_destination() {
+        let workspace = Workspace::new("aur-template-boundary");
+        workspace
+            .write("component/go.mod", "module example.test/example-tool\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n")
+            .write(
+                "component/.goreleaser.yaml",
+                "version: 2\nproject_name: example-tool\naur:\n  - name: '{{ .ProjectName }}/../../other'\n",
+            );
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("a templated Arch package never becomes a destination");
+        assert!(
+            error.to_string().contains(
+                "component/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
+            ),
             "{error}"
         );
     }

@@ -134,15 +134,6 @@ fn native_packager_findings(
             config.aur_names.len()
         ));
     }
-    if publication.publisher == PublisherKind::Aur
-        && config
-            .aur_names
-            .first()
-            .and_then(Option::as_deref)
-            .is_some_and(|name| name.contains("{{"))
-    {
-        findings.push(format!("{identity} cannot publish templated aur[0].name in {file}; maintained Arch publication requires a literal package name"));
-    }
     Ok(findings)
 }
 
