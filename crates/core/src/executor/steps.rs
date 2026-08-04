@@ -123,22 +123,49 @@ const CRATES_IO: &str = "crates.io";
 /// version rather than an authentication error naming nothing.
 const NPM_TRUSTED_PUBLISHING_RANGE: &str = ">=11.5.1";
 
+/// Why one publication derives no maintained recipe steps.
+///
+/// The code travels with the message because a refusal that names an
+/// underivable recipe and a refusal that names a deliverable nothing uploads
+/// are different answers to the operator, and collapsing them into one code
+/// would make the second unreportable at the boundary that reads codes.
+pub(super) struct StepsRefusal {
+    /// Diagnostic code the workflow comparison reports this refusal under.
+    pub code: &'static str,
+    /// Whole message, already naming the publication it refuses.
+    pub message: String,
+}
+
+impl StepsRefusal {
+    /// A recipe this packager's own adapter could not derive steps for.
+    fn underivable(identity: &str, message: &str) -> Self {
+        Self {
+            code: "recipe-underivable",
+            message: format!(
+                "publication {identity} derives no maintained recipe steps: {message}"
+            ),
+        }
+    }
+}
+
 /// Steps one publication's maintained recipe contributes to its publisher job.
 ///
 /// The three packagers below each keep one arm rather than sharing a collapsed
 /// one. Their recipes are owned by separate tasks working from a common base,
 /// and a shared arm makes one edit each of them has to make into one edit they
 /// have to make together.
-pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
     steps_for(context).map(|steps| steps.replace("@INHERITED@", &inherited_environment()))
 }
 
 /// One publication's recipe steps before the shared placeholders are rendered.
-fn steps_for(context: &RecipeContext<'_>) -> Result<String, String> {
+fn steps_for(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+    let identity = context.publication.identity();
+    let underivable = |message: String| StepsRefusal::underivable(&identity, &message);
     match context.publication.packager {
-        Packager::Npm => npm_steps(context),
-        Packager::Cargo => cargo_steps(context),
-        Packager::GoReleaser => Ok(promote_only(context, "goreleaser release --clean")),
+        Packager::Npm => npm_steps(context).map_err(underivable),
+        Packager::Cargo => cargo_steps(context).map_err(underivable),
+        Packager::GoReleaser => goreleaser_steps(context),
         Packager::Buildx => Ok(promote_only(
             context,
             "docker buildx build --push --provenance true --sbom true .",
@@ -162,6 +189,204 @@ fn promote_only(context: &RecipeContext<'_>, command: &str) -> String {
         scalar(context.working_directory),
     )
 }
+
+/// Credential and promotion steps one GoReleaser destination requires.
+///
+/// GoReleaser's open-source distribution has no command that publishes a `dist/`
+/// tree a previous invocation built, so a maintained Go recipe cannot reach its
+/// destination by running the packager again: a second `goreleaser release`
+/// rebuilds from source and produces a subject whose digest cannot equal the one
+/// the release sealed. These steps therefore promote the file the build already
+/// produced, as an ordinary repository-local operation against the destination's
+/// own repository.
+///
+/// Each maintained Go recipe promotes into a different repository under a
+/// different authority, so what varies between them is which repository receives
+/// the file and which credential reaches it. Everything else — the sealed
+/// subject, the release tag the commit message carries, the committer identity —
+/// is the part every Go destination shares.
+fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+    let identity = context.publication.identity();
+    // RPM and APT distribute the deliverable itself rather than a descriptor
+    // that points at one, so their consumer path is the GitHub Release asset and
+    // what places it there is the managed upload job. Who performs that upload
+    // is settled; the job is not derived yet. Until it is, deriving a publisher
+    // job for these adapters would ship a publication whose deliverable nothing
+    // uploads, and giving this job the upload would take an authority the design
+    // reserves to a repository-local job inside the protected environment.
+    if !matches!(
+        context.publication.publisher,
+        PublisherKind::Homebrew | PublisherKind::Aur
+    ) {
+        return Err(StepsRefusal {
+            code: "deliverable-upload-underived",
+            message: format!(
+                "publication {identity} distributes a GitHub-hosted deliverable, which the managed upload job places on the draft Release; that job is not derived yet, so the {} recipe would publish a deliverable nothing uploads",
+                context.publication.publisher
+            ),
+        });
+    }
+    let destination = context.publication.destination.clone().ok_or(StepsRefusal {
+        code: "destination-underived",
+        message: format!(
+            "publication {identity} promotes into a destination repository, but none is configured or derivable"
+        ),
+    })?;
+    let mut credential = String::new();
+    let mut environment = format!("      @ENVVAR@DESTINATION: {}\n", scalar(&destination));
+    environment.push_str(&format!(
+        "      @ENVVAR@COMMITTER_NAME: {}\n      @ENVVAR@COMMITTER_EMAIL: {}\n",
+        scalar(crate::release::build::RELEASE_IDENTITY_NAME),
+        scalar(crate::release::build::RELEASE_IDENTITY_EMAIL),
+    ));
+    let command = match context.publication.publisher {
+        PublisherKind::Homebrew => {
+            let (owner, name) = destination.split_once('/').ok_or(StepsRefusal {
+                code: "destination-malformed",
+                message: format!(
+                    "publication {identity} names tap repository {destination:?}, which is not owner/name"
+                ),
+            })?;
+            credential.push_str(
+                &DESTINATION_TOKEN_STEPS
+                    .replace("@DESTINATION_OWNER@", &scalar(owner))
+                    .replace("@DESTINATION_NAME@", &scalar(name)),
+            );
+            environment.push_str(
+                "      GITHUB_TOKEN: ${{ steps.@JOB@destination_token.outputs.token }}\n",
+            );
+            HOMEBREW_PROMOTE_COMMAND
+        }
+        PublisherKind::Aur => {
+            environment.push_str(&format!(
+                "      @ENVVAR@AUR_KEY: ${{{{ secrets.@ENVVAR@AUR_KEY }}}}\n      @ENVVAR@AUR_HOST_FINGERPRINT: {}\n",
+                scalar(AUR_HOST_FINGERPRINT)
+            ));
+            AUR_PROMOTE_COMMAND
+        }
+        publisher => unreachable!("{publisher} is refused above"),
+    };
+    Ok(format!(
+        "{credential}  - name: {}\n    env:\n      @ENVVAR@SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n      @ENVVAR@SUBJECT_IDENTITY: {}\n      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{command}\n",
+        scalar(&format!("Publish {identity}")),
+        scalar(context.subject_identity),
+    ))
+}
+
+/// Published ED25519 host key fingerprint of the Arch User Repository.
+///
+/// Pinned rather than accepted on first use. The recipe scopes its SSH authority
+/// to one destination, and trusting whatever key answers on a runner would hand
+/// that authority to an unauthenticated peer. A host whose key does not match
+/// this pin fails the job, so a stale pin is a loud failure rather than a silent
+/// downgrade.
+const AUR_HOST_FINGERPRINT: &str = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4";
+
+/// Steps minting a short-lived token for one destination repository.
+///
+/// The App is installed narrowly on the tap or index repository, and the token
+/// names that repository explicitly, so a job that promotes into one destination
+/// cannot write to another repository the App happens to be installed on.
+const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
+    name: Mint a short-lived token for the destination repository
+    uses: @APP_TOKEN@
+    with:
+      app-id: ${{ vars.@ENVVAR@GITHUB_APP_ID }}
+      private-key: ${{ secrets.@ENVVAR@GITHUB_APP_PRIVATE_KEY }}
+      owner: @DESTINATION_OWNER@
+      repositories: @DESTINATION_NAME@
+"#;
+
+/// Promote the generated Homebrew formulas into the configured tap repository.
+///
+/// The packager writes each formula to `homebrew/<directory>/<name>.rb` inside
+/// the distribution tree, where the directory and the name are the ones the
+/// release unit's own `brews` entry declares, and publishes it to that same
+/// relative path in the tap. Promotion therefore preserves the path rather than
+/// choosing one: a tap whose formulas do not live under `Formula` is stating
+/// where they live, and this recipe's premise is that the native configuration
+/// is the authority on that.
+///
+/// Every generated formula is promoted. A release unit with two `brews` entries
+/// publishes both, and scoping the search to the packager's `homebrew` output
+/// keeps a cask or any other generated Ruby file from being promoted as one.
+///
+/// A rerun that finds the tap already carrying this release commits nothing and
+/// still succeeds, because the destination readback that follows is what decides
+/// whether the publication is present rather than whether this step wrote.
+const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/homebrew"
+      test -d "${generated}"
+      mapfile -t -d '' formulas < <(find "${generated}" -type f -name '*.rb' -print0 | sort -z)
+      test "${#formulas[@]}" -gt 0
+      rm -rf "${RUNNER_TEMP}/@JOB@tap"
+      git clone --quiet --depth 1 \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
+        "${RUNNER_TEMP}/@JOB@tap"
+      for formula in "${formulas[@]}"; do
+        install -D -m 644 "${formula}" \
+          "${RUNNER_TEMP}/@JOB@tap/${formula#"${generated}/"}"
+      done
+      git -C "${RUNNER_TEMP}/@JOB@tap" add --all
+      if [ -n "$(git -C "${RUNNER_TEMP}/@JOB@tap" status --porcelain)" ]; then
+        git -C "${RUNNER_TEMP}/@JOB@tap" \
+          -c user.name="${@ENVVAR@COMMITTER_NAME}" \
+          -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
+          commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
+        git -C "${RUNNER_TEMP}/@JOB@tap" push --quiet origin HEAD
+      fi"#;
+
+/// Promote the generated Arch package sources into the Arch User Repository.
+///
+/// The Arch User Repository is a Git host of its own rather than a GitHub
+/// repository, so its authority is an SSH key under the conventional secret
+/// name the recipe states. The key never reaches Intentional configuration; the
+/// recipe names the secret and the repository supplies it.
+///
+/// The packager writes this package's sources as `aur/<package>.pkgbuild` and
+/// `aur/<package>.srcinfo`, and the names `PKGBUILD` and `.SRCINFO` are the ones
+/// the Arch User Repository requires at the destination. Both sides are named
+/// exactly: reading the package's own two files keeps a release unit with more
+/// than one `aur` entry from sweeping its sibling's sources into this package,
+/// and installing them under their required names is what makes the result a
+/// package `makepkg` can read at all.
+///
+/// The host key is pinned rather than accepted from whatever answers on the
+/// runner. The recipe is careful to scope this SSH authority to one destination,
+/// and trusting the host on first use would hand that authority to an
+/// unauthenticated peer. A host whose key does not match the pin fails the job.
+///
+/// A package the Arch User Repository does not yet carry cannot be cloned, so an
+/// absent package is initialized locally and created by the initial push, which
+/// is how the Arch User Repository registers one.
+const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@ENVVAR@DESTINATION}.pkgbuild"
+      srcinfo="${@ENVVAR@SUBJECT}/aur/${@ENVVAR@DESTINATION}.srcinfo"
+      test -f "${pkgbuild}"
+      test -f "${srcinfo}"
+      install -d -m 700 "${HOME}/.ssh"
+      printf '%s\n' "${@ENVVAR@AUR_KEY}" > "${HOME}/.ssh/@JOB@aur"
+      chmod 600 "${HOME}/.ssh/@JOB@aur"
+      ssh-keyscan -t ed25519 aur.archlinux.org > "${RUNNER_TEMP}/@JOB@aur-host-key"
+      test "$(ssh-keygen -l -f "${RUNNER_TEMP}/@JOB@aur-host-key" | cut -d' ' -f2)" \
+        = "${@ENVVAR@AUR_HOST_FINGERPRINT}"
+      cat "${RUNNER_TEMP}/@JOB@aur-host-key" >> "${HOME}/.ssh/known_hosts"
+      export GIT_SSH_COMMAND="ssh -i ${HOME}/.ssh/@JOB@aur -o IdentitiesOnly=yes"
+      rm -rf "${RUNNER_TEMP}/@JOB@aur"
+      if ! git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
+        "${RUNNER_TEMP}/@JOB@aur"; then
+        git init --quiet --initial-branch=master "${RUNNER_TEMP}/@JOB@aur"
+        git -C "${RUNNER_TEMP}/@JOB@aur" remote add origin \
+          "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git"
+      fi
+      install -m 644 "${pkgbuild}" "${RUNNER_TEMP}/@JOB@aur/PKGBUILD"
+      install -m 644 "${srcinfo}" "${RUNNER_TEMP}/@JOB@aur/.SRCINFO"
+      git -C "${RUNNER_TEMP}/@JOB@aur" add --all
+      if [ -n "$(git -C "${RUNNER_TEMP}/@JOB@aur" status --porcelain)" ]; then
+        git -C "${RUNNER_TEMP}/@JOB@aur" \
+          -c user.name="${@ENVVAR@COMMITTER_NAME}" \
+          -c user.email="${@ENVVAR@COMMITTER_EMAIL}" \
+          commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
+        git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD:master
+      fi"#;
 
 /// Index one alternate Cargo registry is declared with, if the workspace declares one.
 ///
