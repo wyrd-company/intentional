@@ -43,8 +43,8 @@
 use crate::config::ReleaseUnitConfig;
 use crate::executor::names::{self, SuppliedName};
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
-use crate::executor::workflow::scalar;
-use crate::model::PublisherKind;
+use crate::executor::workflow::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
+use crate::model::{AttachedComponent, PublisherKind};
 use crate::publication::observation::ConsistencyPolicy;
 
 /// Everything one publication's recipe steps are derived from.
@@ -166,28 +166,8 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
         Packager::Npm => npm_steps(context).map_err(underivable),
         Packager::Cargo => cargo_steps(context).map_err(underivable),
         Packager::GoReleaser => goreleaser_steps(context),
-        Packager::Buildx => Ok(promote_only(
-            context,
-            "docker buildx build --push --provenance true --sbom true .",
-        )),
-        Packager::DevContainerCli => Ok(promote_only(
-            context,
-            "devcontainer features publish --namespace \"${GITHUB_REPOSITORY}\" .",
-        )),
+        Packager::Buildx | Packager::DevContainerCli => oci_steps(context),
     }
-}
-
-/// The single promotion step a recipe without derived readback still emits.
-///
-/// Authentication, readback and retrieval belong to the tasks that own those
-/// destinations; until then the job promotes its subject with one native
-/// command and writes no observation, which the verification step reports.
-fn promote_only(context: &RecipeContext<'_>, command: &str) -> String {
-    format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n      @ENVVAR@SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n    run: {command}\n",
-        scalar(&format!("Publish {}", context.publication.identity())),
-        scalar(context.working_directory),
-    )
 }
 
 /// Credential and promotion steps one GoReleaser destination requires.
@@ -1238,3 +1218,512 @@ const CARGO_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
       @ENVVAR@RETRIEVAL_VERSION="${@ENVVAR@PACKAGER_VERSION}"
       @ENVVAR@observe_present
 "#;
+
+/// Repository variable naming the Docker Hub account a recipe authenticates as.
+const DOCKERHUB_USERNAME_VAR: &str = "DOCKERHUB_USERNAME";
+/// Conventional GitHub secret holding the Docker Hub access token.
+const DOCKERHUB_TOKEN_SECRET: &str = "DOCKERHUB_TOKEN";
+/// Dev Container CLI revision the maintained recipe drives.
+const DEV_CONTAINER_CLI: &str = "@devcontainers/cli@0.88.0";
+
+/// Credential and promotion steps one OCI destination requires.
+///
+/// A maintained OCI recipe owns everything that happens at a destination:
+/// authentication, promotion of the bytes the build job produced, alias
+/// mutation, attached components, destination readback, the closure-time
+/// consumer retrieval, and the observation those steps leave behind.
+///
+/// The build job already sealed the subject, so no recipe here builds. Both
+/// packagers promote what the seal produced and then prove the destination
+/// resolved it: the Buildx recipe pushes the sealed layout itself, and the Dev
+/// Container recipe drives a native client that publishes from source and is
+/// therefore held to the packaged bytes afterwards.
+fn oci_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+    let identity = context.publication.identity();
+    oci_destination_steps(context).map_err(|message| StepsRefusal::underivable(&identity, &message))
+}
+
+fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+    let publication = context.publication;
+    let identity = publication.identity();
+    let feature = publication.packager == Packager::DevContainerCli;
+    let signed = publication
+        .components
+        .contains(&AttachedComponent::Signature);
+
+    // Every client is installed by a pinned, credential-free step. The Dev
+    // Container CLI comes from npm, which runs package lifecycle scripts, so it
+    // is installed here rather than in the step that holds the registry token:
+    // an install executing arbitrary code beside a credential would give back
+    // exactly what these steps are for. Scripts are refused because this client
+    // needs none.
+    let mut steps =
+        format!("  - name: Install the registry client\n    uses: {SETUP_CRANE_ACTION}\n");
+    if feature {
+        steps.push_str(&format!(
+            "  - name: Install the Dev Container client\n    run: npm install --global --no-fund --no-audit --ignore-scripts {DEV_CONTAINER_CLI}\n"
+        ));
+    }
+    if signed {
+        steps.push_str(&format!(
+            "  - name: Install the keyless signing client\n    uses: {COSIGN_INSTALLER_ACTION}\n"
+        ));
+    }
+
+    let destination = oci_destination_environment(context)?;
+    let components = publication
+        .components
+        .iter()
+        .map(|component| component.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let namespace = if feature {
+        "      @ENVVAR@FEATURE_NAMESPACE: \"${{ github.repository }}\"\n".to_owned()
+    } else {
+        String::new()
+    };
+    let (kind, packager_version_command) = if feature {
+        ("dev-container-feature", "devcontainer")
+    } else {
+        ("oci-image", "docker buildx")
+    };
+    let promote = if feature {
+        [
+            OCI_EXISTING,
+            DEV_CONTAINER_CONFLICT_GATE,
+            OCI_CONFLICT_REPORT,
+            DEV_CONTAINER_CONFLICT_TAIL,
+            DEV_CONTAINER_PUBLISH,
+        ]
+        .concat()
+    } else {
+        [
+            OCI_IMAGE_PROMOTE_HEAD,
+            OCI_EXISTING,
+            OCI_IMAGE_CONFLICT_GATE,
+            OCI_CONFLICT_REPORT,
+            OCI_IMAGE_PROMOTE_TAIL,
+        ]
+        .concat()
+    };
+    steps.push_str(&format!(
+        "  - name: {}\n    working-directory: {}\n    env:\n{}{}{}{}      @ENVVAR@COMPONENTS: {}\n{namespace}    run: |\n{}{}{}{}{}{}{}{}{}",
+        scalar(&format!("Publish {identity}")),
+        scalar(context.working_directory),
+        subject_environment(context),
+        observation_environment(context, kind, packager_version_command),
+        policy_environment(publication.publisher),
+        destination,
+        scalar(&components),
+        STRICT_MODE,
+        OBSERVE,
+        OCI_PROLOGUE,
+        promote,
+        OCI_ALIAS_ENTITLEMENT,
+        if feature { "" } else { OCI_ALIAS_PROMOTE },
+        OCI_ALIAS_READBACK,
+        oci_attached_components(publication),
+        oci_observation(publication, packager_version_command),
+    ));
+    Ok(steps)
+}
+
+/// Destination-specific values one OCI recipe body reads from its environment.
+///
+/// Every value a recipe interpolates is routed through `env:` rather than
+/// spliced into the shell source, so a configured repository or a credential
+/// name can never become executable text in a step that holds a registry token.
+/// The credential names are held to a GitHub secret identifier first, because
+/// they land in `${{ secrets.NAME }}`, which is an identifier position: a name
+/// carrying a bracket would not name a missing secret, it would change what the
+/// expression evaluates.
+fn oci_destination_environment(context: &RecipeContext<'_>) -> Result<String, String> {
+    let publication = context.publication;
+    let oci = context.unit.oci.as_ref();
+    let (registry, destination, user, token) = match publication.target.as_str() {
+        "dockerhub" => {
+            let target = oci.and_then(|oci| oci.dockerhub.as_ref());
+            let origin = format!(
+                "release unit {} oci dockerhub username-var",
+                publication.release_unit
+            );
+            let username = names::secret(
+                target
+                    .and_then(|target| target.username_var.as_deref())
+                    .map(|value| SuppliedName {
+                        origin: &origin,
+                        value,
+                    })
+                    .as_ref(),
+                DOCKERHUB_USERNAME_VAR,
+            )?;
+            let origin = format!(
+                "release unit {} oci dockerhub token-secret",
+                publication.release_unit
+            );
+            let secret = names::secret(
+                target
+                    .and_then(|target| target.token_secret.as_deref())
+                    .map(|value| SuppliedName {
+                        origin: &origin,
+                        value,
+                    })
+                    .as_ref(),
+                DOCKERHUB_TOKEN_SECRET,
+            )?;
+            (
+                "docker.io".to_owned(),
+                publication.destination.clone().unwrap_or_default(),
+                format!("${{{{ vars.{username} }}}}"),
+                format!("${{{{ secrets.{secret} }}}}"),
+            )
+        }
+        // GHCR derives its owner from GitHub and its subject from the name the
+        // source declared, so an empty mapping still resolves a destination. A
+        // Dev Container Feature is namespaced by the repository because that is
+        // where its native client resolves it from.
+        _ => {
+            let derived = if publication.packager == Packager::DevContainerCli {
+                format!("${{{{ github.repository }}}}/{}", context.subject_identity)
+            } else {
+                format!(
+                    "${{{{ github.repository_owner }}}}/{}",
+                    context.subject_identity
+                )
+            };
+            (
+                "ghcr.io".to_owned(),
+                publication.destination.clone().unwrap_or(derived),
+                "${{ github.actor }}".to_owned(),
+                "${{ secrets.GITHUB_TOKEN }}".to_owned(),
+            )
+        }
+    };
+    Ok(format!(
+        "      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n      @ENVVAR@REGISTRY_USER: {}\n      @ENVVAR@REGISTRY_TOKEN: {}\n",
+        scalar(&registry),
+        scalar(&destination),
+        scalar(&user),
+        scalar(&token),
+    ))
+}
+
+/// Values every OCI recipe body starts from, and the registry session it opens.
+///
+/// The version and the sealed digest are the build job's outputs rather than
+/// values this body re-derives, so a recipe cannot record its publication under
+/// another release's version or against bytes it did not promote.
+const OCI_PROLOGUE: &str = r#"      version="${@ENVVAR@VERSION}"
+      subject_digest="${@ENVVAR@SUBJECT_DIGEST}"
+      test -n "${version}"
+      test -n "${subject_digest}"
+      repository="${@ENVVAR@REGISTRY}/${@ENVVAR@DESTINATION}"
+      mkdir -p "${@ENVVAR@WORK}"
+      aliases_file="${@ENVVAR@WORK}/aliases.yml"
+      metadata_file="${@ENVVAR@WORK}/metadata.yml"
+      : > "${aliases_file}"
+      : > "${metadata_file}"
+      printf '%s' "${@ENVVAR@REGISTRY_TOKEN}" | crane auth login "${@ENVVAR@REGISTRY}" \
+        --username "${@ENVVAR@REGISTRY_USER}" --password-stdin
+"#;
+
+/// Read what the destination already holds under the released version.
+///
+/// Existence is decided from the destination's tag listing rather than from a
+/// swallowed digest read, so an authentication or registry failure at the
+/// digest read itself is no longer indistinguishable from an absent tag. What
+/// remains swallowed is the listing of a repository that does not exist yet,
+/// which is the same reading as a repository carrying no versions; a genuine
+/// outage there fails loudly at the promotion immediately after.
+const OCI_EXISTING: &str = r#"      known_tags="$(crane ls "${repository}" 2>/dev/null || true)"
+      existing=""
+      if printf '%s\n' "${known_tags}" | grep -Fxq "${version}"; then
+        existing="$(crane digest "${repository}:${version}")"
+      fi
+"#;
+
+/// Report a destination holding another subject, without touching it.
+const OCI_CONFLICT_REPORT: &str = r#"        @ENVVAR@observe_state conflict "$(printf '%s already holds %s under version %s, which is not the subject this release built' \
+          "${repository}" "${conflicting}" "${version}")"
+        exit 0
+"#;
+
+/// Push the sealed layout and prove the destination holds what it sealed.
+///
+/// The identity compared is the set of manifests the index references, not the
+/// index digest. A registry re-serializes the index it is given, so its digest
+/// is a property of the bytes that landed rather than of the layout, and
+/// asserting the layout's own index digest would fail every real publication
+/// while proving nothing extra. The referenced manifests are carried through
+/// unchanged, so comparing them is what establishes that this destination holds
+/// the subject this release built -- and, because every destination is given
+/// the same layout, that all of them hold the same one.
+///
+/// The digest the destination reports is separately held to its own bytes, so a
+/// destination that names one subject and serves another is caught rather than
+/// recorded. A destination already holding different content under this version
+/// is reported as a conflict instead of being overwritten.
+const OCI_IMAGE_PROMOTE_HEAD: &str = r#"      layout="${@ENVVAR@WORK}/layout"
+      rm -rf "${layout}"
+      mkdir -p "${layout}"
+      tar -xf "${@ENVVAR@SUBJECT}/subject.oci.tar" -C "${layout}"
+      sealed_index="$(jq -r '.manifests[0].digest' "${layout}/index.json")"
+      sealed_manifests="$(jq -S -r '[.manifests[].digest] | sort | .[]' \
+        "${layout}/blobs/sha256/${sealed_index#sha256:}")"
+"#;
+
+const OCI_IMAGE_CONFLICT_GATE: &str = r#"      existing_manifests=""
+      if [ -n "${existing}" ]; then
+        existing_manifests="$(crane manifest "${repository}@${existing}" \
+          | jq -S -r '[.manifests[]?.digest] | sort | .[]')"
+      fi
+      if [ -n "${existing}" ] && [ "${existing_manifests}" != "${sealed_manifests}" ]; then
+        conflicting="${existing}"
+"#;
+
+const OCI_IMAGE_PROMOTE_TAIL: &str = r#"      fi
+      crane push --index "${layout}" "${repository}:${version}"
+      published="$(crane digest "${repository}:${version}")"
+      index="$(crane manifest "${repository}@${published}")"
+      test "$(printf '%s' "${index}" | jq -S -r '[.manifests[].digest] | sort | .[]')" \
+        = "${sealed_manifests}"
+      annotated="$(printf '%s' "${index}" \
+        | jq -r '.annotations["org.opencontainers.image.version"] // ""')"
+      test "${annotated}" = "${version}"
+      named="$(printf '%s' "${index}" \
+        | jq -r '.annotations["org.opencontainers.image.title"] // ""')"
+      test "${named}" = "${@ENVVAR@SUBJECT_IDENTITY}"
+"#;
+
+/// Refuse to hand a destination holding another Feature to the native client.
+///
+/// The client publishes from source and would overwrite the tag, and the layer
+/// comparison afterwards cannot notice: it compares against the bytes that same
+/// client just pushed. The decidable question before it runs is whether the
+/// destination's existing layer is the one the build job sealed, which the
+/// packaged artifact answers without the client's help.
+const DEV_CONTAINER_CONFLICT_GATE: &str = r#"      packaged="sha256:$(sha256sum "${@ENVVAR@SUBJECT}/devcontainer-feature-${@ENVVAR@SUBJECT_IDENTITY}.tgz" \
+        | cut -d ' ' -f 1)"
+      if [ -n "${existing}" ]; then
+        existing_layer="$(crane manifest "${repository}@${existing}" | jq -r '.layers[0].digest')"
+      else
+        existing_layer="${packaged}"
+      fi
+      if [ "${existing_layer}" != "${packaged}" ]; then
+        conflicting="${existing}"
+"#;
+
+const DEV_CONTAINER_CONFLICT_TAIL: &str = r#"      fi
+"#;
+
+/// Publish a Feature through its native client and prove it promoted the seal.
+const DEV_CONTAINER_PUBLISH: &str = r#"      devcontainer features publish --namespace "${@ENVVAR@FEATURE_NAMESPACE}" .
+      published="$(crane digest "${repository}:${version}")"
+      layer="$(crane manifest "${repository}@${published}" | jq -r '.layers[0].digest')"
+      test "${layer}" = "${packaged}"
+"#;
+
+/// Decide which stable aliases the released version is entitled to.
+///
+/// Entitlement is decided from the versions the destination already carries
+/// rather than from a local comparison, so a backport publishing 1.2.4 after
+/// 1.3.0 exists is entitled to `1.2` and nothing else, and a rerun of any
+/// release reaches the same decision. Major zero has no broad alias.
+///
+/// The compared set is the stable versions the destination carries, which is
+/// also what keeps a prerelease off every stable alias: a version carrying a
+/// prerelease identifier is never a member of that set, so it is never the
+/// newest member of one. Restating that as its own branch would add a
+/// condition nothing could ever falsify.
+const OCI_ALIAS_ENTITLEMENT: &str = r#"      aliases=""
+      core="${version%%-*}"
+      major="${core%%.*}"
+      minor="${core%.*}"
+      minor_pattern="${minor//./\.}"
+      major_pattern="${major//./\.}"
+      published_tags="$(crane ls "${repository}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+      newest="$(printf '%s\n' "${published_tags}" | sort -V | tail -n 1)"
+      if [ "${newest}" = "${version}" ]; then
+        aliases="latest"
+      fi
+      newest_minor="$(printf '%s\n' "${published_tags}" \
+        | grep -E "^${minor_pattern}\.[0-9]+$" | sort -V | tail -n 1 || true)"
+      if [ "${newest_minor}" = "${version}" ]; then
+        aliases="${aliases} ${minor}"
+      fi
+      if [ "${major}" != "0" ]; then
+        newest_major="$(printf '%s\n' "${published_tags}" \
+          | grep -E "^${major_pattern}\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1 || true)"
+        if [ "${newest_major}" = "${version}" ]; then
+          aliases="${aliases} ${major}"
+        fi
+      fi
+"#;
+
+/// Move the aliases this release is entitled to.
+const OCI_ALIAS_PROMOTE: &str = r#"      for alias in ${aliases}; do
+        crane tag "${repository}:${version}" "${alias}"
+      done
+"#;
+
+/// Compare every mutable alias the destination now resolves with entitlement.
+///
+/// Both directions are checked, and that is the point. An entitled alias that
+/// does not resolve the published subject means the promotion did not take. An
+/// alias that does resolve it without being entitled means something moved a
+/// stable alias this release had no right to -- which is the only way to hold a
+/// native client that maintains its own tags to the same rule, rather than
+/// predicting what it will do and recording the prediction as an observation.
+const OCI_ALIAS_READBACK: &str = r#"      for alias in latest "${minor}" "${major}"; do
+        alias_digest="$(crane digest "${repository}:${alias}" 2>/dev/null || true)"
+        entitled=""
+        case " ${aliases} " in
+          *" ${alias} "*) entitled="yes" ;;
+        esac
+        if [ "${alias_digest}" = "${published}" ]; then
+          test -n "${entitled}"
+          printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
+            >> "${aliases_file}"
+        else
+          test -z "${entitled}"
+        fi
+      done
+"#;
+
+/// Attach and read back exactly the components this target did not omit.
+///
+/// The body carries an arm only for a component this target still selects, so
+/// an omitted component leaves no trace in the recipe at all: nothing attaches
+/// it, nothing looks for it, and nothing records that it was left out. A
+/// selected component that the destination does not hold fails the publication
+/// instead of quietly dropping out of affirmative evidence.
+fn oci_attached_components(publication: &SelectedPublication) -> String {
+    if publication.components.is_empty() {
+        return String::new();
+    }
+    let mut body = String::new();
+    let reads_attestation = publication.components.iter().any(|component| {
+        matches!(
+            component,
+            AttachedComponent::Sbom | AttachedComponent::Provenance
+        )
+    });
+    if reads_attestation {
+        body.push_str(OCI_ATTESTATION_READ);
+    }
+    body.push_str("      provenance_digest=\"\"\n      for component in ${@ENVVAR@COMPONENTS}; do\n        case \"${component}\" in\n");
+    for component in &publication.components {
+        body.push_str(match component {
+            AttachedComponent::Sbom => OCI_SBOM_ARM,
+            AttachedComponent::Provenance => OCI_PROVENANCE_ARM,
+            AttachedComponent::Signature => OCI_SIGNATURE_ARM,
+        });
+    }
+    body.push_str(OCI_COMPONENT_RECORD);
+    body
+}
+
+/// Locate the attestation manifest the packager attached to the subject.
+const OCI_ATTESTATION_READ: &str = r#"      attestation="$(crane manifest "${repository}@${published}" \
+        | jq -r 'first(.manifests[]? | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") | .digest) // ""')"
+      predicates=""
+      if [ -n "${attestation}" ]; then
+        predicates="$(crane manifest "${repository}@${attestation}")"
+      fi
+"#;
+
+const OCI_SBOM_ARM: &str = r#"          sbom)
+            component_digest="$(printf '%s' "${predicates}" \
+              | jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("spdx")) | .digest) // ""')"
+            ;;
+"#;
+
+const OCI_PROVENANCE_ARM: &str = r#"          provenance)
+            component_digest="$(printf '%s' "${predicates}" \
+              | jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("slsa|provenance")) | .digest) // ""')"
+            provenance_digest="${component_digest}"
+            ;;
+"#;
+
+const OCI_SIGNATURE_ARM: &str = r#"          signature)
+            cosign sign --yes "${repository}@${published}"
+            component_digest="$(crane digest "$(cosign triangulate "${repository}@${published}")")"
+            ;;
+"#;
+
+const OCI_COMPONENT_RECORD: &str = r#"          *)
+            component_digest=""
+            ;;
+        esac
+        test -n "${component_digest}"
+        printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
+          "${component}" "${component_digest}" "${repository}@${published}" >> "${metadata_file}"
+      done
+"#;
+
+/// Retrieve the release the way an ordinary public consumer would.
+///
+/// The client is given an empty credential store, so it resolves the release
+/// with no authority this job holds. It then retrieves the subject's own bytes
+/// and checks that they hash to the digest the destination published, which is
+/// what discharges the recipe's obligation to prove the retrieved bytes are the
+/// published subject. Resolution alone would leave a destination that serves a
+/// tag publicly but refuses its content indistinguishable from one that does
+/// not -- a real state at GHCR while a package's visibility is changing.
+///
+/// A destination no public client can reach is reported rather than crashed
+/// into. The publication was accepted; what has not happened is the
+/// destination becoming observable, which is exactly the `pending` state the
+/// protocol already has a bounded policy for. Dying with the client's own
+/// error would leave `verify publication` with nothing to read about a
+/// destination that had in fact been fully written, on what is the most likely
+/// first-run outcome: a GHCR package is private until someone makes it public.
+const OCI_CLEAN_CLIENT: &str = r#"      clean_client="${@ENVVAR@WORK}/clean"
+      rm -rf "${clean_client}"
+      mkdir -p "${clean_client}"
+      if ! retrieved="$(DOCKER_CONFIG="${clean_client}" crane digest "${repository}:${version}" \
+        2>/dev/null)" \
+        || ! DOCKER_CONFIG="${clean_client}" crane manifest "${repository}@${retrieved}" \
+          > "${clean_client}/subject.json" 2>/dev/null; then
+        printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
+          "${repository}" "${version}" >&2
+        @ENVVAR@observe_state pending
+        exit 0
+      fi
+      test "${retrieved}" = "${published}"
+      test "sha256:$(sha256sum < "${clean_client}/subject.json" | cut -d ' ' -f 1)" = "${retrieved}"
+      client_version="$(crane version)"
+"#;
+
+/// Compose the observation the verification command reads.
+///
+/// Everything the schema fixes is written by the shared `observe_present`
+/// helper, so this adds only what an OCI publication has beyond a publication:
+/// the components it attached, the aliases it moved, and the native build
+/// provenance the packager produced.
+fn oci_observation(publication: &SelectedPublication, packager_version_command: &str) -> String {
+    let provenance = if publication
+        .components
+        .contains(&AttachedComponent::Provenance)
+    {
+        "      {\n        printf 'build-provenance:\\n'\n        printf -- '  - kind: \"%s\"\\n    digest: \"%s\"\\n    reference: \"%s\"\\n' \\\n          'oci-attestation' \"${provenance_digest}\" \"${repository}@${published}\"\n      } >> \"${@ENVVAR@OBSERVATION}\"\n"
+    } else {
+        ""
+    };
+    format!(
+        r#"{OCI_CLEAN_CLIENT}      @ENVVAR@PACKAGER_VERSION="$({packager_version_command} version | head -n 1)"
+      @ENVVAR@DESTINATION_DIGEST="${{published}}"
+      @ENVVAR@RETRIEVAL_VERSION="${{client_version}}"
+      @ENVVAR@RETRIEVED_DIGEST="${{retrieved}}"
+      @ENVVAR@observe_present
+      if [ -s "${{metadata_file}}" ]; then
+        printf 'attached-metadata:\n' >> "${{@ENVVAR@OBSERVATION}}"
+        cat "${{metadata_file}}" >> "${{@ENVVAR@OBSERVATION}}"
+      fi
+      if [ -s "${{aliases_file}}" ]; then
+        printf 'destination-aliases:\n' >> "${{@ENVVAR@OBSERVATION}}"
+        cat "${{aliases_file}}" >> "${{@ENVVAR@OBSERVATION}}"
+      fi
+{provenance}"#
+    )
+}

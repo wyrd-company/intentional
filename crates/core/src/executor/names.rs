@@ -184,6 +184,56 @@ pub fn release_unit(supplied: &SuppliedName<'_>) -> Result<String, String> {
     )
 }
 
+/// Longest repository name the OCI distribution specification admits.
+pub const MAX_OCI_SUBJECT: usize = 255;
+
+/// Reject a source-declared OCI subject name a destination could not resolve.
+///
+/// This name is the one identity a release takes from repository *source*
+/// rather than from configuration: a Dockerfile's
+/// `org.opencontainers.image.title` label, or a Dev Container Feature's id. It
+/// reaches every sink this module exists for, and one more that the others do
+/// not — it becomes a registry reference each destination has to resolve.
+///
+/// So the accepted shape is the OCI repository-name grammar rather than this
+/// module's identifier rule. It is narrower than what the annotation itself
+/// permits: `org.opencontainers.image.title` is specified as a human-readable
+/// title, so a conforming Dockerfile may declare `Example Image`. Refusing that
+/// here, where the refusal names the file and the label, is the difference
+/// between a derivation failure a maintainer can fix and a `crane push` failure
+/// on a release runner.
+///
+/// It is narrower than the OCI grammar in two further ways, and both are
+/// choices. Repeated separators are refused, though the grammar permits them,
+/// so one separator means one boundary. Upper case is refused, though a Feature
+/// id may legally carry it, because a registry path is lower-case and a name
+/// that has to be folded before it resolves is not the name the source
+/// declared. Both fail closed: a maintainer renames the subject once rather
+/// than discovering the fold at a destination.
+pub fn oci_subject(supplied: &SuppliedName<'_>) -> Result<String, String> {
+    let name = supplied.value;
+    let component = |part: &str| {
+        !part.is_empty()
+            && part.split(['.', '_', '-']).all(|run| {
+                !run.is_empty()
+                    && run
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            })
+    };
+    if !name.is_empty() && name.len() <= MAX_OCI_SUBJECT && name.split('/').all(component) {
+        Ok(name.to_owned())
+    } else {
+        Err(refusal(
+            supplied,
+            "an OCI repository name",
+            &format!(
+                "at most {MAX_OCI_SUBJECT} characters of lower-case alphanumeric components separated by one period, underscore or hyphen, because every destination has to resolve this name"
+            ),
+        ))
+    }
+}
+
 /// Reject a configured secret name GitHub could not resolve.
 ///
 /// The name is spliced into a `${{ secrets.NAME }}` expression, which is an

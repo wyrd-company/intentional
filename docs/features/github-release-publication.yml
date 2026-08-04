@@ -11,6 +11,7 @@ world-schema:
   subject_build_count: number
   destination_count: number
   destination_digest_matches: boolean
+  destination_content_matches: boolean
   publication_visible: boolean
   clean_client_retrieval: boolean
   authenticated_draft_retrieval: boolean
@@ -34,6 +35,8 @@ world-schema:
   additional_signature_present: boolean
   configuration_valid: boolean
   omitted_component: string
+  subject_named: boolean
+  destination_conflict: boolean
   required_fragment_count: number
   supplied_fragment_count: number
   evidence_verifies: boolean
@@ -220,10 +223,55 @@ rules:
             world:
               destination_count: 2
           - when: The publication workflow distributes the subject
-          - then: The subject is built once and every destination resolves the same digest
+          - then: The subject is built once and every destination holds the content it sealed
             world:
               subject_build_count: 1
+              destination_content_matches: true
+      require-a-named-oci-subject:
+        addresses: OCI subject identity derivation
+        steps:
+          - given: An OCI release unit whose source declares no image or Feature name
+            world:
+              subject_named: false
+          - when: The publication workflow is derived
+          - then: Derivation fails and names the declaration the subject is missing
+            world:
+              subject_named: false
+              diagnostic: Subject identity cannot be derived from native evidence
+      reject-a-destination-holding-another-subject:
+        addresses: OCI destination conflict
+        steps:
+          - given: A destination already carries a different subject under the released version
+            world:
+              destination_conflict: true
+          - when: The OCI recipe publishes the subject
+          - then: The publication is reported as a conflict and the destination is unchanged
+            world:
+              destination_conflict: true
+              publication_resubmitted: false
+      retrieve-an-oci-release-as-a-public-client:
+        addresses: OCI clean-client retrieval
+        steps:
+          - given: An OCI destination has accepted the released subject
+            world:
+              publication_visible: true
+          - when: The OCI recipe performs its pre-closure consumer retrieval
+          - then: An unauthenticated client retrieves the subject and its bytes hash to the published digest
+            world:
+              clean_client_retrieval: true
+              public_client_retrieval: true
               destination_digest_matches: true
+      report-an-oci-destination-no-public-client-can-reach:
+        addresses: OCI consumer observability
+        steps:
+          - given: The destination holds the release but is not publicly retrievable
+            world:
+              publication_visible: false
+          - when: The OCI recipe performs its pre-closure consumer retrieval
+          - then: The publication is reported pending rather than failing unobserved
+            world:
+              clean_client_retrieval: false
+              public_client_retrieval: false
 
   - rule: Publication completes after the strongest truthful pre-closure consumer check
     scenarios:

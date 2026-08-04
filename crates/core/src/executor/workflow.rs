@@ -60,6 +60,18 @@ const DOWNLOAD_ARTIFACT_ACTION: &str =
 const GORELEASER_INSTALL_ACTION: &str =
     "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94";
 
+/// Multi-platform emulation a container-driver Buildx build needs.
+const SETUP_QEMU_ACTION: &str = "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8";
+/// Container-driver Buildx builder, which a stock runner does not start with.
+const SETUP_BUILDX_ACTION: &str =
+    "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
+/// Registry client every OCI recipe reads and promotes with.
+pub(super) const SETUP_CRANE_ACTION: &str =
+    "imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b";
+/// Keyless signing client an OCI recipe installs only when it signs.
+pub(super) const COSIGN_INSTALLER_ACTION: &str =
+    "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6";
+
 /// GoReleaser release the maintained Go recipes are written against.
 ///
 /// The packager is pinned for the reason every external Action is pinned, and
@@ -1147,8 +1159,124 @@ fn subject_identity(
             .ok()
             .flatten()
             .map_or(fallback, Ok),
-        Packager::Buildx | Packager::DevContainerCli => fallback,
+        // The two OCI packagers are derived rather than stood in for. A Dev
+        // Container Feature names itself in `devcontainer-feature.json`. A
+        // Dockerfile-backed image names itself in the one place the format has
+        // for it, the `org.opencontainers.image.title` label, which is also the
+        // annotation its destinations carry, so the derivation reads the name a
+        // consumer resolves rather than one the workspace happened to pick.
+        //
+        // Neither falls back to the release-unit id. A subject the recipe could
+        // not name is exactly the state the sealed cross-check exists to
+        // refuse, and every OCI destination has to resolve this name, so a
+        // stand-in would publish under an identity no consumer asked for.
+        Packager::Buildx => {
+            let Some(name) = std::fs::read_to_string(directory.join("Dockerfile"))
+                .ok()
+                .and_then(|text| dockerfile_image_title(&text))
+            else {
+                return Err(format!(
+                    "release unit {} builds an OCI image whose name the derivation cannot read; declare it as a literal {OCI_TITLE_LABEL} label in {}",
+                    publication.release_unit,
+                    unit.path.join("Dockerfile").display()
+                ));
+            };
+            names::oci_subject(&names::SuppliedName {
+                origin: &format!(
+                    "{} {OCI_TITLE_LABEL} label",
+                    unit.path.join("Dockerfile").display()
+                ),
+                value: &name,
+            })
+        }
+        Packager::DevContainerCli => {
+            let manifest = unit.path.join("devcontainer-feature.json");
+            let Some(name) = std::fs::read_to_string(directory.join("devcontainer-feature.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|manifest| {
+                    manifest
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .filter(|id| !id.is_empty())
+            else {
+                return Err(format!(
+                    "release unit {} publishes a Dev Container Feature whose id the derivation cannot read from {}",
+                    publication.release_unit,
+                    manifest.display()
+                ));
+            };
+            names::oci_subject(&names::SuppliedName {
+                origin: &format!("{} id", manifest.display()),
+                value: &name,
+            })
+        }
     }
+}
+
+/// OCI annotation and Dockerfile label naming a runnable image.
+const OCI_TITLE_LABEL: &str = "org.opencontainers.image.title";
+
+/// Read the image name one Dockerfile declares, if it declares one.
+///
+/// A value built from a build argument names the image at build time rather
+/// than in the source the release seals. Nothing here rejects it: the name is
+/// accepted against the OCI repository-name grammar, which no expression can
+/// satisfy, so refusing it twice would add a rule whose removal changes
+/// nothing.
+///
+/// The last declaration wins, which is the rule the image itself follows: a
+/// later stage's label overrides an earlier one, so a multi-stage build whose
+/// builder stage carries a different title would otherwise name the subject
+/// after a stage the release does not ship.
+fn dockerfile_image_title(text: &str) -> Option<String> {
+    let mut declared = None;
+    let mut logical = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        match trimmed.strip_suffix('\\') {
+            Some(head) => {
+                logical.push_str(head.trim_end());
+                logical.push(' ');
+                continue;
+            }
+            None => logical.push_str(trimmed),
+        }
+        let statement = std::mem::take(&mut logical);
+        let Some(labels) = statement
+            .strip_prefix("LABEL ")
+            .or_else(|| statement.strip_prefix("label "))
+        else {
+            continue;
+        };
+        if let Some(title) = label_value(labels, OCI_TITLE_LABEL) {
+            declared = Some(title);
+        }
+    }
+    declared
+}
+
+/// Value one `LABEL` statement assigns to one key, in either quoted form.
+fn label_value(labels: &str, key: &str) -> Option<String> {
+    for prefix in [format!("{key}="), format!("\"{key}\"=")] {
+        let Some(index) = labels.find(&prefix) else {
+            continue;
+        };
+        let rest = &labels[index + prefix.len()..];
+        let value = match rest.strip_prefix('"') {
+            Some(quoted) => quoted.split('"').next().unwrap_or_default(),
+            None => rest.split_whitespace().next().unwrap_or_default(),
+        };
+        if !value.is_empty() {
+            return Some(value.to_owned());
+        }
+    }
+    None
 }
 
 fn concurrency(group: &str) -> Value {
@@ -1234,6 +1362,8 @@ fn job(
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
         .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
+        .replace("@SETUP_QEMU@", SETUP_QEMU_ACTION)
+        .replace("@SETUP_BUILDX@", SETUP_BUILDX_ACTION)
         .replace("@GORELEASER_VERSION@", &scalar(GORELEASER_VERSION))
         .replace("@VERSION@", &scalar(crate::VERSION))
         .replace("@PREPARE_ACTION@", &action_reference("prepare-release"))
@@ -1482,7 +1612,15 @@ const fn toolchain_steps(packager: Packager) -> &'static str {
         Packager::GoReleaser => {
             "  - name: Install the GoReleaser packager\n    uses: @GORELEASER_INSTALL@\n    with:\n      install-only: true\n      version: @GORELEASER_VERSION@\n"
         }
-        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => "",
+        // A stock runner's default Buildx builder uses the docker driver, which
+        // can neither emit an OCI layout nor build more than the runner's own
+        // platform. Both are requirements of the subject this job seals, so the
+        // container-driver builder and its emulation are part of the recipe
+        // rather than an optimization.
+        Packager::Buildx => {
+            "  - name: Enable multi-platform image builds\n    uses: @SETUP_QEMU@\n  - name: Start a container-driver Buildx builder\n    uses: @SETUP_BUILDX@\n"
+        }
+        Packager::Npm | Packager::Cargo | Packager::DevContainerCli => "",
     }
 }
 
@@ -2967,7 +3105,10 @@ aur:
         let workspace = workspace(label);
         workspace
             .write(".intentional/config.yml", TWO_DESTINATION_CONFIG)
-            .write("component/Dockerfile", "FROM scratch\n");
+            .write(
+                "component/Dockerfile",
+                "FROM scratch\nLABEL org.opencontainers.image.title=\"example-image\"\n",
+            );
         workspace
     }
 

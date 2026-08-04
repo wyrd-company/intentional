@@ -696,19 +696,100 @@ proposed-design:
     without producing a warning or waiver record. Release evidence remains
     affirmative and records only attached components that were produced.
 
-  oci-distribution: >-
+  oci-distribution: |-
     OCI subjects can be runnable images, multi-platform image indexes, or
     non-image artifacts. Every configured destination resolves the exact
-    release version to the same subject digest. Stable runnable-image recipes
-    publish an immutable exact Semantic Version tag and monotonically advance
-    compatible minor, major, and `latest` aliases. Major zero omits the broad
-    `0` alias, prereleases do not advance stable aliases, and backports never
-    move an alias backward. Dev Container Feature recipes maintain their
-    native exact, minor, major, and `latest` aliases. Alias mutation promotes
-    the existing subject and its final digest is read back and recorded.
-    Platform matrices derive from the packager recipe and native packager
-    configuration; platform-independent OCI artifacts have no artificial image
-    platforms.
+    release version to the content the release sealed, and is expected to
+    resolve it under the same digest, pending the confirmations named below.
+    Stable runnable-image recipes publish an immutable exact Semantic Version
+    tag and monotonically advance compatible minor, major, and `latest`
+    aliases. Major zero omits the broad `0` alias, prereleases do not advance
+    stable aliases, and backports never move an alias backward. Dev Container
+    Feature recipes maintain their native exact, minor, major, and `latest`
+    aliases. Alias mutation promotes the existing subject and its final digest
+    is read back and recorded. Platform matrices derive from the packager
+    recipe and native packager configuration; platform-independent OCI
+    artifacts have no artificial image platforms.
+
+    An OCI subject names itself in its own source. A Dev Container Feature
+    carries its id, and a Dockerfile-backed image carries the last
+    `org.opencontainers.image.title` label it declares, which is the one the
+    image itself carries and also the annotation its destinations publish. A
+    release unit whose source declares no such name, or declares one a build
+    argument resolves, publishes nothing: the derivation reports it rather than
+    substituting an identity the destinations do not resolve. A destination
+    name remains destination state and is recorded as such, so one subject can
+    be resolved as different repositories at Docker Hub and GHCR while every
+    fragment agrees on the one subject the release sealed.
+
+    A subject name is the one identity a release takes from repository source
+    rather than from configuration, so it is accepted at the point it enters
+    the model and nowhere else. It is held to the OCI repository-name grammar,
+    which is narrower than the annotation permits, because it becomes a
+    registry reference every destination has to resolve and a value the recipe
+    bodies read beside a registry credential. Deciding its shape once, where a
+    diagnostic can name the file and the label that declared it, is what makes
+    those uses safe; a name that reached a recipe body and was escaped there
+    would put the same decision in every future splice site.
+
+    Alias entitlement is decided from the exact versions the destination
+    already carries rather than from local state, which is what makes a
+    backport, a rerun, and a first release reach the same decision from the
+    same inputs. The version, revision, source, and created annotations are
+    part of the sealed bytes rather than added at a destination, so annotating
+    is not a per-destination mutation; each recipe proves the annotation the
+    destination published is the version the built-subject document records.
+    What a destination is compared against is the content the release sealed,
+    not the digest of the sealed layout's own index. A registry re-serializes
+    the index it is given, so that digest describes the bytes that landed
+    rather than the bytes that were sent; the manifests the index references
+    are carried through unchanged, and comparing those is what establishes that
+    a destination holds this release's subject. Because every destination is
+    handed the same layout, it is also what makes them hold the same one.
+
+    Identical digests across destinations therefore rest on a property no
+    fixture can establish: that the registries serialize one index the same
+    way. Two confirmations against real registries settle it, and until they
+    are made, equal content is what the protocol proves and equal digest is
+    what it expects. The first is that Docker Hub and GHCR report the same
+    index digest for one pushed layout. The second is that the push preserves
+    the set of manifests the index references, which is the comparison every
+    destination check rests on. The digest a destination reports is separately
+    held to the bytes it serves, so a destination naming one subject and
+    serving another is caught rather than recorded, and a destination already
+    holding different content under the released version is reported as a
+    conflict rather than overwritten.
+
+    A native client that publishes from source rather than from the sealed
+    bytes, notably the Dev Container CLI, is held to the same rules rather than
+    trusted to follow them. The conflict decision is taken before it runs,
+    because afterwards it would compare against bytes that client just pushed.
+    Its aliases are read back and compared against the same entitlement every
+    other OCI destination is held to, so a client that advances a stable alias
+    the release was not entitled to fails the publication instead of being
+    recorded as having moved nothing. And what it published is compared against
+    the packaged bytes, so a repackage that produced something else fails
+    instead of passing as a promotion.
+
+    An OCI destination's consumer path is public, so its clean-client retrieval
+    runs with an empty credential store: it resolves the release, retrieves the
+    subject's own bytes, and checks that those bytes hash to the digest the
+    destination published. Resolution alone would leave a destination that
+    serves a tag publicly but refuses its content indistinguishable from one
+    that serves both, which is a real state while a package's visibility is
+    changing. A destination that is not publicly retrievable has been written
+    but has not become observable, which is the pending state the protocol
+    already bounds, so the recipe reports it as pending and says why rather
+    than failing with its client's error and leaving verification nothing to
+    read about a destination that was in fact fully published. Package
+    visibility is therefore a prerequisite of publishing to a destination, and
+    a release that has not met it says so.
+
+    A Dev Container Feature is namespaced by the repository that publishes it,
+    so its destination is not configurable. Its client resolves owner,
+    repository and feature id, which a repository override can neither express
+    nor change, and a configured one is refused where it is written rather than
+    honoured by every readback while the client writes somewhere else.
 
   destination-verification-and-retry: >-
     A publisher command is followed by destination readback that verifies the
