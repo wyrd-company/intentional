@@ -279,12 +279,13 @@ def check_image(image: object, where: str, directory: Path) -> list[str]:
     anticipates, and it catches one that has been moved, renamed, or misspelled.
     Requiring containment is the other half: `../elsewhere.Dockerfile`, an
     absolute path, and a symlink pointing out of the tree all name real files
-    that are not versioned with the action, and the first two are not resolved
-    against the action directory at all — `Path.__truediv__` discards the left
-    operand when the right is absolute.
+    that are not versioned with the action. An absolute value is not resolved
+    against the action directory at all, because `Path.__truediv__` discards the
+    left operand when the right is absolute.
 
     Both sides are resolved before comparison, so containment is judged on where
-    the path physically lands rather than on how it is spelled.
+    the path physically lands rather than on how it is spelled. That is what
+    rejects the symlink, whose spelling is inside the directory.
     """
 
     if not isinstance(image, str) or not image:
