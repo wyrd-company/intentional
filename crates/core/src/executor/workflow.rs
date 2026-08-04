@@ -6666,6 +6666,16 @@ release-units:
             .chain(character_windows(&reversed))
     }
 
+    /// Which window of one token a body carries, if it carries one.
+    ///
+    /// The gate reads this and so does the control below it. They compared the
+    /// same thing through two spellings before, which is an agreement nothing
+    /// checked: a control that re-implements the check it controls goes on
+    /// passing while the check it stands for stops working.
+    fn carries_a_window(body: &str, token: &str) -> Option<String> {
+        windows(token).find(|window| carries(body, window))
+    }
+
     /// Every contiguous `WINDOW`-character run of one string, in order.
     fn character_windows(token: &str) -> Vec<String> {
         token
@@ -6759,38 +6769,42 @@ release-units:
                 "{origin}'s windows are the contiguous runs of its token"
             );
 
-            // The rule the generator serves, exercised where a verbatim check
-            // cannot reach: a body carrying only an interior run of the token
-            // -- neither the token nor a prefix of it -- is rejected, forwards
-            // and reversed. This is the assertion a lowercased-token generator
-            // fails and a widened one fails.
+            // The negative direction first, so that it is reached whatever the
+            // generator produced: without it the rule would be satisfied by a
+            // recogniser that matches anything, and every check above it is a
+            // precondition a widened comparison trips before this is asked.
+            // A body carrying a shorter run, and a body carrying an unrelated
+            // run of window length, are both read as clean.
+            let short: String = token.chars().take(WINDOW - 1).collect();
+            assert_eq!(
+                carries_a_window(&short, token),
+                None,
+                "{origin}: a run shorter than a window is not a window"
+            );
+            assert_eq!(
+                carries_a_window("0369", token),
+                None,
+                "{origin}: an unrelated run of window length is not a window"
+            );
+
+            // And the rule the generator serves, read through the same helper
+            // the gate reads, where a verbatim check cannot reach: a body
+            // carrying only an interior run of the token -- neither the token
+            // nor a prefix of it -- is recognised.
             let interior = &produced[produced.len() / 2 - 1];
             assert!(
                 !carries(interior, token) && !token.starts_with(interior.as_str()),
                 "{origin}'s control window is an interior run rather than the token or its prefix"
             );
             let body = format!("printf '%s' {interior}");
-            assert!(
-                windows(token).any(|window| carries(&body, &window)),
+            assert_eq!(
+                carries_a_window(&body, token).as_ref(),
+                Some(interior),
                 "{origin}: an interior run of the token reaching shell is recognised"
             );
             assert!(
                 !carries(&body, token),
                 "{origin}: the verbatim check reads that same body as clean, which is why the window check exists"
-            );
-
-            // And the other direction, without which the rule would be
-            // satisfied by a generator that matches anything: a body carrying a
-            // shorter run, and a body carrying an unrelated run of the same
-            // length, are both read as clean.
-            let short: String = token.chars().take(WINDOW - 1).collect();
-            assert!(
-                !windows(token).any(|window| carries(&short, &window)),
-                "{origin}: a run shorter than a window is not a window"
-            );
-            assert!(
-                !windows(token).any(|window| carries("0369", &window)),
-                "{origin}: an unrelated run of window length is not a window"
             );
         }
     }
@@ -6813,8 +6827,9 @@ release-units:
             );
         }
         let interior = &produced[1];
-        assert!(
-            windows(token).any(|window| carries(&format!("echo {interior}"), &window)),
+        assert_eq!(
+            carries_a_window(&format!("echo {interior}"), token).as_ref(),
+            Some(interior),
             "an interior run of a non-ASCII value reaching shell is recognised"
         );
     }
@@ -7795,8 +7810,9 @@ release-units:
                     if token.eq_ignore_ascii_case(other) {
                         continue;
                     }
-                    assert!(
-                        !windows(token).any(|window| carries(other, &window)),
+                    assert_eq!(
+                        carries_a_window(other, token),
+                        None,
                         "{origin}'s token windows into {elsewhere}'s, so neither row's window check answers for itself"
                     );
                 }
@@ -7815,7 +7831,7 @@ release-units:
                     // of one looks harmless; the production value is
                     // whatever a repository wrote, and a four-character
                     // window of `";id;` is the original injection again.
-                    if let Some(window) = windows(token).find(|window| carries(body, window)) {
+                    if let Some(window) = carries_a_window(body, token) {
                         panic!(
                             "the {role} workflow carries {window:?}, a window of {origin}, into {job}'s shell:\n{body}"
                         );
