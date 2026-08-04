@@ -17,8 +17,10 @@ classify. So the guarantee is that no line of the declaration went unread, and
 it holds against any edit whatsoever, including edits that preserve the
 document's YAML meaning. What it does not do is accept YAML this grammar does
 not spell -- a flow mapping, a quoted scalar, an alias -- and the cost of that
-is a red check asking for the declaration to be written in the one shape,
-never a run that verified part of the table and reported success.
+is a red check asking for the declaration to be written in the one shape. The
+same cost applies to cosmetic edits outside that shape, including one trailing
+space; the push workflow does not normalise them first. The result is never a
+run that verified part of the table and reported success.
 
 The exhaustive-read claim quantifies over documents the `serde_yaml` consumer
 reads. Its measured search covered hand-built and position-fuzzed documents
