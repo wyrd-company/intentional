@@ -68,9 +68,10 @@ FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
 #: For example, `tag: "v1.0.0"` would otherwise include quotation marks in the
 #: reference sent to Git. They do not close every plain scalar a YAML parser may
 #: type differently. That residual is bounded by the consumers: the Rust checks
-#: read only `repository` and `commit`, the slash keeps a repository scalar a
-#: string, and a non-string commit fails their `as_str` expectation. This online
-#: check sends a tag's exact spelling to Git and reports a resolved disagreement.
+#: consume `constant`, `repository`, and `commit`; the slash keeps a repository
+#: scalar a string, while a constant or commit typed as another scalar kind
+#: fails its `as_str` expectation. This online check sends a tag's exact spelling
+#: to Git and reports a resolved disagreement.
 VALUES = {
     "repository": re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"),
     "tag": re.compile(r"[A-Za-z0-9._+-]+"),
