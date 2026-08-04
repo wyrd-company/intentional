@@ -3968,7 +3968,7 @@ exit 0
             let diagnostic = comparison
                 .diagnostics
                 .iter()
-                .find(|diagnostic| diagnostic.code == "deliverable-upload-underived")
+                .find(|diagnostic| diagnostic.code == "maintained-recipe-underived")
                 .unwrap_or_else(|| panic!("{publisher} is refused: {:?}", comparison.diagnostics));
             assert!(
                 diagnostic

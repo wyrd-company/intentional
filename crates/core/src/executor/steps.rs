@@ -296,7 +296,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
         PublisherKind::Homebrew | PublisherKind::Aur
     ) {
         return Err(StepsRefusal {
-            code: "deliverable-upload-underived",
+            code: "maintained-recipe-underived",
             message: format!(
                 "publication {identity} distributes a GitHub-hosted deliverable the managed upload job places on the draft Release, but no maintained {} recipe is derived to reach its package index, so the publisher job would verify a publication it never performed",
                 context.publication.publisher
