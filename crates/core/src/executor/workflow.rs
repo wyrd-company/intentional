@@ -6558,26 +6558,42 @@ release-units:
         carries(body, value)
     }
 
+    /// How many characters of a token a window keeps.
+    ///
+    /// Short enough that a truncation leaves one and long enough that an opaque
+    /// token's window does not occur by accident.
+    const WINDOW: usize = 4;
+
     /// Every contiguous window of one token, forwards and reversed.
     ///
-    /// Four characters is short enough that a truncation leaves one and long
-    /// enough that an opaque token's window does not occur by accident. The
-    /// tokens are chosen opaque for exactly that reason: a window of a value
-    /// spelled from the derivation's own vocabulary would collide with it, and
-    /// the check would have to be weakened rather than the fixture fixed.
+    /// The tokens are chosen opaque so that a window of one does not collide
+    /// with the derivation's own vocabulary: `unit` is a window of a release
+    /// unit named `sentinelunit` and is also in every script that reads a
+    /// prefixed release-unit variable, so a token spelled from that vocabulary
+    /// would force the check to be weakened rather than the fixture fixed.
+    ///
+    /// Windows are taken over characters rather than bytes. A byte window of a
+    /// non-ASCII value splits a code point and the lossy conversion that
+    /// followed replaced the halves with U+FFFD, so every window of such a
+    /// value was a string the value does not contain and the check silently
+    /// recognised nothing. No rostered value is non-ASCII today; a manifest
+    /// name, an image label and a tag affix can each be, and the recogniser
+    /// must not be the thing that decides whether they are covered.
     fn windows(token: &str) -> impl Iterator<Item = String> + '_ {
         let reversed = token.chars().rev().collect::<String>();
-        let forwards = token
-            .as_bytes()
-            .windows(4)
-            .map(|window| String::from_utf8_lossy(window).into_owned())
-            .collect::<Vec<_>>();
-        let backwards = reversed
-            .as_bytes()
-            .windows(4)
-            .map(|window| String::from_utf8_lossy(window).into_owned())
-            .collect::<Vec<_>>();
-        forwards.into_iter().chain(backwards)
+        character_windows(token)
+            .into_iter()
+            .chain(character_windows(&reversed))
+    }
+
+    /// Every contiguous `WINDOW`-character run of one string, in order.
+    fn character_windows(token: &str) -> Vec<String> {
+        token
+            .chars()
+            .collect::<Vec<_>>()
+            .windows(WINDOW)
+            .map(|window| window.iter().collect())
+            .collect()
     }
 
     /// Whether one surface carries one value, comparing the way `splices` does.
@@ -6607,6 +6623,120 @@ release-units:
             "--registry \"${INTENTIONAL_REGISTRY_NAME}\"",
             "mtdlgw"
         ));
+    }
+
+    // The window generator is the gate's other recogniser and it had no control
+    // of its own. Widening its window to 400 characters makes it yield nothing,
+    // which satisfies every rule stated over it; neutering it to a single
+    // lowercased token satisfies a non-emptiness check while silently demoting
+    // the rule to the case-insensitive verbatim check that already exists. Both
+    // left the suite green. What follows is the control: what the generator
+    // produces is fixed against a count arrived at arithmetically and a set
+    // built by slicing rather than by windowing, and what the rule does with
+    // that output is exercised in both directions.
+    #[test]
+    fn generates_every_window_of_every_roster_token_and_nothing_else() {
+        for (_, token, origin, _) in REPOSITORY_SUPPLIED_VALUES {
+            let produced = windows(token).collect::<Vec<_>>();
+
+            // Independent method one: arithmetic over the token's length. A
+            // token of n characters has n - WINDOW + 1 forward windows and as
+            // many reversed. Widening the window makes this zero, narrowing it
+            // makes it larger, and collapsing the generator to the token itself
+            // makes it one -- all three of which this equality names.
+            let characters = token.chars().count();
+            assert_eq!(
+                produced.len(),
+                2 * (characters + 1 - WINDOW),
+                "{origin}'s token yields every window of it, forwards and reversed"
+            );
+
+            // Independent method two: the same windows built by slicing on
+            // character boundaries instead of by windowing a character vector.
+            // An equal count over the wrong content is what this catches.
+            let boundaries = token
+                .char_indices()
+                .map(|(at, _)| at)
+                .chain([token.len()])
+                .collect::<Vec<_>>();
+            let mut expected = boundaries
+                .windows(WINDOW + 1)
+                .map(|span| token[span[0]..span[WINDOW]].to_owned())
+                .collect::<Vec<_>>();
+            let reversed = token.chars().rev().collect::<String>();
+            let reversed_boundaries = reversed
+                .char_indices()
+                .map(|(at, _)| at)
+                .chain([reversed.len()])
+                .collect::<Vec<_>>();
+            expected.extend(
+                reversed_boundaries
+                    .windows(WINDOW + 1)
+                    .map(|span| reversed[span[0]..span[WINDOW]].to_owned()),
+            );
+            assert_eq!(
+                produced, expected,
+                "{origin}'s windows are the contiguous runs of its token"
+            );
+
+            // The rule the generator serves, exercised where a verbatim check
+            // cannot reach: a body carrying only an interior run of the token
+            // -- neither the token nor a prefix of it -- is rejected, forwards
+            // and reversed. This is the assertion a lowercased-token generator
+            // fails and a widened one fails.
+            let interior = &produced[produced.len() / 2 - 1];
+            assert!(
+                !carries(interior, token) && !token.starts_with(interior.as_str()),
+                "{origin}'s control window is an interior run rather than the token or its prefix"
+            );
+            let body = format!("printf '%s' {interior}");
+            assert!(
+                windows(token).any(|window| carries(&body, &window)),
+                "{origin}: an interior run of the token reaching shell is recognised"
+            );
+            assert!(
+                !carries(&body, token),
+                "{origin}: the verbatim check reads that same body as clean, which is why the window check exists"
+            );
+
+            // And the other direction, without which the rule would be
+            // satisfied by a generator that matches anything: a body carrying a
+            // shorter run, and a body carrying an unrelated run of the same
+            // length, are both read as clean.
+            let short: String = token.chars().take(WINDOW - 1).collect();
+            assert!(
+                !windows(token).any(|window| carries(&short, &window)),
+                "{origin}: a run shorter than a window is not a window"
+            );
+            assert!(
+                !windows(token).any(|window| carries("0369", &window)),
+                "{origin}: an unrelated run of window length is not a window"
+            );
+        }
+    }
+
+    // Windows are taken over characters, and nothing in the roster forces that
+    // today because every rostered value is ASCII. Under the byte-oriented
+    // generator this replaced the halves of every split code point with U+FFFD,
+    // so a non-ASCII value's windows were strings the value does not contain
+    // and the check recognised a splice of it as clean.
+    #[test]
+    fn windows_a_value_whose_characters_are_wider_than_one_byte() {
+        let token = "\u{e9}\u{f6}\u{fc}\u{e5}\u{f8}";
+        let produced = windows(token).collect::<Vec<_>>();
+        assert_eq!(produced.len(), 4, "five characters yield two windows each");
+        for window in &produced {
+            assert_eq!(window.chars().count(), WINDOW);
+            assert!(
+                !window.contains('\u{fffd}'),
+                "a window of {token:?} is characters of it, not the halves of one"
+            );
+        }
+        let interior = &produced[1];
+        assert!(
+            windows(token).any(|window| carries(&format!("echo {interior}"), &window)),
+            "an interior run of a non-ASCII value reaching shell is recognised"
+        );
     }
 
     /// Every managed job of one derived workflow, found without knowing the prefix.
