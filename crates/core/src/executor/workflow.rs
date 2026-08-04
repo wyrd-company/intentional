@@ -5523,18 +5523,159 @@ release-units:
     /// membership assertion exists to catch, one level up.
     const INHERITED: [&str; 3] = ["PATH", "HOME", "RUSTUP_HOME"];
 
+    /// One `INTENTIONAL_ALLOWED+=` append and the conditions that govern it.
+    struct AllowlistAppend {
+        /// The append itself.
+        line: String,
+        /// The conditions open around it, outermost first.
+        conditions: Vec<String>,
+    }
+
+    /// Every allowlist append a rendered body performs, wherever it sits.
+    ///
+    /// Membership used to be read from the prologue alone -- the lines above
+    /// the probe helper -- so the same conditional append moved four lines
+    /// down, inside `resolve() {`, decided membership from the process
+    /// environment with nothing to say so. Nesting is tracked rather than
+    /// stopped at, and the tracking checks its own balance: a body this
+    /// scanner cannot follow fails here rather than quietly reporting that
+    /// there was nothing to inspect.
+    fn allowlist_appends(body: &str) -> Vec<AllowlistAppend> {
+        let mut open: Vec<String> = Vec::new();
+        let mut appends = Vec::new();
+        for raw in body.lines() {
+            let line = raw.trim();
+            if let Some(condition) = line.strip_prefix("if ") {
+                open.push(
+                    condition
+                        .trim_end_matches('\\')
+                        .trim()
+                        .trim_end_matches("then")
+                        .trim()
+                        .trim_end_matches(';')
+                        .to_owned(),
+                );
+            }
+            if line.contains("INTENTIONAL_ALLOWED+=") {
+                appends.push(AllowlistAppend {
+                    line: line.to_owned(),
+                    conditions: open.clone(),
+                });
+            }
+            if line == "fi" || line.ends_with(" fi") || line.ends_with(";fi") {
+                open.pop().expect("a conditional closes one that opened");
+            }
+        }
+        assert!(
+            open.is_empty(),
+            "the scanner followed every conditional in the body; left open: {open:?}"
+        );
+        appends
+    }
+
+    /// The variables one line expands, without indirection or default.
+    fn expanded_names(line: &str) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut rest = line;
+        while let Some((_, tail)) = rest.split_once("${") {
+            let tail = tail.strip_prefix('!').unwrap_or(tail);
+            let name = tail
+                .chars()
+                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+                .collect::<String>();
+            if !name.is_empty() {
+                names.push(name);
+            }
+            rest = tail;
+        }
+        names
+    }
+
+    /// The names an append reads that derivation did not choose.
+    ///
+    /// Every expansion an append performs -- in the value it adds and in the
+    /// condition that decides whether it is added at all -- has to name a
+    /// variable derivation wrote into the step's own `env:`, which is what the
+    /// prefix marks. A bare name is one the process happened to carry, and
+    /// either use hands the allowlist's membership back to the environment the
+    /// allowlist exists to replace.
+    fn unchosen_reads(append: &AllowlistAppend) -> Vec<String> {
+        std::iter::once(&append.line)
+            .chain(append.conditions.iter())
+            .flat_map(|text| expanded_names(text))
+            .filter(|name| !name.starts_with("INTENTIONAL_"))
+            .collect()
+    }
+
+    /// The membership sweep and its recogniser, against bodies written here.
+    ///
+    /// A sweep that reaches nothing passes, and a recogniser that accepts
+    /// everything passes, so neither is left to be judged by the rendered
+    /// bodies alone. Both evasions are written out: the append hidden inside
+    /// the helper, and the append whose value is chosen while the test that
+    /// admits it is not. The shape the recipes really render is the control
+    /// that keeps the recogniser from being a refusal of everything.
+    #[test]
+    fn reads_an_allowlist_member_the_process_environment_decides() {
+        let hidden = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      INTENTIONAL_resolve() {
+        if [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
+          INTENTIONAL_ALLOWED+=(CARGO_UNSTABLE_REGISTRY_AUTH="${CARGO_UNSTABLE_REGISTRY_AUTH}")
+        fi
+      }
+"#;
+        let appends = allowlist_appends(hidden);
+        assert_eq!(appends.len(), 1, "the sweep reaches inside the helper");
+        assert_eq!(
+            unchosen_reads(&appends[0]),
+            ["CARGO_UNSTABLE_REGISTRY_AUTH"; 2],
+            "the value and the test that admits it are both the process's"
+        );
+
+        let tested = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      INTENTIONAL_resolve() {
+        if [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
+          INTENTIONAL_ALLOWED+=("${INTENTIONAL_CARRIED_TOKEN}=${!INTENTIONAL_CARRIED_TOKEN}")
+        fi
+      }
+"#;
+        let appends = allowlist_appends(tested);
+        assert_eq!(appends.len(), 1, "the sweep reaches inside the helper");
+        assert_eq!(
+            unchosen_reads(&appends[0]),
+            ["CARGO_UNSTABLE_REGISTRY_AUTH"],
+            "a chosen value admitted by an unchosen test is still the process's"
+        );
+
+        let chosen = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      if [ -n "${INTENTIONAL_REGISTRY_NAME:-}" ]; then
+        INTENTIONAL_ALLOWED+=("${INTENTIONAL_REGISTRY_INDEX_VARIABLE}=${INTENTIONAL_REGISTRY_INDEX_URL}")
+      fi
+"#;
+        let appends = allowlist_appends(chosen);
+        assert_eq!(appends.len(), 1, "the sweep reads an append it accepts");
+        assert_eq!(appends[0].conditions.len(), 1, "the condition is carried");
+        assert!(
+            unchosen_reads(&appends[0]).is_empty(),
+            "an append derivation named entirely is accepted: {:?}",
+            unchosen_reads(&appends[0])
+        );
+    }
+
     #[test]
     fn inherits_exactly_the_process_variables_the_recipe_names() {
         let workspace = sentinel_workspace("workflow-allowlist-membership", None);
         converge(workspace.root(), WorkflowRole::Publish);
 
         let mut allowlists = 0;
+        let mut appended = 0;
+        let mut governed = 0;
         for (job, body) in managed_shell_bodies(workspace.root(), WorkflowRole::Publish) {
             let Some((_, tail)) = body.split_once("INTENTIONAL_ALLOWED=(") else {
                 continue;
             };
             allowlists += 1;
-            let (declared, rest) = tail.split_once(')').expect("the allowlist is an array");
+            let (declared, _) = tail.split_once(')').expect("the allowlist is an array");
 
             // Every inherited member is present, unconditionally, reading the
             // runner's value.
@@ -5553,22 +5694,31 @@ release-units:
             );
 
             // Nothing is added to the list by asking the process environment
-            // whether a variable is set. The appends that remain read values
-            // derivation put in the step's own `env:`, which is why they are
-            // named by a prefixed variable rather than by a bare one.
-            let appends = rest
-                .lines()
-                .take_while(|line| !line.contains("resolve()") && !line.contains("npm_holds()"))
-                .filter(|line| line.contains("INTENTIONAL_ALLOWED+="))
-                .collect::<Vec<_>>();
-            for append in &appends {
+            // whether a variable is set. Every append the body performs --
+            // wherever in the body it sits -- reads values derivation put in
+            // the step's own `env:`, which is why they are named by a prefixed
+            // variable rather than by a bare one.
+            for append in allowlist_appends(&body) {
+                let unchosen = unchosen_reads(&append);
                 assert!(
-                    append.contains("${INTENTIONAL_"),
-                    "{job} appends a value derivation named, not one the process happened to carry: {append}"
+                    unchosen.is_empty(),
+                    "{job} appends what derivation named, not what the process happened to carry: \
+                     {} reads {unchosen:?}",
+                    append.line
                 );
+                appended += 1;
+                governed += append.conditions.len();
             }
         }
         assert!(allowlists > 0, "the publisher jobs build an allowlist");
+        // The Cargo recipe renders two appends, each inside its own condition.
+        // Counting them is what separates a sweep that accepted every append
+        // from a sweep that found none -- the two are the same green suite.
+        assert!(
+            appended >= 2 && governed >= 2,
+            "the sweep read the appends the recipes render: \
+             {appended} appends under {governed} conditions"
+        );
     }
 
     // The inherited members carry the runner's values, and a workflow-level
