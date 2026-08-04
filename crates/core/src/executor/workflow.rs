@@ -2012,8 +2012,31 @@ release-units:
             "a lookalike repository is external"
         );
         assert!(
+            !is_intentional_action("wyrd-company/intentional/foo@main"),
+            "a path outside Actions is external"
+        );
+        assert!(
             is_intentional_action("wyrd-company/intentional/actions/prepare@0.1.6"),
             "an Action under the repository Actions path is first-party"
+        );
+    }
+
+    #[test]
+    fn resolves_first_party_actions_and_rejects_lookalikes() {
+        let step =
+            |uses: &str| serde_yaml::from_str(&format!("uses: {uses}")).expect("a step parses");
+        assert_eq!(
+            intentional_action(&step("wyrd-company/intentional/actions/prepare@0.1.6")),
+            Some(("prepare".to_owned(), "0.1.6".to_owned())),
+            "the parser resolves a first-party Action"
+        );
+        assert!(
+            intentional_action(&step("wyrd-company/intentional-evil/actions/pwn@main")).is_none(),
+            "the parser rejects a lookalike repository"
+        );
+        assert!(
+            intentional_action(&step("wyrd-company/intentional/foo@main")).is_none(),
+            "the parser rejects a path outside Actions"
         );
     }
 
@@ -2299,18 +2322,22 @@ jobs:
             .collect()
     }
 
-    /// Whether one Action reference lies beneath this repository's Actions path.
-    fn is_intentional_action(action: &str) -> bool {
+    /// Remainder beneath `wyrd-company/intentional/actions/` when the reference is first-party.
+    fn intentional_actions_path(action: &str) -> Option<&str> {
         action
             .strip_prefix(ACTION_REPOSITORY)
-            .is_some_and(|path| path.starts_with("/actions/"))
+            .and_then(|path| path.strip_prefix("/actions/"))
+    }
+
+    /// Whether one Action reference lies beneath this repository's Actions path.
+    fn is_intentional_action(action: &str) -> bool {
+        intentional_actions_path(action).is_some()
     }
 
     /// The Action one managed step resolves from this repository, if any.
     fn intentional_action(step: &Value) -> Option<(String, String)> {
         let action = step.get("uses")?.as_str()?;
-        let path = action.strip_prefix(ACTION_REPOSITORY)?;
-        path.strip_prefix("/actions/")?
+        intentional_actions_path(action)?
             .split_once('@')
             .map(|(name, reference)| (name.to_owned(), reference.to_owned()))
     }
