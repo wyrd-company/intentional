@@ -600,6 +600,8 @@ fn observation_environment(
 /// be executed by a test at all: everything the adapter computes reaches them
 /// as a variable, so the writing can be driven without reaching a registry.
 const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
+        # $schema is a literal YAML key, not a shell expansion.
+        # shellcheck disable=SC2016
         printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
         printf 'contract: publication-observation-1\n'
         printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
