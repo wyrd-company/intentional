@@ -1066,6 +1066,14 @@ release-units:
     /// empty workspace resolves to. A reader that skipped a unit the selection
     /// probes would leave that unit's files in place, and the two results
     /// would differ.
+    ///
+    /// An outcome test can only see a read whose result reaches the outcome,
+    /// and a unit with no configured target derives capabilities and discards
+    /// them — so a selection widened onto one reads files nothing compares
+    /// while every result stays identical. The non-publishing units therefore
+    /// carry a probe file the derivation cannot parse, because that failure
+    /// becomes a diagnostic and the read stops being invisible. Stocking them
+    /// with well-formed content is what makes this assertion unable to fail.
     #[test]
     fn names_every_path_the_selection_opens() {
         const UNITS: &str = r#"$schema: https://intentional.foo/schemas/config.yml
@@ -1102,9 +1110,18 @@ release-units:
                         Capability::NodePackage => {
                             "{\"name\":\"example-component\",\"version\":\"1.0.0\"}"
                         }
-                        Capability::RustCrate => {
+                        // A probe file the derivation cannot parse is the only
+                        // read whose result survives being discarded. A unit
+                        // with no configured target derives capabilities and
+                        // throws them away, so well-formed content there moves
+                        // no outcome and a selection widened onto it reads
+                        // files nothing compares, invisibly. An unparseable one
+                        // becomes a diagnostic, which is how the read makes
+                        // itself observable.
+                        Capability::RustCrate if unit == "published" => {
                             "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n"
                         }
+                        Capability::RustCrate => "this is not valid toml [",
                         Capability::GoApplication => "module example.test/component\n",
                         Capability::RunnableImage => "FROM scratch\n",
                         Capability::DevContainerFeature => "{\"id\":\"example\"}\n",
