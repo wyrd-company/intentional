@@ -3252,6 +3252,7 @@ aur:
         for workspace in [
             workspace("workflow-placeholders"),
             two_destination_workspace("workflow-placeholders-oci"),
+            feature_workspace("workflow-placeholders-feature"),
         ] {
             for role in WorkflowRole::ALL {
                 converge(workspace.root(), role);
@@ -3369,6 +3370,7 @@ aur:
         for workspace in [
             workspace("workflow-artifact-binding"),
             two_destination_workspace("workflow-artifact-binding-oci"),
+            feature_workspace("workflow-artifact-binding-feature"),
         ] {
             converge(workspace.root(), WorkflowRole::Publish);
             let jobs = publish_jobs(workspace.root());
