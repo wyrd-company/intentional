@@ -1466,20 +1466,22 @@ fn upload_job(
     for subject in hosted {
         let find = crate::executor::steps::github_hosted_deliverables(subject.packager)
             .unwrap_or_default();
-        deliverable_steps.push_str(
-            &PUBLISH_UPLOAD_STEP
-                .replace(
+        deliverable_steps.push_str(&templates::step(
+            PUBLISH_UPLOAD_STEP,
+            &[
+                (
                     "@DELIVERABLE_NAME@",
                     &scalar(&format!(
                         "Upload the {} deliverables to the draft Release",
                         subject.identity
                     )),
-                )
-                .replace("@SUBJECT_IDENTITY@", &scalar(&subject.identity))
-                .replace("@SLUG@", &subject.slug)
-                .replace("@DELIVERABLE_FIND@", find)
-                .replace("@VERIFY@", verify),
-        );
+                ),
+                ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
+                ("@SLUG@", &subject.slug),
+                ("@DELIVERABLE_FIND@", find),
+                ("@VERIFY@", verify),
+            ],
+        )?);
     }
     let mut handoff_steps = String::new();
     for consumer in consumers {
@@ -1487,42 +1489,44 @@ fn upload_job(
         let slug = identifier(&identity);
         let find = crate::executor::steps::github_hosted_deliverables(consumer.subject.packager)
             .unwrap_or_default();
-        handoff_steps.push_str(
-            &PUBLISH_HANDOFF_STEP
-                .replace(
+        handoff_steps.push_str(&templates::step(
+            PUBLISH_HANDOFF_STEP,
+            &[
+                (
                     "@HANDOFF_NAME@",
                     &scalar(&format!("Write the {identity} draft-asset handoff")),
-                )
-                .replace(
+                ),
+                (
                     "@HANDOFF_UPLOAD_NAME@",
                     &scalar(&format!("Upload the {identity} draft-asset handoff")),
-                )
-                .replace(
+                ),
+                (
                     "@HANDOFF_SCHEMA@",
                     crate::publication::draft::DRAFT_HANDOFF_SCHEMA,
-                )
-                .replace(
+                ),
+                (
                     "@HANDOFF_CONTRACT@",
                     crate::publication::draft::DRAFT_HANDOFF_CONTRACT,
-                )
-                .replace("@HANDOFF_ARTIFACT@", &handoff_artifact(namespaces, &slug))
-                .replace("@HANDOFF_DIRECTORY@", &handoff_directory(namespaces, &slug))
-                .replace("@HANDOFF@", &scalar(&handoff_file(namespaces, &slug)))
-                .replace(
+                ),
+                ("@HANDOFF_ARTIFACT@", &handoff_artifact(namespaces, &slug)),
+                ("@HANDOFF_DIRECTORY@", &handoff_directory(namespaces, &slug)),
+                ("@HANDOFF@", &scalar(&handoff_file(namespaces, &slug))),
+                (
                     "@RELEASE_UNIT@",
                     &scalar(&consumer.publication.release_unit),
-                )
-                .replace(
+                ),
+                (
                     "@PUBLISHER@",
                     &scalar(consumer.publication.publisher.as_str()),
-                )
-                .replace("@TARGET@", &scalar(&consumer.publication.target))
-                .replace("@PUBLICATION@", &scalar(&identity))
-                .replace("@SUBJECT_SLUG@", &consumer.subject.slug)
-                .replace("@DELIVERABLE_FIND@", find)
-                .replace("@CONSUMED_FIND@", &consumer.consumed)
-                .replace("@VERIFY@", verify),
-        );
+                ),
+                ("@TARGET@", &scalar(&consumer.publication.target)),
+                ("@PUBLICATION@", &scalar(&identity)),
+                ("@SUBJECT_SLUG@", &consumer.subject.slug),
+                ("@DELIVERABLE_FIND@", find),
+                ("@CONSUMED_FIND@", &consumer.consumed),
+                ("@VERIFY@", verify),
+            ],
+        )?);
     }
     job(
         PUBLISH_UPLOAD_JOB,
@@ -1604,7 +1608,6 @@ fn publisher_job(
     };
     let identity = publication.identity();
     let slug = identifier(&identity);
-    let subject_identity = subject.identity.clone();
     // Publisher credentials stay in the repository-owned recipe steps, so the
     // destination readback they perform reaches the portable command as a
     // schema-backed observation rather than as a second verification path.
@@ -1640,7 +1643,6 @@ fn publisher_job(
         ("@NEEDS@", render_list(needs)),
         ("@SLUG@", slug.clone()),
         ("@SUBJECT_SLUG@", subject.slug.clone()),
-        ("@SUBJECT_IDENTITY@", scalar(&subject_identity)),
     ];
     // A draft-dependent publisher's fragment records what it retrieved from the
     // draft Release, and that claim is proved against the inventory the release
@@ -1661,12 +1663,13 @@ fn publisher_job(
     });
     substitutions.extend([
         ("@HANDOFF_STEP@", handoff_step),
+        // Recipe-emitted steps are repository-derived text and are substituted
+        // in the middle of this list, so their position would matter if they
+        // could name another entry's placeholder. They cannot: the renderer
+        // refuses a value that names a later substitution, which is what makes
+        // this position a free choice rather than a contract.
         ("@RECIPE_STEPS@", recipe),
         ("@HANDOFF@", scalar(&handoff)),
-        (
-            "@WORKING_DIRECTORY@",
-            scalar(&unit.path.display().to_string()),
-        ),
         (
             "@SUBJECT_NAME@",
             scalar(&format!("Download the built {} subject", subject.identity)),
@@ -4099,6 +4102,98 @@ exit 0
                 );
             }
         }
+    }
+
+    /// The other direction of the same table, which nothing covered.
+    ///
+    /// `leaves_no_unrendered_placeholder_in_any_derived_workflow` reads the
+    /// residue a template names and a substitution misses. A substitution that
+    /// names a placeholder no template carries leaves no residue at all --
+    /// `replace` on an absent needle is a no-op -- so the entry is dead and
+    /// every fixture above stays green. Two entries were dead when this was
+    /// written, each orphaned by a template the derivation stopped rendering.
+    ///
+    /// The refusal is what every derivation in this module rides: a dead entry
+    /// is a diagnostic from the job that carries it, so any fixture reaching
+    /// that job reports it. This proves the refusal itself, on a template that
+    /// names one of the two placeholders and not the other, so a rule that
+    /// accepted every entry and a rule that refused every entry are both red.
+    #[test]
+    fn refuses_a_substitution_naming_a_placeholder_the_template_does_not_carry() {
+        let namespaces = PrefixNamespaces {
+            job: "intentional_".to_owned(),
+            envvar: "INTENTIONAL_".to_owned(),
+            environment: "intentional-release".to_owned(),
+        };
+        let template = "runs-on: @PRESENT@\n";
+        let rendered = templates::job(
+            template,
+            &namespaces,
+            &[("@PRESENT@", "ubuntu-latest"), ("@ABSENT@", "unread")],
+        );
+        let diagnostic =
+            rendered.expect_err("a substitution the template does not name is refused");
+        assert_eq!(diagnostic.code, "job-substitution-unnamed");
+        assert!(
+            diagnostic.message.contains("@ABSENT@"),
+            "the diagnostic names the dead entry rather than the template: {}",
+            diagnostic.message
+        );
+
+        let live = templates::job(template, &namespaces, &[("@PRESENT@", "ubuntu-latest")])
+            .expect("an entry the template names renders");
+        assert_eq!(
+            live["runs-on"].as_str(),
+            Some("ubuntu-latest"),
+            "the same rule accepts the entry the template does carry"
+        );
+    }
+
+    /// The ordering hazard the substitution list would otherwise carry.
+    ///
+    /// Entries are applied in list order, so a value substituted at one
+    /// position is still exposed to every entry behind it. Recipe-emitted steps
+    /// sit in the middle of the publisher job's list for that reason, and the
+    /// only thing that made their position safe was that no recipe happened to
+    /// emit a later placeholder. This makes it a refusal instead, so the
+    /// position is a free choice rather than an unasserted contract.
+    ///
+    /// The two values differ in exactly the property under test: one names a
+    /// placeholder a later entry substitutes, the other names one an earlier
+    /// entry already consumed. A rule that refused any value containing an `@`
+    /// run would fail the second half.
+    #[test]
+    fn refuses_a_substituted_value_that_a_later_substitution_would_rewrite() {
+        let namespaces = PrefixNamespaces {
+            job: "intentional_".to_owned(),
+            envvar: "INTENTIONAL_".to_owned(),
+            environment: "intentional-release".to_owned(),
+        };
+        let template = "runs-on: @FIRST@@SECOND@\n";
+        let diagnostic = templates::job(
+            template,
+            &namespaces,
+            &[("@FIRST@", "names-@SECOND@"), ("@SECOND@", "-tail")],
+        )
+        .expect_err("a value a later entry would rewrite is refused");
+        assert_eq!(diagnostic.code, "job-substitution-ordered");
+        assert!(
+            diagnostic.message.contains("@FIRST@") && diagnostic.message.contains("@SECOND@"),
+            "the diagnostic names both ends of the collision: {}",
+            diagnostic.message
+        );
+
+        let backwards = templates::job(
+            template,
+            &namespaces,
+            &[("@FIRST@", "head"), ("@SECOND@", "-names-@FIRST@")],
+        )
+        .expect("a value naming an already-consumed placeholder is not a collision");
+        assert_eq!(
+            backwards["runs-on"].as_str(),
+            Some("head-names-@FIRST@"),
+            "and it survives verbatim, which is why only the forward direction is refused"
+        );
     }
 
     /// Every artifact a managed job uploads, as artifact name to producing job.

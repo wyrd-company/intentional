@@ -195,6 +195,61 @@ pub(crate) fn scalar(value: &str) -> String {
         .to_owned()
 }
 
+/// Substitute one template's derived values, in the order the caller states.
+///
+/// The substitution table is held to the template in both directions, and only
+/// one of the two directions is obvious. A placeholder a template names and
+/// nothing substitutes reaches the emitted document as a literal `@NAME@`,
+/// which is loud. A substitution entry naming a placeholder the template does
+/// not carry is silent: `replace` on an absent needle is a no-op, so the entry
+/// is dead and reads as live. Two such entries accumulated in one job's list
+/// within a day of each other, both orphaned when a template the derivation
+/// stopped rendering was collapsed into a shared one. This refuses the entry
+/// instead, at the point where the template and the list are both in hand.
+///
+/// The second refusal is what keeps the list's order from becoming load
+/// bearing. A value substituted at one position is still subject to every
+/// entry behind it, so a value that happened to contain a later entry's
+/// placeholder would be rewritten by it -- and moving either entry would then
+/// change a rendered byte. No derived value names another derived placeholder
+/// today; refusing one is what keeps that a property rather than a
+/// coincidence, and it is why recipe-emitted steps may be substituted at any
+/// position without carrying an ordering contract of their own.
+///
+/// Namespace and pinned-identity placeholders are deliberately outside both
+/// rules: every template shares one table for those, so an entry no single
+/// template names is expected, and a derived value naming one is the whole
+/// reason they are substituted last.
+fn substituted(
+    template: &str,
+    extra: &[(&str, &str)],
+) -> std::result::Result<String, WorkflowDiagnostic> {
+    let mut rendered = template.to_owned();
+    for (index, (placeholder, value)) in extra.iter().enumerate() {
+        if !rendered.contains(placeholder) {
+            return Err(WorkflowDiagnostic::new(
+                "job-substitution-unnamed",
+                format!(
+                    "a managed job template is substituted for {placeholder}, which no template it renders names"
+                ),
+            ));
+        }
+        if let Some((later, _)) = extra[index + 1..]
+            .iter()
+            .find(|(later, _)| value.contains(later))
+        {
+            return Err(WorkflowDiagnostic::new(
+                "job-substitution-ordered",
+                format!(
+                    "the value substituted for {placeholder} names {later}, which a later substitution would rewrite"
+                ),
+            ));
+        }
+        rendered = rendered.replace(placeholder, value);
+    }
+    Ok(rendered)
+}
+
 /// Parse a managed job template after substituting its derived values.
 ///
 /// Every substituted value that lands in a scalar position is rendered through
@@ -206,14 +261,11 @@ pub(super) fn job(
     namespaces: &PrefixNamespaces,
     extra: &[(&str, &str)],
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
-    let mut rendered = template.to_owned();
     // Derived values are substituted first because a value can itself name a
     // namespace placeholder: a packager's build script refers to the prefixed
     // subject environment variable, and substituting the namespaces first would
     // leave that reference unrendered in a privileged job.
-    for (placeholder, value) in extra {
-        rendered = rendered.replace(placeholder, value);
-    }
+    let rendered = substituted(template, extra)?;
     let rendered = rendered
         .replace("@JOB@", &namespaces.job)
         .replace("@ENVVAR@", &namespaces.envvar)
@@ -254,6 +306,19 @@ pub(super) fn job(
             format!("a managed job template did not render to valid YAML: {error}"),
         )
     })
+}
+
+/// Render one repeated step template that is spliced into a job template.
+///
+/// The upload job's per-deliverable and per-handoff steps carry substitution
+/// lists of their own and are rendered before the job that holds them, so they
+/// are held to the same rules for the same reason: a dead entry in one of these
+/// lists is exactly as silent as a dead entry in a job's.
+pub(super) fn step(
+    template: &str,
+    extra: &[(&str, &str)],
+) -> std::result::Result<String, WorkflowDiagnostic> {
+    substituted(template, extra)
 }
 
 /// The managed job templates themselves.
