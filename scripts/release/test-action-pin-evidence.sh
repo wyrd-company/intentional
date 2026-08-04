@@ -454,6 +454,21 @@ elif ! grep -q "declares no Action" "$directory/stderr"; then
   report "$directory"
 fi
 
+# A CRLF checkout reads the same declaration. One trailing carriage return is
+# surrendered per line, because YAML ends a line on CRLF too and a reader that
+# kept it would refuse a file nobody edited.
+case_number=$((case_number + 1))
+directory="$(new_case crlf-line-endings)"
+stub_git "$directory" "${AGREEING[@]}"
+declaration | sed 's/$/\r/' >"$directory/pins.yml"
+if ! run_check "$directory" "$directory/pins.yml"; then
+  echo "expected a CRLF declaration to read the same, but the check failed" >&2
+  report "$directory"
+elif [[ "$(invocations_for "$directory" other-owner/other-action)" -ne 1 ]]; then
+  echo "the CRLF declaration's second entry was not resolved" >&2
+  report "$directory"
+fi
+
 # A well-formed declaration still passes, so the reader is not simply always
 # refusing.
 case_number=$((case_number + 1))
