@@ -148,7 +148,7 @@ def declarations(text):
         if IGNORED.fullmatch(line):
             continue
         if SEQUENCE_KEY.fullmatch(line):
-            if entries or current:
+            if sequence_seen:
                 raise Unreadable(number, line, "the entry sequence reopens")
             sequence_seen = True
             continue

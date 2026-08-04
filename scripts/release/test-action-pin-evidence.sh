@@ -441,6 +441,23 @@ elif ! grep -q "reopens" "$directory/stderr"; then
   report "$directory"
 fi
 
+# Reopening an empty sequence is still a duplicate mapping key. The first key
+# need not have accumulated an entry before the second one replaces it.
+case_number=$((case_number + 1))
+directory="$(new_case empty-sequence-key-reopened)"
+stub_git "$directory" "${AGREEING[@]}"
+{
+  echo "actions:"
+  declaration
+} >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected an empty entry sequence to refuse reopening, but it passed" >&2
+  report "$directory"
+elif ! grep -q "reopens" "$directory/stderr"; then
+  echo "the empty reopened sequence was refused without saying so" >&2
+  report "$directory"
+fi
+
 # A wholly readable file that declares nothing. Exhaustiveness cannot notice
 # this -- there is no unread line -- so it is the one thing the residual floor
 # still holds, and the message says "declares no Action" rather than blaming
