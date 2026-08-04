@@ -4219,29 +4219,99 @@ release-units:
         require-phase: after-publication
 "#;
 
-    /// Every value the sentinel workspace supplies, and where an author types it.
+    /// Where one repository-supplied value legitimately lands.
+    ///
+    /// Naming the surface is what stops this gate's prose from claiming more
+    /// than it checks. Without it the gate says "no value is spliced" while
+    /// only ever having looked at one kind of place, and a value that moved
+    /// from a `with:` input into an expression would satisfy it unchanged.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Surface {
+        /// A workflow expression: a `${{ ... }}` the runner evaluates.
+        Expression,
+        /// Anything else a managed job carries that is not shell: job
+        /// identifiers, step names, `env:` values, `with:` inputs.
+        Plain,
+    }
+
+    /// Every value the sentinel workspace supplies, where an author types it,
+    /// and the surface it is expected to land on.
     ///
     /// This is the roster the gate below reads. Its purpose is that a new value
     /// entering derivation has to join it, so it is a list rather than a
     /// pattern: a pattern would quietly cover a route nobody had considered,
-    /// which is exactly what happened twice in this task.
+    /// which is exactly what happened four times in this task. That the list is
+    /// hand-maintained is a real limitation and epic task 180 owns converting
+    /// it to something machine-established; the conversion has to enumerate the
+    /// derivation's repository-read sites rather than a fixture's values, or it
+    /// reintroduces the pattern this avoids.
     ///
     /// One repository-supplied value is deliberately absent, and its absence is
-    /// the point rather than an oversight. The configured `prefix` *is* spliced
-    /// into managed shell -- `${RUNNER_TEMP}/<prefix>npm-error` and every other
+    /// checked rather than asserted. The configured `prefix` *is* spliced into
+    /// managed shell -- `${RUNNER_TEMP}/<prefix>npm-error` and every other
     /// prefixed path -- because it names identifiers rather than carrying data,
     /// and `config::validate_job_prefix` holds it to a GitHub job identifier
-    /// before derivation ever sees it. It is the one exception, it is validated
-    /// at its own boundary, and it is written down here so it stays one.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str); 8] = [
-        ("sentinelunit", "the release-unit identifier"),
-        ("sentinelpath", "the release-unit path"),
-        ("@sentinelscope/sentinelpackage", "the npm package name"),
-        ("sentinelcrate", "the Cargo crate name"),
-        ("sentinelregistry", "the Cargo registry name"),
-        ("sentinelindex.example", "the Cargo registry index"),
-        ("SENTINELNPMSECRET", "the npm token-secret name"),
-        ("SENTINELCARGOSECRET", "the Cargo token-secret name"),
+    /// before derivation ever sees it. The gate derives under a renamed prefix
+    /// and requires the default spelling to be absent from shell, so an
+    /// exception that had stopped being true would fail here.
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, Surface); 8] = [
+        (
+            "sentinelunit",
+            "the release-unit identifier",
+            Surface::Plain,
+        ),
+        ("sentinelpath", "the release-unit path", Surface::Plain),
+        (
+            "@sentinelscope/sentinelpackage",
+            "the npm package name",
+            Surface::Plain,
+        ),
+        ("sentinelcrate", "the Cargo crate name", Surface::Plain),
+        (
+            "sentinelregistry",
+            "the Cargo registry name",
+            Surface::Plain,
+        ),
+        (
+            "sentinelindex.example",
+            "the Cargo registry index",
+            Surface::Plain,
+        ),
+        (
+            "SENTINELNPMSECRET",
+            "the npm token-secret name",
+            Surface::Expression,
+        ),
+        (
+            "SENTINELCARGOSECRET",
+            "the Cargo token-secret name",
+            Surface::Expression,
+        ),
+    ];
+
+    /// Managed jobs the sentinel configuration derives, without their prefix.
+    ///
+    /// Enumerated rather than counted, and enumerated independently of the
+    /// derivation, so that a job disappearing from the sweep fails here instead
+    /// of quietly shrinking what the gate reads. A gate that inspects fewer
+    /// jobs than it did yesterday reports clean for a new reason.
+    const SENTINEL_JOBS: [(WorkflowRole, &[&str]); 2] = [
+        (WorkflowRole::Release, &["prepare", "release"]),
+        (
+            WorkflowRole::Publish,
+            &[
+                "assemble_evidence",
+                "build_sentinelunit_cargo",
+                "build_sentinelunit_npm",
+                "close_release",
+                "publish_sentinelunit_cargo_primary",
+                "publish_sentinelunit_npm_github",
+                "publish_sentinelunit_npm_primary",
+                "tag_after_publication",
+                "tag_before_publication",
+                "verify_tag",
+            ],
+        ),
     ];
 
     /// Every managed job of one derived workflow, found without knowing the prefix.
@@ -4284,23 +4354,37 @@ release-units:
             .collect()
     }
 
-    /// Everything the managed jobs of one derived workflow carry, as text.
+    /// The managed jobs of one derived workflow, split into the surfaces they carry.
     ///
-    /// Scoped to managed jobs rather than the whole document, because a
-    /// repository-owned job is not where a derived value reaching a workflow
-    /// would show up, and searching the document lets one role's content
-    /// satisfy a claim about another's.
-    fn managed_job_text(root: &Path, role: WorkflowRole) -> String {
-        sentinel_jobs(root, role)
-            .into_iter()
-            .map(|(id, steps)| {
-                format!(
-                    "{id}\n{}",
-                    serde_yaml::to_string(&Value::Sequence(steps)).unwrap_or_default()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+    /// Shell is removed first and the remainder is split into the expressions
+    /// the runner evaluates and everything else, so a claim about where a value
+    /// landed is checked against that surface rather than against the document.
+    /// Searching the document is how a value can be absent from the surface it
+    /// was supposed to be on and present somewhere nobody looked.
+    fn managed_surfaces(root: &Path, role: WorkflowRole) -> (String, String) {
+        let mut expressions = String::new();
+        let mut plain = String::new();
+        for (id, steps) in sentinel_jobs(root, role) {
+            let mut text = format!("{id}\n");
+            for step in steps {
+                let mut step = step;
+                if let Some(mapping) = step.as_mapping_mut() {
+                    mapping.remove(Value::String("run".to_owned()));
+                }
+                text.push_str(&serde_yaml::to_string(&step).unwrap_or_default());
+            }
+            let mut rest = text.as_str();
+            while let Some(open) = rest.find("${{") {
+                plain.push_str(&rest[..open]);
+                let tail = &rest[open..];
+                let close = tail.find("}}").map_or(tail.len(), |end| end + 2);
+                expressions.push_str(&tail[..close]);
+                expressions.push('\n');
+                rest = &tail[close..];
+            }
+            plain.push_str(rest);
+        }
+        (expressions, plain)
     }
 
     // A probe decides whether a long-lived credential is reached and whether an
@@ -4505,64 +4589,114 @@ release-units:
     // surfaces is its own task.
     #[test]
     fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
-        // A gate that inspects nothing reports clean, so how much it inspected
-        // is measured rather than assumed -- and measured under a configured
-        // prefix as well as the default, because the identifier a managed job
-        // carries changes with the prefix and the sentinel step id does not.
-        // Establishing that by deriving both is the point: asserting it would
-        // be the same class of claim the gate exists to stop.
-        let mut swept = Vec::new();
+        // How much the gate inspected is established before any rule is
+        // applied to it. A sweep that finds nothing satisfies every rule, and
+        // this sweep found nothing under a configured prefix until the
+        // recognition changed -- so the scope is compared against an
+        // enumeration written independently of the derivation, under both the
+        // default prefix and a configured one.
+        let mut shell_counts = Vec::new();
         for prefix in [None, Some("acme")] {
             let workspace = sentinel_workspace(
                 &format!("workflow-supplied-values-{}", prefix.unwrap_or("default")),
                 prefix,
             );
+            let reserved = prefix.map_or("intentional_".to_owned(), |prefix| format!("{prefix}_"));
             let mut counts = Vec::new();
-            for role in WorkflowRole::ALL {
+            for (role, expected) in SENTINEL_JOBS {
                 converge(workspace.root(), role);
+                let swept = sentinel_jobs(workspace.root(), role)
+                    .into_iter()
+                    .map(|(id, _)| {
+                        id.strip_prefix(&reserved)
+                            .unwrap_or_else(|| panic!("{id} carries the configured prefix"))
+                            .to_owned()
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    swept,
+                    expected
+                        .iter()
+                        .map(|id| (*id).to_owned())
+                        .collect::<BTreeSet<_>>(),
+                    "the {role} sweep reads exactly the managed jobs this configuration derives"
+                );
+
                 let bodies = managed_shell_bodies(workspace.root(), role);
+                assert!(
+                    !bodies.is_empty(),
+                    "the {role} workflow contributes managed shell for the sweep to read"
+                );
                 counts.push((role, bodies.len()));
-                for (job, body) in bodies {
-                    for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
+
+                for (job, body) in &bodies {
+                    for (supplied, origin, _) in REPOSITORY_SUPPLIED_VALUES {
                         assert!(
                             !body.contains(supplied),
                             "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
                         );
                     }
+                    // The prefix is the one repository-supplied value managed
+                    // shell may carry, and the exception is only honest if
+                    // what is spliced is the configured prefix rather than a
+                    // constant that happens to match the default.
+                    if prefix.is_some() {
+                        assert!(
+                            !body.contains("intentional_"),
+                            "{job}'s shell carries the default prefix under a configured one:\n{body}"
+                        );
+                    }
                 }
             }
+            shell_counts.push(counts);
 
-            // Every value is proved to have reached the managed jobs of some
-            // role. Searching the whole document would let a repository-owned
-            // job satisfy the claim, and searching both roles together lets one
-            // role's content stand in for the other's.
-            let managed = WorkflowRole::ALL
+            // Reach is checked on the surfaces the sweep read, with shell
+            // removed, and against the surface the roster names. Searching the
+            // whole document lets a repository-owned job satisfy the claim, and
+            // searching every surface at once lets a value be absent from the
+            // one it was supposed to be on.
+            let (expressions, plain) = SENTINEL_JOBS
                 .into_iter()
-                .map(|role| managed_job_text(workspace.root(), role))
-                .collect::<Vec<_>>()
-                .join("\n");
-            for (supplied, origin) in REPOSITORY_SUPPLIED_VALUES {
-                assert!(
-                    managed.contains(supplied),
-                    "{origin} never reached a managed job, so its absence from a shell body proves nothing"
+                .map(|(role, _)| managed_surfaces(workspace.root(), role))
+                .fold(
+                    (String::new(), String::new()),
+                    |(mut expressions, mut plain), (role_expressions, role_plain)| {
+                        expressions.push_str(&role_expressions);
+                        plain.push_str(&role_plain);
+                        (expressions, plain)
+                    },
                 );
+            for (supplied, origin, surface) in REPOSITORY_SUPPLIED_VALUES {
+                let (text, other, name) = match surface {
+                    Surface::Expression => (&expressions, &plain, "a workflow expression"),
+                    Surface::Plain => (&plain, &expressions, "a managed job's own content"),
+                };
+                assert!(
+                    text.contains(supplied),
+                    "{origin} never reached {name}, so its absence from a shell body proves nothing"
+                );
+                // A secret name is a reference the runner resolves, so it
+                // belongs in an expression and nowhere else. Asserting that it
+                // is absent from the other surface is also what makes the split
+                // falsifiable: a check that read both surfaces together would
+                // be satisfied by either, which is the shape of a claim that
+                // cannot fail.
+                if surface == Surface::Expression {
+                    assert!(
+                        !other.contains(supplied),
+                        "{origin} is written into a managed job's own content rather than referenced through the secrets context"
+                    );
+                }
             }
-            swept.push(counts);
         }
 
-        let [default, prefixed] = swept.as_slice() else {
+        let [default, prefixed] = shell_counts.as_slice() else {
             panic!("both prefixes were derived");
         };
         assert_eq!(
             default, prefixed,
             "the sweep finds the same managed shell under a configured prefix as under the default"
         );
-        for (role, count) in default {
-            assert!(
-                *count > 0,
-                "the {role} workflow contributes managed shell for the sweep to read"
-            );
-        }
     }
 
     // Every name a maintained recipe reads out of the repository reaches a
