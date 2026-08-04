@@ -3283,11 +3283,14 @@ release-units:
 
     /// Native GoReleaser configuration declaring every pipe the recipes promote.
     ///
-    /// The `nfpms` entry declares a third format on purpose. `nfpms` builds
-    /// whatever formats the repository asks for, and only a fixture declaring
-    /// one beyond the two the system-package adapters distribute can tell a
-    /// derivation that reads the declaration apart from one that names the two
-    /// it happens to know.
+    /// The `nfpms` entry declares two formats beyond the two the system-package
+    /// adapters distribute, and each is there for its own reason. `apk` is a
+    /// format the repository can ask for and the adapters do not distribute, so
+    /// it separates a derivation that reads the declaration from one that names
+    /// the pair it happens to know. `archlinux` is the format whose package does
+    /// not carry the format's own name, so it separates a derivation that maps
+    /// each format to the extension its package carries from one that assumes
+    /// the two are spelled alike.
     const GORELEASER_CONFIG: &str = r#"version: 2
 project_name: example-tool
 builds:
@@ -3295,7 +3298,7 @@ builds:
 brews:
   - repository: { owner: example-org, name: homebrew-tap }
 nfpms:
-  - formats: [ rpm, deb, apk ]
+  - formats: [ rpm, deb, apk, archlinux ]
 aur:
   - name: example-tool-bin
 "#;
@@ -3886,13 +3889,17 @@ aur:
     /// run; and the formula and package sources are descriptors their publisher
     /// jobs promote into repositories. One fixture carries all five kinds so a
     /// selection rule that admitted or dropped the wrong one is visible.
-    const GO_DISTRIBUTION: [(&str, &str); 8] = [
+    const GO_DISTRIBUTION: [(&str, &str); 9] = [
         ("example-tool_1.0.0_linux_amd64.tar.gz", "amd64 archive"),
         ("example-tool_1.0.0_linux_arm64.tar.gz", "arm64 archive"),
         ("checksums.txt", "the published checksums"),
         ("example-tool_1.0.0_amd64.deb", "the Debian package"),
         ("example-tool-1.0.0.x86_64.rpm", "the RPM package"),
         ("example-tool_1.0.0_x86_64.apk", "the Alpine package"),
+        (
+            "example-tool-1.0.0-1-x86_64.pkg.tar.zst",
+            "the Arch package",
+        ),
         ("artifacts.json", "[]"),
         ("homebrew/Formula/example-tool.rb", "class ExampleTool"),
     ];
@@ -3905,8 +3912,9 @@ aur:
     ];
 
     /// Deliverables the upload job places, in the order it places them.
-    const PLACED_ASSETS: [&str; 6] = [
+    const PLACED_ASSETS: [&str; 7] = [
         "checksums.txt",
+        "example-tool-1.0.0-1-x86_64.pkg.tar.zst",
         "example-tool-1.0.0.x86_64.rpm",
         "example-tool_1.0.0_amd64.deb",
         "example-tool_1.0.0_linux_amd64.tar.gz",
@@ -4523,6 +4531,13 @@ exit 0
             declared.len() > 2,
             "the fixture declares a format beyond the two the adapters distribute: {declared:?}"
         );
+        assert!(
+            declared.iter().any(|format| {
+                crate::executor::goreleaser::nfpm_extension(format)
+                    .is_some_and(|extension| extension != format)
+            }),
+            "the fixture declares a format whose package is not named after it, which is what makes the mapping load-bearing: {declared:?}"
+        );
 
         for (publisher, expected) in [
             (
@@ -4580,7 +4595,7 @@ exit 0
         let workspace = go_workspace("workflow-nfpm-unknown");
         workspace.write(
             "component/.goreleaser.yaml",
-            &GORELEASER_CONFIG.replace("[ rpm, deb, apk ]", "[ rpm, deb, msi ]"),
+            &GORELEASER_CONFIG.replace("[ rpm, deb, apk, archlinux ]", "[ rpm, deb, msi ]"),
         );
         let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
             .expect("comparison runs");
