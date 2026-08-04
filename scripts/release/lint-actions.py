@@ -251,11 +251,12 @@ def image_finding(image: str, where: str, candidate: Path) -> str:
 def escape_finding(image: str, where: str, resolved: Path, directory: Path) -> str:
     """Report a Dockerfile that resolves outside the action's own directory.
 
-    This is not the missing-file case and must not be told to add the file: the
-    file exists, and the author's problem is where it sits. It is not the digest
-    case either. GitHub builds a container action from a Dockerfile beneath the
-    directory holding the action document, so naming that directory is the whole
-    of the advice.
+    Containment is judged before existence, so this reports where the value
+    points whether or not a file is there. Either way the advice is the same and
+    the missing-file advice is wrong: an author told to add
+    `../elsewhere.Dockerfile` would be told to create it where a container
+    action may not read it. Naming the directory the file must live under is the
+    whole of what the author can act on.
     """
 
     return (
@@ -274,9 +275,11 @@ def check_image(image: object, where: str, directory: Path) -> list[str]:
     and is the one form that needs no digest.
 
     A schemeless value is read as a Dockerfile when it resolves to an existing
-    file beneath the action document's own directory. Resolving accepts every
-    legitimately named Dockerfile rather than the subset a filename convention
-    anticipates, and it catches one that has been moved, renamed, or misspelled.
+    file beneath the action document's own directory. Resolving admits the
+    spellings a filename convention has to anticipate one at a time —
+    `Dockerfile.ci`, `build.Dockerfile`, `docker/release.Dockerfile` — and it
+    catches one that has been moved, renamed, or misspelled.
+
     Requiring containment is the other half: `../elsewhere.Dockerfile`, an
     absolute path, and a symlink pointing out of the tree all name real files
     that are not versioned with the action. An absolute value is not resolved
@@ -284,8 +287,11 @@ def check_image(image: object, where: str, directory: Path) -> list[str]:
     left operand when the right is absolute.
 
     Both sides are resolved before comparison, so containment is judged on where
-    the path physically lands rather than on how it is spelled. That is what
-    rejects the symlink, whose spelling is inside the directory.
+    the path physically lands rather than on how it is spelled. Resolving the
+    candidate is what rejects the symlink, whose spelling is inside the
+    directory. Resolving the directory is what keeps a correctly placed
+    Dockerfile accepted when the action's own directory is reached through a
+    link, which is otherwise rejected as being outside a directory it is in.
     """
 
     if not isinstance(image, str) or not image:

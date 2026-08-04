@@ -360,16 +360,17 @@ expect_failure_matching \
   "$container/absent-dockerfile.yml"
 
 # GitHub builds a container action's image from a Dockerfile inside the action
-# directory. A value that resolves outside it is not the missing-file case: the
-# file is right there, and telling the author to add it or to pin a digest is
-# advice for a problem they do not have. Each of the three shapes below resolves
-# to a real file, so only containment can reject them.
+# directory. A value pointing outside it is not the missing-file case, and
+# telling the author to add the file or to pin a digest is advice for a problem
+# they do not have. The first three shapes below resolve to a real file, so only
+# containment can reject them.
 outside="$temporary/outside.Dockerfile"
 touch "$outside"
 # The gate reports where the value physically lands, so the expectation has to
 # be the resolved path too. They differ wherever the temporary directory sits
 # behind a symlink.
 outside_resolved="$(readlink -f "$outside")"
+temporary_resolved="$(readlink -f "$temporary")"
 
 container_action "escaping-relative" "../outside.Dockerfile"
 expect_failure_matching \
@@ -395,6 +396,39 @@ expect_failure_matching \
   "a container action whose Dockerfile is a symlink out of the action directory" \
   "runs\.image uses linked\.Dockerfile, which resolves to $outside_resolved, outside the action directory $container" \
   "$container/escaping-symlink.yml"
+
+# Escaping and missing at once. Containment is judged before existence, so this
+# is reported as a location problem rather than a missing file: an author told
+# to create `../does-not-exist.Dockerfile` would be told to put it where a
+# container action may not read it. This pins the branch order; the two
+# single-condition fixtures above and below leave it incidental.
+container_action "escaping-and-absent" "../does-not-exist.Dockerfile"
+expect_failure_matching \
+  "a container action naming a path that is both outside its directory and absent" \
+  "runs\.image uses \.\./does-not-exist\.Dockerfile, which resolves to $temporary_resolved/does-not-exist\.Dockerfile, outside the action directory $container" \
+  "$container/escaping-and-absent.yml"
+
+# The action directory itself can be reached through a symlink — a worktree,
+# a mounted checkout, or a temporary directory behind one. Containment then has
+# to resolve the directory too, or a Dockerfile sitting correctly beside its
+# action document is rejected as "outside the action directory", naming a
+# directory that is not wrong. This fixture creates that condition rather than
+# waiting for a machine that happens to have it.
+linked_action="$temporary/linked-action"
+mkdir -p "$linked_action/real"
+touch "$linked_action/real/Dockerfile"
+cat > "$linked_action/real/action.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action whose own directory is reached through a symlink"
+runs:
+  using: "docker"
+  image: "Dockerfile"
+FIXTURE
+ln -s real "$linked_action/through-a-link"
+
+expect_pass \
+  "a container action whose directory is reached through a symlink" \
+  "$linked_action/through-a-link/action.yml"
 
 # Resolution is against the action document's directory, not the process working
 # directory. Running from a directory that does hold a Dockerfile must not make
