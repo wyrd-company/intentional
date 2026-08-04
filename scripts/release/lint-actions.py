@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import yaml
 
@@ -228,13 +228,39 @@ def check_reference(reference: object, where: str) -> list[str]:
     return []
 
 
-def check_image(image: object, where: str) -> list[str]:
+def image_finding(image: str, where: str, candidate: Path) -> str:
+    """Report a schemeless image that is neither a file nor a pinned reference.
+
+    A schemeless value is one of two things, and the reader is owed both routes.
+    `Dockerfile.ci` is repository content the author can add or correct, and
+    naming the path the gate looked for is what makes a moved or misspelled file
+    actionable. `alpine:latest` names no file because it was never meant to; it
+    is a mutable registry reference, and the digest advice is the one that
+    applies. Splitting these into two messages would need the gate to guess
+    which the author meant.
+    """
+
+    return (
+        f"{where} uses {image}, which names no file at {describe(candidate)} "
+        "and is not pinned to an image digest; either add that file, or "
+        f"reference a registry image as {CONTAINER_SCHEME}<image>@sha256:<64 "
+        "hexadecimal characters>"
+    )
+
+
+def check_image(image: object, where: str, directory: Path) -> list[str]:
     """Hold a container runtime's image to the same digest rule as a step.
 
     GitHub accepts a registry reference with or without the `docker://` scheme,
     so `alpine:latest` is as mutable here as `docker://alpine:latest` is in a
     step. A Dockerfile is repository content, versioned with the action itself,
     and is the one form that needs no digest.
+
+    Which of the two a schemeless value is, is decided by resolving it against
+    the action document's own directory — the same way GitHub does. That accepts
+    every legitimately named Dockerfile rather than the subset a filename
+    convention anticipates, and it additionally catches a Dockerfile that has
+    been moved, renamed, or misspelled, which no filename check can.
     """
 
     if not isinstance(image, str) or not image:
@@ -242,9 +268,10 @@ def check_image(image: object, where: str) -> list[str]:
 
     target = container_target(image)
     if target is None:
-        if PurePosixPath(image).name.startswith("Dockerfile"):
+        candidate = directory / image
+        if candidate.is_file():
             return []
-        return [digest_finding(image, where)]
+        return [image_finding(image, where, candidate)]
 
     if PINNED_IMAGE.match(target):
         return []
@@ -287,7 +314,7 @@ def check(path: Path) -> list[str]:
     if runtime == CONTAINER_RUNTIME:
         if "image" not in runs:
             return [f"{location}: runs with the docker runtime but declares no image:"]
-        return check_image(runs["image"], f"{location}: runs.image")
+        return check_image(runs["image"], f"{location}: runs.image", path.parent)
 
     if runtime != COMPOSITE_RUNTIME:
         return []

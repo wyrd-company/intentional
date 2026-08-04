@@ -283,7 +283,7 @@ FIXTURE
 
 expect_failure_matching \
   "a container action naming a bare registry image" \
-  "runs\.image uses alpine:latest, which is not pinned to an image digest" \
+  "runs\.image uses alpine:latest, which names no file at .*alpine:latest and is not pinned to an image digest" \
   "$temporary/schemeless-image.yml"
 
 cat > "$temporary/imageless.yml" <<'FIXTURE'
@@ -309,16 +309,76 @@ FIXTURE
 expect_pass "a digest-pinned container action" "$temporary/pinned-image.yml"
 
 # A Dockerfile is repository content, versioned with the action itself, so it is
-# the one image form that needs no digest.
-cat > "$temporary/dockerfile-image.yml" <<'FIXTURE'
+# the one image form that needs no digest. Which values are Dockerfiles is
+# decided by resolving them against the action document's own directory, so the
+# fixtures are real files sitting where that resolution looks. A filename
+# convention would have to anticipate every spelling; resolution accepts them
+# all and rejects a path that points at nothing.
+container="$temporary/container"
+mkdir -p "$container/docker"
+touch \
+  "$container/Dockerfile" \
+  "$container/Dockerfile.ci" \
+  "$container/build.Dockerfile" \
+  "$container/docker/release.Dockerfile"
+
+container_action() {
+  local name="$1"
+  local image="$2"
+
+  cat > "$container/$name.yml" <<FIXTURE
 name: "fixture"
-description: "A container action built from a Dockerfile in the repository"
+description: "A container action built from repository content"
+runs:
+  using: "docker"
+  image: "$image"
+FIXTURE
+}
+
+for image in Dockerfile ./Dockerfile Dockerfile.ci build.Dockerfile docker/release.Dockerfile; do
+  container_action "resolved-$(tr '/.' '--' <<<"$image")" "$image"
+done
+
+expect_pass "a container action built from Dockerfile" "$container/resolved-Dockerfile.yml"
+expect_pass "a container action built from ./Dockerfile" "$container/resolved---Dockerfile.yml"
+expect_pass "a container action built from a suffixed Dockerfile.ci" "$container/resolved-Dockerfile-ci.yml"
+expect_pass "a container action built from a prefixed build.Dockerfile" "$container/resolved-build-Dockerfile.yml"
+expect_pass \
+  "a container action built from a Dockerfile in a subdirectory" \
+  "$container/resolved-docker-release-Dockerfile.yml"
+
+# A moved, renamed, or misspelled Dockerfile is the case no filename convention
+# can catch: `Dockerfile.dev` satisfies every spelling rule and still names
+# nothing. The rejection has to name the path the gate looked for, because that
+# is the only part the author can act on.
+container_action "absent-dockerfile" "Dockerfile.dev"
+expect_failure_matching \
+  "a container action naming a Dockerfile that does not exist" \
+  "runs\.image uses Dockerfile\.dev, which names no file at $container/Dockerfile\.dev" \
+  "$container/absent-dockerfile.yml"
+
+# Resolution is against the action document's directory, not the process working
+# directory. Running from a directory that does hold a Dockerfile must not make
+# a document that does not resolve.
+elsewhere="$temporary/elsewhere-cwd"
+mkdir -p "$elsewhere"
+touch "$elsewhere/Dockerfile"
+cat > "$temporary/decoy-action.yml" <<'FIXTURE'
+name: "fixture"
+description: "A container action whose Dockerfile exists only in the working directory"
 runs:
   using: "docker"
   image: "Dockerfile"
 FIXTURE
 
-expect_pass "a container action built from a Dockerfile" "$temporary/dockerfile-image.yml"
+if decoy_output="$(cd "$elsewhere" && "${linter[@]}" "$temporary/decoy-action.yml" 2>&1)"; then
+  echo "expected the lint gate to resolve against the document's directory, not the working directory" >&2
+  failures=$((failures + 1))
+elif ! grep -qE -- "names no file at $temporary/Dockerfile" <<<"$decoy_output"; then
+  echo "the lint gate rejected the decoy without naming the document-relative path:" >&2
+  echo "$decoy_output" >&2
+  failures=$((failures + 1))
+fi
 
 # Discovery is the property the explicit-path cases above cannot exercise: they
 # hand the gate the file. Copying the gate into a fixture repository lets it
@@ -329,10 +389,23 @@ fixture_repository() {
   mkdir -p \
     "$repository/scripts/release" \
     "$repository/actions/published" \
+    "$repository/actions/container/docker" \
     "$repository/.github/actions/internal" \
     "$repository/actions/published/target/generated" \
     "$repository/actions/published/node_modules/vendored"
   cp "$root/scripts/release/lint-actions.py" "$repository/scripts/release/lint-actions.py"
+
+  # Discovery is the invocation with no arguments, so the document's directory
+  # is whatever discovery found rather than anything the caller supplied. A
+  # container action here proves resolution behaves identically either way.
+  touch "$repository/actions/container/docker/build.Dockerfile"
+  cat > "$repository/actions/container/action.yml" <<'FIXTURE'
+name: "fixture"
+description: "A discovered container action built from a Dockerfile beside it"
+runs:
+  using: "docker"
+  image: "docker/build.Dockerfile"
+FIXTURE
 
   # The excluded pair sits *inside* a search root. Placed at the fixture root
   # they would be omitted by search scope rather than by EXCLUDED_DIRECTORIES,
@@ -351,7 +424,7 @@ fixture_repository() {
 discovered="$temporary/discovered"
 fixture_repository "$discovered"
 
-# Three documents are publishable; the two under target/ and node_modules/ are
+# Four documents are publishable; the two under target/ and node_modules/ are
 # not this repository's to fix. Asserting the number, not just the exit status,
 # means a future narrowing of discovery fails loudly instead of passing over
 # fewer files.
@@ -361,8 +434,8 @@ discovered_output="$(python3 "$discovered/scripts/release/lint-actions.py" 2>&1)
   failures=$((failures + 1))
 }
 
-if ! grep -qF -- "(3 checked)" <<<"$discovered_output"; then
-  echo "expected the lint gate to discover 3 action documents, but it reported:" >&2
+if ! grep -qF -- "(4 checked)" <<<"$discovered_output"; then
+  echo "expected the lint gate to discover 4 action documents, but it reported:" >&2
   echo "$discovered_output" >&2
   failures=$((failures + 1))
 fi
