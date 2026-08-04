@@ -1105,8 +1105,17 @@ proposed-design:
     accepts only declared 40-hexadecimal commit identities in derived workflows.
     A network-only evidence workflow resolves each upstream tag on every pull
     request and push. Once merged to the default branch, it also runs every
-    Monday. Each run fails when resolution no longer matches the declared
-    commit. What that seam detects is upstream tag mutation: a retag, a
+    Monday. Each run reads the whole declaration before it resolves anything:
+    every line is classified against a fixed grammar, and a line matching none
+    of it fails the run naming that line, so no run can resolve part of the
+    table and report success over the rest. Completeness there is
+    exhaustiveness rather than agreement between two readings of the same text,
+    and it holds against any edit including one that preserves the document's
+    YAML meaning. Its price is that a declaration respelled in another valid
+    YAML shape is refused rather than read. That reader is stdlib-only, because
+    the workflow installs no dependencies. Each run fails when resolution no
+    longer matches the declared commit. What that seam detects is upstream tag
+    mutation: a retag, a
     force-push, a moved or deleted release tag. What it cannot detect is a
     declaration that was wrong when it was written, because each declared tag
     is chosen from the tags upstream already resolves to the pinned commit, so
