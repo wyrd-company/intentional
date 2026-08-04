@@ -1420,10 +1420,9 @@ release-units:
 
     /// Attempts the racing harness makes before it concludes nothing raced.
     ///
-    /// The window between `is_file` and the read is a few microseconds wide and
-    /// the competing thread reopens it continuously, so the pre-fix code loses
-    /// the race long before this bound. It is a bound on the test's runtime,
-    /// not a sample size the result depends on.
+    /// The bound caps the test's runtime. It is not a sample size the result
+    /// depends on: the probe answers a removal in one syscall, so no number of
+    /// attempts can observe one.
     const RACING_ATTEMPTS: usize = 20_000;
 
     /// Run one probe against a file another thread keeps taking away.
@@ -1453,10 +1452,9 @@ release-units:
             let staged = staged.clone();
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    // Published by rename and withdrawn by removal, so the probe
-                    // sees the file whole or not at all. Writing in place would
-                    // let the probe read a truncated file and fail on malformed
-                    // contents, which is a different defect from this one.
+                    // Published by rename and withdrawn by removal, so the
+                    // probe sees the file whole or not at all. This harness
+                    // opens the removal window, not a torn read.
                     let scratch = path.with_extension("staging");
                     let _ = std::fs::copy(&staged, &scratch);
                     let _ = std::fs::rename(&scratch, &path);

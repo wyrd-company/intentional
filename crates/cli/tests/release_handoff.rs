@@ -1068,9 +1068,9 @@ fn generated_handoff_command(runner_temp: &Path, working_directory: &Path) -> Ve
         .find(|line| line.starts_with("intentional "))
         .and_then(|line| shell_words::split(line.trim_end_matches('|').trim()).ok())
         .expect("the invocation is one readable command line");
-    // The handoff directory is one value the whole command line is bound to, so
-    // it is resolved once. Resolving it per token derived the entire workflow
-    // once per token, which is the same answer at six times the cost.
+    // The handoff directory is one value the whole command line binds to, and
+    // resolving it derives both managed workflows, so it is resolved once for
+    // the command rather than once per token.
     let handoff = generated_handoff_directory(runner_temp)
         .display()
         .to_string();
