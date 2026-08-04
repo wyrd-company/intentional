@@ -940,7 +940,7 @@ fn publish_contract(
     }
 
     let publisher_upstream = before.clone().unwrap_or_else(|| verify.clone());
-    let mut publisher_jobs = Vec::new();
+    let mut publication_completion_jobs = Vec::new();
     let mut identities = BTreeSet::new();
     for publication in &selection.selected {
         let id = publication_job_id(namespaces, publication);
@@ -995,6 +995,7 @@ fn publish_contract(
             handoff.as_deref(),
         )
         .map_err(|diagnostic| vec![diagnostic])?;
+        publication_completion_jobs.push(id.clone());
         jobs.push((id.clone(), Ok(derived.publisher)));
         if let Some(retrieval) = derived.retrieval {
             let retrieval_id = retrieval_job_id(namespaces, publication);
@@ -1008,10 +1009,8 @@ fn publish_contract(
                     &format!("jobs.{retrieval_id}"),
                 )]);
             }
-            publisher_jobs.push(retrieval_id.clone());
+            publication_completion_jobs.push(retrieval_id.clone());
             jobs.push((retrieval_id, Ok(retrieval)));
-        } else {
-            publisher_jobs.push(id);
         }
     }
 
@@ -1019,7 +1018,7 @@ fn publish_contract(
     // every publisher job and precedes the assembly that reads what it sealed.
     if let Some(after) = &after {
         let mut needs = vec![verify.clone()];
-        needs.extend(publisher_jobs.iter().cloned());
+        needs.extend(publication_completion_jobs.iter().cloned());
         jobs.push((
             after.clone(),
             phase_tag_job(namespaces, TagPhase::AfterPublication, &needs),
@@ -1032,7 +1031,7 @@ fn publish_contract(
     // their contributions are available to it, and of closure so the configured
     // gate governs the final authority transition.
     let mut assemble_needs = vec![verify.clone()];
-    assemble_needs.extend(publisher_jobs.iter().cloned());
+    assemble_needs.extend(publication_completion_jobs.iter().cloned());
     // Assembly classifies the sealed phase evidence by document identity, so
     // every tag job that produced one has to precede it or the evidence it
     // requires would simply be absent.
@@ -1707,9 +1706,12 @@ fn publication_jobs(
     // consumer path reads no draft asset receives none, and the Action turns an
     // empty input into an absent option rather than an empty path.
     let handoff = handoff_slug.map_or_else(String::new, |slug| handoff_file(namespaces, slug));
-    let publisher_verification = retrieval_steps
-        .as_ref()
-        .map_or_else(|| verification(&handoff), |_| String::new());
+    let split_retrieval = retrieval_steps.is_some();
+    let publisher_verification = if split_retrieval {
+        String::new()
+    } else {
+        verification(&handoff)
+    };
     let handoff_step = handoff_slug.map_or_else(String::new, |slug| {
         format!(
             "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
@@ -1718,8 +1720,13 @@ fn publication_jobs(
             handoff_directory(namespaces, slug),
         )
     });
+    let publisher_handoff_step = if split_retrieval {
+        String::new()
+    } else {
+        handoff_step.clone()
+    };
     substitutions.extend([
-        ("@HANDOFF_STEP@", handoff_step),
+        ("@HANDOFF_STEP@", publisher_handoff_step),
         // Recipe-emitted steps are repository-derived text and are substituted
         // in the middle of this list, so their position would matter if they
         // could name another entry's placeholder. They cannot: the renderer
@@ -1745,7 +1752,7 @@ fn publication_jobs(
                 format!("{}build_{}", namespaces.job, subject.slug),
             ];
             let retrieval_needs = render_list(&retrieval_needs);
-            let retrieval_verification = verification("");
+            let retrieval_verification = verification(&handoff);
             job(
                 PUBLISH_RETRIEVAL_JOB,
                 namespaces,
@@ -1753,6 +1760,7 @@ fn publication_jobs(
                     ("@NEEDS@", retrieval_needs.as_str()),
                     ("@SUBJECT_SLUG@", subject.slug.as_str()),
                     ("@SUBJECT_NAME@", subject_name.as_str()),
+                    ("@HANDOFF_STEP@", handoff_step.as_str()),
                     ("@RETRIEVAL_STEPS@", retrieval.as_str()),
                     ("@VERIFY_STEPS@", retrieval_verification.as_str()),
                 ],
@@ -2906,13 +2914,11 @@ aur:
         }
     }
 
-    // One publisher-job template serves every recipe, so which publications
-    // consume a draft asset is now a conditional inside it rather than a
-    // separate template. Both sides of that conditional are load-bearing: a
-    // draft-dependent publisher without a handoff is refused by `verify
-    // publication`, and a publisher that reads no draft asset supplying one is
-    // refused by the same command. Neither refusal is reachable from here, so
-    // the derivation is what has to get the answer right.
+    // Verification runs in the publisher unless a recipe isolates retrieval in
+    // a narrower job. Its handoff follows it: a draft-dependent verifier without
+    // one is refused by `verify publication`, and a verifier that reads no draft
+    // asset supplying one is refused by the same command. Neither refusal is
+    // reachable from here, so the derivation has to get both sides right.
     #[test]
     fn names_the_draft_handoff_only_for_a_publisher_that_reads_one() {
         for (label, workspace, draft_dependent) in [
@@ -4534,6 +4540,7 @@ exit 0
     fn binds_every_artifact_a_managed_job_consumes_to_the_job_that_produces_it() {
         for workspace in [
             workspace("workflow-artifact-binding"),
+            npm_workspace("workflow-artifact-binding-npm"),
             two_destination_workspace("workflow-artifact-binding-oci"),
             feature_workspace("workflow-artifact-binding-feature"),
         ] {
@@ -4596,7 +4603,9 @@ exit 0
                 .collect::<BTreeSet<_>>();
 
             // A publisher promotes the subject its own build job produced, by
-            // exact name, so it can never receive another subject's bytes.
+            // exact name, and the job that verifies the publication uploads its
+            // evidence fragment. A split retrieval owns verification and
+            // evidence without changing which publisher promoted the bytes.
             let publishers = job_ids(&jobs, "intentional_publish_");
             let fragments = publishers
                 .iter()
@@ -4621,17 +4630,27 @@ exit 0
                         format!("intentional_subject-{slug}"),
                         "{publisher} promotes the subject {build} produced"
                     );
+                    let evidence_owner =
+                        publisher.replace("intentional_publish_", "intentional_retrieve_");
+                    let evidence_owner = if jobs.contains_key(Value::String(evidence_owner.clone()))
+                    {
+                        evidence_owner.as_str()
+                    } else {
+                        publisher.as_str()
+                    };
                     uploads
                         .iter()
-                        .find(|(_, producer)| *producer == publisher)
+                        .find(|(_, producer)| *producer == evidence_owner)
                         .map(|(name, _)| name.clone())
-                        .unwrap_or_else(|| panic!("{publisher} uploads its evidence fragment"))
+                        .unwrap_or_else(|| {
+                            panic!("{evidence_owner} uploads the publication evidence fragment")
+                        })
                 })
                 .collect::<BTreeSet<_>>();
 
             // Each phase stages exactly what it seals: the before-publication
             // tag reads the built-subject documents, the after-publication tag
-            // reads the accepted fragments.
+            // reads the accepted publication fragments.
             let staged = |job: &str| {
                 let selected = downloads
                     .iter()
@@ -4653,11 +4672,11 @@ exit 0
             let after = staged("intentional_tag_after_publication");
             assert!(
                 fragments.iter().all(|fragment| after.contains(fragment)),
-                "the after-publication tag stages every publisher fragment: {after:?}"
+                "the after-publication tag stages every publication fragment: {after:?}"
             );
             assert_eq!(
                 after, fragments,
-                "the after-publication tag stages the publisher fragments and nothing else"
+                "the after-publication tag stages the publication fragments and nothing else"
             );
             let phase_documents = uploads
                 .keys()
@@ -8507,6 +8526,16 @@ release-units:
                 "retrieval reads only after {dependency} completes"
             );
         }
+        let after = &jobs[Value::String("intentional_tag_after_publication".to_owned())];
+        let after_needs = after["needs"]
+            .as_sequence()
+            .expect("after-publication tag names its direct dependencies");
+        for completed in [publisher, retrieval] {
+            assert!(
+                after_needs.contains(&Value::String(completed.to_owned())),
+                "after-publication tag directly follows {completed}"
+            );
+        }
 
         let publishing = managed_job_steps(workspace.root(), publisher);
         let retrieving = managed_job_steps(workspace.root(), retrieval);
@@ -8562,7 +8591,7 @@ release-units:
         std::fs::write(&tarball, "sealed package bytes").expect("sealed package");
         let observed = temporary.join("observed-npmrc");
         let stub = format!(
-            "case \"$1\" in\n  view) printf 'sha512-'; openssl dgst -sha512 -binary '{}' | base64 -w0; printf '\\n'; exit 0 ;;\n  pack) cp '{}' \"$(pwd)/example-component-1.0.0.tgz\"; cp \"$npm_config_userconfig\" '{}'; exit 0 ;;\n  --version) printf '11.5.1\\n'; exit 0 ;;\nesac",
+            "case \"$1\" in\n  config) mkdir -p \"$HOME\"; printf '%s\\n' \"$3\" >> \"$HOME/.npmrc\"; exit 0 ;;\n  view) grep -q ':_authToken=read-job-token' \"$HOME/.npmrc\" || exit 1; printf 'sha512-'; openssl dgst -sha512 -binary '{}' | base64 -w0; printf '\\n'; exit 0 ;;\n  pack) grep -q ':_authToken=read-job-token' \"$npm_config_userconfig\" || exit 1; cp '{}' \"$(pwd)/example-component-1.0.0.tgz\"; cp \"$npm_config_userconfig\" '{}'; exit 0 ;;\n  --version) printf '11.5.1\\n'; exit 0 ;;\nesac",
             tarball.display(),
             tarball.display(),
             observed.display(),
@@ -8576,11 +8605,16 @@ release-units:
                 ("INTENTIONAL_GITHUB_PACKAGES_TOKEN", "read-job-token"),
                 ("INTENTIONAL_VERSION", "1.0.0"),
                 ("INTENTIONAL_SUBJECT_DIGEST", "unused-build-digest"),
+                ("INTENTIONAL_DEADLINE", "0"),
             ],
         );
         assert!(
             succeeded,
             "read-scoped retrieval succeeds against stub npm: {calls}"
+        );
+        assert!(
+            observed.exists(),
+            "the authenticated destination probe reaches clean-client retrieval: {calls}"
         );
         let npmrc = std::fs::read_to_string(observed).expect("stub npm consumed scratch npmrc");
         assert!(

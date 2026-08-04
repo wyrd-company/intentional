@@ -686,7 +686,7 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
+@HANDOFF_STEP@@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
 
 /// Verify one observation and upload the resulting publisher-evidence fragment.
 pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@

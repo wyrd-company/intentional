@@ -747,7 +747,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     ));
 
     let readback = format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{scope_environment}{}{}{}{}    run: |\n{}{}{}{}",
+        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{scope_environment}{}{}{}{}    run: |\n{}{}{}{}{}",
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
         scalar(destination),
@@ -760,6 +760,11 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         observation_environment(context, "npm-package", "npm", "npm"),
         policy_environment(context.publication.publisher),
         STRICT_MODE,
+        if primary {
+            ""
+        } else {
+            NPM_GITHUB_AUTHENTICATION
+        },
         OBSERVE,
         const_probe(),
         npm_readback(if primary {
