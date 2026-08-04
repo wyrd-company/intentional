@@ -327,11 +327,7 @@ mod tests {
             });
             let project = crate::executor::names::SuppliedName {
                 origin: "component/.goreleaser.yaml project_name",
-                value: if declared_value.is_none() {
-                    " example-project "
-                } else {
-                    "example-project"
-                },
+                value: "example-project",
             };
             assert_eq!(
                 arch_package_name(declared.as_ref(), &project).expect("the package name stands"),
@@ -339,6 +335,18 @@ mod tests {
                 "{declared_value:?} resolves the package the packager writes"
             );
         }
+    }
+
+    #[test]
+    fn trims_the_project_name_fallback_before_suffixing_it() {
+        let project = crate::executor::names::SuppliedName {
+            origin: "component/.goreleaser.yaml project_name",
+            value: " example-project ",
+        };
+        assert_eq!(
+            arch_package_name(None, &project).expect("the package name stands"),
+            "example-project-bin"
+        );
     }
 
     // Stated as the divergence it is rather than as the packager's rule: the
