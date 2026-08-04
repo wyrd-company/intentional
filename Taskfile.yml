@@ -66,6 +66,10 @@ tasks:
         length == 1'
         .intentional/config.yml >/dev/null
       - scripts/release/test-retry.sh
+      # The online pin check itself needs the network, so it stays in its own
+      # workflow. Its completeness and retry semantics do not, and are proved
+      # here against a stubbed git.
+      - scripts/release/test-action-pin-evidence.sh
       - scripts/release/assert-release-workflow-baseline.sh
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
       # As with the action lint above, both lines are deliberate: the first
