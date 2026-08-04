@@ -198,10 +198,6 @@ struct ContributeArgs {
 
 #[derive(Debug, Args)]
 struct AssembleArgs {
-    /// Prepared release-candidate handoff identifying the release being closed.
-    #[arg(long, value_name = "PATH")]
-    candidate: PathBuf,
-
     /// Directory containing downloaded publisher, phase-tag, and contribution artifacts.
     #[arg(long, value_name = "PATH")]
     input: PathBuf,
@@ -593,12 +589,10 @@ fn evidence_contribute(root: &std::path::Path, args: ContributeArgs) -> Result<(
 }
 
 fn evidence_assemble(root: &std::path::Path, args: AssembleArgs) -> Result<()> {
-    let candidate = resolve(root, args.candidate);
     let input = resolve(root, args.input);
     let output = resolve(root, args.output);
     let assembly = assemble(&AssembleRequest {
         root,
-        candidate: &candidate,
         input: &input,
         output: &output,
         workflow: WorkflowIdentity {

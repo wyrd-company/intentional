@@ -844,37 +844,6 @@ commands:
         summary: Assemble publisher fragments and contributions into final release evidence.
         mode: non-interactive
         options:
-          - name: candidate
-            flags:
-              - --candidate
-            kind: option
-            description: >-
-              Prepared release-candidate handoff directory identifying the
-              release being closed, carrying both its manifest and the sealed
-              release plan the manifest inventories. The manifest is the
-              authority for source commit S, release commit R, the annotated
-              global tag name, object, and target, and the sealed plan digest.
-              Assembly refuses a handoff that is absent, unreadable, or fails
-              the release-candidate manifest's own structural rules; a handoff
-              whose transported plan file is absent, is not a release plan, or
-              digests to something other than the bytes the manifest
-              inventories; a plan whose own seal no longer recomputes over its
-              payload; a manifest whose claimed plan digest is not the one the
-              transported plan seals, naming both digests; and a manifest naming
-              a global release tag the plan does not seal, or rendering a sealed
-              tag under another name. It then refuses any publisher or phase
-              document that identifies a different release, naming each identity
-              component that disagreed with its expected and observed values. A
-              publisher fragment is held to six components; a phase document
-              records the global tag by name and carries neither the tag object
-              nor its target, so it is held to the four it carries.
-            required: true
-            repeatable: false
-            value:
-              type: directory
-              arity:
-                min: 1
-                max: 1
           - name: input
             flags:
               - --input
@@ -919,44 +888,32 @@ commands:
                 check.
         examples:
           - >-
-            intentional evidence assemble --candidate release-candidate --input
-            evidence-artifacts --output release-evidence
+            intentional evidence assemble --input evidence-artifacts --output
+            release-evidence
         notes:
           - >-
             The credential-free assemble-evidence Action wraps this command and
             defines no GitHub step outputs.
           - >-
-            The release identity comes from the prepared candidate handoff, not
-            from the evidence fragments and not from the assembling job's
-            checkout. A release that configures no publication therefore
-            assembles a complete statement, because naming the release no longer
-            depends on a publisher having run. The statement's identity contract
-            is unchanged: it still records the annotated global tag object,
-            which the handoff manifest carries.
+            Assembly proves the checkout it is given rather than trusting it or
+            being handed a document about it. It resolves the annotated global
+            release tag the checked-out commit publishes, rebuilds the release
+            from the accepted source commit in an isolated local clone, and
+            refuses the checkout unless the rebuilt plan digest, tree, commit,
+            tag object and tag name all match what the published tag carries.
+            The release identity, and the sealed release plan, come from that
+            one derivation. A release that configures no publication therefore
+            assembles a complete statement, because naming the release does not
+            depend on a publisher having run, and a fragment identifying some
+            other release is refused however many others agree with it.
           - >-
             The plan digest every accepted fragment agrees on is the digest the
-            supplied sealed plan itself determines, recomputed from the plan's
-            payload rather than read from any document's assertion. Fragments
-            that agree unanimously with each other and with the manifest are
-            still refused when that digest is not the sealed plan's.
-          - >-
-            The sealed plan is read rather than merely digested. The global
-            release tag the manifest names must be a tag that plan seals, under
-            the name it seals it by, and every published subject must carry the
-            version the plan assigns its release unit. A build job derives that
-            version by reproducing the plan from the accepted source commit, so
-            assembly states the agreement against the plan it was handed rather
-            than trusting the reproduction happened.
-          - >-
-            The expected publication set is derived from the assembling
-            workspace's configuration and reconciled against the sealed plan.
-            The plan and the configuration must name one interpretation
-            contract, the plan must release every release unit the
-            configuration selects a publication for, and the configuration must
-            declare every release unit the plan releases. This binds the
-            expectation to the sealed plan; it does not prove the assembling
-            job's checkout is R, because a plan seals versions and tags rather
-            than publication destinations.
+            reproduced plan's own payload determines. The global release tag and
+            every published subject's version are held to what that plan seals.
+            The expected publication set is derived from the proved checkout's
+            configuration and reconciled against the same plan: a release unit
+            with publishers and no version bump is not in the plan, and a
+            publication configured for it publishes nothing this release sealed.
           - >-
             The output directory is the complete assembly handoff. Its
             intentional-evidence.yml is the schema-backed release evidence and

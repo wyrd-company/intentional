@@ -492,15 +492,15 @@ pub(crate) mod tests {
         temp: tempfile::TempDir,
         pub(crate) root: PathBuf,
         /// Accepted source commit S.
-        source: String,
+        pub(crate) source: String,
         /// Deterministic release commit R.
-        release: String,
+        pub(crate) release: String,
         /// Identity of the annotated global tag object.
-        tag_object: String,
+        pub(crate) tag_object: String,
         /// Rendered name of the global release tag.
-        tag_name: String,
+        pub(crate) tag_name: String,
         /// Digest sealed inside the release plan.
-        plan_digest: String,
+        pub(crate) plan_digest: String,
     }
 
     fn git(directory: &Path, arguments: &[&str]) -> String {
@@ -522,22 +522,43 @@ pub(crate) mod tests {
     impl ReleasedWorkspace {
         /// Author one intent, build the release, and publish its annotated global tag.
         pub(crate) fn new() -> Self {
+            Self::with(
+                CONFIG,
+                &[("package.json", "{\n  \"version\": \"1.0.0\"\n}\n")],
+                "widget",
+            )
+        }
+
+        /// The same released workspace under a caller's configuration.
+        ///
+        /// A module whose behaviour depends on what the release publishes needs
+        /// its own release units and publishers, and building the release from
+        /// parts is exactly what lets a test prove an identity the repository
+        /// never carried. Parameterising the fixture keeps those tests on a
+        /// genuinely released checkout.
+        pub(crate) fn with(config: &str, files: &[(&str, &str)], release_unit: &str) -> Self {
             let temp = tempfile::tempdir().expect("temporary directory");
             let root = temp.path().join("workspace");
             std::fs::create_dir_all(&root).expect("create workspace");
             git(&root, &["init", "--quiet", "--initial-branch=main"]);
             git(&root, &["config", "user.name", "Fixture Author"]);
             git(&root, &["config", "user.email", "fixture@example.invalid"]);
-            write(&root, ".intentional/config.yml", CONFIG);
-            write(&root, "package.json", "{\n  \"version\": \"1.0.0\"\n}\n");
+            write(&root, ".intentional/config.yml", config);
+            for (path, contents) in files {
+                write(&root, path, contents);
+            }
             write(&root, ".intentional/intents/.keep", "");
             git(&root, &["add", "-A"]);
             git(&root, &["commit", "--quiet", "-m", "Create the workspace"]);
             // A workspace tag carries its own version stream, so the baseline
             // states where that stream starts rather than deriving it from a
             // release unit.
-            let baseline =
-                BTreeMap::from([(RECORD_TAG_ID.to_owned(), "1.0.0".parse().expect("version"))]);
+            let baseline = Config::load(&root)
+                .expect("the fixture configuration loads")
+                .unphased_tags()
+                .into_iter()
+                .map(|tag| (tag.id, "1.0.0".parse().expect("version")))
+                .collect::<BTreeMap<_, _>>();
             crate::tag::TagResult::build_baseline(&root, &baseline)
                 .expect("baseline tag set")
                 .apply(&root, false)
@@ -546,7 +567,7 @@ pub(crate) mod tests {
             write(
                 &root,
                 ".intentional/intents/quiet-otter-0001.md",
-                "---\nwidget: minor\n---\n\nAdd a widget capability\n",
+                &format!("---\n{release_unit}: minor\n---\n\nAdd a capability\n"),
             );
             git(&root, &["add", "-A"]);
             git(&root, &["commit", "--quiet", "-m", "Record release intent"]);
@@ -583,7 +604,7 @@ pub(crate) mod tests {
             );
         }
 
-        fn checkout(&self, commit: &str) {
+        pub(crate) fn checkout(&self, commit: &str) {
             git(&self.root, &["checkout", "--quiet", "--detach", commit]);
         }
 

@@ -10,9 +10,6 @@ branding:
   color: "orange"
 
 inputs:
-  candidate:
-    description: "Prepared release-candidate handoff directory carrying the manifest and the sealed release plan the release is bound to"
-    required: true
   input:
     description: "Directory containing downloaded publisher, phase-tag, and contribution artifacts"
     required: true
@@ -44,7 +41,6 @@ runs:
     - name: Assemble release evidence
       shell: bash
       env:
-        INPUT_CANDIDATE: ${{ inputs.candidate }}
         INPUT_INPUT: ${{ inputs.input }}
         INPUT_OUTPUT: ${{ inputs.output }}
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
@@ -52,5 +48,4 @@ runs:
         set -euo pipefail
 
         intentional --directory "$INPUT_WORKING_DIRECTORY" evidence assemble \
-          --candidate "$INPUT_CANDIDATE" \
           --input "$INPUT_INPUT" --output "$INPUT_OUTPUT"

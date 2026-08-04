@@ -5,13 +5,14 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    canonical_json, initialize, Adapter, Bump, CandidateResolution, Generator, InitPlan, InitState,
-    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan, TagPhase, TagRole,
+    canonical_json, initialize, Adapter, CandidateResolution, Generator, InitPlan, InitState,
+    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
 };
 use predicates::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -1947,7 +1948,12 @@ fn baseline_tags_include_deterministic_tagger_and_pass_strict_fsck() {
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.commit("add fixture");
     initialize_independent(&repo);
-    repo.cli().args(["tag", "--baseline"]).assert().success();
+    // A workspace tag carries its own version stream, so the baseline states
+    // where that stream starts rather than deriving it from a release unit.
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=1.0.0"])
+        .assert()
+        .success();
     assert_tagger_header(&repo.root, "sample-library@1.0.0");
     git_fsck_strict(&repo.root);
 }
@@ -2385,33 +2391,46 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
+workspace-tags:
+  release:
+    template: 'release/{version}'
 release-units:
   sample-library:
     path: .
     npm: {}
+    projections:
+      - adapter: json
+        file: package.json
+        pointer: /version
+        mode: committed
     tags:
-      primary: { role: primary, template: '{id}@{version}' }
+      primary: { role: primary, template: '{id}@{version}', require-phase: before-publication }
 "#;
 
-fn evidence_fragment() -> String {
-    let plan_digest = evidence_plan().digest;
+fn evidence_fragment(released: &BTreeMap<String, String>) -> String {
+    let source = &released["source"];
+    let release = &released["release"];
+    let tag_name = &released["global-tag"];
+    let tag_object = &released["global-tag-object"];
+    let plan_digest = &released["plan-digest"];
+    let version = &released["version"];
     format!(
         r#"$schema: https://intentional.foo/schemas/publisher-evidence/v1
 contract: publisher-evidence-1
 release-unit: sample-library
 publisher: npm
 target: primary
-source-commit: 1111111111111111111111111111111111111111
-release-commit: 2222222222222222222222222222222222222222
+source-commit: {source}
+release-commit: {release}
 global-tag:
-  name: release/1.0.0
-  object: 3333333333333333333333333333333333333333
-  target: 2222222222222222222222222222222222222222
+  name: {tag_name}
+  object: {tag_object}
+  target: {release}
 plan-digest: {plan_digest}
 subject:
   kind: npm-package
   identity: sample-library
-  version: 1.0.0
+  version: {version}
   digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
 packager:
   id: npm
@@ -2420,7 +2439,7 @@ build-provenance: []
 attached-metadata: []
 destination:
   identity: registry.example.test/sample-library
-  version: 1.0.0
+  version: {version}
   digest: sha512-example
 clean-client:
   mode: public
@@ -2433,108 +2452,150 @@ phase-tags: []
     )
 }
 
-/// The sealed release plan the prepared handoff transports.
+/// Drive a fixture repository to a genuinely released checkout.
 ///
-/// Built and sealed here rather than written down, so the handoff cannot state
-/// a digest the plan it ships does not have.
-fn evidence_plan() -> ReleasePlan {
-    let mut plan = ReleasePlan {
-        digest: String::new(),
-        contract: "contract-1".to_owned(),
-        generator: Generator {
-            tool: "intentional".to_owned(),
-            version: "0.0.0".to_owned(),
-        },
-        channel: None,
-        release_units: vec![PlanReleaseUnit {
-            id: "sample-library".to_owned(),
-            old_version: "0.9.0".to_owned(),
-            new_version: "1.0.0".to_owned(),
-            bump: Bump::Minor,
-            contributing_intent_ids: Vec::new(),
-            tag_ids: vec!["release-unit/sample-library/primary".to_owned()],
-            release_notes: "## 1.0.0\n".to_owned(),
-        }],
-        tags: vec![
-            PlanTag {
-                id: "release-unit/sample-library/primary".to_owned(),
-                name: "sample-library@1.0.0".to_owned(),
-                version: "1.0.0".to_owned(),
-                release_unit: Some("sample-library".to_owned()),
-                role: Some(TagRole::Primary),
-                require_phase: Some(TagPhase::BeforePublication),
-                tag_after: Vec::new(),
-            },
-            PlanTag {
-                id: "workspace/release".to_owned(),
-                name: "release/1.0.0".to_owned(),
-                version: "1.0.0".to_owned(),
-                release_unit: None,
-                role: None,
-                require_phase: None,
-                tag_after: Vec::new(),
-            },
+/// `evidence assemble` proves the checkout it is given by reproducing the
+/// release from the accepted source commit, so the CLI's end-to-end assembly
+/// path needs a repository that actually carries a release. Preparing the
+/// candidate and importing its bundle is what the release workflow does; doing
+/// it here keeps this test on the same artifact rather than on a checkout
+/// assembled out of parts.
+///
+/// Returns the identities the release carries.
+fn release_the_fixture(repo: &TestRepo) -> BTreeMap<String, String> {
+    let remote = repo.root.join("..").join("remote.git");
+    git(
+        &repo.root,
+        &[
+            "init",
+            "--quiet",
+            "--bare",
+            "--initial-branch=main",
+            remote.to_str().expect("remote path"),
         ],
-        tag_order: vec![
-            "release-unit/sample-library/primary".to_owned(),
-            "workspace/release".to_owned(),
+    );
+    git(&repo.root, &["add", "-A"]);
+    git(
+        &repo.root,
+        &["commit", "--quiet", "-m", "Create the workspace"],
+    );
+    // A workspace tag carries its own version stream, so the baseline states
+    // where that stream starts rather than deriving it from a release unit.
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=1.0.0"])
+        .assert()
+        .success();
+    git(
+        &repo.root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("remote path"),
         ],
+    );
+    git(
+        &repo.root,
+        &["push", "--quiet", "origin", "HEAD:main", "--tags"],
+    );
+    repo.cli()
+        .args([
+            "add",
+            "--release-unit",
+            "sample-library:minor",
+            "--message",
+            "Add a capability",
+        ])
+        .assert()
+        .success();
+    git(&repo.root, &["add", "-A"]);
+    git(
+        &repo.root,
+        &["commit", "--quiet", "-m", "Record release intent"],
+    );
+    git(&repo.root, &["push", "--quiet", "origin", "HEAD:main"]);
+
+    let handoff = repo.root.join("..").join("release-candidate");
+    repo.cli()
+        .args(["release", "prepare", "--output"])
+        .arg(&handoff)
+        .assert()
+        .success();
+    let manifest: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(handoff.join("release-candidate.yml")).expect("manifest"),
+    )
+    .expect("the manifest parses");
+
+    let bundle = handoff.join("release.bundle");
+    git(
+        &repo.root,
+        &[
+            "fetch",
+            "--quiet",
+            bundle.to_str().expect("bundle path"),
+            "refs/heads/intentional-release:refs/intentional/imported",
+            "refs/tags/intentional-global-release:refs/intentional/imported-tag",
+        ],
+    );
+    let field = |path: [&str; 2]| {
+        manifest[path[0]][path[1]]
+            .as_str()
+            .expect("a manifest identity")
+            .to_owned()
     };
-    plan.digest = plan.payload_digest().expect("the fixture plan seals");
-    plan
+    let tag_name = field(["global-tag", "name"]);
+    let tag_object = field(["global-tag", "object"]);
+    git(
+        &repo.root,
+        &["update-ref", &format!("refs/tags/{tag_name}"), &tag_object],
+    );
+    let release = field(["release", "commit"]);
+    git(&repo.root, &["checkout", "--quiet", "--detach", &release]);
+    // The version is read from the sealed plan rather than predicted, because
+    // it is what the plan assigns and the fragments have to record it.
+    let plan: Value = serde_json::from_str(
+        &fs::read_to_string(handoff.join("release-plan.json")).expect("sealed plan"),
+    )
+    .expect("the sealed plan parses");
+    let version = plan["release_units"][0]["new_version"]
+        .as_str()
+        .expect("the plan assigns a version")
+        .to_owned();
+    BTreeMap::from([
+        ("version".to_owned(), version),
+        ("source".to_owned(), field(["source", "commit"])),
+        ("release".to_owned(), release),
+        ("global-tag".to_owned(), tag_name),
+        ("global-tag-object".to_owned(), tag_object),
+        ("plan-digest".to_owned(), field(["plan", "digest"])),
+    ])
 }
 
-/// Stage the prepared release-candidate handoff every assembling test binds to.
-///
-/// Its identities are the ones `evidence_fragment` records, so an assembly that
-/// succeeds here does so because the fragment and the handoff name one release.
-fn stage_evidence_candidate(repo: &TestRepo) {
-    let plan = evidence_plan();
-    let bytes = plan.to_canonical_json().expect("plan bytes");
-    let sha256 = format!("sha256:{:x}", Sha256::digest(bytes.as_bytes()));
-    let size = bytes.len();
-    let digest = &plan.digest;
-    repo.write("candidate/release-plan.json", &bytes);
-    repo.write(
-        "candidate/release-candidate.yml",
-        &format!(
-            r#"$schema: https://intentional.foo/schemas/release-candidate/v1
-contract: github-release-candidate-1
-source:
-  commit: 1111111111111111111111111111111111111111
-release:
-  commit: 2222222222222222222222222222222222222222
-  parent: 1111111111111111111111111111111111111111
-  tree: 6666666666666666666666666666666666666666
-plan:
-  file: release-plan.json
-  digest: {digest}
-  sha256: {sha256}
-global-tag:
-  id: workspace/release
-  name: release/1.0.0
-  object: 3333333333333333333333333333333333333333
-  target: 2222222222222222222222222222222222222222
-changed-tree:
-  - path: package.json
-    status: modified
-    digest: sha256:8888888888888888888888888888888888888888888888888888888888888888
-git-bundle:
-  file: release.bundle
-  sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
-  heads:
-    - refs/heads/intentional-release
-    - refs/tags/intentional-global-release
-files:
-  - path: release-plan.json
-    sha256: {sha256}
-    size: {size}
-  - path: release.bundle
-    sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
-    size: 512
+/// The sealed before-publication evidence this configuration declares.
+fn evidence_phase(released: &BTreeMap<String, String>) -> String {
+    let source = &released["source"];
+    let release = &released["release"];
+    let tag_name = &released["global-tag"];
+    let plan_digest = &released["plan-digest"];
+    let version = &released["version"];
+    format!(
+        r#"$schema: https://intentional.foo/schemas/phase-tag-evidence/v1
+phase: before-publication
+source-commit: {source}
+release-commit: {release}
+global-tag: {tag_name}
+plan-digest: {plan_digest}
+subjects:
+  - release-unit: sample-library
+    identity: sample-library
+    version: {version}
+    digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
+intended-destinations:
+  - release-unit: sample-library
+    publisher: npm
+    target: primary
 "#
-        ),
-    );
+    )
 }
 
 fn assembly_environment() -> Vec<(&'static str, &'static str)> {
@@ -2647,16 +2708,18 @@ fn evidence_assemble_closes_one_bundle_from_fragments_and_contributions() {
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write("value.yml", "outcome: clean\n");
     repo.write("report.json", "{\"ok\":true}");
-    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
-    stage_evidence_candidate(&repo);
+    let released = release_the_fixture(&repo);
+    repo.write(
+        "artifacts/publisher/evidence.yml",
+        &evidence_fragment(&released),
+    );
+    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
     contribute_artifact(&repo, "assessment", "scan", "1");
 
     repo.cli_with_env(&assembly_environment())
         .args([
             "evidence",
             "assemble",
-            "--candidate",
-            "candidate",
             "--input",
             "artifacts",
             "--output",
@@ -2687,15 +2750,17 @@ fn evidence_assemble_requires_its_workflow_identity() {
     let repo = TestRepo::new();
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
-    stage_evidence_candidate(&repo);
+    let released = release_the_fixture(&repo);
+    repo.write(
+        "artifacts/publisher/evidence.yml",
+        &evidence_fragment(&released),
+    );
+    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
     repo.cli()
         .env_remove("GITHUB_REPOSITORY")
         .args([
             "evidence",
             "assemble",
-            "--candidate",
-            "candidate",
             "--input",
             "artifacts",
             "--output",
@@ -2735,8 +2800,12 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
     let repo = TestRepo::new();
     repo.write(".intentional/config.yml", EVIDENCE_CONFIG);
     repo.write("package.json", &npm_manifest("1.0.0"));
-    repo.write("artifacts/publisher/evidence.yml", &evidence_fragment());
-    stage_evidence_candidate(&repo);
+    let released = release_the_fixture(&repo);
+    repo.write(
+        "artifacts/publisher/evidence.yml",
+        &evidence_fragment(&released),
+    );
+    repo.write("artifacts/phase/phase.yml", &evidence_phase(&released));
     let mut environment = assembly_environment();
     environment.retain(|(key, _)| *key != "GITHUB_RUN_ID");
     environment.push(("GITHUB_RUN_ID", "run-42"));
@@ -2744,8 +2813,6 @@ fn evidence_assemble_rejects_a_malformed_run_identifier() {
         .args([
             "evidence",
             "assemble",
-            "--candidate",
-            "candidate",
             "--input",
             "artifacts",
             "--output",

@@ -985,32 +985,32 @@ proposed-design:
     It also emits the complete attachment set. Repository-local closure steps
     upload and artifact-attest those files on the draft Release.
 
-    Assembly is handed the prepared release-candidate handoff, and the release
-    identity it records comes from there. It is not derived from the publisher
-    evidence fragments and not from the assembling job's checkout, which is
-    whatever the workflow gave it. A release that configures no publication
-    therefore assembles a complete statement, because naming the release no
-    longer depends on a publisher having run, and the statement's identity
-    contract does not weaken to allow it: the handoff manifest carries the
-    annotated tag object the statement records. A fragment identifying some
-    other release is refused however many other fragments agree with it.
+    Assembly proves the checkout it is given rather than trusting it or being
+    handed a document about it. It resolves the annotated global release tag the
+    checked-out commit publishes, rebuilds the release from the accepted source
+    commit in an isolated local clone, and refuses the checkout unless the
+    rebuilt plan digest, tree, commit, tag object and tag name all match what
+    the published tag carries. That reproduction is credential-free, reaches no
+    network, and is the same one tag verification performs, so the release
+    identity and the sealed release plan both come from one derivation performed
+    in the job that consumes them. A release that configures no publication
+    assembles a complete statement, because naming the release does not depend
+    on a publisher having run, and the statement's identity contract does not
+    weaken to allow it: reproduction proves the annotated tag object the
+    statement records. A fragment identifying some other release is refused
+    however many other fragments agree with it.
 
-    The handoff transports the sealed release plan as well as its manifest, and
-    assembly reads it rather than only digesting it. The plan digest every
-    accepted fragment agrees on is the digest that plan's own payload
-    determines, recomputed rather than read from the seal it carries, so the
-    binding rests on a derivation set against a claim instead of on agreement
-    between claims. The global release tag the manifest names must be a tag the
-    plan seals, under the name it seals it by, and every published subject must
-    carry the version the plan assigns its release unit. The expected
-    publication set is derived from the assembling workspace's configuration and
-    reconciled against the same plan: one interpretation contract, every
-    configured publication released by the plan, and every released release unit
-    declared by the configuration. That binds the expectation to the sealed
-    plan. It does not prove the assembling job's checkout is R, because a plan
-    seals versions and tags rather than publication destinations, so a checkout
-    differing only in publisher settings within a released release unit shifts
-    what assembly expects while agreeing with the plan completely.
+    The plan digest every accepted fragment agrees on is the digest the
+    reproduced plan's own payload determines, so the binding rests on a
+    derivation rather than on agreement between claims. The global release tag
+    is the one that plan seals, under the name it seals it by, and every
+    published subject carries the version the plan assigns its release unit. The
+    expected publication set is derived from the proved checkout's configuration
+    and reconciled against the same plan: a release unit with publishers and no
+    version bump is not in the plan, and a publication configured for it
+    publishes nothing this release sealed. Because the configuration read is the
+    one at the proved release commit, a job checked out at any other ref is
+    refused outright rather than silently shifting what assembly expects.
 
     Evidence is not the only thing the draft carries. The GitHub-hosted
     deliverables are placed there before any publisher runs, by the managed

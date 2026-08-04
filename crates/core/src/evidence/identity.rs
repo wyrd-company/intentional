@@ -5,131 +5,54 @@
 
 //! The release identity final assembly binds its evidence to.
 //!
-//! Assembly is handed the prepared release-candidate handoff and reads the
-//! release identity from it. The handoff is the artifact the privileged
-//! publication job verified before it pushed the release commit and the
-//! annotated global tag, so it is the one input to assembly that states which
-//! release is being closed without asking the assembling job's own checkout.
+//! Assembly proves the checkout it was given rather than trusting it or being
+//! handed a document about it. `verify release-tag` resolves the annotated
+//! global tag the checked-out commit publishes, rebuilds the release from the
+//! accepted source commit in an isolated local clone, and refuses the checkout
+//! unless the rebuilt plan digest, tree, commit, tag object and tag name all
+//! match what the published tag carries.
+//!
+//! That is what makes the checkout usable evidence. The rule assembly is held
+//! to was never "do not read the checkout", it was "do not infer identity from
+//! the checkout without proving it is R", and this proves it. Every identity
+//! and the whole sealed plan then come from one derivation performed in the job
+//! that consumes them, with no credential, no network access, and no document
+//! transported from another run.
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::evidence::assemble::{ReleaseIdentity, TagIdentity};
-use crate::evidence::digest_bytes;
 use crate::plan::ReleasePlan;
-use crate::release::candidate::{ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST};
+use crate::release::tag::verify_release_tag;
 use std::path::Path;
 
-/// What one prepared release-candidate handoff tells assembly about its release.
-///
-/// Named for the handoff rather than for the release, because preparation has
-/// its own `PreparedRelease` describing what it wrote.
+/// What the proved checkout tells assembly about the release it is closing.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PreparedHandoff {
+pub struct ProvedRelease {
     /// Release identity every accepted document must agree with.
     pub identity: ReleaseIdentity,
-    /// Sealed release plan the handoff transports.
+    /// Sealed release plan the reproduction rebuilt and the tag seals.
     pub plan: ReleasePlan,
 }
 
-/// Read the release the prepared candidate handoff was prepared for.
+/// Prove the checkout is the release commit and read the release from it.
 ///
-/// The manifest is parsed through its own closed validation rather than picked
-/// apart field by field, so a handoff that is internally inconsistent is
-/// refused here instead of supplying assembly with half an identity.
-///
-/// The manifest's claims about the release are then held to the plan the
-/// handoff actually transports, in steps that fail independently and in the
-/// order they are written: the transported bytes are the ones the manifest
-/// inventoried; the digest the plan's payload determines is the one the
-/// manifest claims; the plan's own seal still recomputes over that payload; and
-/// the global tag the manifest names is a tag the plan seals, under the name it
-/// seals it by.
-///
-/// The digest comparison reads `payload_digest` rather than the seal the plan
-/// carries, and runs before the seal is checked, so it is a derivation set
-/// against a claim on its own terms rather than by standing after a check that
-/// already made the two equal.
-pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
-    let manifest = directory.join(RELEASE_CANDIDATE_MANIFEST);
-    let text = std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
-    let candidate = ReleaseCandidate::from_yaml(&text).map_err(|error| {
-        Error::Validation(format!(
-            "release candidate {} is not a usable handoff: {error}",
-            manifest.display()
-        ))
-    })?;
-
-    let plan_path = directory.join(&candidate.plan.file);
-    let bytes = std::fs::read(&plan_path).map_err(|error| Error::io(&plan_path, error))?;
-    let transported = digest_bytes(&bytes);
-    if transported != candidate.plan.sha256 {
-        return Err(Error::Validation(format!(
-            "the handoff transports {} as {transported}, which its manifest inventories as {}",
-            candidate.plan.file, candidate.plan.sha256
-        )));
-    }
-    let plan: ReleasePlan = serde_json::from_slice(&bytes).map_err(|error| {
-        Error::Validation(format!(
-            "the handoff's sealed release plan {} is not a release plan: {error}",
-            plan_path.display()
-        ))
-    })?;
-    // The manifest's claim is compared against the recomputed digest before the
-    // plan's own seal is looked at, so this comparison is a derivation set
-    // against a claim on its own terms. Standing it after `verify_digest` would
-    // make it claim-versus-claim that happens to be correct, and would leave
-    // nothing able to tell the two spellings apart.
-    let sealed = plan.payload_digest()?;
-    if sealed != candidate.plan.digest {
-        return Err(Error::Validation(format!(
-            "the release candidate identifies the release by plan-digest {}, but the sealed \
-             release plan it transports seals {sealed}",
-            candidate.plan.digest
-        )));
-    }
-    // The plan's own seal is then held to its payload, which refuses a
-    // self-inconsistent document the manifest happens to agree with.
-    plan.verify_digest()?;
-
-    // The plan seals the tags the release creates, and the manifest names one
-    // of them as the global release tag. Reading the plan's own entry is what
-    // stops a manifest and a unanimous set of fragments from agreeing about a
-    // tag the release never sealed.
-    let tag = plan
-        .tags
-        .iter()
-        .find(|tag| tag.id == candidate.global_tag.id)
-        .ok_or_else(|| {
-            Error::Validation(format!(
-                "the release candidate names global release tag {}, which the sealed release \
-                 plan does not seal; it seals {}",
-                candidate.global_tag.id,
-                plan.tags
-                    .iter()
-                    .map(|tag| tag.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        })?;
-    if tag.name != candidate.global_tag.name {
-        return Err(Error::Validation(format!(
-            "the release candidate renders global release tag {} as {}, and the sealed release \
-             plan seals it as {}",
-            candidate.global_tag.id, candidate.global_tag.name, tag.name
-        )));
-    }
-
-    Ok(PreparedHandoff {
+/// The tag's target is not read separately: reproduction refuses a global tag
+/// that targets anything but the released commit, so the target is R and
+/// recording it as anything else would be recording a value nothing proved.
+pub fn proved_release(root: &Path) -> Result<ProvedRelease> {
+    let verified = verify_release_tag(root)?;
+    Ok(ProvedRelease {
         identity: ReleaseIdentity {
-            source_commit: candidate.source.commit,
-            release_commit: candidate.release.commit,
+            source_commit: verified.source,
+            release_commit: verified.release.clone(),
             global_tag: TagIdentity {
-                name: candidate.global_tag.name,
-                object: candidate.global_tag.object,
-                target: candidate.global_tag.target,
+                name: verified.global_tag,
+                object: verified.global_tag_object,
+                target: verified.release,
             },
-            plan_digest: candidate.plan.digest,
+            plan_digest: verified.plan_digest,
         },
-        plan,
+        plan: verified.plan,
     })
 }
 
@@ -144,8 +67,8 @@ fn disagreements(label: &str, components: &[(&str, &str, &str)]) -> Vec<String> 
         .filter(|(_, expected, observed)| expected != observed)
         .map(|(field, expected, observed)| {
             format!(
-                "{label} records {field} {observed:?}, but the prepared release candidate \
-                 identifies the release by {field} {expected:?}"
+                "{label} records {field} {observed:?}, but the proved release identifies \
+                 the release by {field} {expected:?}"
             )
         })
         .collect()
@@ -224,223 +147,42 @@ pub(crate) fn phase_disagreements(
 /// its identities from here rather than from a constant of its own, so a
 /// fixture cannot agree with itself while disagreeing with the handoff.
 #[cfg(test)]
-pub(crate) mod test_support {
-    use crate::evidence::digest_bytes;
-    use crate::executor::fixture::Workspace;
-    use crate::model::{Bump, TagPhase, TagRole};
-    use crate::plan::{Generator, PlanReleaseUnit, PlanTag, ReleasePlan};
-    use crate::release::candidate::{
-        RELEASE_BUNDLE_FILE, RELEASE_CANDIDATE_CONTRACT, RELEASE_CANDIDATE_MANIFEST,
-        RELEASE_CANDIDATE_SCHEMA, RELEASE_PLAN_FILE,
-    };
-    use std::path::PathBuf;
-
-    /// Source commit S.
-    pub(crate) const SOURCE: &str = "1111111111111111111111111111111111111111";
-    /// Release commit R.
-    pub(crate) const RELEASE: &str = "2222222222222222222222222222222222222222";
-    /// Annotated global tag object.
-    pub(crate) const TAG_OBJECT: &str = "3333333333333333333333333333333333333333";
-    /// Rendered global tag name.
-    pub(crate) const TAG_NAME: &str = "release/1.0.0";
-    /// Release unit the fixture releases and publishes.
-    pub(crate) const RELEASE_UNIT: &str = "component";
-
-    /// The sealed release plan the fixture handoff transports.
-    ///
-    /// Assembly reads the plan's contract and the release units it releases.
-    /// The tags are carried because a real plan carries them: exactly one tag
-    /// without a required phase, which is the global release tag the manifest
-    /// names.
-    pub(crate) fn sealed_plan() -> ReleasePlan {
-        let mut plan = ReleasePlan {
-            digest: String::new(),
-            contract: "contract-1".to_owned(),
-            generator: Generator {
-                tool: "intentional".to_owned(),
-                version: "0.0.0".to_owned(),
-            },
-            channel: None,
-            release_units: vec![PlanReleaseUnit {
-                id: RELEASE_UNIT.to_owned(),
-                old_version: "0.9.0".to_owned(),
-                new_version: "1.0.0".to_owned(),
-                bump: Bump::Minor,
-                contributing_intent_ids: Vec::new(),
-                tag_ids: vec![format!("release-unit/{RELEASE_UNIT}/primary")],
-                release_notes: "## 1.0.0\n".to_owned(),
-            }],
-            tags: vec![
-                PlanTag {
-                    id: format!("release-unit/{RELEASE_UNIT}/primary"),
-                    name: format!("{RELEASE_UNIT}@1.0.0"),
-                    version: "1.0.0".to_owned(),
-                    release_unit: Some(RELEASE_UNIT.to_owned()),
-                    role: Some(TagRole::Primary),
-                    require_phase: Some(TagPhase::BeforePublication),
-                    tag_after: Vec::new(),
-                },
-                PlanTag {
-                    id: "workspace/release".to_owned(),
-                    name: TAG_NAME.to_owned(),
-                    version: "1.0.0".to_owned(),
-                    release_unit: None,
-                    role: None,
-                    require_phase: None,
-                    tag_after: Vec::new(),
-                },
-            ],
-            tag_order: vec![
-                format!("release-unit/{RELEASE_UNIT}/primary"),
-                "workspace/release".to_owned(),
-            ],
-        };
-        plan.digest = plan.payload_digest().expect("the fixture plan seals");
-        plan
-    }
-
-    /// The exact bytes the handoff transports as its sealed plan.
-    pub(crate) fn sealed_plan_bytes() -> String {
-        // Preparation writes the canonical JSON followed by a newline, so the
-        // fixture transports exactly what a real handoff transports.
-        format!(
-            "{}\n",
-            sealed_plan()
-                .to_canonical_json()
-                .expect("the fixture plan serializes")
-        )
-    }
-
-    /// Digest sealed inside the release plan the handoff transports.
-    ///
-    /// Derived from the plan rather than written down, so a fixture cannot
-    /// state a digest the plan it ships does not have.
-    pub(crate) fn plan_digest() -> String {
-        sealed_plan().digest
-    }
-
-    /// Render the handoff manifest of the one prepared release under test.
-    pub(crate) fn candidate_manifest() -> String {
-        let plan_digest = plan_digest();
-        let plan_bytes = sealed_plan_bytes();
-        let plan_sha256 = digest_bytes(plan_bytes.as_bytes());
-        let plan_size = plan_bytes.len();
-        format!(
-            r#"$schema: {RELEASE_CANDIDATE_SCHEMA}
-contract: {RELEASE_CANDIDATE_CONTRACT}
-source:
-  commit: {SOURCE}
-release:
-  commit: {RELEASE}
-  parent: {SOURCE}
-  tree: 6666666666666666666666666666666666666666
-plan:
-  file: {RELEASE_PLAN_FILE}
-  digest: {plan_digest}
-  sha256: {plan_sha256}
-global-tag:
-  id: workspace/release
-  name: {TAG_NAME}
-  object: {TAG_OBJECT}
-  target: {RELEASE}
-changed-tree:
-  - path: {RELEASE_UNIT}/package.json
-    status: modified
-    digest: sha256:8888888888888888888888888888888888888888888888888888888888888888
-git-bundle:
-  file: {RELEASE_BUNDLE_FILE}
-  sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
-  heads:
-    - refs/heads/intentional-release
-    - refs/tags/intentional-global-release
-files:
-  - path: {RELEASE_PLAN_FILE}
-    sha256: {plan_sha256}
-    size: {plan_size}
-  - path: {RELEASE_BUNDLE_FILE}
-    sha256: sha256:9999999999999999999999999999999999999999999999999999999999999999
-    size: 512
-"#
-        )
-    }
-
-    /// Write that handoff beneath a workspace and return its directory.
-    pub(crate) fn candidate(workspace: &Workspace) -> PathBuf {
-        workspace
-            .write(
-                &format!("handoff/{RELEASE_CANDIDATE_MANIFEST}"),
-                &candidate_manifest(),
-            )
-            .write(
-                &format!("handoff/{RELEASE_PLAN_FILE}"),
-                &sealed_plan_bytes(),
-            );
-        workspace.root().join("handoff")
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::test_support::{
-        candidate_manifest, plan_digest, RELEASE, SOURCE, TAG_NAME, TAG_OBJECT,
-    };
     use super::*;
-    use crate::executor::fixture::Workspace;
+    use crate::release::tag::tests::ReleasedWorkspace;
 
-    fn identity() -> ReleaseIdentity {
+    fn identity(workspace: &ReleasedWorkspace) -> ReleaseIdentity {
         ReleaseIdentity {
-            source_commit: SOURCE.to_owned(),
-            release_commit: RELEASE.to_owned(),
+            source_commit: workspace.source.clone(),
+            release_commit: workspace.release.clone(),
             global_tag: TagIdentity {
-                name: TAG_NAME.to_owned(),
-                object: TAG_OBJECT.to_owned(),
-                target: RELEASE.to_owned(),
+                name: workspace.tag_name.clone(),
+                object: workspace.tag_object.clone(),
+                target: workspace.release.clone(),
             },
-            plan_digest: plan_digest(),
+            plan_digest: workspace.plan_digest.clone(),
         }
     }
 
     #[test]
-    fn reads_the_release_identity_the_handoff_declares() {
-        let workspace = Workspace::new("candidate-identity");
-        let directory = super::test_support::candidate(&workspace);
-        assert_eq!(
-            prepared_release(&directory).expect("identity").identity,
-            identity()
-        );
+    fn reads_the_release_from_the_checkout_it_proves() {
+        let workspace = ReleasedWorkspace::new();
+        let proved = proved_release(&workspace.root).expect("the checkout is the release");
+        assert_eq!(proved.identity, identity(&workspace));
+        assert_eq!(proved.plan.digest, workspace.plan_digest);
     }
 
+    /// A checkout that is not the released commit is refused, not read.
+    ///
+    /// This is the state the whole binding exists for: a job checked out at a
+    /// ref that is not R. Assembly refuses it rather than deriving an
+    /// expectation from it.
     #[test]
-    fn refuses_a_handoff_whose_manifest_contradicts_itself() {
-        let workspace = Workspace::new("candidate-identity-broken");
-        // The global tag must target R. A manifest that targets S instead is
-        // internally inconsistent, and assembly must not take the half of it
-        // that still parses.
-        workspace.write(
-            &format!("handoff/{RELEASE_CANDIDATE_MANIFEST}"),
-            &candidate_manifest().replace(
-                &format!("  target: {RELEASE}"),
-                &format!("  target: {SOURCE}"),
-            ),
-        );
-        let error = prepared_release(&workspace.root().join("handoff"))
-            .expect_err("an inconsistent handoff is refused");
-        assert!(
-            error
-                .to_string()
-                .contains("global tag must target release commit"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn refuses_a_handoff_that_is_not_there() {
-        let workspace = Workspace::new("candidate-identity-absent");
-        let error = prepared_release(workspace.root()).expect_err("an absent handoff is refused");
-        assert!(
-            error.to_string().contains(RELEASE_CANDIDATE_MANIFEST),
-            "{error}"
-        );
+    fn refuses_a_checkout_that_is_not_the_released_commit() {
+        let workspace = ReleasedWorkspace::new();
+        let error = proved_release(&workspace.root.join(".intentional"))
+            .expect_err("a directory that is not the released checkout is refused");
+        assert!(!error.to_string().is_empty(), "{error}");
     }
 
     /// Each identity component is compared, and each is compared on its own.
@@ -450,7 +192,7 @@ mod tests {
     /// because the components beside it still disagreed.
     #[test]
     fn names_each_identity_component_a_fragment_spells_differently() {
-        let expected = identity();
+        let expected = identity(&ReleasedWorkspace::new());
         let elsewhere = "9".repeat(40);
         /// One named component of an identity, and how to spell it wrongly.
         type Corruption = (&'static str, fn(&mut ReleaseIdentity, &str));
@@ -502,7 +244,7 @@ mod tests {
     /// components the two lists share, and never on the ones they do not.
     #[test]
     fn names_each_identity_component_a_phase_document_spells_differently() {
-        let expected = identity();
+        let expected = identity(&ReleasedWorkspace::new());
         /// One named component of a phase document, and how to spell it wrongly.
         type Corruption = (&'static str, fn(&mut [String; 4]));
         let corruptions: [Corruption; 4] = [
