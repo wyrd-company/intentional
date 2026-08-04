@@ -99,6 +99,56 @@ fn inherited_environment() -> String {
         .join(" ")
 }
 
+/// `find` predicate selecting one packager's GitHub-hosted deliverables.
+///
+/// A GitHub-hosted deliverable is a file the build produced whose consumer
+/// resolves it from the release's own GitHub Release rather than from a
+/// registry. Only GoReleaser produces any today: an npm tarball, a `.crate`, an
+/// OCI layout and a Dev Container Feature all reach a registry, so a build job
+/// for those packagers hands the upload job nothing.
+///
+/// GoReleaser writes what it distributes at the top of its distribution tree
+/// and everything else below it, so depth is the rule rather than a list of
+/// extensions the packager could add to. Descriptors are excluded structurally:
+/// a Homebrew formula lives under `homebrew/` and an Arch package's sources
+/// under `aur/`, and their publisher jobs promote them into repositories. What
+/// remains at the top is the archives, the checksum file, and the native
+/// packages, minus the three documents the packager writes to describe its own
+/// run. Those three are named because they are build metadata rather than
+/// anything a consumer resolves; a release that published them would inventory
+/// GoReleaser's internal state as a deliverable.
+pub(super) const fn github_hosted_deliverables(packager: Packager) -> Option<&'static str> {
+    match packager {
+        Packager::GoReleaser => {
+            Some("! -name artifacts.json ! -name metadata.json ! -name config.yaml")
+        }
+        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => None,
+    }
+}
+
+/// `find` predicate selecting the deliverables one publication consumes.
+///
+/// A draft-dependent publication's handoff inventories the assets that
+/// publication retrieves, not every asset the subject produced. The split is
+/// the packager's own: `nfpms` writes one file per declared format and each
+/// system-package adapter distributes exactly its own format, while a Homebrew
+/// formula and an Arch `PKGBUILD` resolve the release archives their descriptor
+/// points at. Handing an adapter the other half would make it download and
+/// digest bytes its consumer path never resolves and record that as its
+/// retrieval.
+pub(super) fn consumed_deliverables(publisher: PublisherKind) -> Option<String> {
+    let native = |format: &str| format!("-name '*.{format}'");
+    match publisher {
+        PublisherKind::Rpm | PublisherKind::Apt => {
+            crate::executor::goreleaser::nfpm_format(publisher).map(native)
+        }
+        PublisherKind::Homebrew | PublisherKind::Aur => {
+            Some("! -name '*.rpm' ! -name '*.deb'".to_owned())
+        }
+        PublisherKind::Npm | PublisherKind::Cargo | PublisherKind::Oci => None,
+    }
+}
+
 /// Conventional GitHub secret holding npm's bootstrap token.
 const NPM_TOKEN_SECRET: &str = "NPM_TOKEN";
 /// Conventional GitHub secret holding Cargo's bootstrap registry token.

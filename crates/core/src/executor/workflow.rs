@@ -911,6 +911,48 @@ fn publish_contract(
         ));
     }
 
+    // Only a subject whose packager produces GitHub-hosted deliverables gives
+    // the upload job anything to place. Every other subject reaches a registry,
+    // and a release built entirely of those derives no upload job at all.
+    let hosted = subjects
+        .iter()
+        .filter(|subject| {
+            crate::executor::steps::github_hosted_deliverables(subject.packager).is_some()
+        })
+        .collect::<Vec<_>>();
+    // A publication receives a draft-asset handoff when its consumer path
+    // resolves a Release asset and its subject produced one. The same decision
+    // derives the step that writes the document and the input that names it to
+    // the publisher, so the two cannot disagree about which publications have
+    // one.
+    let mut consumers = Vec::new();
+    for publication in &selection.selected {
+        if !crate::publication::draft::is_draft_dependent(publication.publisher) {
+            continue;
+        }
+        let Some(consumed) = crate::executor::steps::consumed_deliverables(publication.publisher)
+        else {
+            continue;
+        };
+        let Some(subject) = hosted.iter().find(|subject| subject.covers(publication)) else {
+            continue;
+        };
+        consumers.push(DraftConsumer {
+            publication,
+            subject,
+            consumed,
+        });
+    }
+    let upload = (!hosted.is_empty()).then(|| format!("{}upload_deliverables", namespaces.job));
+    if let Some(upload) = &upload {
+        let mut needs = vec![verify.clone()];
+        needs.extend(build_jobs.iter().cloned());
+        jobs.push((
+            upload.clone(),
+            upload_job(namespaces, &verify, &needs, &hosted, &consumers),
+        ));
+    }
+
     let publisher_upstream = before.clone().unwrap_or_else(|| verify.clone());
     let mut publisher_jobs = Vec::new();
     let mut identities = BTreeSet::new();
@@ -949,9 +991,26 @@ fn publish_contract(
         if !needs.contains(&producer) {
             needs.push(producer);
         }
+        // Every publisher waits on the upload job whether or not it reads a
+        // Release asset. The barrier is what keeps repository write authority
+        // in one job: a per-subject upload would narrow it and multiply the
+        // jobs holding `contents: write` by the number of subjects.
+        needs.extend(upload.iter().cloned());
+        let handoff = consumers
+            .iter()
+            .find(|consumer| consumer.publication.identity() == publication.identity())
+            .map(|_| identifier(&publication.identity()));
         jobs.push((
             id,
-            publisher_job(root, namespaces, &needs, publication, subject, config),
+            publisher_job(
+                root,
+                namespaces,
+                &needs,
+                publication,
+                subject,
+                config,
+                handoff.as_deref(),
+            ),
         ));
     }
 
@@ -1446,6 +1505,130 @@ fn build_job(
     )
 }
 
+/// One draft-dependent publication and the subject whose assets it consumes.
+struct DraftConsumer<'a> {
+    /// Publication the handoff is written for.
+    publication: &'a SelectedPublication,
+    /// Subject whose GitHub-hosted deliverables the publication resolves.
+    subject: &'a DistinctSubject,
+    /// `find` predicate selecting the deliverables this publication consumes.
+    consumed: String,
+}
+
+/// Artifact one publication's draft-asset handoff is transported as.
+///
+/// The producer and the consumer are one expression rather than two spellings.
+/// A handoff whose artifact name or directory disagreed between the job that
+/// writes it and the job that reads it would not fail loudly: the download
+/// would resolve nothing, the publisher would pass a path with no file behind
+/// it, and the failure would surface as a verification refusal naming the
+/// destination instead of the transport.
+fn handoff_artifact(namespaces: &PrefixNamespaces, slug: &str) -> String {
+    format!("{}handoff-{slug}", namespaces.job)
+}
+
+/// Directory the handoff artifact is written to and unpacked into.
+fn handoff_directory(namespaces: &PrefixNamespaces, slug: &str) -> String {
+    format!("${{{{ runner.temp }}}}/{}handoff/{slug}", namespaces.job)
+}
+
+/// File one publication's draft-asset handoff is carried in.
+fn handoff_file(namespaces: &PrefixNamespaces, slug: &str) -> String {
+    format!(
+        "{}/{}",
+        handoff_directory(namespaces, slug),
+        crate::publication::draft::DRAFT_HANDOFF_FILE
+    )
+}
+
+/// Managed job placing every GitHub-hosted deliverable on the draft Release.
+///
+/// The job is derived only where the release builds a deliverable for it to
+/// place. Deriving it regardless would emit a job holding repository
+/// content-write authority for the duration of an upload it has nothing to
+/// upload, which is the cost `immutable-github-release` weighs against
+/// publisher concurrency and declines to pay twice.
+fn upload_job(
+    namespaces: &PrefixNamespaces,
+    verify: &str,
+    needs: &[String],
+    hosted: &[&DistinctSubject],
+    consumers: &[DraftConsumer<'_>],
+) -> std::result::Result<Value, WorkflowDiagnostic> {
+    let mut deliverable_steps = String::new();
+    for subject in hosted {
+        let find = crate::executor::steps::github_hosted_deliverables(subject.packager)
+            .unwrap_or_default();
+        deliverable_steps.push_str(
+            &PUBLISH_UPLOAD_STEP
+                .replace(
+                    "@DELIVERABLE_NAME@",
+                    &scalar(&format!(
+                        "Upload the {} deliverables to the draft Release",
+                        subject.identity
+                    )),
+                )
+                .replace("@SUBJECT_IDENTITY@", &scalar(&subject.identity))
+                .replace("@SLUG@", &subject.slug)
+                .replace("@DELIVERABLE_FIND@", find)
+                .replace("@VERIFY@", verify),
+        );
+    }
+    let mut handoff_steps = String::new();
+    for consumer in consumers {
+        let identity = consumer.publication.identity();
+        let slug = identifier(&identity);
+        let find = crate::executor::steps::github_hosted_deliverables(consumer.subject.packager)
+            .unwrap_or_default();
+        handoff_steps.push_str(
+            &PUBLISH_HANDOFF_STEP
+                .replace(
+                    "@HANDOFF_NAME@",
+                    &scalar(&format!("Write the {identity} draft-asset handoff")),
+                )
+                .replace(
+                    "@HANDOFF_UPLOAD_NAME@",
+                    &scalar(&format!("Upload the {identity} draft-asset handoff")),
+                )
+                .replace(
+                    "@HANDOFF_SCHEMA@",
+                    crate::publication::draft::DRAFT_HANDOFF_SCHEMA,
+                )
+                .replace(
+                    "@HANDOFF_CONTRACT@",
+                    crate::publication::draft::DRAFT_HANDOFF_CONTRACT,
+                )
+                .replace("@HANDOFF_ARTIFACT@", &handoff_artifact(namespaces, &slug))
+                .replace("@HANDOFF_DIRECTORY@", &handoff_directory(namespaces, &slug))
+                .replace("@HANDOFF@", &scalar(&handoff_file(namespaces, &slug)))
+                .replace(
+                    "@RELEASE_UNIT@",
+                    &scalar(&consumer.publication.release_unit),
+                )
+                .replace(
+                    "@PUBLISHER@",
+                    &scalar(consumer.publication.publisher.as_str()),
+                )
+                .replace("@TARGET@", &scalar(&consumer.publication.target))
+                .replace("@PUBLICATION@", &scalar(&identity))
+                .replace("@SUBJECT_SLUG@", &consumer.subject.slug)
+                .replace("@DELIVERABLE_FIND@", find)
+                .replace("@CONSUMED_FIND@", &consumer.consumed)
+                .replace("@VERIFY@", verify),
+        );
+    }
+    job(
+        PUBLISH_UPLOAD_JOB,
+        namespaces,
+        &[
+            ("@NEEDS@", &render_list(needs)),
+            ("@VERIFY@", verify),
+            ("@DELIVERABLE_STEPS@", &deliverable_steps),
+            ("@HANDOFF_STEPS@", &handoff_steps),
+        ],
+    )
+}
+
 /// Managed job sealing and publishing the tags one executor phase declares.
 fn phase_tag_job(
     namespaces: &PrefixNamespaces,
@@ -1501,6 +1684,7 @@ fn publisher_job(
     publication: &SelectedPublication,
     subject: &DistinctSubject,
     config: &Config,
+    handoff_slug: Option<&str>,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
     let unit = &config.release_units[&publication.release_unit];
     // An omitted selector is what chooses an adapter's configured primary
@@ -1553,21 +1737,23 @@ fn publisher_job(
     ];
     // A draft-dependent publisher's fragment records what it retrieved from the
     // draft Release, and that claim is proved against the inventory the release
-    // sealed for this publication. The path is named by the derivation so the
-    // job consumes the handoff for its own publication rather than whichever
-    // document happens to be on the runner. A publisher whose consumer path
-    // reads no draft asset passes none, and the Action turns an empty input into
-    // an absent option rather than an empty path.
-    let handoff = if crate::publication::draft::is_draft_dependent(publication.publisher) {
+    // sealed for this publication. The document arrives as the artifact the
+    // upload job wrote it to, at the path the same expressions derive on both
+    // sides, so the job consumes the handoff for its own publication rather
+    // than whichever document happens to be on the runner. A publisher whose
+    // consumer path reads no draft asset receives none, and the Action turns an
+    // empty input into an absent option rather than an empty path.
+    let handoff = handoff_slug.map_or_else(String::new, |slug| handoff_file(namespaces, slug));
+    let handoff_step = handoff_slug.map_or_else(String::new, |slug| {
         format!(
-            "${{{{ runner.temp }}}}/{}handoff/{slug}/{}",
-            namespaces.job,
-            crate::publication::draft::DRAFT_HANDOFF_FILE
+            "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
+            scalar(&format!("Download the {identity} draft-asset handoff")),
+            handoff_artifact(namespaces, slug),
+            handoff_directory(namespaces, slug),
         )
-    } else {
-        String::new()
-    };
+    });
     substitutions.extend([
+        ("@HANDOFF_STEP@", handoff_step),
         ("@RECIPE_STEPS@", recipe),
         ("@HANDOFF@", scalar(&handoff)),
         (
@@ -1831,6 +2017,12 @@ steps:
 /// release already closed, and continuing would mean uploading assets onto an
 /// immutable Release, so the transition refuses.
 ///
+/// The two streams are kept apart on the success path. `gh` writes notices,
+/// deprecations and its own update prompt to standard error on calls that exit
+/// zero, so a resolution that merged them would make those bytes part of the
+/// value it compares and refuse a perfectly good draft. The failure branch is
+/// where the diagnostic is read, and only there.
+///
 /// The step names its repository rather than inheriting one. The push step
 /// rewrote `origin` to embed the installation token, so a `gh` that resolved
 /// the repository from the remote would take the Release the whole publication
@@ -1893,12 +2085,18 @@ steps:
     run: |
       set -euo pipefail
       viewed="$(gh release view "${@ENVVAR@GLOBAL_TAG}" \
-        --json isDraft --jq '.isDraft' 2>&1)" && resolved=0 || resolved=$?
+        --json isDraft --jq '.isDraft' 2>"${RUNNER_TEMP}/@JOB@release-view-error")" \
+        && resolved=0 || resolved=$?
       if test "${resolved}" -eq 0; then
-        test "${viewed}" = "true"
+        if test "${viewed}" != "true"; then
+          printf 'the Release for %s is no longer a draft, so this release has already closed; continuing would place assets on an immutable Release\n' \
+            "${@ENVVAR@GLOBAL_TAG}" >&2
+          exit 1
+        fi
       else
-        if ! printf '%s\n' "${viewed}" | grep -qi 'release not found'; then
-          printf 'the draft Release could not be resolved: %s\n' "${viewed}" >&2
+        if ! grep -qi 'release not found' "${RUNNER_TEMP}/@JOB@release-view-error"; then
+          printf 'the draft Release could not be resolved: %s\n' \
+            "$(cat "${RUNNER_TEMP}/@JOB@release-view-error")" >&2
           exit 1
         fi
         gh release create "${@ENVVAR@GLOBAL_TAG}" --draft --verify-tag \
@@ -1906,10 +2104,25 @@ steps:
       fi
 "#;
 
+/// The job that proves the release identity every later job binds itself to.
+///
+/// The four identities it proves are projected as job outputs because the
+/// managed upload job writes them into a draft-asset handoff, and a downstream
+/// publisher proves that document against its own checkout before it trusts a
+/// single asset. Routing them through the graph is what makes them the verified
+/// values: `github.ref_name` and a configured tag template are ambient values
+/// that agree with the verified identity right up until they do not, and a
+/// handoff carrying one of those would be refused on a release runner by the
+/// command that compares them.
 const PUBLISH_VERIFY_JOB: &str = r#"
 runs-on: ubuntu-latest
 permissions:
   contents: read
+outputs:
+  global-tag: ${{ steps.@JOB@verified.outputs.global-tag }}
+  source-sha: ${{ steps.@JOB@verified.outputs.source-sha }}
+  release-sha: ${{ steps.@JOB@verified.outputs.release-sha }}
+  plan-digest: ${{ steps.@JOB@verified.outputs.plan-digest }}
 env:
   @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
 steps:
@@ -1920,7 +2133,8 @@ steps:
       fetch-depth: 0
       fetch-tags: true
       persist-credentials: false
-  - name: Verify the global release tag
+  - id: @JOB@verified
+    name: Verify the global release tag
     uses: @VERIFY_RELEASE_TAG_ACTION@
     with:
       intentional-version: @VERSION@
@@ -2085,7 +2299,7 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@RECIPE_STEPS@  - name: @VERIFY_NAME@
+@HANDOFF_STEP@@RECIPE_STEPS@  - name: @VERIFY_NAME@
     uses: @VERIFY_PUBLICATION_ACTION@
     with:
       release-unit: @RELEASE_UNIT@
@@ -2100,6 +2314,207 @@ steps:
     with:
       name: @JOB@evidence-@SLUG@
       path: ${{ runner.temp }}/@JOB@evidence/@SLUG@.yml
+      retention-days: 1
+"#;
+
+/// Managed job placing every GitHub-hosted deliverable on the draft Release.
+///
+/// Writing to a Release is `contents: write`, the same permission that pushes
+/// commits and moves tags, so the authority stays in a repository-local job
+/// inside the protected environment and no publisher job receives it. That
+/// makes this an unconditional barrier between every build job and every
+/// publisher job: the slowest build gates the first publication, which is the
+/// price of one job holding repository write authority instead of one per
+/// subject.
+///
+/// The draft is resolved once, before any asset is written. A Release that is
+/// no longer a draft has already closed and a Release carrying another tag is
+/// not this release's, and both are refused there rather than discovered
+/// halfway through an upload. The resolved identifier is written to a file
+/// because a later step needs the same Release and a step cannot read another
+/// step's shell variables.
+///
+/// Uploading is `--clobber`, so a rerun after a partial failure replaces what it
+/// already placed and succeeds. `immutable-github-release` states that a failure
+/// before closure leaves a resumable draft, and an upload that refused a
+/// deliverable already present would make that draft resumable only by hand.
+const PUBLISH_UPLOAD_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+environment: @ENVIRONMENT@
+permissions:
+  contents: read
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: Download every built subject
+    uses: @DOWNLOAD@
+    with:
+      pattern: @JOB@subject-*
+      path: ${{ runner.temp }}/@JOB@subject
+  - id: @JOB@token
+    name: Mint a short-lived Release token
+    uses: @APP_TOKEN@
+    with:
+      app-id: ${{ vars.@ENVVAR@GITHUB_APP_ID }}
+      private-key: ${{ secrets.@ENVVAR@GITHUB_APP_PRIVATE_KEY }}
+  - name: Resolve the draft Release for the released tag
+    env:
+      GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      GH_REPO: ${{ github.repository }}
+      @ENVVAR@GLOBAL_TAG: ${{ needs.@VERIFY@.outputs.global-tag }}
+      @ENVVAR@RELEASE_ID: ${{ runner.temp }}/@JOB@draft-release
+    run: |
+      set -euo pipefail
+      viewed="$(gh release view "${@ENVVAR@GLOBAL_TAG}" \
+        --json isDraft,tagName,databaseId --jq '[.isDraft, .tagName, .databaseId] | @tsv' \
+        2>"${RUNNER_TEMP}/@JOB@release-view-error")" || {
+        printf 'the draft Release for %s could not be resolved: %s\n' \
+          "${@ENVVAR@GLOBAL_TAG}" "$(cat "${RUNNER_TEMP}/@JOB@release-view-error")" >&2
+        exit 1
+      }
+      IFS=$'\t' read -r drafted named identified <<<"${viewed}"
+      if test "${drafted}" != "true"; then
+        printf 'the Release for %s is no longer a draft; deliverables are placed before closure, never onto a published Release\n' \
+          "${@ENVVAR@GLOBAL_TAG}" >&2
+        exit 1
+      fi
+      if test "${named}" != "${@ENVVAR@GLOBAL_TAG}"; then
+        printf 'the Release resolved for %s carries tag %s; the deliverables of this release belong to the draft of its own global release tag\n' \
+          "${@ENVVAR@GLOBAL_TAG}" "${named}" >&2
+        exit 1
+      fi
+      printf '%s\n' "${identified}" > "${@ENVVAR@RELEASE_ID}"
+@DELIVERABLE_STEPS@@HANDOFF_STEPS@"#;
+
+/// One subject's deliverables reaching the draft Release.
+///
+/// The bytes are the ones the build job produced and transported. Nothing here
+/// runs a packager: a second packaging produces a subject whose digest cannot
+/// equal the one the release sealed, which is the whole premise of the
+/// build-once graph.
+///
+/// A Release asset name is flat, so two subjects that produce the same basename
+/// would silently replace one another and the handoff of the loser would
+/// inventory an identifier holding the winner's bytes. The ledger is what makes
+/// that a refusal naming both, and it spans subjects because the collision does.
+const PUBLISH_UPLOAD_STEP: &str = r#"  - name: @DELIVERABLE_NAME@
+    env:
+      GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      GH_REPO: ${{ github.repository }}
+      @ENVVAR@GLOBAL_TAG: ${{ needs.@VERIFY@.outputs.global-tag }}
+      @ENVVAR@SUBJECT_IDENTITY: @SUBJECT_IDENTITY@
+      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/@JOB@subject-@SLUG@/bytes
+      @ENVVAR@LEDGER: ${{ runner.temp }}/@JOB@uploaded
+    run: |
+      set -euo pipefail
+      mapfile -t -d '' @ENVVAR@DELIVERABLES < <(find "${@ENVVAR@SUBJECT}" \
+        -maxdepth 1 -type f @DELIVERABLE_FIND@ -print0 | sort -z)
+      if test "${#@ENVVAR@DELIVERABLES[@]}" -eq 0; then
+        printf 'the %s build produced no GitHub-hosted deliverable under %s, so this publication has nothing its consumers could resolve\n' \
+          "${@ENVVAR@SUBJECT_IDENTITY}" "${@ENVVAR@SUBJECT}" >&2
+        exit 1
+      fi
+      touch "${@ENVVAR@LEDGER}"
+      for @ENVVAR@DELIVERABLE in "${@ENVVAR@DELIVERABLES[@]}"; do
+        @ENVVAR@ASSET="$(basename "${@ENVVAR@DELIVERABLE}")"
+        if grep -qxF "${@ENVVAR@ASSET}" "${@ENVVAR@LEDGER}"; then
+          printf 'another subject of this release already places Release asset %s; a Release asset name is flat, so one deliverable would replace the other\n' \
+            "${@ENVVAR@ASSET}" >&2
+          exit 1
+        fi
+        printf '%s\n' "${@ENVVAR@ASSET}" >> "${@ENVVAR@LEDGER}"
+      done
+      gh release upload "${@ENVVAR@GLOBAL_TAG}" "${@ENVVAR@DELIVERABLES[@]}" --clobber
+"#;
+
+/// One draft-dependent publication's asset handoff, written from the live draft.
+///
+/// The inventory is read back from the Release rather than predicted, because
+/// the stable asset identifier the consumer resolves is GitHub's and exists only
+/// once the asset does. The digest beside it is the one the release sealed: it
+/// is taken from the local bytes this job uploaded, so the consumer proving its
+/// download against it proves the round trip rather than agreeing with whatever
+/// the Release now holds.
+///
+/// The document is written whole or not at all. A deliverable the draft does not
+/// carry is a refusal rather than an omitted entry, because a handoff that
+/// inventories a subset is indistinguishable at the consumer from one whose
+/// publication legitimately consumes fewer assets.
+const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
+    env:
+      GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      GH_REPO: ${{ github.repository }}
+      @ENVVAR@REPOSITORY: ${{ github.repository }}
+      @ENVVAR@GLOBAL_TAG: ${{ needs.@VERIFY@.outputs.global-tag }}
+      @ENVVAR@SOURCE_COMMIT: ${{ needs.@VERIFY@.outputs.source-sha }}
+      @ENVVAR@RELEASE_COMMIT: ${{ needs.@VERIFY@.outputs.release-sha }}
+      @ENVVAR@PLAN_DIGEST: ${{ needs.@VERIFY@.outputs.plan-digest }}
+      @ENVVAR@RELEASE_ID: ${{ runner.temp }}/@JOB@draft-release
+      @ENVVAR@RELEASE_UNIT: @RELEASE_UNIT@
+      @ENVVAR@PUBLISHER: @PUBLISHER@
+      @ENVVAR@TARGET: @TARGET@
+      @ENVVAR@PUBLICATION: @PUBLICATION@
+      @ENVVAR@SUBJECT: ${{ runner.temp }}/@JOB@subject/@JOB@subject-@SUBJECT_SLUG@/bytes
+      @ENVVAR@HANDOFF: @HANDOFF@
+    run: |
+      set -euo pipefail
+      @ENVVAR@RELEASE="$(cat "${@ENVVAR@RELEASE_ID}")"
+      mapfile -t -d '' @ENVVAR@CONSUMED < <(find "${@ENVVAR@SUBJECT}" \
+        -maxdepth 1 -type f @DELIVERABLE_FIND@ @CONSUMED_FIND@ -print0 | sort -z)
+      if test "${#@ENVVAR@CONSUMED[@]}" -eq 0; then
+        printf 'the %s publication consumes a GitHub Release asset, but its subject produced none under %s\n' \
+          "${@ENVVAR@PUBLICATION}" "${@ENVVAR@SUBJECT}" >&2
+        exit 1
+      fi
+      gh api --paginate "repos/${@ENVVAR@REPOSITORY}/releases/${@ENVVAR@RELEASE}/assets" \
+        --jq '.[] | [.name, .id, .size, .content_type] | @tsv' \
+        > "${RUNNER_TEMP}/@JOB@inventory"
+      mkdir -p "$(dirname "${@ENVVAR@HANDOFF}")"
+      {
+        printf '$schema: %s\n' "@HANDOFF_SCHEMA@"
+        printf 'contract: %s\n' "@HANDOFF_CONTRACT@"
+        printf 'repository: "%s"\n' "${@ENVVAR@REPOSITORY}"
+        printf 'release-id: %s\n' "${@ENVVAR@RELEASE}"
+        printf 'global-tag: "%s"\n' "${@ENVVAR@GLOBAL_TAG}"
+        printf 'source-commit: "%s"\n' "${@ENVVAR@SOURCE_COMMIT}"
+        printf 'release-commit: "%s"\n' "${@ENVVAR@RELEASE_COMMIT}"
+        printf 'plan-digest: "%s"\n' "${@ENVVAR@PLAN_DIGEST}"
+        printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
+        printf 'publisher: %s\n' "${@ENVVAR@PUBLISHER}"
+        printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
+        printf 'assets:\n'
+        for @ENVVAR@ASSET_PATH in "${@ENVVAR@CONSUMED[@]}"; do
+          @ENVVAR@ASSET="$(basename "${@ENVVAR@ASSET_PATH}")"
+          @ENVVAR@ENTRY="$(awk -F'\t' -v name="${@ENVVAR@ASSET}" \
+            '$1 == name { print; exit }' "${RUNNER_TEMP}/@JOB@inventory")"
+          if test -z "${@ENVVAR@ENTRY}"; then
+            printf 'deliverable %s is not an asset of draft Release %s, so the %s publication could not retrieve it\n' \
+              "${@ENVVAR@ASSET}" "${@ENVVAR@RELEASE}" "${@ENVVAR@PUBLICATION}" >&2
+            exit 1
+          fi
+          IFS=$'\t' read -r _ @ENVVAR@ID @ENVVAR@SIZE @ENVVAR@MEDIA <<<"${@ENVVAR@ENTRY}"
+          printf -- '- id: %s\n' "${@ENVVAR@ID}"
+          printf '  name: "%s"\n' "${@ENVVAR@ASSET}"
+          printf '  size: %s\n' "${@ENVVAR@SIZE}"
+          printf '  media-type: "%s"\n' "${@ENVVAR@MEDIA}"
+          printf '  sha256: "sha256:%s"\n' \
+            "$(sha256sum "${@ENVVAR@ASSET_PATH}" | cut -d' ' -f1)"
+        done
+      } > "${@ENVVAR@HANDOFF}"
+  - name: @HANDOFF_UPLOAD_NAME@
+    uses: @UPLOAD@
+    with:
+      name: @HANDOFF_ARTIFACT@
+      path: @HANDOFF_DIRECTORY@
       retention-days: 1
 "#;
 
@@ -2178,19 +2593,38 @@ steps:
       @ENVVAR@RELEASE: ${{ runner.temp }}/@JOB@release
     run: |
       set -euo pipefail
-      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json isDraft --jq '.isDraft')" = "true"
-      test "$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json tagName --jq '.tagName')" = "${@ENVVAR@GLOBAL_TAG}"
-      test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${@ENVVAR@GLOBAL_TAG}" \
+      drafted="$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json isDraft --jq '.isDraft')"
+      if test "${drafted}" != "true"; then
+        printf 'the Release for %s is already published, so there is nothing left to close and its assets are frozen\n' \
+          "${@ENVVAR@GLOBAL_TAG}" >&2
+        exit 1
+      fi
+      named="$(gh release view "${@ENVVAR@GLOBAL_TAG}" --json tagName --jq '.tagName')"
+      if test "${named}" != "${@ENVVAR@GLOBAL_TAG}"; then
+        printf 'the Release resolved for %s carries tag %s; closure publishes the draft of its own global release tag\n' \
+          "${@ENVVAR@GLOBAL_TAG}" "${named}" >&2
+        exit 1
+      fi
+      targeted="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${@ENVVAR@GLOBAL_TAG}" \
         --jq '.object.sha' | xargs -I {} gh api "repos/${GITHUB_REPOSITORY}/git/tags/{}" \
-        --jq '.object.sha')" = "${GITHUB_SHA}"
+        --jq '.object.sha')"
+      if test "${targeted}" != "${GITHUB_SHA}"; then
+        printf 'the annotated tag %s targets %s, not the released commit %s this run is closing\n' \
+          "${@ENVVAR@GLOBAL_TAG}" "${targeted}" "${GITHUB_SHA}" >&2
+        exit 1
+      fi
       gh release upload "${@ENVVAR@GLOBAL_TAG}" \
         "${@ENVVAR@RELEASE}"/* --clobber
       for asset in "${@ENVVAR@RELEASE}"/*; do
         name="$(basename "${asset}")"
         gh release download "${@ENVVAR@GLOBAL_TAG}" --pattern "${name}" \
           --output - > "${RUNNER_TEMP}/@JOB@closure-asset"
-        printf '%s  %s\n' "$(sha256sum < "${asset}" | cut -d' ' -f1)" \
-          "${RUNNER_TEMP}/@JOB@closure-asset" | sha256sum --check --status
+        if ! printf '%s  %s\n' "$(sha256sum < "${asset}" | cut -d' ' -f1)" \
+          "${RUNNER_TEMP}/@JOB@closure-asset" | sha256sum --check --status; then
+          printf 'the Release asset %s reads back as bytes this release did not assemble; the draft is left unpublished\n' \
+            "${name}" >&2
+          exit 1
+        fi
       done
       gh release edit "${@ENVVAR@GLOBAL_TAG}" --draft=false
 "#;
@@ -3119,6 +3553,873 @@ aur:
         }
     }
 
+    /// The managed job that places GitHub-hosted deliverables on the draft.
+    const UPLOAD_JOB: &str = "intentional_upload_deliverables";
+
+    // `immutable-github-release` gives the upload of a GitHub-hosted deliverable
+    // to one repository-local job so that no publisher job holds `contents:
+    // write`. The graph that makes that true is the barrier: every build
+    // precedes it and every publisher follows it, so a publisher whose consumer
+    // path resolves a Release asset finds it there. Both directions are asserted
+    // against the derived graph rather than the template, because a job that
+    // exists and is not wired in is the failure this prevents.
+    #[test]
+    fn derives_one_upload_job_every_build_precedes_and_every_publisher_follows() {
+        let workspace = go_workspace("workflow-upload-graph");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let needs = job_needs(&jobs, UPLOAD_JOB);
+        let builds = job_ids(&jobs, "intentional_build_");
+        assert!(!builds.is_empty(), "the release builds a subject");
+        for build in &builds {
+            assert!(
+                needs.contains(build),
+                "the upload job waits for {build}: {needs:?}"
+            );
+        }
+        let publishers = job_ids(&jobs, "intentional_publish_");
+        assert!(!publishers.is_empty(), "the release derives a publisher");
+        for publisher in &publishers {
+            assert!(
+                job_needs(&jobs, publisher).contains(&UPLOAD_JOB.to_owned()),
+                "{publisher} publishes only once the deliverables are placed"
+            );
+        }
+        assert_eq!(
+            job_ids(&jobs, UPLOAD_JOB).len(),
+            1,
+            "one job holds this authority rather than one per subject"
+        );
+    }
+
+    // Repository write authority reaches this job the way it reaches the other
+    // two transitions: inside the configured protected environment, through a
+    // short-lived installation token minted in the job, and with the workflow's
+    // own permissions left read-only.
+    #[test]
+    fn places_the_deliverables_inside_the_protected_environment_under_a_minted_token() {
+        let workspace = go_workspace("workflow-upload-environment");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let body = &jobs[&Value::String(UPLOAD_JOB.to_owned())];
+
+        assert_eq!(
+            body["environment"].as_str(),
+            Some("intentional-release"),
+            "the upload job writes to the Release inside the protected environment"
+        );
+        assert_eq!(
+            body["permissions"]["contents"].as_str(),
+            Some("read"),
+            "the job's own workflow permissions stay read-only"
+        );
+        assert!(
+            job_steps(&jobs, UPLOAD_JOB).iter().any(|step| step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))),
+            "the installation token is the sole Release-write authority"
+        );
+    }
+
+    // The authority the upload job takes is the authority every publisher job is
+    // denied. `withholds_the_workflow_identity_scope_from_repository_destinations`
+    // proves no publisher requests the scope; this proves none of them reaches
+    // the Release with what it does hold.
+    #[test]
+    fn leaves_every_release_write_to_the_managed_upload_job() {
+        let workspace = go_workspace("workflow-upload-authority");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        for publisher in job_ids(&jobs, "intentional_publish_") {
+            let bodies = job_run_bodies(&jobs, &publisher);
+            assert!(
+                !bodies.contains("gh release"),
+                "{publisher} reads its Release asset and never writes one: {bodies}"
+            );
+        }
+        assert!(
+            job_run_bodies(&jobs, UPLOAD_JOB).contains("gh release upload"),
+            "the upload job is what places the deliverables"
+        );
+    }
+
+    // A release whose every deliverable reaches a registry has nothing for this
+    // job to place, and deriving it regardless would hold repository
+    // content-write authority for the duration of an upload with no bytes in it.
+    #[test]
+    fn derives_no_upload_job_where_every_deliverable_reaches_a_registry() {
+        for (label, workspace) in [
+            ("npm", npm_workspace("workflow-upload-none-npm")),
+            ("oci", two_destination_workspace("workflow-upload-none-oci")),
+        ] {
+            converge(workspace.root(), WorkflowRole::Publish);
+            let jobs = publish_jobs(workspace.root());
+            assert!(
+                !jobs.contains_key(Value::String(UPLOAD_JOB.to_owned())),
+                "{label} places nothing on the Release, so no job holds that authority"
+            );
+            for publisher in job_ids(&jobs, "intentional_publish_") {
+                assert!(
+                    !job_needs(&jobs, &publisher).contains(&UPLOAD_JOB.to_owned()),
+                    "{label}'s {publisher} does not wait on a job that does not exist"
+                );
+            }
+        }
+    }
+
+    // The handoff is an agreement between two jobs across an artifact boundary,
+    // and every part of it is a name one side writes and the other reads: the
+    // artifact, the directory it unpacks into, and the file the portable command
+    // is told to verify. None of those failures is loud -- a download that
+    // resolves nothing yields an empty directory and the refusal names the
+    // destination three steps later -- so the join is asserted here rather than
+    // trusted to two spellings that happen to match.
+    #[test]
+    fn binds_the_handoff_the_upload_job_writes_to_the_document_its_publisher_reads() {
+        let workspace = go_workspace("workflow-upload-handoff-join");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let upload = job_steps(&jobs, UPLOAD_JOB);
+
+        let mut joined = 0_usize;
+        for publisher in job_ids(&jobs, "intentional_publish_") {
+            let steps = job_steps(&jobs, &publisher);
+            let verified = steps
+                .iter()
+                .find_map(|step| step["with"]["draft-handoff"].as_str())
+                .unwrap_or_else(|| panic!("{publisher} verifies its publication"));
+            let downloaded = steps.iter().find(|step| {
+                step["with"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("intentional_handoff-"))
+            });
+            let Some(downloaded) = downloaded else {
+                assert!(
+                    verified.is_empty(),
+                    "{publisher} names a handoff no job hands it: {verified}"
+                );
+                continue;
+            };
+            joined += 1;
+            let artifact = downloaded["with"]["name"].as_str().expect("artifact name");
+            let directory = downloaded["with"]["path"].as_str().expect("artifact path");
+            assert_eq!(
+                verified,
+                format!(
+                    "{directory}/{}",
+                    crate::publication::draft::DRAFT_HANDOFF_FILE
+                ),
+                "{publisher} verifies the document the artifact it downloaded contains"
+            );
+
+            let produced = upload
+                .iter()
+                .find(|step| step["with"]["name"].as_str() == Some(artifact))
+                .unwrap_or_else(|| panic!("the upload job produces {artifact}"));
+            assert_eq!(
+                produced["with"]["path"].as_str(),
+                Some(directory),
+                "{artifact} is packed from the directory {publisher} unpacks it into"
+            );
+            let written = upload
+                .iter()
+                .filter_map(|step| step["env"]["INTENTIONAL_HANDOFF"].as_str())
+                .find(|path| *path == verified);
+            assert!(
+                written.is_some(),
+                "a step writes {verified}, which {publisher} verifies"
+            );
+        }
+        assert_eq!(
+            joined, 2,
+            "both draft-dependent publications are joined, not only the first"
+        );
+    }
+
+    // A deliverable can only be inventoried once it is an asset, so the order is
+    // the contract rather than an accident of how the steps were written.
+    #[test]
+    fn places_every_deliverable_before_the_handoff_that_inventories_it() {
+        let workspace = go_workspace("workflow-upload-order");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let names = job_steps(&jobs, UPLOAD_JOB)
+            .iter()
+            .filter_map(|step| step["name"].as_str().map(str::to_owned))
+            .collect::<Vec<_>>();
+
+        let placed = names
+            .iter()
+            .position(|name| name.contains("deliverables to the draft Release"))
+            .expect("the job places the deliverables");
+        let inventoried = names
+            .iter()
+            .position(|name| name.contains("draft-asset handoff"))
+            .expect("the job writes a handoff");
+        assert!(
+            placed < inventoried,
+            "the handoff is written from a draft that already carries the assets: {names:?}"
+        );
+    }
+
+    /// The distribution tree a GoReleaser build hands the upload job.
+    ///
+    /// Two archives and a checksum file are what a Homebrew formula and an Arch
+    /// `PKGBUILD` resolve; the `.deb` and `.rpm` are what the system-package
+    /// adapters distribute; `artifacts.json` is the packager's own record of its
+    /// run; and the formula and package sources are descriptors their publisher
+    /// jobs promote into repositories. One fixture carries all five kinds so a
+    /// selection rule that admitted or dropped the wrong one is visible.
+    const GO_DISTRIBUTION: [(&str, &str); 7] = [
+        ("example-tool_1.0.0_linux_amd64.tar.gz", "amd64 archive"),
+        ("example-tool_1.0.0_linux_arm64.tar.gz", "arm64 archive"),
+        ("checksums.txt", "the published checksums"),
+        ("example-tool_1.0.0_amd64.deb", "the Debian package"),
+        ("example-tool-1.0.0.x86_64.rpm", "the RPM package"),
+        ("artifacts.json", "[]"),
+        ("homebrew/Formula/example-tool.rb", "class ExampleTool"),
+    ];
+
+    /// Assets a Homebrew or Arch publication resolves from the draft Release.
+    const CONSUMED_ASSETS: [&str; 3] = [
+        "checksums.txt",
+        "example-tool_1.0.0_linux_amd64.tar.gz",
+        "example-tool_1.0.0_linux_arm64.tar.gz",
+    ];
+
+    /// Deliverables the upload job places, in the order it places them.
+    const PLACED_ASSETS: [&str; 5] = [
+        "checksums.txt",
+        "example-tool-1.0.0.x86_64.rpm",
+        "example-tool_1.0.0_amd64.deb",
+        "example-tool_1.0.0_linux_amd64.tar.gz",
+        "example-tool_1.0.0_linux_arm64.tar.gz",
+    ];
+
+    /// Lay one built subject's transported bytes out where the job reads them.
+    fn stage_subject(directory: &Path) {
+        for (relative, contents) in GO_DISTRIBUTION {
+            let path = directory.join(relative);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("subject directory");
+            std::fs::write(&path, contents).expect("subject file");
+        }
+    }
+
+    /// Release identity the stand-in verify job proves for the upload job.
+    const UPLOAD_TAG: &str = "component/staged@1.1.0";
+    const UPLOAD_SOURCE: &str = "0000000000000000000000000000000000000000";
+    const UPLOAD_RELEASE: &str = "1111111111111111111111111111111111111111";
+    const UPLOAD_PLAN_DIGEST: &str =
+        "sha256:3333333333333333333333333333333333333333333333333333333333333333";
+    /// Stable GitHub identifier of the draft the stub serves.
+    const UPLOAD_RELEASE_ID: &str = "4242";
+
+    /// A `gh` stub that keeps the draft's asset inventory in a shared file.
+    ///
+    /// The inventory is what the handoff step reads back, so it is served rather
+    /// than predicted: a name reaches it only because an upload placed it, and
+    /// its identifier is the store's rather than anything the derivation chose.
+    const GH_RELEASE_STUB: &str = r#"#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GH_STUB_LOG}"
+touch "${GH_STUB_ASSETS}"
+case "$1 $2" in
+  "release view")
+    if [ "${GH_STUB_RESOLVES}" != yes ]; then
+      printf 'HTTP 503: Service Unavailable\n' >&2
+      exit 1
+    fi
+    printf '%s\t%s\t%s\n' "${GH_STUB_DRAFT}" "${GH_STUB_TAG}" "${GH_STUB_RELEASE}"
+    ;;
+  "release upload")
+    for candidate in "$@"; do
+      [ -f "${candidate}" ] || continue
+      name="$(basename "${candidate}")"
+      if awk -F'\t' -v n="${name}" '$1 == n { held = 1 } END { exit !held }' "${GH_STUB_ASSETS}"; then
+        continue
+      fi
+      printf '%s\t%s\t%s\t%s\n' "${name}" \
+        "$(( $(wc -l < "${GH_STUB_ASSETS}") + 100 ))" \
+        "$(wc -c < "${candidate}")" application/octet-stream >> "${GH_STUB_ASSETS}"
+    done
+    ;;
+  "api --paginate")
+    cat "${GH_STUB_ASSETS}"
+    ;;
+esac
+exit 0
+"#;
+
+    /// A stand-in runner serving one draft, with the built subject already on it.
+    fn upload_runner(label: &str, inventory: &Path) -> StubRunner {
+        let runner = StubRunner::new(label)
+            .stub("gh", GH_RELEASE_STUB)
+            .setting("GH_STUB_ASSETS", &inventory.display().to_string())
+            .setting("GH_STUB_RESOLVES", "yes")
+            .setting("GH_STUB_DRAFT", "true")
+            .setting("GH_STUB_TAG", UPLOAD_TAG)
+            .setting("GH_STUB_RELEASE", UPLOAD_RELEASE_ID);
+        stage_subject(
+            &runner
+                .temp()
+                .join("intentional_subject/intentional_subject-component_goreleaser/bytes"),
+        );
+        runner
+    }
+
+    /// Every `run:` body of the derived upload job, in the order a runner takes them.
+    fn upload_scripts(root: &Path, runner: &StubRunner) -> Vec<(String, BTreeMap<String, String>)> {
+        let mut bindings = runner.contexts();
+        bindings.insert(
+            "${{ steps.intentional_token.outputs.token }}".to_owned(),
+            "stub-installation-token".to_owned(),
+        );
+        for (name, value) in [
+            ("global-tag", UPLOAD_TAG),
+            ("source-sha", UPLOAD_SOURCE),
+            ("release-sha", UPLOAD_RELEASE),
+            ("plan-digest", UPLOAD_PLAN_DIGEST),
+        ] {
+            bindings.insert(
+                format!("${{{{ needs.intentional_verify_tag.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+        }
+        managed_steps(root, WorkflowRole::Publish)
+            .into_iter()
+            .find(|(id, _)| id == UPLOAD_JOB)
+            .expect("the upload job is derived")
+            .1
+            .iter()
+            .filter(|step| step.get("run").is_some())
+            .map(|step| {
+                (
+                    step["run"].as_str().expect("a script").to_owned(),
+                    resolved_environment(step, &bindings, "upload"),
+                )
+            })
+            .collect()
+    }
+
+    /// Run every step of the derived upload job, stopping at the first failure.
+    fn run_upload_job(root: &Path, runner: &StubRunner) -> Executed {
+        let mut last = Executed {
+            succeeded: true,
+            invocations: String::new(),
+            diagnostics: String::new(),
+        };
+        for (script, environment) in upload_scripts(root, runner) {
+            last = runner.execute(&script, &environment);
+            if !last.succeeded {
+                break;
+            }
+        }
+        last
+    }
+
+    /// One handoff the executed job wrote, parsed through its own contract.
+    fn written_handoff(
+        runner: &StubRunner,
+        slug: &str,
+    ) -> crate::publication::draft::DraftReleaseAssetHandoff {
+        let path = runner.temp().join(format!(
+            "intentional_handoff/{slug}/{}",
+            crate::publication::draft::DRAFT_HANDOFF_FILE
+        ));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{} was written: {error}", path.display()));
+        crate::publication::draft::DraftReleaseAssetHandoff::from_yaml(&text)
+            .unwrap_or_else(|error| panic!("the handoff its consumer parses:\n{text}\n{error}"))
+    }
+
+    // The job is executed rather than read. What it uploads, and what the
+    // document it leaves behind says, are decided by shell running against a
+    // live inventory, and no reading of the template shows either. The document
+    // is parsed through the same contract the consuming publisher parses it
+    // with, so a member this job spells differently is a failure here rather
+    // than on a release runner.
+    #[test]
+    fn places_the_built_deliverables_and_hands_off_what_each_publication_consumes() {
+        let workspace = go_workspace("workflow-upload-execute");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-execute-inventory");
+        let runner = upload_runner(
+            "workflow-upload-execute-runner",
+            &inventory.root().join("assets"),
+        );
+
+        let executed = run_upload_job(workspace.root(), &runner);
+        assert!(
+            executed.succeeded,
+            "the upload job completes: {}",
+            executed.diagnostics
+        );
+
+        let placed = executed
+            .invocations
+            .lines()
+            .find(|line| line.starts_with("release upload"))
+            .expect("the job uploads the deliverables");
+        for asset in PLACED_ASSETS {
+            assert!(
+                placed.contains(asset),
+                "{asset} is a GitHub-hosted deliverable: {placed}"
+            );
+        }
+        for excluded in ["artifacts.json", "example-tool.rb"] {
+            assert!(
+                !placed.contains(excluded),
+                "{excluded} is not a deliverable a consumer resolves: {placed}"
+            );
+        }
+        assert!(
+            placed.contains("--clobber"),
+            "a rerun replaces what it already placed: {placed}"
+        );
+
+        // Every member but the digest is read back from the draft rather than
+        // predicted, so each is compared against the inventory the Release
+        // served rather than against a value this test also chose.
+        let served = std::fs::read_to_string(inventory.root().join("assets"))
+            .expect("the draft served an inventory")
+            .lines()
+            .map(|row| {
+                let mut fields = row.split('\t');
+                let name = fields.next().expect("an asset name").to_owned();
+                (
+                    name,
+                    (
+                        fields.next().expect("an identifier").to_owned(),
+                        fields.next().expect("a size").to_owned(),
+                        fields.next().expect("a media type").to_owned(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let handoff = written_handoff(&runner, "component_homebrew_primary");
+        assert_eq!(handoff.identity(), "component/homebrew/primary");
+        assert_eq!(handoff.repository, REPOSITORY_IDENTITY);
+        assert_eq!(handoff.release_id.to_string(), UPLOAD_RELEASE_ID);
+        assert_eq!(handoff.global_tag, UPLOAD_TAG);
+        assert_eq!(handoff.source_commit, UPLOAD_SOURCE);
+        assert_eq!(handoff.release_commit, UPLOAD_RELEASE);
+        assert_eq!(handoff.plan_digest, UPLOAD_PLAN_DIGEST);
+        assert_eq!(
+            handoff
+                .assets
+                .iter()
+                .map(|asset| asset.name.as_str())
+                .collect::<Vec<_>>(),
+            CONSUMED_ASSETS,
+            "a Homebrew publication resolves the archives its formula points at, not the system packages"
+        );
+
+        // The digest the handoff seals is the one taken from the bytes this job
+        // uploaded, which is what makes the consumer's download a proved round
+        // trip rather than agreement with whatever the Release now holds.
+        for asset in &handoff.assets {
+            let contents = GO_DISTRIBUTION
+                .iter()
+                .find(|(relative, _)| relative.ends_with(&asset.name))
+                .map(|(_, contents)| *contents)
+                .unwrap_or_else(|| panic!("{} is a staged deliverable", asset.name));
+            assert_eq!(
+                asset.sha256,
+                crate::evidence::digest_bytes(contents.as_bytes()),
+                "{} is sealed under the bytes the build produced",
+                asset.name
+            );
+            let (id, size, media) = served
+                .get(&asset.name)
+                .unwrap_or_else(|| panic!("{} is an asset of the draft", asset.name));
+            assert_eq!(
+                (
+                    asset.id.to_string(),
+                    asset.size.to_string(),
+                    asset.media_type.clone()
+                ),
+                (id.clone(), size.clone(), media.clone()),
+                "{} is inventoried as the draft serves it",
+                asset.name
+            );
+            assert_eq!(asset.size, contents.len() as u64, "{}", asset.name);
+        }
+
+        let arch = written_handoff(&runner, "component_aur_primary");
+        assert_eq!(arch.identity(), "component/aur/primary");
+        assert_eq!(
+            arch.assets
+                .iter()
+                .map(|asset| asset.name.as_str())
+                .collect::<Vec<_>>(),
+            CONSUMED_ASSETS,
+        );
+    }
+
+    // `immutable-github-release` states that a failure before closure leaves a
+    // resumable draft, so a rerun has to place its deliverables onto a draft
+    // that already carries some or all of them. The rerun is a new runner with
+    // an empty scratch directory against the same Release, which is what a
+    // re-run job on GitHub is.
+    #[test]
+    fn places_its_deliverables_again_on_a_draft_that_already_carries_them() {
+        let workspace = go_workspace("workflow-upload-rerun");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-rerun-inventory");
+        let assets = inventory.root().join("assets");
+
+        let first = upload_runner("workflow-upload-rerun-first", &assets);
+        let initial = run_upload_job(workspace.root(), &first);
+        assert!(
+            initial.succeeded,
+            "the first attempt places the deliverables: {}",
+            initial.diagnostics
+        );
+
+        let second = upload_runner("workflow-upload-rerun-second", &assets);
+        let repeated = run_upload_job(workspace.root(), &second);
+        assert!(
+            repeated.succeeded,
+            "a rerun against a draft that already carries its assets succeeds: {}",
+            repeated.diagnostics
+        );
+        assert_eq!(
+            written_handoff(&first, "component_homebrew_primary"),
+            written_handoff(&second, "component_homebrew_primary"),
+            "the rerun hands off the same inventory rather than a second one"
+        );
+    }
+
+    /// Execute the upload job with one stub setting replaced.
+    fn refused_upload(label: &str, key: &str, value: &str) -> Executed {
+        let workspace = go_workspace(label);
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new(&format!("{label}-inventory"));
+        let runner = upload_runner(&format!("{label}-runner"), &inventory.root().join("assets"))
+            .setting(key, value);
+        run_upload_job(workspace.root(), &runner)
+    }
+
+    // Every refusal in this job reports what it refused. A privileged step that
+    // exits non-zero with an empty log is the one case an operator has to
+    // diagnose under time pressure, and the three states below are the ones a
+    // wrong or missing draft arrives in. Each is refused before any asset is
+    // written, because an upload onto a published Release cannot be undone and
+    // an upload onto another tag's draft is bytes the release never sealed.
+    #[test]
+    fn refuses_a_draft_it_could_not_resolve_and_says_which_state_it_found() {
+        for (label, key, value, expected) in [
+            (
+                "workflow-upload-published",
+                "GH_STUB_DRAFT",
+                "false",
+                "no longer a draft",
+            ),
+            (
+                "workflow-upload-other-tag",
+                "GH_STUB_TAG",
+                "component/staged@9.9.9",
+                "carries tag component/staged@9.9.9",
+            ),
+            (
+                "workflow-upload-unresolved",
+                "GH_STUB_RESOLVES",
+                "no",
+                "could not be resolved",
+            ),
+        ] {
+            let executed = refused_upload(label, key, value);
+            assert!(
+                !executed.succeeded,
+                "{label} stops the job: {}",
+                executed.invocations
+            );
+            assert!(
+                executed.diagnostics.contains(expected),
+                "{label} reports its cause: {:?}",
+                executed.diagnostics
+            );
+            assert!(
+                !executed.invocations.contains("release upload"),
+                "{label} refuses before any asset is written: {}",
+                executed.invocations
+            );
+        }
+    }
+
+    // A Release asset name is flat, so two subjects producing one basename would
+    // place one over the other and the loser's handoff would inventory an
+    // identifier holding the winner's bytes. Nothing about that is loud: the
+    // upload succeeds, the inventory resolves, and the digests disagree at a
+    // publisher. The ledger spans subjects for that reason, and this executes a
+    // second subject whose archive collides with the first's.
+    #[test]
+    fn refuses_a_second_subject_that_places_a_release_asset_name_already_taken() {
+        let workspace = go_workspace("workflow-upload-collision");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-collision-inventory");
+        let runner = upload_runner(
+            "workflow-upload-collision-runner",
+            &inventory.root().join("assets"),
+        );
+
+        let (script, environment) = upload_scripts(workspace.root(), &runner)
+            .into_iter()
+            .find(|(script, _)| script.contains("gh release upload"))
+            .expect("the job places deliverables");
+        let first = runner.execute(&script, &environment);
+        assert!(
+            first.succeeded,
+            "the first subject places its deliverables: {}",
+            first.diagnostics
+        );
+
+        let sibling = runner.temp().join("sibling/bytes");
+        stage_subject(&sibling);
+        let mut colliding = environment.clone();
+        colliding.insert(
+            "INTENTIONAL_SUBJECT".to_owned(),
+            sibling.display().to_string(),
+        );
+        let second = runner.execute(&script, &colliding);
+        assert!(
+            !second.succeeded,
+            "a second subject placing a taken name is refused: {}",
+            second.invocations
+        );
+        assert!(
+            second.diagnostics.contains("already places Release asset")
+                && second.diagnostics.contains("checksums.txt"),
+            "the refusal names the asset both subjects claim: {:?}",
+            second.diagnostics
+        );
+    }
+
+    // The handoff carries a release identity a downstream publisher proves
+    // against its own checkout, so those identities have to be the ones
+    // `intentional verify release-tag` proved. They reach the graph as outputs
+    // of the job that ran that verification, and each output name is bound to
+    // one the Action declares: an output projected from a name the Action does
+    // not expose is empty on a runner and empty is what a handoff would carry.
+    #[test]
+    fn projects_the_verified_release_identities_the_upload_job_hands_off() {
+        let workspace = go_workspace("workflow-verified-outputs");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        let steps = job_steps(&jobs, "intentional_verify_tag");
+        let (verifier, action) = steps
+            .iter()
+            .find_map(|step| {
+                let (name, _) = intentional_action(step)?;
+                (name == "verify-release-tag")
+                    .then(|| (step["id"].as_str().expect("the step is addressable"), name))
+            })
+            .expect("the verify job proves the tag through the published Action");
+        let declared = action_outputs(&action);
+        let projected = jobs[&Value::String("intentional_verify_tag".to_owned())]["outputs"]
+            .as_mapping()
+            .expect("the verify job projects what it proved")
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.as_str().expect("an output name").to_owned(),
+                    value.as_str().expect("an output value").to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            projected.keys().cloned().collect::<Vec<_>>(),
+            ["global-tag", "plan-digest", "release-sha", "source-sha"],
+            "the four identities the handoff declares are projected"
+        );
+        for (name, value) in &projected {
+            assert_eq!(
+                value,
+                &format!("${{{{ steps.{verifier}.outputs.{name} }}}}"),
+                "{name} is read from the step that proved it"
+            );
+            assert!(
+                declared.contains(name),
+                "{action} declares {name}, so the projection is not empty on a runner"
+            );
+        }
+    }
+
+    // A handoff that inventoried a subset would be indistinguishable at the
+    // consumer from one whose publication legitimately consumes fewer assets,
+    // so a deliverable the draft does not carry fails the job. The witness is a
+    // draft whose inventory is missing what this publication consumes, which is
+    // what a partially failed upload leaves behind.
+    #[test]
+    fn refuses_to_hand_off_a_deliverable_the_draft_does_not_carry() {
+        let workspace = go_workspace("workflow-upload-absent-asset");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let inventory = Workspace::new("workflow-upload-absent-inventory");
+        let runner = upload_runner(
+            "workflow-upload-absent-runner",
+            &inventory.root().join("assets"),
+        );
+
+        // Every step but the upload runs, so the draft resolves and the handoff
+        // is attempted against a Release carrying none of this subject's bytes.
+        let mut executed = None;
+        for (script, environment) in upload_scripts(workspace.root(), &runner) {
+            if script.contains("gh release upload") {
+                continue;
+            }
+            let attempt = runner.execute(&script, &environment);
+            if !attempt.succeeded {
+                executed = Some(attempt);
+                break;
+            }
+        }
+        let executed = executed.expect("the handoff step refuses an inventory without its assets");
+        assert!(
+            executed
+                .diagnostics
+                .contains("is not an asset of draft Release")
+                && executed.diagnostics.contains("component/homebrew/primary"),
+            "the refusal names the asset and the publication that could not retrieve it: {:?}",
+            executed.diagnostics
+        );
+    }
+
+    // The split between what the upload places and what each adapter consumes
+    // is the packager's own, and only two of the four draft-dependent adapters
+    // derive a publisher job today. The rule is therefore exercised directly,
+    // over a staged distribution tree carrying every kind of file the packager
+    // writes, so the two adapters whose jobs task 148 still refuses are covered
+    // by the same evidence as the two that derive.
+    #[test]
+    fn selects_the_deliverables_each_adapter_places_and_consumes() {
+        let staged = Workspace::new("deliverable-selection");
+        let subject = staged.root().join("bytes");
+        stage_subject(&subject);
+
+        let placed = selected(
+            &subject,
+            crate::executor::steps::github_hosted_deliverables(Packager::GoReleaser)
+                .expect("GoReleaser writes GitHub-hosted deliverables"),
+            "",
+        );
+        assert_eq!(
+            placed, PLACED_ASSETS,
+            "the packager's own build metadata and its descriptors are not deliverables"
+        );
+
+        for (publisher, expected) in [
+            (
+                PublisherKind::Rpm,
+                vec!["example-tool-1.0.0.x86_64.rpm".to_owned()],
+            ),
+            (
+                PublisherKind::Apt,
+                vec!["example-tool_1.0.0_amd64.deb".to_owned()],
+            ),
+            (
+                PublisherKind::Homebrew,
+                CONSUMED_ASSETS.map(str::to_owned).to_vec(),
+            ),
+            (
+                PublisherKind::Aur,
+                CONSUMED_ASSETS.map(str::to_owned).to_vec(),
+            ),
+        ] {
+            let consumed = crate::executor::steps::consumed_deliverables(publisher)
+                .unwrap_or_else(|| panic!("{publisher} consumes a Release asset"));
+            assert_eq!(
+                selected(
+                    &subject,
+                    crate::executor::steps::github_hosted_deliverables(Packager::GoReleaser)
+                        .expect("GoReleaser writes GitHub-hosted deliverables"),
+                    &consumed,
+                ),
+                expected,
+                "{publisher} retrieves what its consumer path resolves and nothing else"
+            );
+        }
+
+        for registry in [PublisherKind::Npm, PublisherKind::Cargo, PublisherKind::Oci] {
+            assert!(
+                crate::executor::steps::consumed_deliverables(registry).is_none(),
+                "{registry} resolves its subject from a registry"
+            );
+        }
+    }
+
+    /// Names the derived `find` predicates select from one staged subject.
+    ///
+    /// The predicates are run by `find` rather than reimplemented, because they
+    /// are shell text the derivation splices and a Rust reimplementation would
+    /// agree with itself while the emitted command did something else.
+    fn selected(subject: &Path, deliverables: &str, consumed: &str) -> Vec<String> {
+        let script = format!(
+            "find \"$1\" -maxdepth 1 -type f {deliverables} {consumed} -print0 | sort -z | xargs -0 -n1 basename"
+        );
+        let output = std::process::Command::new("bash")
+            .args(["-c", &script, "selection", &subject.display().to_string()])
+            .output()
+            .expect("the selection runs");
+        assert!(output.status.success(), "the selection runs");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    // One diagnostic convention across all three `gh`-driven Release writers.
+    // A privileged step that exits non-zero with an empty log is the one case an
+    // operator has to diagnose under time pressure, and a bare `test` under
+    // `set -e` is exactly that. The counts are exact rather than a presence
+    // check: a body with four refusals and three messages passes any check that
+    // only asks whether the body ever writes to standard error.
+    #[test]
+    fn reports_the_cause_of_every_refusal_in_the_release_writing_steps() {
+        let workspace = go_workspace("workflow-release-writer-diagnostics");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+        }
+        let mut swept = 0_usize;
+        for (role, job) in [
+            (WorkflowRole::Release, "intentional_release"),
+            (WorkflowRole::Publish, UPLOAD_JOB),
+            (WorkflowRole::Publish, "intentional_close_release"),
+        ] {
+            for step in managed_steps(workspace.root(), role)
+                .into_iter()
+                .find(|(id, _)| id == job)
+                .unwrap_or_else(|| panic!("{job} is derived"))
+                .1
+            {
+                let Some(body) = step["run"].as_str() else {
+                    continue;
+                };
+                if !body.contains("gh ") {
+                    continue;
+                }
+                swept += 1;
+                assert_eq!(
+                    body.matches("exit 1").count(),
+                    body.matches(">&2").count(),
+                    "every refusal in {job} reports what it refused: {body}"
+                );
+                for line in body.lines().map(str::trim) {
+                    assert!(
+                        !line.starts_with("test "),
+                        "{job} refuses through a bare `test`, which exits with an empty log: {line}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            swept, 6,
+            "every `gh`-driven step of all three Release writers is swept"
+        );
+    }
+
     // The deliverable RPM and APT distribute is the GitHub Release asset itself,
     // which the managed upload job places on the draft. Deriving a publisher job
     // before that job exists would ship a publication whose deliverable nothing
@@ -3253,6 +4554,12 @@ aur:
             workspace("workflow-placeholders"),
             two_destination_workspace("workflow-placeholders-oci"),
             feature_workspace("workflow-placeholders-feature"),
+            // The Go workspace is the only fixture that derives the managed
+            // upload job and its per-publication steps, and those steps are
+            // rendered by their own builder rather than by the job renderer.
+            // A placeholder left in one of them is invisible to every other
+            // fixture here.
+            go_workspace("workflow-placeholders-go"),
         ] {
             for role in WorkflowRole::ALL {
                 converge(workspace.root(), role);
@@ -3763,58 +5070,184 @@ aur:
         job_script(root, WorkflowRole::Release, "intentional_release")
     }
 
-    /// The derived draft-creation step, with its declared environment resolved
-    /// from the verified step outputs the job produced.
+    /// What executing one derived privileged step did.
+    struct Executed {
+        /// Whether the step succeeded.
+        succeeded: bool,
+        /// Command line of every stubbed invocation the step made.
+        invocations: String,
+        /// Everything the step wrote to standard error.
+        diagnostics: String,
+    }
+
+    /// A stand-in runner: a scratch directory, stubbed commands, and one log.
     ///
-    /// Resolution is what binds the two halves: the step's `env:` block names
-    /// the variables and the `run:` body reads them, and a body reading a name
-    /// the block does not declare would run with an empty value on a runner.
-    /// Executing the body under exactly the declared environment is what makes
-    /// that disagreement fail here.
-    fn draft_creation(root: &Path, tag: &str) -> (String, BTreeMap<String, String>) {
-        let steps = managed_steps(root, WorkflowRole::Release)
-            .into_iter()
-            .find(|(id, _)| id == "intentional_release")
-            .expect("the authority transition is derived")
-            .1;
-        let step = steps
+    /// One runner executes every step of a job in turn, because the steps of a
+    /// managed job are not independent: the upload job resolves the draft once
+    /// and writes what it resolved to a file a later step reads, and a harness
+    /// that gave each step its own scratch directory would prove each step in a
+    /// world the runner never produces.
+    ///
+    /// Nothing is inherited from this process. `PATH` reaches the stubs and
+    /// `RUNNER_TEMP` is the scratch directory; every other value a body reads
+    /// comes from the step's own parsed `env:` block, so a body naming a
+    /// variable the block does not declare runs empty here exactly as it would
+    /// on a runner.
+    ///
+    /// The stubs and their log live outside the converged fixture so test
+    /// scaffolding never lands in the tree the derivation produced.
+    struct StubRunner {
+        scaffold: Workspace,
+        /// Values the stubs read, beyond the step's own environment.
+        settings: BTreeMap<String, String>,
+    }
+
+    impl StubRunner {
+        fn new(label: &str) -> Self {
+            let scaffold = Workspace::new(label);
+            std::fs::create_dir_all(scaffold.root().join("runner-temp"))
+                .expect("the runner scratch directory exists");
+            Self {
+                scaffold,
+                settings: BTreeMap::new(),
+            }
+        }
+
+        /// The scratch directory `runner.temp` and `RUNNER_TEMP` both name.
+        fn temp(&self) -> PathBuf {
+            self.scaffold.root().join("runner-temp")
+        }
+
+        /// Install one stubbed executable on the runner's `PATH`.
+        fn stub(self, name: &str, body: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            let stub = self.scaffold.root().join(name);
+            std::fs::write(&stub, body).expect("the stub is written");
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+            self
+        }
+
+        /// Set one value the stubs read.
+        fn setting(mut self, key: &str, value: &str) -> Self {
+            self.settings.insert(key.to_owned(), value.to_owned());
+            self
+        }
+
+        /// The workflow contexts this runner resolves for a step's `env:` block.
+        fn contexts(&self) -> BTreeMap<String, String> {
+            BTreeMap::from([
+                (
+                    "${{ runner.temp }}".to_owned(),
+                    self.temp().display().to_string(),
+                ),
+                (
+                    "${{ github.repository }}".to_owned(),
+                    REPOSITORY_IDENTITY.to_owned(),
+                ),
+            ])
+        }
+
+        fn execute(&self, script: &str, environment: &BTreeMap<String, String>) -> Executed {
+            let log = self.scaffold.root().join("invocations");
+            let mut command = std::process::Command::new("bash");
+            command
+                .args(["-c", script])
+                .env_clear()
+                .env(
+                    "PATH",
+                    format!("{}:/usr/bin:/bin", self.scaffold.root().display()),
+                )
+                .env("RUNNER_TEMP", self.temp().display().to_string())
+                .env("GH_STUB_LOG", log.display().to_string());
+            for (key, value) in self.settings.iter().chain(environment) {
+                command.env(key, value);
+            }
+            let output = command.output().expect("the managed step runs");
+            Executed {
+                succeeded: output.status.success(),
+                invocations: std::fs::read_to_string(&log).unwrap_or_default(),
+                diagnostics: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+        }
+    }
+
+    /// Repository the stand-in runner claims to be running in.
+    const REPOSITORY_IDENTITY: &str = "example-owner/example-repo";
+
+    /// One step's `env:` block with every workflow expression resolved.
+    ///
+    /// Resolution is what binds the two halves of a step: the block names the
+    /// variables and the body reads them, and a body reading a name the block
+    /// does not declare would run with an empty value on a runner. A value still
+    /// carrying an expression after resolution is refused rather than passed
+    /// through, because a test that ran against an unexpanded `${{ ... }}`
+    /// asserts against a placeholder the runner would never supply.
+    fn resolved_environment(
+        step: &Value,
+        bindings: &BTreeMap<String, String>,
+        label: &str,
+    ) -> BTreeMap<String, String> {
+        step["env"]
+            .as_mapping()
+            .unwrap_or_else(|| panic!("the {label} step names its inputs"))
             .iter()
-            .find(|step| {
-                step.get("run")
-                    .and_then(Value::as_str)
-                    .is_some_and(|body| body.contains("gh release create"))
+            .map(|(key, value)| {
+                let key = key
+                    .as_str()
+                    .expect("an environment name is a scalar")
+                    .to_owned();
+                let mut resolved = value
+                    .as_str()
+                    .expect("an environment value is a scalar")
+                    .to_owned();
+                for (expression, substitute) in bindings {
+                    resolved = resolved.replace(expression.as_str(), substitute);
+                }
+                assert!(
+                    !resolved.contains("${{"),
+                    "the {label} step reads {key} from {resolved}, which no verified output or bound context supplies"
+                );
+                (key, resolved)
             })
-            .expect("the authority transition creates the draft Release");
-        let outputs = BTreeMap::from([
+            .collect()
+    }
+
+    /// The derived draft-creation step and the environment it declares.
+    fn draft_creation(
+        root: &Path,
+        runner: &StubRunner,
+        tag: &str,
+    ) -> (String, BTreeMap<String, String>) {
+        let step = privileged_step(
+            root,
+            WorkflowRole::Release,
+            "intentional_release",
+            "gh release create",
+        );
+        // The verified step outputs the transition produced, plus the workflow
+        // contexts a runner would expand. Anything the step names that is
+        // neither is refused, because an ambient value that happens to agree
+        // with the verified identity today is exactly the substitution this job
+        // cannot take.
+        let mut bindings = runner.contexts();
+        for (name, value) in [
             ("token", "stub-installation-token"),
             ("global-tag", tag),
             ("source-sha", "0000000000000000000000000000000000000000"),
             ("release-sha", "1111111111111111111111111111111111111111"),
-        ]);
-        // The workflow contexts a runner would expand. Anything the step names
-        // that is neither a verified step output nor one of these is refused,
-        // because an ambient value that happens to agree with the verified
-        // identity today is exactly the substitution this job cannot take.
-        let contexts = BTreeMap::from([("${{ github.repository }}", "example-owner/example-repo")]);
-        let environment = step["env"]
-            .as_mapping()
-            .expect("the creation step names its inputs")
-            .iter()
-            .map(|(key, value)| {
-                let key = key.as_str().expect("an environment name is a scalar").to_owned();
-                let value = value.as_str().expect("an environment value is a scalar");
-                let resolved = value
-                    .strip_prefix("${{ steps.")
-                    .and_then(|rest| rest.strip_suffix(" }}"))
-                    .and_then(|rest| rest.rsplit_once(".outputs."))
-                    .and_then(|(_, name)| outputs.get(name).copied())
-                    .or_else(|| contexts.get(value).copied())
-                    .unwrap_or_else(|| {
-                        panic!("the creation step reads {key} from a verified step output, not {value}")
-                    });
-                (key, resolved.to_owned())
-            })
-            .collect();
+        ] {
+            bindings.insert(
+                format!("${{{{ steps.intentional_handoff.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+            bindings.insert(
+                format!("${{{{ steps.intentional_token.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+        }
+        let environment = resolved_environment(&step, &bindings, "draft-creation");
         let script = step["run"]
             .as_str()
             .expect("the creation step runs a script")
@@ -3822,40 +5255,27 @@ aur:
         (script, environment)
     }
 
+    /// The one step of a managed job whose body contains `fragment`.
+    fn privileged_step(root: &Path, role: WorkflowRole, id: &str, fragment: &str) -> Value {
+        managed_steps(root, role)
+            .into_iter()
+            .find(|(job, _)| job == id)
+            .unwrap_or_else(|| panic!("the {id} job is derived"))
+            .1
+            .into_iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains(fragment))
+            })
+            .unwrap_or_else(|| panic!("the {id} job runs a step containing `{fragment}`"))
+    }
+
     /// Execute the derived draft-creation step against a stubbed `gh`.
-    ///
-    /// Returns whether the step succeeded and the command line of every `gh`
-    /// invocation it made, so a test can assert what the step did rather than
-    /// what its text contains.
-    ///
-    /// The stub and its invocation log live outside the converged fixture so
-    /// test scaffolding never lands in the tree the derivation produced.
-    fn run_draft_creation(root: &Path, gh: &str) -> (bool, String) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let (script, environment) = draft_creation(root, "component@1.2.3");
-        let scaffold = Workspace::new("draft-creation-scaffold");
-        let stub = scaffold.root().join("gh");
-        std::fs::write(&stub, gh).expect("the stub is written");
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub is executable");
-        let log = scaffold.root().join("invocations");
-
-        let mut command = std::process::Command::new("bash");
-        command
-            .args(["-c", &script])
-            .env_clear()
-            .env(
-                "PATH",
-                format!("{}:/usr/bin:/bin", scaffold.root().display()),
-            )
-            .env("GH_STUB_LOG", log.display().to_string());
-        for (key, value) in &environment {
-            command.env(key, value);
-        }
-        let output = command.output().expect("the creation step runs");
-        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
-        (output.status.success(), recorded)
+    fn run_draft_creation(root: &Path, gh: &str) -> Executed {
+        let runner = StubRunner::new("draft-creation-scaffold").stub("gh", gh);
+        let (script, environment) = draft_creation(root, &runner, "component@1.2.3");
+        runner.execute(&script, &environment)
     }
 
     /// A `gh` stub that records its arguments and answers `release view` with
@@ -3958,20 +5378,56 @@ aur:
         let workspace = workspace("workflow-draft-creation-rerun");
         converge(workspace.root(), WorkflowRole::Release);
 
-        let (created, invocations) =
-            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
-        assert!(created, "the first run creates the draft: {invocations}");
+        let first = run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
         assert!(
-            invocations.contains("release create") && invocations.contains("--draft"),
-            "the first run creates the Release as a draft: {invocations}"
+            first.succeeded,
+            "the first run creates the draft: {}",
+            first.diagnostics
+        );
+        assert!(
+            first.invocations.contains("release create") && first.invocations.contains("--draft"),
+            "the first run creates the Release as a draft: {}",
+            first.invocations
         );
 
-        let (resumed, invocations) =
-            run_draft_creation(workspace.root(), &gh_stub("    printf 'true\\n'"));
-        assert!(resumed, "a rerun against an existing draft succeeds");
+        let rerun = run_draft_creation(workspace.root(), &gh_stub("    printf 'true\\n'"));
         assert!(
-            !invocations.contains("release create"),
-            "a rerun against an existing draft creates nothing: {invocations}"
+            rerun.succeeded,
+            "a rerun against an existing draft succeeds: {}",
+            rerun.diagnostics
+        );
+        assert!(
+            !rerun.invocations.contains("release create"),
+            "a rerun against an existing draft creates nothing: {}",
+            rerun.invocations
+        );
+    }
+
+    // `gh` writes notices, deprecations and update prompts to standard error on
+    // calls that succeed, so a success path that merged the streams would make
+    // every one of those bytes part of the value it compares. The draft would be
+    // perfectly good and the transition would fail on it. The witness is a stub
+    // that answers `true` and writes a notice while exiting zero: merged, the
+    // comparison sees the notice and refuses; separated, it sees `true` and
+    // resumes.
+    #[test]
+    fn resumes_a_draft_whose_resolution_wrote_a_notice_while_succeeding() {
+        let workspace = workspace("workflow-draft-creation-notice");
+        converge(workspace.root(), WorkflowRole::Release);
+
+        let noisy = run_draft_creation(
+            workspace.root(),
+            &gh_stub("    printf 'a new release of gh is available\\n' >&2\n    printf 'true\\n'"),
+        );
+        assert!(
+            noisy.succeeded,
+            "a notice on the success path is not part of the resolved state: {}",
+            noisy.diagnostics
+        );
+        assert!(
+            !noisy.invocations.contains("release create"),
+            "the existing draft is resumed rather than recreated: {}",
+            noisy.invocations
         );
     }
 
@@ -4018,10 +5474,14 @@ aur:
         let workspace = workspace("workflow-draft-creation-tag-verified");
         converge(workspace.root(), WorkflowRole::Release);
 
-        let (created, invocations) =
-            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
-        assert!(created, "the draft is created: {invocations}");
-        let creation = invocations
+        let executed = run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_ABSENT));
+        assert!(
+            executed.succeeded,
+            "the draft is created: {}",
+            executed.diagnostics
+        );
+        let creation = executed
+            .invocations
             .lines()
             .find(|line| line.contains("release create"))
             .expect("the step creates the Release");
@@ -4042,15 +5502,22 @@ aur:
         let workspace = workspace("workflow-draft-creation-unresolved");
         converge(workspace.root(), WorkflowRole::Release);
 
-        let (continued, invocations) =
-            run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_UNRESOLVED));
+        let executed = run_draft_creation(workspace.root(), &gh_stub(GH_RELEASE_UNRESOLVED));
         assert!(
-            !continued,
-            "an unresolved Release state stops the transition: {invocations}"
+            !executed.succeeded,
+            "an unresolved Release state stops the transition: {}",
+            executed.invocations
         );
         assert!(
-            !invocations.contains("release create"),
-            "an unresolved Release state is not treated as absence: {invocations}"
+            !executed.invocations.contains("release create"),
+            "an unresolved Release state is not treated as absence: {}",
+            executed.invocations
+        );
+        assert!(
+            executed.diagnostics.contains("could not be resolved")
+                && executed.diagnostics.contains("503"),
+            "the refusal reports what the resolution said: {:?}",
+            executed.diagnostics
         );
     }
 
@@ -4064,11 +5531,16 @@ aur:
         let workspace = workspace("workflow-draft-creation-published");
         converge(workspace.root(), WorkflowRole::Release);
 
-        let (continued, invocations) =
-            run_draft_creation(workspace.root(), &gh_stub("    printf 'false\\n'"));
+        let executed = run_draft_creation(workspace.root(), &gh_stub("    printf 'false\\n'"));
         assert!(
-            !continued,
-            "the transition refuses a Release that is no longer a draft: {invocations}"
+            !executed.succeeded,
+            "the transition refuses a Release that is no longer a draft: {}",
+            executed.invocations
+        );
+        assert!(
+            executed.diagnostics.contains("no longer a draft"),
+            "the refusal names what it refused rather than exiting silently: {:?}",
+            executed.diagnostics
         );
     }
 
