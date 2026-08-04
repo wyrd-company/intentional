@@ -12,15 +12,25 @@
 # relationship, so moving either an action or a script must fail this gate
 # rather than a release.
 
+#
+# The tree to check defaults to this repository. A caller may name another so
+# the gate itself can be held to negative cases, because a gate only ever run
+# against compliant files cannot distinguish "the rule holds" from "the rule is
+# never evaluated".
+
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 cd "$root"
 
 checked=0
 failed=0
 
 for action in action.yml actions/*/action.yml; do
+  # An unmatched glob and a tree without a root action document both arrive as
+  # a path that is not a file. Skipping them here keeps the vacuity check below
+  # the single place that decides an empty sweep is a failure.
+  [[ -f "$action" ]] || continue
   action_directory="$(dirname "$action")"
   # The grep pattern matches a literal action-path reference rather than a
   # shell expansion, so it is written to survive single-quote linting.
