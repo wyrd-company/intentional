@@ -20,6 +20,13 @@ not spell -- a flow mapping, a quoted scalar, an alias -- and the cost of that
 is a red check asking for the declaration to be written in the one shape,
 never a run that verified part of the table and reported success.
 
+The exhaustive-read claim quantifies over documents the `serde_yaml` consumer
+reads. Its measured search covered hand-built and position-fuzzed documents
+accepted by PyYAML; constructs on which PyYAML and `serde_yaml` disagree are
+outside that search. Within the claim's input set, closure is at line
+granularity: every line is classified or refused. It does not assert that this
+reader and a YAML parser assign every field value the same scalar type.
+
 The guarantee is about lines, so it can only be as good as the agreement on
 what a line is. Where readers of this file disagree about that, the file is
 refused rather than read one way; see `AMBIGUOUS_BREAKS`.
