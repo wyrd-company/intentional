@@ -423,6 +423,10 @@ fn lines(text: &str, region: Range<usize>) -> impl Iterator<Item = Range<usize>>
 /// strictly right of `indent`. A `#` line at or left of `indent` can never be
 /// scalar content, so it is a comment, and no entry of the container can own it.
 ///
+/// Blank lines are not this predicate's business. The two call sites treat them
+/// differently on purpose, and folding them in here would recouple what this
+/// extraction separated.
+///
 /// The converse is deliberately not claimed: a `#` line right of `indent` may
 /// be a genuine comment about a nested key. Attributing it to the entry that
 /// encloses it is still correct, because that entry is where a nested comment
@@ -859,6 +863,10 @@ mod tests {
         assert!(
             !comment_belongs_to_container("  runs-on: x\n", 2),
             "an ordinary line is not a comment, whatever its indent"
+        );
+        assert!(
+            !comment_belongs_to_container("\n", 2),
+            "a blank line is not this predicate's business"
         );
     }
 
