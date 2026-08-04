@@ -5523,42 +5523,54 @@ release-units:
     /// membership assertion exists to catch, one level up.
     const INHERITED: [&str; 3] = ["PATH", "HOME", "RUSTUP_HOME"];
 
-    /// One `INTENTIONAL_ALLOWED+=` append and the conditions that govern it.
-    struct AllowlistAppend {
-        /// The append itself.
+    /// One assignment to the allowlist, and the conditions that govern it.
+    struct AllowlistAssignment {
+        /// The assignment itself, as one logical line.
         line: String,
         /// The conditions open around it, outermost first.
         conditions: Vec<String>,
     }
 
-    /// Every allowlist append a rendered body performs, wherever it sits.
+    /// Every assignment a rendered body makes to the allowlist, in order.
     ///
-    /// Membership used to be read from the prologue alone -- the lines above
-    /// the probe helper -- so the same conditional append moved four lines
-    /// down, inside `resolve() {`, decided membership from the process
-    /// environment with nothing to say so. Nesting is tracked rather than
-    /// stopped at, and the tracking checks its own balance: a body this
-    /// scanner cannot follow fails here rather than quietly reporting that
-    /// there was nothing to inspect.
-    fn allowlist_appends(body: &str) -> Vec<AllowlistAppend> {
+    /// The declaration comes first and the rest add to it. Membership used to
+    /// be read from the prologue alone -- the lines above the probe helper --
+    /// so the same conditional append moved four lines down, inside
+    /// `resolve() {`, decided membership from the process environment with
+    /// nothing to say so. Three things follow from that being a placement
+    /// defect rather than a spelling one, and each is a way the same evasion
+    /// comes back:
+    ///
+    /// - Nesting is tracked rather than stopped at, and the tracking checks
+    ///   its own balance, so a body this scanner cannot follow fails here
+    ///   rather than quietly reporting nothing to inspect.
+    /// - `\`-continued lines are folded first. A condition read only to its
+    ///   first physical line is a prefix again, and one backslash is cheaper
+    ///   than four moved lines.
+    /// - Re-assignment counts. `ALLOWED=("${ALLOWED[@]}" ...)` adds to the
+    ///   list exactly as `+=` does, so the sweep keys on the list being
+    ///   assigned, not on the token that happens to do it.
+    ///
+    /// `elif` opens no condition and `else` does not swap one, so an append in
+    /// an else-branch is attributed the `if` it is not governed by. That
+    /// direction over-reports -- a false rejection, never a false pass -- and
+    /// no rendered body uses either.
+    fn allowlist_assignments(body: &str) -> Vec<AllowlistAssignment> {
         let mut open: Vec<String> = Vec::new();
-        let mut appends = Vec::new();
-        for raw in body.lines() {
-            let line = raw.trim();
+        let mut assignments = Vec::new();
+        for line in logical_lines(body) {
             if let Some(condition) = line.strip_prefix("if ") {
                 open.push(
                     condition
-                        .trim_end_matches('\\')
-                        .trim()
                         .trim_end_matches("then")
                         .trim()
                         .trim_end_matches(';')
                         .to_owned(),
                 );
             }
-            if line.contains("INTENTIONAL_ALLOWED+=") {
-                appends.push(AllowlistAppend {
-                    line: line.to_owned(),
+            for _ in 0..assigned(&line) {
+                assignments.push(AllowlistAssignment {
+                    line: line.clone(),
                     conditions: open.clone(),
                 });
             }
@@ -5570,28 +5582,81 @@ release-units:
             open.is_empty(),
             "the scanner followed every conditional in the body; left open: {open:?}"
         );
-        appends
+        assignments
     }
 
-    /// The variables one line expands, without indirection or default.
-    fn expanded_names(line: &str) -> Vec<String> {
+    /// How many times a fragment assigns the allowlist, counted without the sweep.
+    ///
+    /// This is the sweep's independent enumeration. A count taken from the
+    /// sweep's own output cannot falsify the sweep -- a sweep that reads the
+    /// first assignment of each body and stops agrees with itself perfectly --
+    /// so the number the sweep is held to is read straight off the text.
+    fn assigned(fragment: &str) -> usize {
+        fragment.matches("INTENTIONAL_ALLOWED=").count()
+            + fragment.matches("INTENTIONAL_ALLOWED+=").count()
+    }
+
+    /// A body's lines, with `\`-continuations folded into one logical line each.
+    fn logical_lines(body: &str) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut pending: Option<String> = None;
+        for raw in body.lines() {
+            let trimmed = raw.trim();
+            let continues = trimmed.ends_with('\\');
+            let piece = trimmed.trim_end_matches('\\').trim_end();
+            match &mut pending {
+                Some(joined) => {
+                    joined.push(' ');
+                    joined.push_str(piece);
+                }
+                None => pending = Some(piece.to_owned()),
+            }
+            if !continues {
+                lines.push(pending.take().expect("a logical line was started"));
+            }
+        }
+        lines.extend(pending);
+        lines
+    }
+
+    /// The variables one fragment expands, braced or not.
+    ///
+    /// The unbraced form is included because it is the same read: a member
+    /// whose value is `"$SOMETHING"` is as much the process's as one whose
+    /// value is `"${SOMETHING}"`. A positional parameter is skipped -- it is
+    /// the generated script's own argument, not anything the process supplied.
+    fn expanded_names(fragment: &str) -> Vec<String> {
+        let characters = fragment.chars().collect::<Vec<_>>();
         let mut names = Vec::new();
-        let mut rest = line;
-        while let Some((_, tail)) = rest.split_once("${") {
-            let tail = tail.strip_prefix('!').unwrap_or(tail);
-            let name = tail
-                .chars()
-                .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
-                .collect::<String>();
-            if !name.is_empty() {
+        let mut index = 0;
+        while index < characters.len() {
+            if characters[index] != '$' {
+                index += 1;
+                continue;
+            }
+            let mut start = index + 1;
+            if characters.get(start) == Some(&'{') {
+                start += 1;
+                if characters.get(start) == Some(&'!') {
+                    start += 1;
+                }
+            }
+            let mut end = start;
+            while end < characters.len()
+                && (characters[end].is_ascii_alphanumeric() || characters[end] == '_')
+            {
+                end += 1;
+            }
+            let name = characters[start..end].iter().collect::<String>();
+            if !name.is_empty() && !name.starts_with(|first: char| first.is_ascii_digit()) {
                 names.push(name);
             }
-            rest = tail;
+            index = if end > start { end } else { index + 1 };
         }
         names
     }
 
-    /// The names an append reads that derivation did not choose.
+    /// The names an assignment reads that derivation did not choose.
     ///
     /// Every expansion an append performs -- in the value it adds and in the
     /// condition that decides whether it is added at all -- has to name a
@@ -5599,67 +5664,149 @@ release-units:
     /// prefix marks. A bare name is one the process happened to carry, and
     /// either use hands the allowlist's membership back to the environment the
     /// allowlist exists to replace.
-    fn unchosen_reads(append: &AllowlistAppend) -> Vec<String> {
-        std::iter::once(&append.line)
-            .chain(append.conditions.iter())
-            .flat_map(|text| expanded_names(text))
+    fn unchosen_reads(assignment: &AllowlistAssignment) -> Vec<String> {
+        std::iter::once(&assignment.line)
+            .chain(assignment.conditions.iter())
+            .flat_map(|fragment| expanded_names(fragment))
             .filter(|name| !name.starts_with("INTENTIONAL_"))
             .collect()
     }
 
-    /// The membership sweep and its recogniser, against bodies written here.
-    ///
-    /// A sweep that reaches nothing passes, and a recogniser that accepts
-    /// everything passes, so neither is left to be judged by the rendered
-    /// bodies alone. Both evasions are written out: the append hidden inside
-    /// the helper, and the append whose value is chosen while the test that
-    /// admits it is not. The shape the recipes really render is the control
-    /// that keeps the recogniser from being a refusal of everything.
-    #[test]
-    fn reads_an_allowlist_member_the_process_environment_decides() {
-        let hidden = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+    /// One written-out body the sweep and its recogniser are calibrated against.
+    struct Calibration {
+        /// What the body does.
+        shape: &'static str,
+        /// The body, a declaration followed by exactly one append.
+        body: &'static str,
+        /// The conditions that append is expected to be found under.
+        conditions: usize,
+        /// The names that append is expected to read unchosen.
+        unchosen: &'static [&'static str],
+    }
+
+    /// Every evasion the sweep must see, and the one shape it must accept.
+    const CALIBRATIONS: [Calibration; 7] = [
+        Calibration {
+            shape: "an append hidden inside the probe helper",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
       INTENTIONAL_resolve() {
         if [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
           INTENTIONAL_ALLOWED+=(CARGO_UNSTABLE_REGISTRY_AUTH="${CARGO_UNSTABLE_REGISTRY_AUTH}")
         fi
       }
-"#;
-        let appends = allowlist_appends(hidden);
-        assert_eq!(appends.len(), 1, "the sweep reaches inside the helper");
-        assert_eq!(
-            unchosen_reads(&appends[0]),
-            ["CARGO_UNSTABLE_REGISTRY_AUTH"; 2],
-            "the value and the test that admits it are both the process's"
-        );
-
-        let tested = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+"#,
+            conditions: 1,
+            unchosen: &[
+                "CARGO_UNSTABLE_REGISTRY_AUTH",
+                "CARGO_UNSTABLE_REGISTRY_AUTH",
+            ],
+        },
+        Calibration {
+            shape: "a chosen value admitted by an unchosen test",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
       INTENTIONAL_resolve() {
         if [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
           INTENTIONAL_ALLOWED+=("${INTENTIONAL_CARRIED_TOKEN}=${!INTENTIONAL_CARRIED_TOKEN}")
         fi
       }
-"#;
-        let appends = allowlist_appends(tested);
-        assert_eq!(appends.len(), 1, "the sweep reaches inside the helper");
-        assert_eq!(
-            unchosen_reads(&appends[0]),
-            ["CARGO_UNSTABLE_REGISTRY_AUTH"],
-            "a chosen value admitted by an unchosen test is still the process's"
-        );
-
-        let chosen = r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+"#,
+            conditions: 1,
+            unchosen: &["CARGO_UNSTABLE_REGISTRY_AUTH"],
+        },
+        Calibration {
+            shape: "an unchosen test on a continuation line",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      if [ -n "${INTENTIONAL_REGISTRY_NAME:-}" ] \
+        && [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
+        INTENTIONAL_ALLOWED+=("${INTENTIONAL_REGISTRY_INDEX_VARIABLE}=${INTENTIONAL_REGISTRY_INDEX_URL}")
+      fi
+"#,
+            conditions: 1,
+            unchosen: &["CARGO_UNSTABLE_REGISTRY_AUTH"],
+        },
+        Calibration {
+            shape: "the list added to by re-assignment rather than by append",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      INTENTIONAL_resolve() {
+        INTENTIONAL_ALLOWED=("${INTENTIONAL_ALLOWED[@]}" CARGO_UNSTABLE_REGISTRY_AUTH="${CARGO_UNSTABLE_REGISTRY_AUTH}")
+      }
+"#,
+            conditions: 0,
+            unchosen: &["CARGO_UNSTABLE_REGISTRY_AUTH"],
+        },
+        Calibration {
+            shape: "an unbraced expansion",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      INTENTIONAL_resolve() {
+        INTENTIONAL_ALLOWED+=(CARGO_UNSTABLE_REGISTRY_AUTH="$CARGO_UNSTABLE_REGISTRY_AUTH")
+      }
+"#,
+            conditions: 0,
+            unchosen: &["CARGO_UNSTABLE_REGISTRY_AUTH"],
+        },
+        Calibration {
+            shape: "an else-branch append, attributed the `if` it is not governed by",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
+      if [ -n "${CARGO_UNSTABLE_REGISTRY_AUTH:-}" ]; then
+        :
+      else
+        INTENTIONAL_ALLOWED+=("${INTENTIONAL_CARRIED_TOKEN}=${!INTENTIONAL_CARRIED_TOKEN}")
+      fi
+"#,
+            conditions: 1,
+            unchosen: &["CARGO_UNSTABLE_REGISTRY_AUTH"],
+        },
+        Calibration {
+            shape: "the shape the recipes render",
+            body: r#"      INTENTIONAL_ALLOWED=(PATH="${PATH:-}")
       if [ -n "${INTENTIONAL_REGISTRY_NAME:-}" ]; then
         INTENTIONAL_ALLOWED+=("${INTENTIONAL_REGISTRY_INDEX_VARIABLE}=${INTENTIONAL_REGISTRY_INDEX_URL}")
       fi
-"#;
-        let appends = allowlist_appends(chosen);
-        assert_eq!(appends.len(), 1, "the sweep reads an append it accepts");
-        assert_eq!(appends[0].conditions.len(), 1, "the condition is carried");
-        assert!(
-            unchosen_reads(&appends[0]).is_empty(),
-            "an append derivation named entirely is accepted: {:?}",
-            unchosen_reads(&appends[0])
-        );
+"#,
+            conditions: 1,
+            unchosen: &[],
+        },
+    ];
+
+    /// The membership sweep and its recogniser, against bodies written here.
+    ///
+    /// A sweep that reaches nothing passes, and a recogniser that accepts
+    /// everything passes, so neither is left to be judged by the rendered
+    /// bodies alone. Every route the same evasion takes is written out, each
+    /// with the reading it must produce, and the shape the recipes really
+    /// render is the control that keeps the recogniser from being a refusal of
+    /// everything.
+    #[test]
+    fn reads_an_allowlist_member_the_process_environment_decides() {
+        for Calibration {
+            shape,
+            body,
+            conditions,
+            unchosen,
+        } in CALIBRATIONS
+        {
+            let assignments = allowlist_assignments(body);
+            assert_eq!(
+                assignments.len(),
+                assigned(body),
+                "{shape}: the sweep read every assignment the body makes"
+            );
+            assert_eq!(
+                assignments.len(),
+                2,
+                "{shape}: a declaration and one append"
+            );
+            assert_eq!(
+                assignments[1].conditions.len(),
+                conditions,
+                "{shape}: the conditions governing the append are carried"
+            );
+            assert_eq!(
+                unchosen_reads(&assignments[1]),
+                unchosen,
+                "{shape}: what the append reads that derivation did not choose"
+            );
+        }
     }
 
     #[test]
@@ -5698,8 +5845,20 @@ release-units:
             // wherever in the body it sits -- reads values derivation put in
             // the step's own `env:`, which is why they are named by a prefixed
             // variable rather than by a bare one.
-            for append in allowlist_appends(&body) {
-                let unchosen = unchosen_reads(&append);
+            //
+            // "Every" is the load-bearing word, so the sweep is held to a
+            // count taken off the text rather than to a floor it sets itself.
+            // A sweep that reads the first assignment of each body and stops
+            // satisfies any floor two jobs can jointly clear, and behind it the
+            // hidden append this guard exists to catch is admitted again.
+            let assignments = allowlist_assignments(&body);
+            assert_eq!(
+                assignments.len(),
+                assigned(&body),
+                "{job}: the sweep read every assignment the body makes to the list"
+            );
+            for append in &assignments[1..] {
+                let unchosen = unchosen_reads(append);
                 assert!(
                     unchosen.is_empty(),
                     "{job} appends what derivation named, not what the process happened to carry: \
@@ -5711,11 +5870,11 @@ release-units:
             }
         }
         assert!(allowlists > 0, "the publisher jobs build an allowlist");
-        // The Cargo recipe renders two appends, each inside its own condition.
-        // Counting them is what separates a sweep that accepted every append
-        // from a sweep that found none -- the two are the same green suite.
+        // Two Cargo publisher jobs render two conditional appends each. This
+        // says the recipes still add to the list at all -- completeness is the
+        // per-body equality above, not this floor.
         assert!(
-            appended >= 2 && governed >= 2,
+            appended >= 4 && governed >= 4,
             "the sweep read the appends the recipes render: \
              {appended} appends under {governed} conditions"
         );
