@@ -2525,9 +2525,15 @@ subjects: []
         assert!(message.contains(&plan_digest()), "{message}");
     }
 
-    /// Corrupting the plan payload alone breaks the plan's own seal.
+    /// Corrupting the plan payload alone moves the digest it determines.
+    ///
+    /// This is the other side of the independence proof: the manifest's claim
+    /// is untouched here and the plan is what moved, where
+    /// `binds_the_agreed_plan_digest_to_the_sealed_plan_it_transports` moves
+    /// the claim and leaves the plan alone. Both die on the same comparison,
+    /// which is the point — it is the one comparison neither side controls.
     #[test]
-    fn refuses_a_sealed_plan_whose_seal_no_longer_covers_its_payload() {
+    fn refuses_a_sealed_plan_whose_payload_was_rewritten() {
         let workspace = workspace("assemble-plan-payload");
         let input = workspace.root().join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2556,9 +2562,11 @@ subjects: []
         let output = workspace.root().join("release-evidence");
         let error = assemble(&request(&workspace, &handoff, &input, &output))
             .expect_err("a rewritten plan is refused");
+        let message = error.to_string();
+        assert!(message.contains(&plan_digest()), "{message}");
         assert!(
-            error.to_string().contains("release plan digest mismatch"),
-            "{error}"
+            message.contains("release plan it transports seals"),
+            "the rewritten payload determines another digest: {message}"
         );
     }
 

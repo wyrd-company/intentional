@@ -44,9 +44,9 @@ pub struct PreparedHandoff {
 /// that plan seals, under the name it seals it by.
 ///
 /// The digest comparison reads `payload_digest` rather than the seal the plan
-/// carries, so it is a derivation set against a claim at the point of use. That
-/// keeps it non-circular on its own rather than by standing after the seal
-/// check, which a later edit could move or drop without anything noticing.
+/// carries, and runs before the seal is checked, so it is a derivation set
+/// against a claim on its own terms rather than by standing after a check that
+/// already made the two equal.
 pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
     let manifest = directory.join(RELEASE_CANDIDATE_MANIFEST);
     let text = std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
@@ -72,7 +72,11 @@ pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
             plan_path.display()
         ))
     })?;
-    plan.verify_digest()?;
+    // The manifest's claim is compared against the recomputed digest before the
+    // plan's own seal is looked at, so this comparison is a derivation set
+    // against a claim on its own terms. Standing it after `verify_digest` would
+    // make it claim-versus-claim that happens to be correct, and would leave
+    // nothing able to tell the two spellings apart.
     let sealed = plan.payload_digest()?;
     if sealed != candidate.plan.digest {
         return Err(Error::Validation(format!(
@@ -81,6 +85,9 @@ pub fn prepared_release(directory: &Path) -> Result<PreparedHandoff> {
             candidate.plan.digest
         )));
     }
+    // The plan's own seal is then held to its payload, which refuses a
+    // self-inconsistent document the manifest happens to agree with.
+    plan.verify_digest()?;
 
     // The plan seals the tags the release creates, and the manifest names one
     // of them as the global release tag. Reading the plan's own entry is what
