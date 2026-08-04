@@ -4917,6 +4917,14 @@ aur:
                 r#"{"name":"@kfnrbg/pxwqld","version":"1.0.0"}"#,
             )
             .write(
+                "bgqnwt/Dockerfile",
+                "FROM scratch\nLABEL org.opencontainers.image.title=\"gwlqcx\"\n",
+            )
+            .write(
+                "kdshpm/devcontainer-feature.json",
+                r#"{"id":"nfxkbd","version":"1.0.0"}"#,
+            )
+            .write(
                 "vkjmtd/Cargo.toml",
                 "[package]\nname = \"hbzqvn\"\nversion = \"1.0.0\"\npublish = [\"mtdlgw\"]\n",
             )
@@ -4937,6 +4945,30 @@ github:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
 release-units:
+  jdmcvx:
+    path: bgqnwt
+    oci:
+      dockerhub:
+        repository: zrpvhm/phqvrb
+        username-var: KLXVBRQ
+        token-secret: WZDNGPT
+      ghcr:
+        repository: mwbqjt/nkwzdt
+        omit: [ signature ]
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+  rtwzlf:
+    path: kdshpm
+    oci:
+      ghcr: {}
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
   qhwzru:
     path: vkjmtd
     npm:
@@ -5019,7 +5051,7 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 10] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 20] = [
         (
             "qhwzru",
             "qhwzru",
@@ -5074,6 +5106,69 @@ release-units:
             "the Cargo registry name, uppercased into a variable spelling",
             Surface::Plain,
         ),
+        // The OCI surface. Both destinations are configured explicitly, and
+        // both halves of each repository are separately typed by an author, so
+        // owner and name are separate rows.
+        (
+            "jdmcvx",
+            "jdmcvx",
+            "the image release-unit identifier",
+            Surface::Plain,
+        ),
+        (
+            "bgqnwt",
+            "bgqnwt",
+            "the image release-unit path",
+            Surface::Plain,
+        ),
+        (
+            "rtwzlf",
+            "rtwzlf",
+            "the Feature release-unit identifier",
+            Surface::Plain,
+        ),
+        (
+            "kdshpm",
+            "kdshpm",
+            "the Feature release-unit path",
+            Surface::Plain,
+        ),
+        (
+            "gwlqcx",
+            "gwlqcx",
+            "the image name the Dockerfile label declares",
+            Surface::Plain,
+        ),
+        (
+            "nfxkbd",
+            "nfxkbd",
+            "the Feature id its manifest declares",
+            Surface::Plain,
+        ),
+        (
+            "zrpvhm",
+            "zrpvhm",
+            "the Docker Hub repository owner",
+            Surface::Plain,
+        ),
+        (
+            "phqvrb",
+            "phqvrb",
+            "the Docker Hub repository name",
+            Surface::Plain,
+        ),
+        (
+            "mwbqjt",
+            "mwbqjt",
+            "the GHCR repository owner",
+            Surface::Plain,
+        ),
+        (
+            "nkwzdt",
+            "nkwzdt",
+            "the GHCR repository name",
+            Surface::Plain,
+        ),
     ];
 
     /// Managed jobs the sentinel configuration derives, without their prefix.
@@ -5088,12 +5183,17 @@ release-units:
             WorkflowRole::Publish,
             &[
                 "assemble_evidence",
+                "build_jdmcvx_buildx",
                 "build_qhwzru_cargo",
                 "build_qhwzru_npm",
+                "build_rtwzlf_devcontainer_cli",
                 "close_release",
+                "publish_jdmcvx_oci_dockerhub",
+                "publish_jdmcvx_oci_ghcr",
                 "publish_qhwzru_cargo_primary",
                 "publish_qhwzru_npm_github",
                 "publish_qhwzru_npm_primary",
+                "publish_rtwzlf_oci_ghcr",
                 "tag_after_publication",
                 "tag_before_publication",
                 "verify_tag",
@@ -7553,6 +7653,29 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 .replace("${{ secrets.GITHUB_TOKEN }}", "example-github-token")
         }
 
+        /// The one release unit this fixture's configuration declares.
+        ///
+        /// Read from the workspace rather than restated here, so the anchor is
+        /// the text an author wrote rather than a second copy of it.
+        fn configured_release_unit(root: &Path) -> String {
+            let configuration: Value = serde_yaml::from_str(
+                &std::fs::read_to_string(root.join(".intentional/config.yml"))
+                    .expect("the workspace is configured"),
+            )
+            .expect("the configuration parses");
+            let units = configuration["release-units"]
+                .as_mapping()
+                .expect("release units")
+                .keys()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let [unit] = units.as_slice() else {
+                panic!("this fixture declares one release unit: {units:?}");
+            };
+            unit.clone()
+        }
+
         /// The sealed OCI layout a build job would have produced.
         fn write_layout(bytes: &Path, annotated_version: &str, attested: bool) {
             let layout = bytes.join("layout");
@@ -7847,6 +7970,16 @@ done
                     .identity,
                 "example-owner/example-image",
                 "an empty GHCR mapping derives its owner from GitHub and its name from the subject"
+            );
+            // Both deliveries render from one `@RELEASE_UNIT@` substitution, so
+            // their agreeing with each other cannot show that either is the
+            // release unit an author configured: a constant in that one place
+            // moves both. The third anchor is the configuration file itself.
+            let configured = configured_release_unit(dockerhub_recipe.workspace.root());
+            assert_eq!(
+                dockerhub.verified("release-unit"),
+                configured,
+                "the job verifies the release unit the configuration names"
             );
             for outcome in [&dockerhub, &ghcr] {
                 assert_eq!(
