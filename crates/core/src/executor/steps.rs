@@ -134,6 +134,13 @@ pub(super) struct StepsRefusal {
     pub code: &'static str,
     /// Whole message, already naming the publication it refuses.
     pub message: String,
+    /// Configuration key the refusal is about, when one key wrote it.
+    ///
+    /// A refusal about the recipe as a whole names the release unit, which is
+    /// what the caller falls back to. A refusal about a value an author typed
+    /// names the key they typed it into, so the diagnostic points at the line
+    /// to edit rather than at the unit that contains it.
+    pub path: Option<String>,
 }
 
 impl StepsRefusal {
@@ -144,6 +151,16 @@ impl StepsRefusal {
             message: format!(
                 "publication {identity} derives no maintained recipe steps: {message}"
             ),
+            path: None,
+        }
+    }
+
+    /// A destination this packager's client resolves for itself.
+    fn not_overridable(message: String, path: String) -> Self {
+        Self {
+            code: "destination-not-overridable",
+            message,
+            path: Some(path),
         }
     }
 }
@@ -204,6 +221,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
                 "publication {identity} distributes a GitHub-hosted deliverable, which the managed upload job places on the draft Release; that job is not derived yet, so the {} recipe would publish a deliverable nothing uploads",
                 context.publication.publisher
             ),
+            path: None,
         });
     }
     let destination = context.publication.destination.clone().ok_or(StepsRefusal {
@@ -211,6 +229,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
         message: format!(
             "publication {identity} promotes into a destination repository, but none is configured or derivable"
         ),
+        path: None,
     })?;
     let mut credential = String::new();
     let mut environment = format!("      @ENVVAR@DESTINATION: {}\n", scalar(&destination));
@@ -226,6 +245,7 @@ fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal>
                 message: format!(
                     "publication {identity} names tap repository {destination:?}, which is not owner/name"
                 ),
+                path: None,
             })?;
             credential.push_str(
                 &DESTINATION_TOKEN_STEPS
@@ -436,9 +456,19 @@ fn subject_environment(context: &RecipeContext<'_>) -> String {
 /// spelling the script chose: `intentional verify publication` refuses any
 /// other, and a recipe that named its own would be discovered by that refusal
 /// on a release runner rather than by derivation here.
-fn observation_environment(context: &RecipeContext<'_>, kind: &str, packager: &str) -> String {
+/// The retrieval client is routed separately from the packager because the two
+/// are the same program for a language registry and are not for an OCI
+/// destination: a Buildx subject is retrieved by the registry client, not by
+/// the builder that produced it. Naming one and printing it twice would record
+/// a retrieval that did not happen the way it says it did.
+fn observation_environment(
+    context: &RecipeContext<'_>,
+    kind: &str,
+    packager: &str,
+    client: &str,
+) -> String {
     format!(
-        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n",
+        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n      @ENVVAR@RETRIEVAL_CLIENT: {}\n",
         scalar(context.observation),
         scalar(&context.publication.release_unit),
         scalar(context.publication.publisher.as_str()),
@@ -447,6 +477,7 @@ fn observation_environment(context: &RecipeContext<'_>, kind: &str, packager: &s
         scalar(kind),
         scalar(packager),
         scalar(context.publication.retrieval.as_str()),
+        scalar(client),
     )
 }
 
@@ -493,7 +524,7 @@ const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
           printf '  digest: "%s"\n' "${@ENVVAR@DESTINATION_DIGEST}"
           printf 'retrieval:\n'
           printf '  mode: %s\n' "${@ENVVAR@RETRIEVAL_MODE}"
-          printf '  client: "%s"\n' "${@ENVVAR@PACKAGER_ID}"
+          printf '  client: "%s"\n' "${@ENVVAR@RETRIEVAL_CLIENT}"
           printf '  version: "%s"\n' "${@ENVVAR@RETRIEVAL_VERSION}"
           printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_DIGEST}"
         } > "${@ENVVAR@OBSERVATION}"
@@ -617,7 +648,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<String, String> {
             "      @ENVVAR@GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n".to_owned()
         },
         subject_environment(context),
-        observation_environment(context, "npm-package", "npm"),
+        observation_environment(context, "npm-package", "npm", "npm"),
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
@@ -1007,7 +1038,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(&format!("Read {identity} back and retrieve it")),
         scalar(registry),
         subject_environment(context),
-        observation_environment(context, "cargo-crate", "cargo"),
+        observation_environment(context, "cargo-crate", "cargo", "cargo"),
         policy_environment(context.publication.publisher),
         STRICT_MODE,
         OBSERVE,
@@ -1239,7 +1270,26 @@ const DEV_CONTAINER_CLI: &str = "@devcontainers/cli@0.88.0";
 /// Container recipe drives a native client that publishes from source and is
 /// therefore held to the packaged bytes afterwards.
 fn oci_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
-    let identity = context.publication.identity();
+    let publication = context.publication;
+    let identity = publication.identity();
+    // A Dev Container Feature is namespaced by the repository that publishes
+    // it: its client resolves `<owner>/<repository>/<feature id>`, which a
+    // two-segment repository override cannot express and which the client would
+    // ignore. Accepting one would point every readback at a repository nothing
+    // was written to, so the combination is refused where it is configured
+    // rather than after the destination has been mutated.
+    if publication.packager == Packager::DevContainerCli && publication.destination.is_some() {
+        return Err(StepsRefusal::not_overridable(
+            format!(
+                "publication {identity} configures a repository, but a Dev Container Feature is namespaced by the repository publishing it and its client resolves owner/repository/{}",
+                context.subject_identity
+            ),
+            format!(
+                "release-units.{}.oci.{}.repository",
+                publication.release_unit, publication.target
+            ),
+        ));
+    }
     oci_destination_steps(context).map_err(|message| StepsRefusal::underivable(&identity, &message))
 }
 
@@ -1311,7 +1361,12 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
         scalar(&format!("Publish {identity}")),
         scalar(context.working_directory),
         subject_environment(context),
-        observation_environment(context, kind, packager_version_command),
+        observation_environment(
+            context,
+            kind,
+            publication.packager.as_str(),
+            "crane",
+        ),
         policy_environment(publication.publisher),
         destination,
         scalar(&components),
