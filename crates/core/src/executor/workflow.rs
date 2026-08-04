@@ -1802,14 +1802,9 @@ release-units:
 
     #[test]
     fn binds_external_action_constants_to_the_authored_declarations() {
-        let declaration: Value = serde_yaml::from_str(
-            &std::fs::read_to_string(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../github-action-pins.yml"
-            ))
-            .expect("the authored external Action pin declaration exists"),
-        )
-        .expect("the Action pin declaration parses");
+        let declaration: Value =
+            serde_yaml::from_str(include_str!("../../../../github-action-pins.yml"))
+                .expect("the Action pin declaration parses");
         let declared = declaration["actions"].as_sequence().expect("actions table");
         let declared_names = declared
             .iter()
@@ -1912,7 +1907,7 @@ release-units:
                         let Some(action) = step.get("uses").and_then(Value::as_str) else {
                             continue;
                         };
-                        if action.starts_with(ACTION_REPOSITORY) {
+                        if is_intentional_action(action) {
                             continue;
                         }
                         let (_, commit) = action.rsplit_once('@').expect("Action has a revision");
@@ -1933,6 +1928,18 @@ release-units:
         assert_eq!(
             reached, declared,
             "the fixture set reaches every declared external Action"
+        );
+    }
+
+    #[test]
+    fn distinguishes_first_party_actions_from_lookalike_repositories() {
+        assert!(
+            !is_intentional_action("wyrd-company/intentional-evil/actions/pwn@main"),
+            "a lookalike repository is external"
+        );
+        assert!(
+            is_intentional_action("wyrd-company/intentional/actions/prepare@0.1.6"),
+            "an Action under the repository Actions path is first-party"
         );
     }
 
@@ -2218,11 +2225,18 @@ jobs:
             .collect()
     }
 
+    /// Whether one Action reference lies beneath this repository's Actions path.
+    fn is_intentional_action(action: &str) -> bool {
+        action
+            .strip_prefix(ACTION_REPOSITORY)
+            .is_some_and(|path| path.starts_with("/actions/"))
+    }
+
     /// The Action one managed step resolves from this repository, if any.
     fn intentional_action(step: &Value) -> Option<(String, String)> {
-        step.get("uses")?
-            .as_str()?
-            .strip_prefix("wyrd-company/intentional/actions/")?
+        let action = step.get("uses")?.as_str()?;
+        let path = action.strip_prefix(ACTION_REPOSITORY)?;
+        path.strip_prefix("/actions/")?
             .split_once('@')
             .map(|(name, reference)| (name.to_owned(), reference.to_owned()))
     }
@@ -2747,7 +2761,7 @@ aur:
         assert_eq!(
             steps[installer]["uses"].as_str(),
             Some("goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94"),
-            "the installer is pinned to a complete commit identity"
+            "the installer retains an independent literal witness of its complete commit identity"
         );
         assert_eq!(
             steps[installer]["with"]["install-only"].as_bool(),

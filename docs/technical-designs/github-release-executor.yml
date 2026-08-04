@@ -1076,11 +1076,13 @@ proposed-design:
     becoming a second authority for release semantics.
 
   external-action-pins: >-
-    Every external Action emitted into a managed job is declared by repository,
-    upstream release tag, and complete commit identity in
+    Every Action outside `wyrd-company/intentional/actions/` emitted into a
+    managed job is declared by repository, upstream release tag, and complete
+    commit identity in
     `github-action-pins.yml`. Offline conformance compares that authored table
     with the independently enumerated template constants in both directions and
     accepts only declared 40-hexadecimal commit identities in derived workflows.
-    A network-only evidence workflow resolves each upstream tag every Monday and
-    on changes to either side of the agreement, and fails when resolution no
-    longer matches the declared commit.
+    A network-only evidence workflow resolves each upstream tag on every pull
+    request and push. Once merged to the default branch, it also runs every
+    Monday. Each run fails when resolution no longer matches the declared
+    commit.

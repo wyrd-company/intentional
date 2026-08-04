@@ -7,11 +7,7 @@ name: GitHub Action pin evidence
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/github-action-pins.yml"
-      - "github-action-pins.yml"
-      - "scripts/release/verify-github-action-pins-online.py"
-      - "crates/core/src/executor/workflow/templates.rs"
+  push:
   schedule:
     - cron: "23 7 * * 1"
   workflow_dispatch:

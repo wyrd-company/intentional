@@ -49,7 +49,9 @@ tasks:
     cmds:
       - actionlint .github/workflows/*.yml
       - shellcheck scripts/action/*.sh scripts/release/*.sh
-      - ryl check .github/workflows/*.yml Taskfile.yml .intentional/config.yml
+      - >-
+        ryl check .github/workflows/*.yml Taskfile.yml
+        .intentional/config.yml github-action-pins.yml
       # Both lines are deliberate. The first attributes a regression to this
       # repository's own action documents; the second attributes it to the
       # gate's own semantics. Dropping either leaves one of those two failures

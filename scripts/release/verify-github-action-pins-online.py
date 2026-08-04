@@ -45,8 +45,8 @@ def resolve(repository, tag):
 
 def main():
     pins = list(declarations())
-    if len(pins) != 9:
-        raise SystemExit(f"expected 9 Action declarations, found {len(pins)}")
+    if not pins:
+        raise SystemExit("expected at least one Action declaration")
     disagreements = []
     for pin in pins:
         actual = resolve(pin["repository"], pin["tag"])
