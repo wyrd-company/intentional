@@ -4082,7 +4082,7 @@ release-units:
     /// through the same gap into a `sed` address; the answer is to hold every
     /// entry to the same rule and to keep the list where a new entry has to
     /// join it.
-    const REPOSITORY_SUPPLIED: [(&str, &str, &str); 5] = [
+    const REPOSITORY_SUPPLIED: [(&str, &str, &str); 6] = [
         (
             "component/Cargo.toml",
             "[package]\nname = \"@VALUE@\"\nversion = \"1.0.0\"\n",
@@ -4106,6 +4106,11 @@ release-units:
         (
             ".intentional/config.yml",
             "@TOKEN_SECRET@",
+            "recipe-underivable",
+        ),
+        (
+            ".cargo/config.toml",
+            "[registries.example-registry]\nindex = \"@VALUE@\"\n",
             "recipe-underivable",
         ),
     ];
@@ -4227,6 +4232,159 @@ release-units:
             .collect()
     }
 
+    // A probe decides whether a long-lived credential is reached and whether an
+    // immutable version is submitted, and it answers from what a client tells
+    // it. A probe that reads the released repository's own client configuration
+    // therefore lets that repository choose the answer: cargo can be made to
+    // report absence by going offline, by substituting the source, or by
+    // replacing the index, and npm resolves a scoped name through whichever
+    // registry a project file names. Those are four routes to one
+    // misclassification, and closing them one at a time is how this task
+    // reached its fourth round. What is asserted is the property instead --
+    // the probe is built rather than inherited -- and it is asserted by running
+    // the derived helper with a repository configuration present and watching
+    // it not be used.
+    #[test]
+    fn resolves_through_a_probe_that_inherits_no_repository_configuration() {
+        let workspace = sentinel_workspace("workflow-probe-isolation");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let temporary = workspace.root().join("runner");
+        std::fs::create_dir_all(&temporary).expect("runner directory");
+
+        // Cargo: the probe builds its scratch crate and must leave it with no
+        // configuration of the repository's.
+        let cargo_step = publisher_steps(workspace.root(), "cargo_primary")
+            .into_iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("INTENTIONAL_resolve()"))
+            })
+            .expect("the Cargo recipe defines a resolve");
+        let stubs = stub_client(
+            &temporary.join("cargo"),
+            "cargo",
+            &format!("{CARGO_NEW}exit 0"),
+        );
+        let probe = temporary.join("probe");
+        let body = cargo_step["run"].as_str().expect("a script");
+        let end = body.find("\n}\n").expect("the resolve is a shell function");
+        let helper = &body[..end + "\n}\n".len()];
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(format!(
+                "{helper}\nINTENTIONAL_resolve \"{}\"",
+                probe.display()
+            ))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("STUB_LOG", temporary.join("stub.log"))
+            .env("RUNNER_TEMP", &temporary)
+            // The released repository declares a registry index, and a probe
+            // that inherited this file would inherit every other key in it too.
+            .env("GITHUB_WORKSPACE", workspace.root());
+        for (key, value) in step_environment(&cargo_step) {
+            command.env(
+                key,
+                value.replace("${{ runner.temp }}", &temporary.display().to_string()),
+            );
+        }
+        let output = command.output().expect("the resolve runs");
+        assert!(
+            output.status.success(),
+            "the resolve runs against a stub client: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !probe.join("probe/.cargo/config.toml").exists(),
+            "the probe carries no configuration of the repository it releases"
+        );
+        assert!(
+            !body.contains("GITHUB_WORKSPACE"),
+            "the Cargo probe reads nothing out of the released workspace:\n{body}"
+        );
+
+        // npm: the probe runs somewhere a project `.npmrc` cannot reach it.
+        let npm_step = publisher_steps(workspace.root(), "npm_primary")
+            .into_iter()
+            .find(|step| {
+                step.get("run")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("INTENTIONAL_npm_holds()"))
+            })
+            .expect("the npm recipe defines a probe");
+        let body = npm_step["run"].as_str().expect("a script");
+        let start = body
+            .find("INTENTIONAL_npm_holds() {")
+            .expect("the probe is a shell function");
+        let end = body[start..]
+            .find("\n}\n")
+            .expect("the probe is a shell function");
+        let helper = &body[..start + end + "\n}\n".len()];
+        let stubs = stub_client(
+            &temporary.join("npm"),
+            "npm",
+            "pwd >> \"${STUB_LOG}\"; echo 'sha512-x'",
+        );
+        let log = temporary.join("stub.log");
+        std::fs::write(&log, "").expect("stub log");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(format!(
+                "{helper}\nINTENTIONAL_npm_holds example >/dev/null"
+            ))
+            .current_dir(workspace.root())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("STUB_LOG", &log)
+            .env("RUNNER_TEMP", &temporary);
+        for (key, value) in step_environment(&npm_step) {
+            command.env(
+                key,
+                value.replace("${{ runner.temp }}", &temporary.display().to_string()),
+            );
+        }
+        let output = command.output().expect("the probe runs");
+        assert!(
+            output.status.success(),
+            "the probe runs against a stub client: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !recorded
+                .lines()
+                .any(|line| line == workspace.root().to_string_lossy()),
+            "the npm probe ran in the released workspace, where a project .npmrc applies: {recorded}"
+        );
+        // Running elsewhere is half of it. npm resolves a scoped name through
+        // whichever registry `@scope:registry` names, wherever that is
+        // configured, and `--registry` does not outrank it -- so the probe says
+        // which registry serves this scope rather than leaving the question
+        // open.
+        assert!(
+            recorded.contains(&format!(
+                "--{}:registry=",
+                step_environment(&npm_step)["INTENTIONAL_SCOPE"]
+            )),
+            "the probe names the registry serving its scope: {recorded}"
+        );
+    }
+
     // The refusal test below proves a hostile value cannot be derived. It does
     // not prove that an accepted one stays out of shell source, and those are
     // different claims: `example-component` is a perfectly legal crate name,
@@ -4321,6 +4479,14 @@ release-units:
                         ),
                     );
                 } else {
+                    if file == ".cargo/config.toml" {
+                        // An index is only read for a registry the manifest
+                        // names, so the release unit has to name one.
+                        workspace.write(
+                            "component/Cargo.toml",
+                            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+                        );
+                    }
                     workspace.write(file, &template.replace("@VALUE@", hostile));
                 }
                 let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None);
