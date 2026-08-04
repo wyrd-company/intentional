@@ -10,6 +10,24 @@ The declaration to read defaults to this repository's. A caller may name
 another so this seam can be held to declarations that are deliberately
 malformed, because a check only ever run against a well-formed file cannot
 distinguish "every entry was read" from "every entry that was read agreed".
+
+The declaration is read exhaustively rather than recognised selectively: the
+reader classifies every line and refuses the file on the first line it cannot
+classify. So the guarantee is that no line of the declaration went unread, and
+it holds against any edit whatsoever, including edits that preserve the
+document's YAML meaning. What it does not do is accept YAML this grammar does
+not spell -- a flow mapping, a quoted scalar, an anchor -- and the cost of that
+is a red check asking for the declaration to be written in the one shape,
+never a run that verified part of the table and reported success.
+
+The guarantee is about lines, so it can only be as good as the agreement on
+what a line is. Where readers of this file disagree about that, the file is
+refused rather than read one way; see `AMBIGUOUS_BREAKS`.
+
+The reader is deliberately stdlib-only. This script runs on a hosted runner in
+`.github/workflows/github-action-pins.yml` with no dependency installation
+step, so a third-party parser here would trade a completeness hole for an
+`ImportError` on every push.
 """
 
 from pathlib import Path
@@ -21,8 +39,30 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 DECLARATION = ROOT / "github-action-pins.yml"
-FIELD = re.compile(r"^    (repository|tag|commit): (\S+)$")
-ENTRY = re.compile(r"^  - constant: (\S+)$", re.MULTILINE)
+
+#: The complete grammar of the declaration, line by line. Every line of the
+#: file must match one of these, and a line matching none of them fails the
+#: run. There is no second recogniser to agree with, so there is no shared
+#: assumption for an edit to slip between.
+IGNORED = re.compile(r"[ \t]*(#.*)?")
+SEQUENCE_KEY = re.compile(r"actions:")
+HEADER = re.compile(r"  - constant: (\S+)")
+FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
+
+REQUIRED_FIELDS = ("repository", "tag", "commit")
+
+#: Characters that are a line break to some readers of this file and an
+#: ordinary character to others.
+#:
+#: Measured, not assumed: PyYAML ends a line on U+2028, Python's ``splitlines``
+#: ends a line on all of these, and the YAML 1.2 grammar ends a line on none of
+#: them but ``\r`` and ``\n``. So a declaration containing one is read as
+#: different documents by different tools, and picking a side would put this
+#: reader's line model back into disagreement with somebody's parser -- the
+#: same class of divergence, one layer down, that made a pair of counts agree
+#: about a document neither had read. It is refused instead. Nothing legitimate
+#: in this declaration needs one.
+AMBIGUOUS_BREAKS = "\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 
 #: Attempts one repository's resolution is given before the run fails.
 #:
@@ -36,50 +76,94 @@ ATTEMPTS = 18
 DELAY_SECONDS = float(os.environ.get("INTENTIONAL_ACTION_PIN_RETRY_DELAY", "10"))
 
 
-def declared_constants(text):
-    """Every entry the declaration opens, counted straight off the raw text.
+class Unreadable(SystemExit):
+    """A line of the declaration this reader will not claim to have understood.
 
-    This never consults the field parse, the entries it yielded, or anything
-    the field pattern produced. That independence is the whole point: an
-    equality between this count and the parsed count fails when the parser
-    skips an entry, and it is the only shape that does. A floor -- including
-    non-emptiness -- is satisfied by any partial sweep, which is how a run that
-    read eight of nine entries reported success.
+    The entry under construction is named when there is one, because an
+    operator handed a line number and a line of YAML still has to work out
+    which Action stopped the run.
     """
-    return ENTRY.findall(text)
 
-
-def unreadable_constants(text):
-    """The entries whose field block the parser could not read completely.
-
-    Diagnosis only. The equality above decides whether the run fails; this
-    decides what the failure is allowed to say, so an operator is told which
-    entry to look at rather than only that a count was wrong.
-    """
-    unreadable = []
-    for block in re.split(r"^(?=  - constant: )", text, flags=re.MULTILINE):
-        header = ENTRY.search(block)
-        if not header:
-            continue
-        fields = {
-            match.group(1) for match in map(FIELD.match, block.splitlines()) if match
-        }
-        if fields != {"repository", "tag", "commit"}:
-            unreadable.append(header.group(1))
-    return unreadable
+    def __init__(self, number, line, reason, entry=None):
+        within = f" (within {entry})" if entry else ""
+        super().__init__(f"github-action-pins line {number}{within}: {reason}: {line!r}")
 
 
 def declarations(text):
-    current = {}
-    for line in text.splitlines():
-        match = FIELD.match(line)
-        if not match:
+    """Read the whole declaration, or refuse naming the line that stopped it.
+
+    Completeness here is exhaustiveness rather than agreement. Every line is
+    classified by exactly one rule and an unclassified line raises, so there is
+    no count to compare against a second count and no lexical assumption two
+    recognisers can share. An edit that moves an entry out of the shape below
+    does not become invisible; it becomes the failure.
+
+    Lines are split on ``\\n``, one trailing ``\\r`` is surrendered so a CRLF
+    checkout reads the same, and a line carrying any other character some
+    reader treats as a break is refused rather than resolved one way. Matching
+    is whole-line, so nothing trails off the end of a rule unexamined.
+    """
+    entries = []
+    current = None
+    constants = set()
+    for number, line in enumerate(text.split("\n"), start=1):
+        line = line[:-1] if line.endswith("\r") else line
+        found = [character for character in line if character in AMBIGUOUS_BREAKS]
+        if found:
+            raise Unreadable(
+                number,
+                line,
+                f"this line carries {found[0]!r}, which some readers of this file "
+                "treat as a line break and others do not",
+                current and current["constant"],
+            )
+        if IGNORED.fullmatch(line):
             continue
-        field, value = match.groups()
-        current[field] = value
-        if current.keys() >= {"repository", "tag", "commit"}:
-            yield current
-            current = {}
+        if SEQUENCE_KEY.fullmatch(line):
+            if entries or current:
+                raise Unreadable(number, line, "the entry sequence reopens")
+            continue
+        header = HEADER.fullmatch(line)
+        if header:
+            current = finish(current, entries)
+            constant = header.group(1)
+            if constant in constants:
+                raise Unreadable(number, line, "this entry is declared twice")
+            constants.add(constant)
+            current = {"constant": constant, "line": number}
+            continue
+        field = FIELD.fullmatch(line)
+        if field:
+            if current is None:
+                raise Unreadable(number, line, "this field opens no entry")
+            name, value = field.groups()
+            if name in current:
+                raise Unreadable(number, line, f"{name} is declared twice")
+            current[name] = value
+            continue
+        raise Unreadable(
+            number,
+            line,
+            "this line is not a declaration this reader knows",
+            current and current["constant"],
+        )
+    finish(current, entries)
+    return entries
+
+
+def finish(current, entries):
+    """Close the entry under construction, refusing one that lacks a field."""
+    if current is None:
+        return None
+    missing = [field for field in REQUIRED_FIELDS if field not in current]
+    if missing:
+        raise Unreadable(
+            current["line"],
+            current["constant"],
+            f"this entry declares no {', '.join(missing)}",
+        )
+    entries.append(current)
+    return None
 
 
 def resolve(repository, tag):
@@ -125,19 +209,16 @@ def resolve(repository, tag):
 def main(argv):
     declaration = Path(argv[1]) if len(argv) > 1 else DECLARATION
     text = declaration.read_text(encoding="utf-8")
-    pins = list(declarations(text))
-    constants = declared_constants(text)
-    if not constants:
-        raise SystemExit("expected at least one Action declaration")
-    # An equality, never a floor. The two counts come from the same text by
-    # different routes, so a parse that skipped an entry disagrees with the
-    # text that declared it.
-    if len(pins) != len(constants):
-        unreadable = unreadable_constants(text)
-        raise SystemExit(
-            f"read {len(pins)} of the {len(constants)} declared Action entries; "
-            f"could not read: {', '.join(unreadable) or 'unidentified entries'}"
-        )
+    # Completeness is discharged here, by the read itself: `declarations`
+    # returns only when every line of the file was accounted for, so what
+    # follows cannot be a partial sweep.
+    pins = declarations(text)
+    # Not a completeness check. Exhaustiveness already rules out a partial
+    # read, so the only file this can still reject is one that genuinely
+    # declares nothing -- a table emptied rather than a table misread -- and
+    # the message says so.
+    if not pins:
+        raise SystemExit("the declaration is readable but declares no Action")
     disagreements = []
     for pin in pins:
         actual = resolve(pin["repository"], pin["tag"])
