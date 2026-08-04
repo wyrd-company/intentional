@@ -6,11 +6,13 @@
 #
 # Prove the action-path gate rejects what it claims to reject.
 #
-# The gate asserts three things: every referenced path resolves from the
+# The gate asserts four things: every referenced path resolves from the
 # action's own directory, a directly invoked script carries an executable bit,
-# and a sweep that finds nothing is a failure rather than a pass. Each is
-# restored below as the shape the gate exists to stop, and each negative case
-# must fail on its own so a single over-broad rule cannot stand in for three.
+# interpreter invocations are exempt from the executable-bit rule at the
+# invocation site, and a sweep that finds nothing is a failure rather than a
+# pass. Each is restored below as the shape the gate exists to stop, and each
+# negative case must fail on its own so a single over-broad rule cannot stand in
+# for four.
 
 # Every case body below spells `$GITHUB_ACTION_PATH` literally, because it is
 # the text the gate reads out of an action document rather than a value this
