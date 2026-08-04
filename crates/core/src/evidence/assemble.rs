@@ -2557,7 +2557,60 @@ subjects: []
         let output = workspace.root().join("release-evidence");
         let error = assemble(&request(&workspace, &handoff, &input, &output))
             .expect_err("a handoff without its sealed plan is refused");
-        assert!(error.to_string().contains(RELEASE_PLAN_FILE), "{error}");
+        let message = error.to_string();
+        assert!(message.contains(RELEASE_PLAN_FILE), "{message}");
+        // An absent plan is reported as an absent plan. Reading it as empty
+        // bytes would fail the inventory comparison instead, which names the
+        // same file and would let this assertion pass over a plan assembly
+        // never opened.
+        assert!(
+            message.contains("failed to access"),
+            "the absent plan is named for being absent: {message}"
+        );
+    }
+
+    /// The configuration must declare every release unit the plan releases.
+    ///
+    /// The release units the configuration selects publications for are all
+    /// released here, so only this conjunct can refuse the checkout.
+    #[test]
+    fn refuses_a_sealed_plan_releasing_a_release_unit_the_configuration_does_not_declare() {
+        let workspace = workspace("assemble-plan-unknown-unit");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+        let mut plan = sealed_plan();
+        let mut ghost = plan.release_units[0].clone();
+        ghost.id = "ghost".to_owned();
+        ghost.tag_ids = vec!["release-unit/ghost/primary".to_owned()];
+        plan.release_units.push(ghost);
+        plan.digest = plan.payload_digest().expect("reseal");
+        let bytes = plan.to_canonical_json().expect("plan bytes");
+        std::fs::write(handoff.join(RELEASE_PLAN_FILE), &bytes).expect("plan");
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest()
+                .replace(
+                    &crate::evidence::digest_bytes(sealed_plan_bytes().as_bytes()),
+                    &crate::evidence::digest_bytes(bytes.as_bytes()),
+                )
+                .replace(&plan_digest(), &plan.digest),
+        )
+        .expect("manifest");
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a release unit the configuration does not declare is refused");
+        let message = error.to_string();
+        assert!(message.contains("releases release unit ghost"), "{message}");
+        assert!(
+            !message.contains("does not release"),
+            "every configured publication is released, so only this conjunct fires: {message}"
+        );
     }
 
     /// Configuration is a second input, so assembly proves the two agree.
