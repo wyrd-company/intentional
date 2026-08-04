@@ -4199,15 +4199,15 @@ release-units:
             )
             .write(
                 ".cargo/config.toml",
-                "[registries.sentinelregistry]\nindex = \"sparse+https://sentinelindex.example/idx/\"\n",
+                "[registries.mtdlgw]\nindex = \"sparse+https://jvnqsx.example/idx/\"\n",
             )
             .write(
-                "sentinelpath/package.json",
-                r#"{"name":"@sentinelscope/sentinelpackage","version":"1.0.0"}"#,
+                "vkjmtd/package.json",
+                r#"{"name":"@kfnrbg/pxwqld","version":"1.0.0"}"#,
             )
             .write(
-                "sentinelpath/Cargo.toml",
-                "[package]\nname = \"sentinelcrate\"\nversion = \"1.0.0\"\npublish = [\"sentinelregistry\"]\n",
+                "vkjmtd/Cargo.toml",
+                "[package]\nname = \"hbzqvn\"\nversion = \"1.0.0\"\npublish = [\"mtdlgw\"]\n",
             )
             .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
             .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
@@ -4219,20 +4219,20 @@ release-units:
 contract: contract-1
 workspace-tags:
   release:
-    template: 'sentineltagprefix{version}sentineltagsuffix'
+    template: 'tzbrmk{version}dnwlpq'
 github:
 @PREFIX@
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml }
 release-units:
-  sentinelunit:
-    path: sentinelpath
+  qhwzru:
+    path: vkjmtd
     npm:
-      token-secret: SENTINELNPMSECRET
+      token-secret: KQVBZTLM
       additional-targets: { github: {} }
     cargo:
-      token-secret: SENTINELCARGOSECRET
+      token-secret: HGWRXPFD
     tags:
       staged:
         role: primary
@@ -4271,21 +4271,34 @@ release-units:
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
     ///
-    /// The comparison the gate applies is a case-folded substring, so it
-    /// recognises a value carried verbatim or through a case transform and not
-    /// through any other. This derivation applies three transforms whose
-    /// outputs it would not recognise: the npm scope is a path-component split
-    /// of the package name, `environment_fragment` uppercases *and* maps every
-    /// non-alphanumeric character to an underscore, and a validated name is
-    /// lowercased in places. Each output is a value a repository supplied, so
-    /// each has a roster row of its own naming the surface it is routed to.
+    /// Each row carries a token as well as a value, and the gate rejects both
+    /// the folded value and any four-character window of the token, forwards or
+    /// reversed. Two different transforms are covered by those two checks and
+    /// it is worth being exact about which, because the wrong generalisation
+    /// here propagates to every copy of this gate.
     ///
-    /// That is what closes the gap rather than the comparison. A transform's
-    /// output is only invisible while it is unnamed; named, it is checked like
-    /// any other value, and routing it through `env:` is what makes the check
-    /// pass. A new transform is answered the same way -- give its output a row
-    /// -- and widening the comparison is the fallback for an output no row can
-    /// name.
+    /// A case-folded substring recognises a value carried verbatim or
+    /// case-transformed, and nothing else. It does not recognise truncation,
+    /// windowing or reversal: those keep a run of the value without keeping the
+    /// value, and a check anchored on the whole value passes over them. That is
+    /// what the window check is for. It is not a general answer either -- a
+    /// transform that re-alphabets the value, percent-encoding or a hash, keeps
+    /// no run for either check to find.
+    ///
+    /// Both checks depend on the token being opaque. A window of a token
+    /// spelled from the derivation's own vocabulary collides with the
+    /// derivation, so the tokens here are deliberately meaningless: `unit` is a
+    /// window of a release unit named `sentinelunit`, and it is also in every
+    /// script that reads a prefixed release-unit variable.
+    ///
+    /// This derivation applies three transforms whose outputs a value-anchored
+    /// check would not see: the npm scope is a path-component split of the
+    /// package name, `environment_fragment` uppercases *and* maps every
+    /// non-alphanumeric character to an underscore, and a validated name is
+    /// lowercased in places. Each output has a roster row of its own naming the
+    /// surface it is routed to, which is what closes them -- a transform's
+    /// output is only invisible while it is unnamed. A new transform is
+    /// answered the same way.
     ///
     /// One repository-supplied value is deliberately absent, and its absence is
     /// checked rather than asserted. The configured `prefix` *is* spliced into
@@ -4295,36 +4308,42 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, Surface); 10] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 10] = [
         (
-            "sentinelunit",
+            "qhwzru",
+            "qhwzru",
             "the release-unit identifier",
             Surface::Plain,
         ),
-        ("sentinelpath", "the release-unit path", Surface::Plain),
+        ("vkjmtd", "vkjmtd", "the release-unit path", Surface::Plain),
         (
-            "@sentinelscope/sentinelpackage",
+            "@kfnrbg/pxwqld",
+            "pxwqld",
             "the npm package name",
             Surface::Plain,
         ),
-        ("sentinelcrate", "the Cargo crate name", Surface::Plain),
+        ("hbzqvn", "hbzqvn", "the Cargo crate name", Surface::Plain),
         (
-            "sentinelregistry",
+            "mtdlgw",
+            "mtdlgw",
             "the Cargo registry name",
             Surface::Plain,
         ),
         (
-            "sentinelindex.example",
+            "jvnqsx.example",
+            "jvnqsx",
             "the Cargo registry index",
             Surface::Plain,
         ),
         (
-            "SENTINELNPMSECRET",
+            "KQVBZTLM",
+            "KQVBZTLM",
             "the npm token-secret name",
             Surface::Expression,
         ),
         (
-            "SENTINELCARGOSECRET",
+            "HGWRXPFD",
+            "HGWRXPFD",
             "the Cargo token-secret name",
             Surface::Expression,
         ),
@@ -4333,12 +4352,14 @@ release-units:
         // value in another shape, and the shape is what the comparison would
         // otherwise fail to recognise.
         (
-            "@sentinelscope",
+            "@kfnrbg",
+            "kfnrbg",
             "the npm scope, split from the package name",
             Surface::Plain,
         ),
         (
-            "CARGO_REGISTRIES_SENTINELREGISTRY",
+            "CARGO_REGISTRIES_MTDLGW",
+            "MTDLGW",
             "the Cargo registry name, uppercased into a variable spelling",
             Surface::Plain,
         ),
@@ -4356,12 +4377,12 @@ release-units:
             WorkflowRole::Publish,
             &[
                 "assemble_evidence",
-                "build_sentinelunit_cargo",
-                "build_sentinelunit_npm",
+                "build_qhwzru_cargo",
+                "build_qhwzru_npm",
                 "close_release",
-                "publish_sentinelunit_cargo_primary",
-                "publish_sentinelunit_npm_github",
-                "publish_sentinelunit_npm_primary",
+                "publish_qhwzru_cargo_primary",
+                "publish_qhwzru_npm_github",
+                "publish_qhwzru_npm_primary",
                 "tag_after_publication",
                 "tag_before_publication",
                 "verify_tag",
@@ -4390,6 +4411,28 @@ release-units:
         carries(body, value)
     }
 
+    /// Every contiguous window of one token, forwards and reversed.
+    ///
+    /// Four characters is short enough that a truncation leaves one and long
+    /// enough that an opaque token's window does not occur by accident. The
+    /// tokens are chosen opaque for exactly that reason: a window of a value
+    /// spelled from the derivation's own vocabulary would collide with it, and
+    /// the check would have to be weakened rather than the fixture fixed.
+    fn windows(token: &str) -> impl Iterator<Item = String> + '_ {
+        let reversed = token.chars().rev().collect::<String>();
+        let forwards = token
+            .as_bytes()
+            .windows(4)
+            .map(|window| String::from_utf8_lossy(window).into_owned())
+            .collect::<Vec<_>>();
+        let backwards = reversed
+            .as_bytes()
+            .windows(4)
+            .map(|window| String::from_utf8_lossy(window).into_owned())
+            .collect::<Vec<_>>();
+        forwards.into_iter().chain(backwards)
+    }
+
     /// Whether one surface carries one value, comparing the way `splices` does.
     ///
     /// Reach and exclusivity read this too. Three comparisons of the same kind
@@ -4407,15 +4450,15 @@ release-units:
     // gate would otherwise have read as absent.
     #[test]
     fn recognises_a_spliced_value_that_survived_a_case_transform() {
-        let body = "INTENTIONAL_ALLOWED+=(CARGO_REGISTRIES_SENTINELREGISTRY_TOKEN=\"x\")";
+        let body = "INTENTIONAL_ALLOWED+=(CARGO_REGISTRIES_MTDLGW_TOKEN=\"x\")";
         assert!(
-            splices(body, "sentinelregistry"),
+            splices(body, "mtdlgw"),
             "a value spliced in another case is still spliced"
         );
-        assert!(splices("--registry sentinelregistry", "sentinelregistry"));
+        assert!(splices("--registry mtdlgw", "mtdlgw"));
         assert!(!splices(
             "--registry \"${INTENTIONAL_REGISTRY_NAME}\"",
-            "sentinelregistry"
+            "mtdlgw"
         ));
     }
 
@@ -4606,6 +4649,16 @@ release-units:
     // got back into a list whose entire purpose was that nothing is. The list
     // is the security property, so the list is what is asserted: exactly these
     // names, each unconditional, in both probes.
+    /// The process variables a probe may inherit, written independently.
+    ///
+    /// Deliberately not `steps::INHERITED_ENVIRONMENT`: comparing the rendered
+    /// allowlist against the constant that renders it compares the code with
+    /// itself, so dropping a member changes both sides and the assertion holds.
+    /// That is what happened -- the first version of this test passed with
+    /// `RUSTUP_HOME` removed from the constant, which is the same defect the
+    /// membership assertion exists to catch, one level up.
+    const INHERITED: [&str; 3] = ["PATH", "HOME", "RUSTUP_HOME"];
+
     #[test]
     fn inherits_exactly_the_process_variables_the_recipe_names() {
         let workspace = sentinel_workspace("workflow-allowlist-membership", None);
@@ -4628,11 +4681,11 @@ release-units:
                 .collect::<BTreeSet<_>>();
             assert_eq!(
                 inherited,
-                crate::executor::steps::INHERITED_ENVIRONMENT
+                INHERITED
                     .iter()
                     .map(|name| (*name).to_owned())
                     .collect::<BTreeSet<_>>(),
-                "{job} inherits exactly the names the recipe enumerates"
+                "{job} inherits exactly the names this test enumerates"
             );
 
             // Nothing is added to the list by asking the process environment
@@ -4944,11 +4997,23 @@ release-units:
                 counts.push((role, bodies.len()));
 
                 for (job, body) in &bodies {
-                    for (supplied, origin, _) in REPOSITORY_SUPPLIED_VALUES {
+                    for (supplied, token, origin, _) in REPOSITORY_SUPPLIED_VALUES {
                         assert!(
                             !splices(body, supplied),
                             "the {role} workflow splices {origin} into {job}'s shell:\n{body}"
                         );
+                        // A contiguous run of the value's distinctive token is
+                        // what survives truncation, windowing and reversal --
+                        // the transforms a case-folded substring cannot see. A
+                        // fixture value is alphanumeric, so a surviving window
+                        // of one looks harmless; the production value is
+                        // whatever a repository wrote, and a four-character
+                        // window of `";id;` is the original injection again.
+                        if let Some(window) = windows(token).find(|window| carries(body, window)) {
+                            panic!(
+                                "the {role} workflow carries {window:?}, a window of {origin}, into {job}'s shell:\n{body}"
+                            );
+                        }
                     }
                     // The prefix is the one repository-supplied value managed
                     // shell may carry, and the exception is only honest if
@@ -4999,7 +5064,7 @@ release-units:
                 }
             }
 
-            for (supplied, origin, surface) in REPOSITORY_SUPPLIED_VALUES {
+            for (supplied, _, origin, surface) in REPOSITORY_SUPPLIED_VALUES {
                 let (text, other, name) = match surface {
                     Surface::Expression => (&expressions, &plain, "a workflow expression"),
                     Surface::Plain => (&plain, &expressions, "a managed job's own content"),
