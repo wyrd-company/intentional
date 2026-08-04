@@ -604,24 +604,25 @@ fi
 
 # A transient failure is retried and the run succeeds -- and the retry is
 # scoped to the repository that failed. The healthy repository's count is
-# asserted separately from the flaky one's, so widening retry to re-resolve the
-# whole file reddens the healthy count while leaving the flaky one intact.
+# asserted separately from the flaky one's. Re-resolving entries in place or
+# aborting and restarting the sweep both redden the healthy count while leaving
+# the flaky one intact.
 case_number=$((case_number + 1))
 directory="$(new_case retry-is-scoped-to-one-repository)"
 stub_git "$directory" \
-  "example-owner/example-action=fail-twice-then-succeed:$EXAMPLE_COMMIT" \
-  "other-owner/other-action=succeed:$OTHER_COMMIT"
+  "example-owner/example-action=succeed:$EXAMPLE_COMMIT" \
+  "other-owner/other-action=fail-twice-then-succeed:$OTHER_COMMIT"
 declaration >"$directory/pins.yml"
 if ! run_check "$directory" "$directory/pins.yml"; then
   echo "expected two transient failures to be retried to success, but the check failed" >&2
   report "$directory"
 else
-  if [[ "$(invocations_for "$directory" example-owner/example-action)" -ne 3 ]]; then
-    echo "expected three invocations for the retried repository, got $(invocations_for "$directory" example-owner/example-action)" >&2
+  if [[ "$(invocations_for "$directory" other-owner/other-action)" -ne 3 ]]; then
+    echo "expected three invocations for the retried repository, got $(invocations_for "$directory" other-owner/other-action)" >&2
     report "$directory"
   fi
-  if [[ "$(invocations_for "$directory" other-owner/other-action)" -ne 1 ]]; then
-    echo "the healthy repository was resolved $(invocations_for "$directory" other-owner/other-action) times; one repository's retry must not re-resolve another" >&2
+  if [[ "$(invocations_for "$directory" example-owner/example-action)" -ne 1 ]]; then
+    echo "the healthy repository was resolved $(invocations_for "$directory" example-owner/example-action) times; one repository's retry must not re-resolve another" >&2
     report "$directory"
   fi
 fi
