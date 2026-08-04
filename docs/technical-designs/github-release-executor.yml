@@ -1006,11 +1006,16 @@ proposed-design:
     is the one that plan seals, under the name it seals it by, and every
     published subject carries the version the plan assigns its release unit. The
     expected publication set is derived from the proved checkout's configuration
-    and reconciled against the same plan: a release unit with publishers and no
+    and reconciled against the plan: a release unit with publishers and no
     version bump is not in the plan, and a publication configured for it
-    publishes nothing this release sealed. Because the configuration read is the
-    one at the proved release commit, a job checked out at any other ref is
-    refused outright rather than silently shifting what assembly expects.
+    publishes nothing this release sealed. The plan itself is rebuilt from the
+    configuration at the accepted source commit, not at the release commit, and
+    the two are bound rather than identical: reproduction proves the rebuilt
+    release tree is the released tree, so the configuration at the release
+    commit is the deterministic product of the configuration the plan was
+    rebuilt from. Because the configuration read is the one at the proved
+    release commit, a job checked out at any other ref is refused outright
+    rather than silently shifting what assembly expects.
 
     Evidence is not the only thing the draft carries. The GitHub-hosted
     deliverables are placed there before any publisher runs, by the managed

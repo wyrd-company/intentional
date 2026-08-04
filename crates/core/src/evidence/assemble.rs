@@ -864,9 +864,14 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
 
 /// Prove the configured publications describe the release the plan sealed.
 ///
-/// The plan is rebuilt from the configuration at the proved release commit, so
-/// the two agree on their interpretation contract and on which release units
-/// exist by construction; checking either would be a comparison no input could
+/// The plan is rebuilt from the configuration at the accepted source commit,
+/// not at the release commit, and the two are bound rather than identical.
+/// Reproduction proves the rebuilt release tree is the released tree, so the
+/// configuration this assembly reads at R is the deterministic product of the
+/// configuration the plan was rebuilt from at S; tag verification separately
+/// binds the tag record's interpretation contract to the configuration at R.
+/// Agreement on the contract and on which release units exist therefore holds
+/// by construction, and checking either would be a comparison no input could
 /// fail. What the plan does decide independently is which release units this
 /// release actually versions. A release unit with publishers and no version
 /// bump is not in the plan, and a publication configured for it publishes
@@ -930,11 +935,12 @@ fn bind_subject_versions(
     }
 }
 
-/// Require every publisher fragment to identify the prepared release.
+/// Require every publisher fragment to identify the proved release.
 ///
-/// The release identity comes from the prepared candidate handoff rather than
-/// from the fragments, so a fragment is measured against an authority it did
-/// not produce. Comparing the fragments only with each other would let them
+/// The release identity comes from the checkout this run proved by reproducing
+/// the release from its accepted source commit, not from the fragments, so a
+/// fragment is measured against an identity the run derived rather than against
+/// one any fragment produced. Comparing the fragments only with each other would let them
 /// agree unanimously about a release that was never the one being closed, and
 /// would leave a release with no configured publications unable to name itself
 /// at all.
@@ -1422,7 +1428,7 @@ release-units:
     /// accepted source commit and refusing a checkout the reproduction does not
     /// match, so a fixture that assembled a workspace out of parts would be
     /// testing against a release the repository never carried.
-    fn workspace(_label: &str) -> ReleasedWorkspace {
+    fn workspace() -> ReleasedWorkspace {
         ReleasedWorkspace::with(
             CONFIG,
             &[(
@@ -1533,10 +1539,11 @@ phase-tags: []
         output
     }
 
-    /// One assembly request against the prepared handoff staged for it.
+    /// One assembly request against a released checkout.
     ///
-    /// The handoff is written here rather than by each test, so no test can
-    /// assemble without one and every test binds to the same prepared release.
+    /// The request carries no identity of its own and this helper stages
+    /// nothing: every test binds to the release its own checkout carries, which
+    /// assembly proves by reproducing it from the accepted source commit.
     fn request<'a>(
         workspace: &'a ReleasedWorkspace,
         input: &'a Path,
@@ -1552,7 +1559,7 @@ phase-tags: []
 
     #[test]
     fn assembles_one_deterministic_bundle() {
-        let workspace = workspace("assemble-bundle");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(input.join("publisher")).expect("publisher artifact");
         stage_phase(&workspace, &input);
@@ -1624,7 +1631,7 @@ phase-tags: []
 
     #[test]
     fn preserves_arbitrary_contributor_yaml_without_interpretation() {
-        let workspace = workspace("assemble-opaque");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
@@ -1654,7 +1661,7 @@ phase-tags: []
 
     #[test]
     fn selects_the_highest_attempt_of_a_retried_job() {
-        let workspace = workspace("assemble-retry");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
@@ -1694,7 +1701,7 @@ phase-tags: []
 
     #[test]
     fn rejects_a_namespace_claimed_by_two_jobs() {
-        let workspace = workspace("assemble-namespace-collision");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1729,7 +1736,7 @@ phase-tags: []
 
     #[test]
     fn rejects_a_release_asset_name_collision() {
-        let workspace = workspace("assemble-asset-collision");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1769,7 +1776,7 @@ phase-tags: []
 
     #[test]
     fn rejects_a_contribution_whose_attachment_no_longer_matches_its_digest() {
-        let workspace = workspace("assemble-corrupt-attachment");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1817,7 +1824,7 @@ phase-tags: []
 
     #[test]
     fn rejects_attachment_paths_that_leave_the_bundle() {
-        let workspace = workspace("assemble-traversal");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1863,7 +1870,7 @@ phase-tags: []
 
     #[test]
     fn reports_missing_and_unexpected_publisher_evidence_in_one_run() {
-        let workspace = workspace("assemble-fragments");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1887,7 +1894,7 @@ phase-tags: []
 
     #[test]
     fn rejects_duplicate_publisher_evidence() {
-        let workspace = workspace("assemble-duplicate");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(input.join("first")).expect("first");
         std::fs::create_dir_all(input.join("second")).expect("second");
@@ -1912,7 +1919,7 @@ phase-tags: []
 
     #[test]
     fn rejects_two_destinations_that_describe_one_subject_differently() {
-        let workspace = workspace("assemble-rebuilt-subject");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -1945,7 +1952,7 @@ phase-tags: []
 
     #[test]
     fn rejects_phase_tag_evidence_that_disagrees_with_publisher_evidence() {
-        let workspace = workspace("assemble-phase");
+        let workspace = workspace();
         let source = &workspace.source;
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
@@ -2027,7 +2034,7 @@ release-units:
     // declares phased tags has to hand assembly what they sealed.
     #[test]
     fn refuses_assembly_when_a_declared_phase_sealed_nothing() {
-        let workspace = workspace("assemble-phase-absent");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -2064,7 +2071,7 @@ release-units:
     // form of supplying no phase evidence at all.
     #[test]
     fn refuses_a_fragment_naming_a_subject_the_phase_did_not_seal() {
-        let workspace = workspace("assemble-phase-unsealed-subject");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -2146,7 +2153,7 @@ intended-destinations:
 
     #[test]
     fn accepts_phase_tag_evidence_that_agrees_with_the_accepted_fragments() {
-        let workspace = workspace("assemble-phase-agrees");
+        let workspace = workspace();
         let source = &workspace.source;
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
@@ -2192,7 +2199,7 @@ publisher-evidence:
 
     #[test]
     fn rejects_a_phase_tag_intent_that_disagrees_with_the_configured_publications() {
-        let workspace = workspace("assemble-phase-intent");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -2224,7 +2231,7 @@ publisher-evidence:
 
     #[test]
     fn rejects_sealed_publisher_evidence_that_differs_from_what_shipped() {
-        let workspace = workspace("assemble-phase-sealed");
+        let workspace = workspace();
         let source = &workspace.source;
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
@@ -2309,11 +2316,11 @@ publisher-evidence:
                 "a phase member is present with an explicit null",
             ),
         ] {
-            let workspace = workspace(&format!("assemble-phase-{label}"));
-        let source = &workspace.source;
-        let release = &workspace.release;
-        let tag_name = &workspace.tag_name;
-        let plan_digest = &workspace.plan_digest;
+            let workspace = workspace();
+            let source = &workspace.source;
+            let release = &workspace.release;
+            let tag_name = &workspace.tag_name;
+            let plan_digest = &workspace.plan_digest;
             let input = workspace.root.join("artifacts");
             std::fs::create_dir_all(&input).expect("artifacts");
             std::fs::write(
@@ -2345,7 +2352,7 @@ subjects: []
 
     #[test]
     fn reports_phase_tag_evidence_that_does_not_identify_itself() {
-        let workspace = workspace("assemble-unidentified-phase");
+        let workspace = workspace();
         let source = &workspace.source;
         let release = &workspace.release;
         let plan_digest = &workspace.plan_digest;
@@ -2416,7 +2423,7 @@ subjects: []
                 },
                 plan_digest: workspace.plan_digest.clone(),
             },
-            "the prepared candidate identifies the release when no publisher can"
+            "the proved checkout identifies the release when no publisher can"
         );
         assert!(
             assembly.evidence.release_units.is_empty(),
@@ -2434,7 +2441,7 @@ subjects: []
     /// disagreed.
     #[test]
     fn refuses_fragments_that_agree_with_each_other_and_not_with_the_proved_release() {
-        let workspace = workspace("assemble-unanimous");
+        let workspace = workspace();
         let release = &workspace.release;
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
@@ -2505,7 +2512,7 @@ subjects: []
     /// release's. Assembly holds the sealed plan and can say so directly.
     #[test]
     fn binds_a_published_subject_to_the_version_the_sealed_plan_assigns() {
-        let workspace = workspace("assemble-plan-version");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -2531,7 +2538,7 @@ subjects: []
     /// Phase documents name the component that disagreed, as fragments do.
     #[test]
     fn names_the_identity_component_a_phase_document_spells_differently() {
-        let workspace = workspace("assemble-phase-component");
+        let workspace = workspace();
         let release = &workspace.release;
         let tag_name = &workspace.tag_name;
         let plan_digest = &workspace.plan_digest;
@@ -2581,7 +2588,7 @@ intended-destinations:
     /// finding, so both reach one diagnostic.
     #[test]
     fn refuses_a_checkout_it_cannot_prove_and_still_reports_the_rest() {
-        let workspace = workspace("assemble-unproved-checkout");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(
@@ -2608,7 +2615,7 @@ intended-destinations:
 
     #[test]
     fn includes_available_contributions_without_waiting_for_absent_ones() {
-        let workspace = workspace("assemble-best-effort");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
@@ -2634,7 +2641,7 @@ intended-destinations:
 
     #[test]
     fn refuses_to_assemble_into_a_populated_directory() {
-        let workspace = workspace("assemble-populated");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_phase(&workspace, &input);
@@ -2658,7 +2665,7 @@ intended-destinations:
 
     #[test]
     fn rejects_an_unusable_workflow_identity() {
-        let workspace = workspace("assemble-workflow");
+        let workspace = workspace();
         let input = workspace.root.join("artifacts");
         std::fs::create_dir_all(&input).expect("artifacts");
         std::fs::write(

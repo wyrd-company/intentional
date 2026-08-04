@@ -140,17 +140,18 @@ pub(crate) fn phase_disagreements(
     )
 }
 
-/// The one prepared handoff every evidence test binds its documents to.
-///
-/// Assembly, the fragments it accepts, and the phase documents it compares all
-/// have to spell one release the same way. Every evidence test therefore reads
-/// its identities from here rather than from a constant of its own, so a
-/// fixture cannot agree with itself while disagreeing with the handoff.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::release::tag::tests::ReleasedWorkspace;
 
+    /// The one release every evidence test binds its documents to.
+    ///
+    /// Assembly, the fragments it accepts, and the phase documents it compares
+    /// all have to spell one release the same way. Every evidence test
+    /// therefore reads its identities from here rather than from a constant of
+    /// its own, so a fixture cannot agree with itself while disagreeing with
+    /// the released checkout assembly proves.
     fn identity(workspace: &ReleasedWorkspace) -> ReleaseIdentity {
         ReleaseIdentity {
             source_commit: workspace.source.clone(),
