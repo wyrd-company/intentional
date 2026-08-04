@@ -424,6 +424,31 @@ fn reconcile(
             .set_before(&["concurrency"], &contract.concurrency, "jobs")
             .map_err(unparsable)?;
     }
+    // A managed publisher job's probe inherits a fixed set of process
+    // variables and clears everything else, and those members carry the
+    // runner's values -- the executable search path and the toolchain roots
+    // through which a client is found. A workflow-level `env:` applies to every
+    // job in the workflow, managed ones included, so a repository declaring one
+    // of those names would choose the client that answers a probe whose answer
+    // gates a long-lived credential. Refusing is not a denylist of dangerous
+    // keys: it is the exact complement of the inherited set, so the two cannot
+    // drift, and it is what makes calling that set the runner's contract true
+    // rather than hopeful.
+    if let Some(declared) = document.get(&["env"]).map_err(unparsable)? {
+        if let Some(mapping) = declared.as_mapping() {
+            for name in crate::executor::steps::INHERITED_ENVIRONMENT {
+                if mapping.contains_key(Value::String(name.to_owned())) {
+                    return Err(WorkflowDiagnostic::at(
+                        "inherited-environment-declared",
+                        format!(
+                            "the workflow declares {name} at the top level, which applies to every managed job; a maintained recipe's probe inherits {name} from the runner to find its client, so a workflow-level value would choose the client that decides whether a first publication reaches a bootstrap credential"
+                        ),
+                        &format!("env.{name}"),
+                    ));
+                }
+            }
+        }
+    }
     let permissions = document.get(&["permissions"]).map_err(unparsable)?;
     if !read_only_permissions(permissions.as_ref()) {
         // Intentional owns the safe default, but narrowing a grant the
@@ -4246,14 +4271,21 @@ release-units:
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
     ///
-    /// The comparison the gate applies is a case-folded substring, which
-    /// recognises a value carried verbatim or through a case transform. Other
-    /// value-preserving transforms would evade it -- percent-encoding,
-    /// whitespace normalisation, path-component splitting -- and none of them
-    /// appears in this derivation. A new one is answered here, either by
-    /// widening the comparison or by routing the value through `env:` so that
-    /// no comparison is needed, which is what the one case transform this
-    /// derivation used to apply was answered with.
+    /// The comparison the gate applies is a case-folded substring, so it
+    /// recognises a value carried verbatim or through a case transform and not
+    /// through any other. This derivation applies three transforms whose
+    /// outputs it would not recognise: the npm scope is a path-component split
+    /// of the package name, `environment_fragment` uppercases *and* maps every
+    /// non-alphanumeric character to an underscore, and a validated name is
+    /// lowercased in places. Each output is a value a repository supplied, so
+    /// each has a roster row of its own naming the surface it is routed to.
+    ///
+    /// That is what closes the gap rather than the comparison. A transform's
+    /// output is only invisible while it is unnamed; named, it is checked like
+    /// any other value, and routing it through `env:` is what makes the check
+    /// pass. A new transform is answered the same way -- give its output a row
+    /// -- and widening the comparison is the fallback for an output no row can
+    /// name.
     ///
     /// One repository-supplied value is deliberately absent, and its absence is
     /// checked rather than asserted. The configured `prefix` *is* spliced into
@@ -4263,7 +4295,7 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, Surface); 8] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, Surface); 10] = [
         (
             "sentinelunit",
             "the release-unit identifier",
@@ -4295,6 +4327,20 @@ release-units:
             "SENTINELCARGOSECRET",
             "the Cargo token-secret name",
             Surface::Expression,
+        ),
+        // Derived from the values above rather than typed by an author, and on
+        // the roster for that reason: a transform's output is a repository's
+        // value in another shape, and the shape is what the comparison would
+        // otherwise fail to recognise.
+        (
+            "@sentinelscope",
+            "the npm scope, split from the package name",
+            Surface::Plain,
+        ),
+        (
+            "CARGO_REGISTRIES_SENTINELREGISTRY",
+            "the Cargo registry name, uppercased into a variable spelling",
+            Surface::Plain,
         ),
     ];
 
@@ -4341,7 +4387,16 @@ release-units:
     /// substring check is a recogniser, not a proof, and the property it stands
     /// in for is that values are routed rather than written.
     fn splices(body: &str, value: &str) -> bool {
-        body.to_ascii_lowercase()
+        carries(body, value)
+    }
+
+    /// Whether one surface carries one value, comparing the way `splices` does.
+    ///
+    /// Reach and exclusivity read this too. Three comparisons of the same kind
+    /// answering the same question differently is how a value ends up counting
+    /// as present on one surface and absent on another.
+    fn carries(text: &str, value: &str) -> bool {
+        text.to_ascii_lowercase()
             .contains(&value.to_ascii_lowercase())
     }
 
@@ -4541,6 +4596,108 @@ release-units:
         assert!(
             !calls.lines().any(|line| line.starts_with("publish")),
             "the refusal happens before anything is submitted: {calls}"
+        );
+    }
+
+    // Deleting the whole `RUSTUP_HOME` block left every test green: the
+    // allowlist's membership was not asserted anywhere, so a member could be
+    // added, dropped, or made conditional on the process environment without
+    // anything noticing -- which is how a variable read from the environment
+    // got back into a list whose entire purpose was that nothing is. The list
+    // is the security property, so the list is what is asserted: exactly these
+    // names, each unconditional, in both probes.
+    #[test]
+    fn inherits_exactly_the_process_variables_the_recipe_names() {
+        let workspace = sentinel_workspace("workflow-allowlist-membership", None);
+        converge(workspace.root(), WorkflowRole::Publish);
+
+        let mut allowlists = 0;
+        for (job, body) in managed_shell_bodies(workspace.root(), WorkflowRole::Publish) {
+            let Some((_, tail)) = body.split_once("INTENTIONAL_ALLOWED=(") else {
+                continue;
+            };
+            allowlists += 1;
+            let (declared, rest) = tail.split_once(')').expect("the allowlist is an array");
+
+            // Every inherited member is present, unconditionally, reading the
+            // runner's value.
+            let inherited = declared
+                .split_whitespace()
+                .filter(|entry| !entry.contains("CARGO_NET_OFFLINE"))
+                .map(|entry| entry.split_once('=').expect("an assignment").0.to_owned())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                inherited,
+                crate::executor::steps::INHERITED_ENVIRONMENT
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<BTreeSet<_>>(),
+                "{job} inherits exactly the names the recipe enumerates"
+            );
+
+            // Nothing is added to the list by asking the process environment
+            // whether a variable is set. The appends that remain read values
+            // derivation put in the step's own `env:`, which is why they are
+            // named by a prefixed variable rather than by a bare one.
+            let appends = rest
+                .lines()
+                .take_while(|line| !line.contains("resolve()") && !line.contains("npm_holds()"))
+                .filter(|line| line.contains("INTENTIONAL_ALLOWED+="))
+                .collect::<Vec<_>>();
+            for append in &appends {
+                assert!(
+                    append.contains("${INTENTIONAL_"),
+                    "{job} appends a value derivation named, not one the process happened to carry: {append}"
+                );
+            }
+        }
+        assert!(allowlists > 0, "the publisher jobs build an allowlist");
+    }
+
+    // The inherited members carry the runner's values, and a workflow-level
+    // `env:` applies to every job in the workflow -- so without this a
+    // repository chooses the client that answers the probe, which is the same
+    // capability the allowlist was built to take away. Refusing exactly the
+    // inherited names is the complement of that list rather than a guess at
+    // which keys are dangerous.
+    #[test]
+    fn refuses_a_workflow_that_declares_an_inherited_process_variable() {
+        for name in crate::executor::steps::INHERITED_ENVIRONMENT {
+            let workspace = workspace("workflow-declared-inherited");
+            workspace.write(
+                ".github/workflows/publish.yml",
+                &REPOSITORY_PUBLISH_WORKFLOW.replace(
+                    "jobs:",
+                    &format!("env:\n  {name}: /repository/chosen\n\njobs:"),
+                ),
+            );
+            let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+                .expect("comparison");
+            assert_eq!(
+                comparison.status,
+                ComparisonStatus::Blocked,
+                "a workflow declaring {name} derives a managed job that would read it"
+            );
+            let diagnostic = &comparison.diagnostics[0];
+            assert_eq!(diagnostic.code, "inherited-environment-declared");
+            assert!(
+                diagnostic.message.contains(name),
+                "the diagnostic names the key an author has to remove: {diagnostic:?}"
+            );
+        }
+
+        // A workflow-level `env:` the recipes do not read is still preserved,
+        // which is what keeps this a complement rather than a ban.
+        let workspace = workspace("workflow-unrelated-env");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            &REPOSITORY_PUBLISH_WORKFLOW
+                .replace("jobs:", "env:\n  REPOSITORY_SETTING: kept\n\njobs:"),
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        assert!(
+            workflow(workspace.root(), WorkflowRole::Publish).contains("REPOSITORY_SETTING: kept"),
+            "an unrelated workflow-level env block survives convergence"
         );
     }
 
@@ -4847,8 +5004,13 @@ release-units:
                     Surface::Expression => (&expressions, &plain, "a workflow expression"),
                     Surface::Plain => (&plain, &expressions, "a managed job's own content"),
                 };
+                // Folded for the same reason the shell comparison is: the
+                // gate's own argument is that a case transform preserves a
+                // value, so a value that reached its surface in another case
+                // has reached it. A stricter comparison here would call that
+                // absent while the shell comparison called it present.
                 assert!(
-                    text.contains(supplied),
+                    carries(text, supplied),
                     "{origin} never reached {name}, so its absence from a shell body proves nothing"
                 );
                 // A secret name is a reference the runner resolves, so it
@@ -4859,7 +5021,7 @@ release-units:
                 // cannot fail.
                 if surface == Surface::Expression {
                     assert!(
-                        !other.contains(supplied),
+                        !carries(other, supplied),
                         "{origin} is written into a managed job's own content rather than referenced through the secrets context"
                     );
                 }

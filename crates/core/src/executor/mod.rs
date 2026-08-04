@@ -9,7 +9,7 @@ pub mod check;
 pub mod init;
 mod names;
 pub mod recipe;
-mod steps;
+pub(crate) mod steps;
 pub mod workflow;
 
 pub use check::{check_executor, ExecutorCheck};

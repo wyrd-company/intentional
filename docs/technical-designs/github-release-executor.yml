@@ -571,10 +571,21 @@ proposed-design:
     configuration is told which registry serves the scope rather than being left
     to look it up.
 
-    Two variables remain inherited and are named as such: the executable search
-    path and the home directory are the runner's own process contract, and a
-    repository able to redirect those has redirected every step of the job
-    rather than this probe.
+    A small fixed set of process variables is still inherited, because a client
+    cannot be found or run without them: the executable search path and the
+    roots through which a proxied toolchain resolves the binary it stands in
+    for. That set is enumerated in one place, its members are unconditional,
+    and none of them is added by asking the process whether it carries it —
+    membership decided by the environment is the environment deciding what the
+    probe reads, which is the property being closed rather than an exception to
+    it.
+
+    Those members carry the runner's values, and a workflow-level `env:` applies
+    to every job in the workflow. Convergence therefore refuses a repository
+    workflow that declares any of them. That refusal is the exact complement of
+    the inherited set rather than a list of keys judged dangerous, so the two
+    cannot drift apart, and it is what makes calling that set the runner's
+    contract true rather than merely intended.
 
     Every name a recipe reads out of the repository it releases is validated
     where it enters the model rather than escaped where it is used. These names

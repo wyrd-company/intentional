@@ -71,6 +71,34 @@ pub(super) struct RecipeContext<'a> {
     pub root: &'a std::path::Path,
 }
 
+/// Every process variable a maintained recipe's probe inherits.
+///
+/// The list is the whole of what survives `env -i`, and it is one list rather
+/// than a shell fragment per adapter so that adding a member is a change to a
+/// named set. Each is here because the client cannot be found or run without
+/// it: `PATH` locates the executable, and `HOME` and `RUSTUP_HOME` are how a
+/// proxied toolchain resolves the binary it stands in for.
+///
+/// Membership is unconditional. A member added by testing whether it is set is
+/// membership the process environment decides, which is the shape that let
+/// `RUSTUP_HOME` back in after the environment had supposedly been closed.
+///
+/// Because these carry runner values, a repository able to set them would
+/// choose the client that answers a probe whose answer gates a long-lived
+/// credential. Convergence therefore refuses a workflow that declares any of
+/// them, which is what makes calling them the runner's contract true rather
+/// than hopeful.
+pub(super) const INHERITED_ENVIRONMENT: [&str; 3] = ["PATH", "HOME", "RUSTUP_HOME"];
+
+/// The inherited members as one shell array fragment.
+fn inherited_environment() -> String {
+    INHERITED_ENVIRONMENT
+        .iter()
+        .map(|name| format!("{name}=\"${{{name}:-}}\""))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Conventional GitHub secret holding npm's bootstrap token.
 const NPM_TOKEN_SECRET: &str = "NPM_TOKEN";
 /// Conventional GitHub secret holding Cargo's bootstrap registry token.
@@ -102,6 +130,11 @@ const NPM_TRUSTED_PUBLISHING_RANGE: &str = ">=11.5.1";
 /// and a shared arm makes one edit each of them has to make into one edit they
 /// have to make together.
 pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+    steps_for(context).map(|steps| steps.replace("@INHERITED@", &inherited_environment()))
+}
+
+/// One publication's recipe steps before the shared placeholders are rendered.
+fn steps_for(context: &RecipeContext<'_>) -> Result<String, String> {
     match context.publication.packager {
         Packager::Npm => npm_steps(context),
         Packager::Cargo => cargo_steps(context),
@@ -459,7 +492,7 @@ fn const_probe() -> String {
 /// wrote is the credential this destination legitimately presents. `PATH` and
 /// `HOME` are the runner's process contract, as they are on the Cargo side, and
 /// a repository that redirects them has redirected the whole job.
-const NPM_ALLOWED: &str = r#"      @ENVVAR@ALLOWED=(PATH="${PATH}" HOME="${HOME}")
+const NPM_ALLOWED: &str = r#"      @ENVVAR@ALLOWED=(@INHERITED@)
 "#;
 
 /// The scope registry a scoped name's probe states for itself.
@@ -798,13 +831,17 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// separately before this.
 ///
 /// So the probe is given an environment rather than allowed to inherit one.
-/// `env -i` clears it and the variables named here are put back: a variable
-/// nobody thought of cannot arrive, which is the property route-by-route
-/// closure never had. Two of them, `PATH` and `HOME`, are the runner's own
-/// process contract rather than derived values — the client binary and the
-/// toolchain are found through them — and a repository that redirects those has
-/// redirected every step of the job rather than this probe. That is the exact
-/// extent of what is still inherited, and it is stated rather than implied.
+/// `env -i` clears it and only [`INHERITED_ENVIRONMENT`] is put back, with the
+/// derived entries beside it: a variable nobody thought of cannot arrive, which
+/// is the property route-by-route closure never had.
+///
+/// The inherited members carry the runner's values, and a repository could
+/// otherwise choose those values through the top-level `env:` block
+/// convergence preserves — which would make the client that answers the probe
+/// a repository's choice, since every one of them takes part in finding it.
+/// That is why convergence refuses a workflow declaring any of these names:
+/// the list is the whole of what is inherited, and refusing the names is what
+/// makes them the runner's rather than the repository's.
 ///
 /// The publish credential is simply not in the list where the retrieval records
 /// the public consumer path, so withholding it is no longer a step. A
@@ -819,10 +856,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
 /// the environment is cleared: an offline resolution reports absence in the
 /// words absence uses, so the condition is removed rather than parsed.
 const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
-      @ENVVAR@ALLOWED=(PATH="${PATH}" HOME="${HOME}" CARGO_NET_OFFLINE=false)
-      if [ -n "${RUSTUP_HOME:-}" ]; then
-        @ENVVAR@ALLOWED+=(RUSTUP_HOME="${RUSTUP_HOME}")
-      fi
+      @ENVVAR@ALLOWED=(@INHERITED@ CARGO_NET_OFFLINE=false)
       if [ -n "${@ENVVAR@REGISTRY_NAME:-}" ]; then
         @ENVVAR@REGISTRY_ARGUMENTS=(--registry "${@ENVVAR@REGISTRY_NAME}")
         @ENVVAR@ALLOWED+=("${@ENVVAR@REGISTRY_INDEX_VARIABLE}=${@ENVVAR@REGISTRY_INDEX_URL}")
