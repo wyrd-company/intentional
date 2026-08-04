@@ -4,7 +4,13 @@
 #   implements: github-release-executor
 #   verifies: github-action-pins
 # ---
-"""Resolve each declared GitHub Action tag and verify its pinned commit."""
+"""Resolve each declared GitHub Action tag and verify its pinned commit.
+
+The declaration to read defaults to this repository's. A caller may name
+another so this seam can be held to declarations that are deliberately
+malformed, because a check only ever run against a well-formed file cannot
+distinguish "every entry was read" from "every entry that was read agreed".
+"""
 
 from pathlib import Path
 import re
@@ -16,9 +22,9 @@ DECLARATION = ROOT / "github-action-pins.yml"
 FIELD = re.compile(r"^    (repository|tag|commit): (\S+)$")
 
 
-def declarations():
+def declarations(text):
     current = {}
-    for line in DECLARATION.read_text(encoding="utf-8").splitlines():
+    for line in text.splitlines():
         match = FIELD.match(line)
         if not match:
             continue
@@ -43,8 +49,10 @@ def resolve(repository, tag):
     return resolved.get(f"{reference}^{{}}", resolved.get(reference))
 
 
-def main():
-    pins = list(declarations())
+def main(argv):
+    declaration = Path(argv[1]) if len(argv) > 1 else DECLARATION
+    text = declaration.read_text(encoding="utf-8")
+    pins = list(declarations(text))
     if not pins:
         raise SystemExit("expected at least one Action declaration")
     disagreements = []
@@ -63,4 +71,4 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv))
