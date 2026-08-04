@@ -4147,6 +4147,19 @@ exit 0
             Some("ubuntu-latest"),
             "the same rule accepts the entry the template does carry"
         );
+
+        // The upload job's repeated steps are rendered by their own entry
+        // point, and a dead entry in one of those lists is exactly as silent.
+        // Removing the rule from that entry point alone leaves this module's
+        // job-level assertions green, so the step renderer is stated here too.
+        let step = templates::step(template, &[("@ABSENT@", "unread")])
+            .expect_err("a step template refuses the same entry");
+        assert_eq!(step.code, "job-substitution-unnamed");
+        assert!(
+            templates::step(template, &[("@PRESENT@", "ubuntu-latest")])
+                .is_ok_and(|rendered| rendered == "runs-on: ubuntu-latest\n"),
+            "and renders the entry it does carry"
+        );
     }
 
     /// The ordering hazard the substitution list would otherwise carry.

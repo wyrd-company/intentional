@@ -11,7 +11,6 @@
 //! the substitution that turns one body plus one set of derived values into a
 //! parsed job.
 //!
-//!
 //! Every managed checkout states `fetch-tags: true` rather than inheriting tags
 //! from `fetch-depth: 0`. The portable commands these jobs invoke derive
 //! version authority and resolve the global release tag from the repository's
@@ -54,10 +53,10 @@ pub(super) const SETUP_QEMU_ACTION: &str =
 pub(super) const SETUP_BUILDX_ACTION: &str =
     "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
 /// Registry client every OCI recipe reads and promotes with.
-pub(crate) const SETUP_CRANE_ACTION: &str =
+pub(in crate::executor) const SETUP_CRANE_ACTION: &str =
     "imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b";
 /// Keyless signing client an OCI recipe installs only when it signs.
-pub(crate) const COSIGN_INSTALLER_ACTION: &str =
+pub(in crate::executor) const COSIGN_INSTALLER_ACTION: &str =
     "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6";
 
 /// GoReleaser release the maintained Go recipes are written against.
@@ -188,7 +187,7 @@ pub(super) fn render_list(values: &[String]) -> String {
 }
 
 /// Render one value as a YAML scalar that cannot alter the template's shape.
-pub(crate) fn scalar(value: &str) -> String {
+pub(in crate::executor) fn scalar(value: &str) -> String {
     serde_yaml::to_string(&Value::String(value.to_owned()))
         .unwrap_or_else(|_| format!("{value:?}"))
         .trim_end()
