@@ -52,12 +52,13 @@ FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
 #: What each field's value is allowed to be, spelled out rather than left as
 #: "anything without a space".
 #:
-#: A loose value pattern is a completeness hole wearing a field name: YAML
-#: writes the same scalar several ways, and `tag: "v1.0.0"` would otherwise be
-#: read as a tag whose name includes the quotation marks -- resolved, compared,
-#: and reported without anyone noticing the reader had understood the line
-#: differently from the parser. So each value is held to the shape that field
-#: can actually take, and a value written any other way is refused instead.
+#: These patterns close syntax that changes the literal value this reader sees.
+#: For example, `tag: "v1.0.0"` would otherwise include quotation marks in the
+#: reference sent to Git. They do not close every plain scalar a YAML parser may
+#: type differently. That residual is bounded by the consumers: the Rust checks
+#: read only `repository` and `commit`, the slash keeps a repository scalar a
+#: string, and a non-string commit fails their `as_str` expectation. This online
+#: check sends a tag's exact spelling to Git and reports a resolved disagreement.
 VALUES = {
     "repository": re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"),
     "tag": re.compile(r"[A-Za-z0-9._+-]+"),
