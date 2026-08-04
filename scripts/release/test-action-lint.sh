@@ -335,17 +335,19 @@ runs:
 FIXTURE
 }
 
-for image in Dockerfile ./Dockerfile Dockerfile.ci build.Dockerfile docker/release.Dockerfile; do
-  container_action "resolved-$(tr '/.' '--' <<<"$image")" "$image"
-done
+container_action "plain" "Dockerfile"
+container_action "dot-relative" "./Dockerfile"
+container_action "suffixed" "Dockerfile.ci"
+container_action "prefixed" "build.Dockerfile"
+container_action "subdirectory" "docker/release.Dockerfile"
 
-expect_pass "a container action built from Dockerfile" "$container/resolved-Dockerfile.yml"
-expect_pass "a container action built from ./Dockerfile" "$container/resolved---Dockerfile.yml"
-expect_pass "a container action built from a suffixed Dockerfile.ci" "$container/resolved-Dockerfile-ci.yml"
-expect_pass "a container action built from a prefixed build.Dockerfile" "$container/resolved-build-Dockerfile.yml"
+expect_pass "a container action built from Dockerfile" "$container/plain.yml"
+expect_pass "a container action built from ./Dockerfile" "$container/dot-relative.yml"
+expect_pass "a container action built from a suffixed Dockerfile.ci" "$container/suffixed.yml"
+expect_pass "a container action built from a prefixed build.Dockerfile" "$container/prefixed.yml"
 expect_pass \
   "a container action built from a Dockerfile in a subdirectory" \
-  "$container/resolved-docker-release-Dockerfile.yml"
+  "$container/subdirectory.yml"
 
 # A moved, renamed, or misspelled Dockerfile is the case no filename convention
 # can catch: `Dockerfile.dev` satisfies every spelling rule and still names
