@@ -136,15 +136,14 @@ proposed-design:
     channel for RPM. A mapping missing any of these is a semantic configuration
     failure, because each one is a thing no evidence can supply.
 
-    A mapping also names the secrets its delivery Action requires, as input
-    names bound to secret names. Delivery is the one step whose authority
-    Intentional does not derive, and a composite Action reads no secrets of its
-    own, so a credential it needs arrives as an input the derived job passes.
-    Derivation establishes that both names are well formed; whether the named
-    secret exists is answered in the job, where the repository's secrets are.
-    The list is empty for a destination whose delivery needs no credential, and
-    an empty list is written rather than omitted, because a delivery that
-    silently receives nothing and one that needs nothing are different claims.
+    A mapping also carries the `with:` block its delivery Action requires,
+    written as the workflow would spell it. Delivery is the one step whose
+    authority Intentional does not derive, so the credential it presents is
+    written here as an ordinary workflow expression and reaches the step
+    unread. The block is empty for an Action needing nothing beyond the reserved
+    inputs, and an empty block is written rather than omitted, because a
+    delivery that needs nothing and one whose configuration forgot to say are
+    different claims.
 
     Every concrete publisher target supports a target-scoped `omit` list when
     its maintained recipe defines attached components. An adapter-level `omit`
@@ -696,7 +695,7 @@ proposed-design:
 
     Configuration supplies the delivery step, the repository's base URL, the
     public half of the key that signs its index, the observation deadline, and
-    the secrets the delivery step requires. The delivery step is a
+    the inputs the delivery step takes. The delivery step is a
     repository-owned composite Action named by path, invoked as a step of the
     publisher job. It is a composite Action rather than a reusable workflow
     because delivery sits between establishment and readback: a job that calls a
@@ -711,30 +710,37 @@ proposed-design:
     reconciliation into a merge. Naming a path keeps the delivery code in a file
     its own repository reviews and tests, and keeps the derived job regenerable.
 
-    The seam has a stated contract in both directions. Inward, the recipe passes
-    the established package's path on the runner, its format, the package name,
+    The seam has a stated contract in both directions, and it is expressed in
+    the delivery Action's own inputs. Inward, the recipe supplies the
+    established package's path on the runner, its format, the package name,
     version and architecture the release sealed, the sealed digest, and the
-    index coordinates the publication configured. A composite Action reads no
-    secrets of its own, so any credential delivery needs is passed as an input
-    from a secret the configuration names, and reaches the step as an input
-    rather than an expression expanded into a script. The publisher job itself
-    holds `contents: read` and mints nothing.
+    index coordinates the publication configured. These are facts about this
+    release rather than settings: the path is where the job placed the asset it
+    pulled from the draft Release, the identity is what establishment read out
+    of the package, and the digest is the one the release sealed. They occupy a
+    reserved input namespace the delivery Action declares. The publisher job
+    itself holds `contents: read` and mints nothing.
 
-    Where a named secret is answered for is not where it is named. Derivation
-    runs against configuration and a repository's secret inventory is not there,
-    and a workflow that references a secret the repository never set is not
-    refused at run time either — the reference resolves to an empty string and
-    the step proceeds. Derivation therefore establishes the shape of both names
-    and stops. The derived job reads each resolved secret before it invokes
-    delivery and fails on an empty one, naming the input whose secret did not
-    resolve and never any value it read, the ones that resolved included. It
-    reads every configured binding before it decides rather than stopping at the
-    first empty one, so a run missing several names them all instead of
-    surrendering one per release attempt, and the order it reads them in is
-    insignificant. The two cases this cannot separate, a secret the repository
-    never set and one it set empty, have the same answer:
-    an empty credential is not a credential, and delivery must not be handed one
-    and left to discover it.
+    Whatever else the Action needs, configuration supplies as a literal `with:`
+    block that the derived step carries unread. A credential, a plain value, a
+    repository variable and a workflow expression are the same thing here,
+    because the values are the configuring repository's to write and its
+    delivery code's to interpret. Intentional generates a call, so the call
+    being well formed is its concern and what populates it is not.
+
+    Well formed is decided against the Action itself. The configured path names
+    a file in the configuring repository, so derivation reads it and requires
+    that it is a composite Action, that it declares every reserved input the
+    recipe supplies, that every key the configuration writes is an input the
+    Action declares, that every input the Action requires without a default is
+    covered by one side or the other, and that no configured key falls in the
+    reserved namespace. Reserving a namespace rather than a list of names is
+    what keeps that last check honest: it refuses whatever the recipe reserves
+    today, so an input added later is covered without a second edit somewhere
+    else. It is also the only one of these that guards more than a broken call.
+    A configured key overwriting the sealed digest or the package path would
+    hand delivery a package the establishment step never proved, which is a call
+    that lies rather than a call that fails.
 
     Outward, the recipe reads the step's success and nothing else. A delivery
     step that reported what it published would be reporting on itself, and no
