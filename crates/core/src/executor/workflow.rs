@@ -2376,17 +2376,24 @@ jobs:
             .join("action.yml")
     }
 
-    /// The required inputs of an Action and the keys a step supplies it.
+    /// The inputs of an Action and the keys a step supplies it, in both
+    /// directions.
     ///
     /// An Action input is an agreement between two documents nothing joins: the
-    /// Action declares it required, and a managed step spells it in `with:`. A
-    /// step that omits one is not a parse error and not a rendering failure —
+    /// Action declares it, and a managed step spells it in `with:`. Both halves
+    /// of the agreement fail silently, and they fail the same way. A step that
+    /// omits a required input is not a parse error and not a rendering failure —
     /// the derived workflow is still valid YAML and every structural assertion
-    /// in this module still passes over it. It fails on a runner, once, at the
-    /// end of a release.
+    /// in this module still passes over it. A step that supplies a key the
+    /// Action never declares is worse: GitHub ignores it without warning, so the
+    /// input the author meant to set arrives as its default and the workflow
+    /// runs to completion doing the wrong thing. A single transposed character
+    /// in a `with:` key produces exactly that. Either way it fails on a runner,
+    /// once, at the end of a release.
     ///
     /// The sweep reads the Action documents rather than a list written here, so
-    /// an input added to any of them is covered the day it is added.
+    /// an input added to or removed from any of them is covered the day it
+    /// changes.
     #[test]
     fn supplies_every_required_input_of_every_action_it_resolves() {
         let workspace = workspace("workflow-action-inputs");
@@ -2409,10 +2416,17 @@ jobs:
                                 .collect::<BTreeSet<_>>()
                         })
                         .unwrap_or_default();
+                    let declared = declared_action_inputs(&name);
                     for input in required_action_inputs(&name) {
                         assert!(
                             supplied.contains(&input),
                             "{id} resolves {name}, which requires input {input}; it supplies {supplied:?}"
+                        );
+                    }
+                    for key in &supplied {
+                        assert!(
+                            declared.contains(key),
+                            "{id} resolves {name} and supplies {key}, which {name} does not declare; it declares {declared:?}"
                         );
                     }
                 }
@@ -2426,6 +2440,28 @@ jobs:
 
     /// The inputs one published Action declares required.
     fn required_action_inputs(name: &str) -> BTreeSet<String> {
+        action_inputs(name)
+            .iter()
+            .filter(|(_, body)| {
+                body.get("required")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .filter_map(|(key, _)| key.as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// Every input one published Action declares, required or not.
+    fn declared_action_inputs(name: &str) -> BTreeSet<String> {
+        action_inputs(name)
+            .keys()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The `inputs` mapping one published Action declares.
+    fn action_inputs(name: &str) -> serde_yaml::Mapping {
         let path = action_document(name);
         let document: Value = serde_yaml::from_str(
             &std::fs::read_to_string(&path).expect("action document readable"),
@@ -2434,17 +2470,7 @@ jobs:
         document
             .get("inputs")
             .and_then(Value::as_mapping)
-            .map(|inputs| {
-                inputs
-                    .iter()
-                    .filter(|(_, body)| {
-                        body.get("required")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                    })
-                    .filter_map(|(key, _)| key.as_str().map(str::to_owned))
-                    .collect()
-            })
+            .cloned()
             .unwrap_or_default()
     }
 
