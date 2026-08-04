@@ -1731,6 +1731,62 @@ release-units:
     }
 
     #[test]
+    fn rejects_verification_when_no_workspace_tag_is_the_global_release_tag() {
+        let config = CONFIG.replace(
+            "  release:\n    template: 'component@{version}'\n",
+            "  release:\n    template: 'component@{version}'\n    require-phase: after-publication\n",
+        );
+        let released = released_from(
+            "verify-no-global-workspace-tag",
+            &config,
+            &["component"],
+            "component@1.0.0",
+            ReleaseShape::SoleParent,
+        );
+        let error = verify_release(
+            released.workspace.root(),
+            "1.0.0",
+            false,
+            &FakeReleaseSource::draft(REPOSITORY, "component@1.0.0", 7),
+        )
+        .expect_err("verification requires one unphased workspace tag");
+        assert!(
+            error
+                .to_string()
+                .contains("configuration declares 0 workspace tags without an executor phase"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_verification_when_multiple_workspace_tags_are_unphased() {
+        let config = CONFIG.replace(
+            "  release:\n    template: 'component@{version}'\n",
+            "  mirror:\n    template: 'component-mirror@{version}'\n  release:\n    template: 'component@{version}'\n",
+        );
+        let released = released_from(
+            "verify-multi-global-workspace-tag",
+            &config,
+            &["component"],
+            "component@1.0.0",
+            ReleaseShape::SoleParent,
+        );
+        let error = verify_release(
+            released.workspace.root(),
+            "1.0.0",
+            false,
+            &FakeReleaseSource::draft(REPOSITORY, "component@1.0.0", 7),
+        )
+        .expect_err("verification requires exactly one unphased workspace tag");
+        assert!(
+            error
+                .to_string()
+                .contains("configuration declares 2 workspace tags without an executor phase"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn verifies_a_complete_release_from_its_durable_evidence() {
         let (released, _, source) = scenario("verify-complete");
         let verification =

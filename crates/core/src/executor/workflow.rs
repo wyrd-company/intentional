@@ -5759,6 +5759,35 @@ exit 0
     }
 
     #[test]
+    fn blocks_publication_when_multiple_workspace_tags_omit_require_phase() {
+        let workspace = workspace("workflow-multi-workspace-tag");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "workspace-tags:\n  release:\n    template: '{version}'\n",
+                "workspace-tags:\n  mirror:\n    template: '{version}-mirror'\n  release:\n    template: '{version}'\n",
+            ),
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics.len(), 1);
+        assert_eq!(comparison.diagnostics[0].code, "release-tag-undefined");
+        assert_eq!(
+            comparison.diagnostics[0].path.as_deref(),
+            Some("workspace-tags")
+        );
+        assert!(
+            comparison.diagnostics[0].message.contains(
+                "2 workspace tags omit require-phase: workspace/mirror, workspace/release"
+            ),
+            "{}",
+            comparison.diagnostics[0].message
+        );
+        assert!(comparison.output_digest.is_none());
+    }
+
+    #[test]
     fn blocks_publication_when_only_a_release_unit_tag_omits_require_phase() {
         let workspace = workspace("workflow-release-unit-tag");
         workspace.write(

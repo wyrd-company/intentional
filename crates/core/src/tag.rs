@@ -1833,26 +1833,16 @@ phase-tags: []
         );
     }
 
-    #[test]
-    fn refuses_to_discard_staged_evidence_a_workspace_cannot_bind() {
+    fn staged_phase_evidence_bind_error(config_yaml: &str) -> String {
         let workspace = phase_workspace("tag-phase-unbindable");
-        // Every configured tag declares a phase, so no global release tag
-        // exists for the evidence to bind to. Sealing nothing while accepting
-        // the directory would discard the claim the caller asked to record.
-        workspace.write(
-            ".intentional/config.yml",
-            &PHASE_CONFIG.replace(
-                "  release: { template: 'release/{version}' }\n",
-                "  release: { template: 'release/{version}', require-phase: before-publication }\n",
-            ),
-        );
+        workspace.write(".intentional/config.yml", config_yaml);
         let input = stage_built_subject(&workspace, "sample-library");
         let config = Config::load(workspace.root()).expect("configuration");
         let versions = BTreeMap::from([
             ("workspace/release".to_owned(), "1.0.0".to_owned()),
             ("component".to_owned(), "1.0.0".to_owned()),
         ]);
-        let error = TagResult::from_versions(
+        TagResult::from_versions(
             workspace.root(),
             &config,
             &versions,
@@ -1861,13 +1851,68 @@ phase-tags: []
             Some(PLAN_DIGEST),
             Some(&input),
         )
-        .expect_err("evidence with nothing to bind it is rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("exactly one workspace tag without require-phase"),
-            "{error}"
+        .expect_err("evidence with nothing to bind it is rejected")
+        .to_string()
+    }
+
+    #[test]
+    fn refuses_staged_phase_evidence_when_no_unphased_tags_exist_anywhere() {
+        let message = staged_phase_evidence_bind_error(
+            &PHASE_CONFIG
+                .replace(
+                    "  release: { template: 'release/{version}' }\n",
+                    "  release: { template: 'release/{version}', require-phase: before-publication }\n",
+                )
+                .replace(
+                    "      primary: { role: primary, template: '{id}@{version}' }\n",
+                    "      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }\n",
+                ),
         );
+        assert!(message.contains("declares none"), "{message}");
+        assert!(!message.contains("release-unit"), "{message}");
+        assert!(
+            !message.contains("workspace tags omit require-phase"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn refuses_staged_phase_evidence_when_only_release_unit_tags_omit_require_phase() {
+        // The workspace tag is phased, but component.tags.primary has no
+        // require-phase, so the refusal names the release-unit tag rather than
+        // claiming no global release tag exists.
+        let message = staged_phase_evidence_bind_error(&PHASE_CONFIG.replace(
+            "  release: { template: 'release/{version}' }\n",
+            "  release: { template: 'release/{version}', require-phase: before-publication }\n",
+        ));
+        assert!(
+            message.contains("no workspace tag omits require-phase"),
+            "{message}"
+        );
+        assert!(
+            message.contains("release-unit/component/primary"),
+            "{message}"
+        );
+        assert!(!message.contains("declares none"), "{message}");
+        assert!(
+            !message.contains("workspace tags omit require-phase"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn refuses_staged_phase_evidence_when_multiple_workspace_tags_omit_require_phase() {
+        let message = staged_phase_evidence_bind_error(&PHASE_CONFIG.replace(
+            "  release: { template: 'release/{version}' }\n",
+            "  mirror: { template: 'release/mirror/{version}' }\n  release: { template: 'release/{version}' }\n",
+        ));
+        assert!(
+            message
+                .contains("workspace tags omit require-phase: workspace/mirror, workspace/release"),
+            "{message}"
+        );
+        assert!(!message.contains("declares none"), "{message}");
+        assert!(!message.contains("release-unit"), "{message}");
     }
 
     #[test]

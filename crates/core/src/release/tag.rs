@@ -859,7 +859,10 @@ pub(crate) mod tests {
             message.contains("no workspace tag omits require-phase"),
             "{message}"
         );
-        assert!(message.contains("release-unit/intentional/primary"), "{message}");
+        assert!(
+            message.contains("release-unit/intentional/primary"),
+            "{message}"
+        );
         assert!(!message.contains("declares none"), "{message}");
     }
 

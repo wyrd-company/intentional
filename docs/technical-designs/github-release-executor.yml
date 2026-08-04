@@ -293,14 +293,15 @@ proposed-design:
     Preparation records the annotated global tag under a reserved ref rather
     than under its rendered release tag name: tags carry version authority, so
     writing that name before the release is accepted would change the plan a
-    repeated preparation seals.     The global release tag is the single workspace tag that declares no required
-    publication phase; every other tag, workspace or release-unit, declares the
-    phase that creates it. Executor conformance reports a workspace with no such
-    tag, or with more than one unphased workspace tag, and names every unphased
-    release-unit tag separately, so the constraint surfaces where it can be
-    fixed rather than inside a privileged pipeline. A multi-release-unit
-    repository adopting the executor moves its global release tag under
-    workspace-tags rather than leaving it on a release unit.
+    repeated preparation seals. The global release tag is the single workspace
+    tag that declares no required publication phase; every other tag, workspace
+    or release-unit, declares the phase that creates it. Executor conformance
+    reports a workspace with no such tag, or with more than one unphased
+    workspace tag, and names every unphased release-unit tag separately, so
+    the constraint surfaces where it can be fixed rather than inside a
+    privileged pipeline. A multi-release-unit repository adopting the executor
+    moves its global release tag under workspace-tags rather than leaving it on
+    a release unit.
     The bundle is thin: it declares S as its prerequisite, carries the objects R
     and its tag introduce, and is bounded so an untrusted handoff cannot become
     an unbounded object-ingestion surface.
