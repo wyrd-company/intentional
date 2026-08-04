@@ -68,7 +68,11 @@ tasks:
       - scripts/release/test-retry.sh
       - scripts/release/assert-release-workflow-baseline.sh
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
+      # As with the action lint above, both lines are deliberate: the first
+      # attributes a regression to this repository's own action documents, the
+      # second to the gate's own semantics.
       - scripts/release/assert-action-paths.sh
+      - scripts/release/test-action-paths.sh
       - scripts/release/assert-consumer-contract.sh
       - scripts/release/test-self-hosted-tag.sh
 

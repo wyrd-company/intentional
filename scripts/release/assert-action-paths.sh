@@ -34,25 +34,40 @@ for action in action.yml actions/*/action.yml; do
   action_directory="$(dirname "$action")"
   # The grep pattern matches a literal action-path reference rather than a
   # shell expansion, so it is written to survive single-quote linting.
-  while IFS= read -r reference; do
+  #
+  # References are swept per invocation site rather than per distinct path,
+  # because the executable-bit exemption belongs to a site. A document that
+  # invokes one script through an interpreter and also invokes it directly has
+  # only the interpreted site exempted; collapsing the two sites into one path
+  # would let the interpreted invocation excuse the direct one.
+  while IFS= read -r match; do
+    site="${match%%:*}"
+    reference="${match#*:}"
     relative="${reference#\$GITHUB_ACTION_PATH/}"
     resolved="$action_directory/$relative"
     checked=$((checked + 1))
     if [[ ! -f "$resolved" ]]; then
-      echo "$action references $reference, which does not resolve to a file" >&2
+      echo "$action:$site references $reference, which does not resolve to a file" >&2
       failed=$((failed + 1))
       continue
     fi
     # A script run through an explicit interpreter does not need its own
-    # executable bit; one invoked directly does.
-    if grep -qE "(^|[^[:alnum:]_])(bash|sh) +\"?[\$]GITHUB_ACTION_PATH/${relative//\//\\/}" "$action"; then
+    # executable bit; one invoked directly does. Deleting every interpreted
+    # invocation from the line leaves exactly the references the shell executes
+    # itself, so the question is asked of this site rather than of the document.
+    direct="$(
+      sed -n "${site}p" "$action" |
+        sed -E 's/(^|[^[:alnum:]_])(bash|sh)[[:space:]]+"?[$]GITHUB_ACTION_PATH\/[A-Za-z0-9._\/-]*/\1/g' |
+        grep -o -- '[$]GITHUB_ACTION_PATH/[A-Za-z0-9._/-]*' || true
+    )"
+    if ! grep -qxF -- "$reference" <<<"$direct"; then
       continue
     fi
     if [[ ! -x "$resolved" ]]; then
-      echo "$action references $reference, which is invoked directly but is not executable" >&2
+      echo "$action:$site references $reference, which is invoked directly but is not executable" >&2
       failed=$((failed + 1))
     fi
-  done < <(grep -o -- '[$]GITHUB_ACTION_PATH/[A-Za-z0-9._/-]*' "$action" | sort -u)
+  done < <(grep -no -- '[$]GITHUB_ACTION_PATH/[A-Za-z0-9._/-]*' "$action" | sort -u)
 done
 
 if [[ "$failed" -ne 0 ]]; then
