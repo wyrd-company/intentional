@@ -620,12 +620,32 @@ fn capability_evidence(
 /// Default Cargo registry when a manifest states no explicit destination.
 const CRATES_IO: &str = "crates.io";
 
+/// Read one probed file, or `None` when it is not there to be read.
+///
+/// A capability probe asks whether a path is a file and then reads it, and the
+/// two questions are asked at different instants. Executor tests derive
+/// capabilities against temporary workspaces, and a workspace dropped on
+/// another thread can take the file inside that window. A file that has gone
+/// by the time the read reaches it is the absent case — the same answer the
+/// existence check itself would have given a moment later — rather than an
+/// unexplained missing-file error naming a path nobody can inspect any more.
+/// Every other read failure is still reported.
+fn probed_file_text(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(Error::io(path, error)),
+    }
+}
+
 fn node_package_is_publishable(root: &Path, relative: &Path) -> Result<bool> {
     let path = root.join(relative);
     if !path.is_file() {
         return Ok(false);
     }
-    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    let Some(text) = probed_file_text(&path)? else {
+        return Ok(false);
+    };
     let value = serde_json::from_str::<serde_json::Value>(&text).map_err(|error| {
         Error::Validation(format!("{} is not valid JSON: {error}", relative.display()))
     })?;
@@ -656,7 +676,9 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
     if !path.is_file() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    let Some(text) = probed_file_text(&path)? else {
+        return Ok(None);
+    };
     let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
         Error::Validation(format!("{} is not valid TOML: {error}", relative.display()))
     })?;
@@ -1366,6 +1388,82 @@ release-units:
                 recipe.publisher,
                 recipe.target
             );
+        }
+    }
+
+    /// Reads a probe can survive: the file is gone by the time it is read.
+    ///
+    /// A path that does not exist when the read reaches it produces exactly the
+    /// error a file removed inside the check-to-read window produces, so this
+    /// is the racing outcome injected directly rather than waited for.
+    #[test]
+    fn a_probed_file_taken_before_the_read_is_absent_rather_than_an_error() {
+        let workspace = Workspace::new("probe-taken");
+        let taken = workspace.root().join("already-gone.toml");
+        assert_eq!(
+            probed_file_text(&taken).expect("a file that has gone is absent, not a failure"),
+            None
+        );
+    }
+
+    /// Reads a probe must not swallow: the path is there and unreadable.
+    #[test]
+    fn a_probed_file_that_cannot_be_read_is_still_reported() {
+        let workspace = Workspace::new("probe-unreadable");
+        let directory = workspace.root().join("Cargo.toml");
+        std::fs::create_dir(&directory).expect("create directory in the manifest position");
+        assert!(
+            probed_file_text(&directory).is_err(),
+            "only a file that has gone is absent; every other read failure is reported"
+        );
+    }
+
+    /// Attempts the racing harness makes before it concludes nothing raced.
+    ///
+    /// The window between `is_file` and the read is a few microseconds wide and
+    /// the competing thread reopens it continuously, so the pre-fix code loses
+    /// the race long before this bound. It is a bound on the test's runtime,
+    /// not a sample size the result depends on.
+    const RACING_ATTEMPTS: usize = 20_000;
+
+    /// The window the CLI handoff fixtures fell into, opened on purpose.
+    ///
+    /// One thread removes and rewrites the manifest while the probe reads it.
+    /// Before the fix this surfaces the removal as a missing-file error and the
+    /// test fails; after it, a manifest that has gone is the absent case and no
+    /// interleaving can fail.
+    #[test]
+    fn a_manifest_removed_while_the_probe_runs_is_absent_rather_than_an_error() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let workspace = Workspace::new("manifest-removal-race");
+        let root = workspace.root().to_path_buf();
+        let manifest = root.join("Cargo.toml");
+        let stop = Arc::new(AtomicBool::new(false));
+        let competitor = {
+            let stop = Arc::clone(&stop);
+            let manifest = manifest.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::fs::write(
+                        &manifest,
+                        "[package]\nname = \"raced-component\"\nversion = \"1.0.0\"\n",
+                    );
+                    let _ = std::fs::remove_file(&manifest);
+                }
+            })
+        };
+
+        let outcome = (0..RACING_ATTEMPTS)
+            .map(|_| cargo_manifest(&root, Path::new("Cargo.toml")))
+            .find(std::result::Result::is_err);
+
+        stop.store(true, Ordering::Relaxed);
+        competitor.join().expect("the competing thread finishes");
+
+        if let Some(Err(error)) = outcome {
+            panic!("a manifest removed while the probe ran was reported as a failure: {error:?}");
         }
     }
 }

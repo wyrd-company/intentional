@@ -43,21 +43,45 @@ pub use recipe::{
 pub mod fixture {
     use std::path::{Path, PathBuf};
 
+    /// Directory name for one fixture workspace.
+    ///
+    /// The label says what the workspace is for; it is not an identity. Tests
+    /// reach a label through shared helpers, so one label names many workspaces
+    /// within one binary, and two of them can be created inside a single clock
+    /// tick. Neither the label nor the instant is therefore allowed to carry
+    /// uniqueness: a process-wide sequence number does, and it is exact rather
+    /// than probable.
+    fn workspace_directory_name(label: &str, instant: u128) -> String {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        format!(
+            "intentional-executor-{label}-{}-{instant}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        )
+    }
+
     /// Self-deleting workspace directory used by executor tests.
     pub struct Workspace(PathBuf);
 
     impl Workspace {
         #[must_use]
         pub fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "intentional-executor-{label}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .expect("system time")
-                    .as_nanos()
-            ));
-            std::fs::create_dir_all(&path).expect("create workspace");
+            let instant = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos();
+            Self::at(std::env::temp_dir().join(workspace_directory_name(label, instant)))
+        }
+
+        /// Claim one directory exclusively.
+        ///
+        /// `create_dir` refuses a directory that already exists, so a name two
+        /// workspaces both derived is a named panic rather than two fixtures
+        /// silently sharing a root and deleting it from under each other.
+        fn at(path: PathBuf) -> Self {
+            std::fs::create_dir(&path).unwrap_or_else(|error| {
+                panic!("create workspace {}: {error}", path.display());
+            });
             Self(path)
         }
 
@@ -142,13 +166,91 @@ release-units:
                     "the {role} contract must derive: {:?}",
                     comparison.diagnostics
                 );
-                let applied = comparison.apply().expect("transformation applies");
+                let applied = comparison
+                    .apply()
+                    .unwrap_or_else(|error| panic!("{}", derivation_failure(root, role, &error)));
                 assert!(applied.applied);
                 (
                     role,
-                    std::fs::read_to_string(root.join(&applied.path)).expect("derived workflow"),
+                    std::fs::read_to_string(root.join(&applied.path)).unwrap_or_else(|error| {
+                        panic!("{}", derivation_failure(root, role, &error))
+                    }),
                 )
             })
             .collect()
+    }
+
+    /// Why one role's derivation did not finish.
+    ///
+    /// The two failures a derivation can produce read identically — a missing
+    /// file under a temporary path — but they have opposite causes. A root that
+    /// is still present means the contract or the workspace contents are wrong.
+    /// A root that has gone missing means the fixture directory was deleted
+    /// while the derivation was running, which is a fixture-lifetime defect and
+    /// not a contract defect. Reporting which one held is what stops the next
+    /// reader from investigating the wrong one.
+    fn derivation_failure(
+        root: &Path,
+        role: crate::config::WorkflowRole,
+        error: &dyn std::fmt::Display,
+    ) -> String {
+        format!(
+            "the {role} transformation did not complete under {}; the fixture workspace root is {}: {error}",
+            root.display(),
+            if root.is_dir() {
+                "present"
+            } else {
+                "missing, so it was removed while the derivation was running"
+            }
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{derivation_failure, workspace_directory_name, Workspace};
+        use crate::config::WorkflowRole;
+
+        /// The defect the CLI handoff fixtures were exposed to: one label,
+        /// reached twice through a shared helper, inside one clock tick.
+        #[test]
+        fn one_label_within_one_clock_tick_still_names_distinct_workspaces() {
+            let first = workspace_directory_name("shared-label", 1);
+            let second = workspace_directory_name("shared-label", 1);
+            assert_ne!(
+                first, second,
+                "a workspace name may not take its uniqueness from the label or the clock"
+            );
+        }
+
+        #[test]
+        fn two_workspaces_under_one_label_own_separate_roots() {
+            let first = Workspace::new("shared-label");
+            let second = Workspace::new("shared-label");
+            assert_ne!(first.root(), second.root());
+            first.write("marker.txt", "first");
+            assert!(!second.root().join("marker.txt").exists());
+            assert!(first.root().is_dir() && second.root().is_dir());
+        }
+
+        #[test]
+        #[should_panic(expected = "create workspace")]
+        fn a_workspace_refuses_a_root_another_workspace_already_holds() {
+            let held = Workspace::new("already-held");
+            let _second = Workspace::at(held.root().to_path_buf());
+        }
+
+        #[test]
+        fn a_derivation_failure_says_whether_the_workspace_survived() {
+            let workspace = Workspace::new("derivation-diagnostic");
+            let present = derivation_failure(workspace.root(), WorkflowRole::Release, &"io error");
+            assert!(present.contains("root is present"), "{present}");
+
+            let removed = workspace.root().join("gone");
+            let missing = derivation_failure(&removed, WorkflowRole::Release, &"io error");
+            assert!(
+                missing.contains("removed while the derivation was running"),
+                "{missing}"
+            );
+        }
     }
 }
