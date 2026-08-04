@@ -4697,6 +4697,7 @@ fn annotate_choice_lines(yaml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::executor::fixture::Workspace;
 
     const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -4856,39 +4857,19 @@ mod tests {
 
     #[test]
     fn npm_dependency_evidence_follows_the_materialized_projection_path() {
-        struct TestDirectory(PathBuf);
-        impl Drop for TestDirectory {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-
-        let root = TestDirectory(std::env::temp_dir().join(format!(
-            "intentional-init-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time")
-                .as_nanos()
-        )));
-        for directory in ["base", "duplicates/alpha", "duplicates/beta"] {
-            std::fs::create_dir_all(root.0.join(directory)).expect("create fixture directory");
-        }
-        std::fs::write(
-            root.0.join("base/package.json"),
+        let root = Workspace::new("init");
+        root.write(
+            "base/package.json",
             r#"{"name":"sample-base","version":"1.0.0"}"#,
         )
-        .expect("write base manifest");
-        std::fs::write(
-            root.0.join("duplicates/alpha/package.json"),
+        .write(
+            "duplicates/alpha/package.json",
             r#"{"name":"sample-duplicate","version":"1.0.0"}"#,
         )
-        .expect("write first duplicate");
-        std::fs::write(
-            root.0.join("duplicates/beta/package.json"),
+        .write(
+            "duplicates/beta/package.json",
             r#"{"name":"sample-duplicate","version":"1.0.0","dependencies":{"sample-base":"^1.0.0"}}"#,
-        )
-        .expect("write second duplicate");
+        );
         let mut config = Config::from_yaml(
             r#"contract: contract-1
 release-units:
@@ -4909,7 +4890,8 @@ release-units:
         )
         .expect("fixture config");
 
-        let mut edges = derive_npm_dependencies(&root.0, &mut config).expect("dependency evidence");
+        let mut edges =
+            derive_npm_dependencies(root.root(), &mut config).expect("dependency evidence");
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].manifest, Path::new("duplicates/beta/package.json"));
         assert_eq!(

@@ -32,13 +32,11 @@ pub use recipe::{
 
 /// Workspace and workflow-derivation fixtures shared by executor tests.
 ///
-/// Workflow derivation is exercised from three crates' tests: this crate's own
-/// reconciliation tests, the command-line crate's invocation-binding gate, and
-/// its end-to-end release-handoff test. All three need the same representative
-/// workspace, and a second copy of it is a second thing to keep in step with
-/// the contract, so the fixture is published under the `test-support` feature
-/// rather than transcribed per crate. The feature is enabled only by
-/// dev-dependencies, so nothing here reaches a released binary.
+/// Tests in this crate and the command-line crate need self-deleting workspaces
+/// with the same ownership and uniqueness contract. A second copy is a second
+/// thing to keep in step with that contract, so the fixture is published under
+/// the `test-support` feature rather than transcribed per crate. The feature is
+/// enabled only by dev-dependencies, so nothing here reaches a released binary.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixture {
     use std::path::{Path, PathBuf};
@@ -219,6 +217,37 @@ release-units:
             derivation_failure, derive_workflows_under, workspace_directory_name, Workspace,
         };
         use crate::config::WorkflowRole;
+
+        #[test]
+        fn init_tests_use_the_shared_workspace_fixture() {
+            let init_source = include_str!("../init.rs");
+            assert!(
+                init_source.contains("use crate::executor::fixture::Workspace;"),
+                "init tests must import the shared workspace fixture"
+            );
+            assert!(
+                !init_source.contains("struct TestDirectory"),
+                "init tests must not transcribe a workspace fixture"
+            );
+            assert!(
+                !init_source.contains("std::env::temp_dir()"),
+                "init tests must not hand-roll a temporary fixture root"
+            );
+        }
+
+        #[test]
+        fn a_workspace_removes_its_root_when_dropped() {
+            let root = {
+                let workspace = Workspace::new("cleanup");
+                let root = workspace.root().to_path_buf();
+                assert!(root.is_dir(), "the workspace owns a created root");
+                root
+            };
+            assert!(
+                !root.exists(),
+                "the workspace root must not survive its owner"
+            );
+        }
 
         /// The defect the CLI handoff fixtures were exposed to: one label,
         /// reached twice through a shared helper, inside one clock tick.
