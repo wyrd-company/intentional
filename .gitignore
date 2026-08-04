@@ -3,3 +3,4 @@
 #   implements: intent-driven-polyglot-release
 # ---
 /target/
+__pycache__/
