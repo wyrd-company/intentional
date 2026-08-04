@@ -35,6 +35,15 @@ pub enum Capability {
 }
 
 impl Capability {
+    /// Every capability a release unit can derive.
+    pub const ALL: [Self; 5] = [
+        Self::NodePackage,
+        Self::RustCrate,
+        Self::GoApplication,
+        Self::RunnableImage,
+        Self::DevContainerFeature,
+    ];
+
     /// Stable capability name used in plans and diagnostics.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -566,24 +575,18 @@ pub fn capability_set(evidence: &[CapabilityEvidence]) -> BTreeSet<Capability> {
 /// against the release commit before trusting what it derived — would
 /// otherwise restate the names beside the probes that use them, and a probe
 /// added later would leave that restatement silently short.
-pub const CAPABILITY_PROBES: [(Capability, &str); 5] = [
-    (Capability::NodePackage, "package.json"),
-    (Capability::RustCrate, "Cargo.toml"),
-    (Capability::GoApplication, "go.mod"),
-    (Capability::RunnableImage, "Dockerfile"),
-    (Capability::DevContainerFeature, "devcontainer-feature.json"),
-];
-
 /// The file one capability probe opens inside a release unit.
-const fn probe_file(capability: Capability) -> &'static str {
-    let mut index = 0;
-    while index < CAPABILITY_PROBES.len() {
-        if CAPABILITY_PROBES[index].0 as u8 == capability as u8 {
-            return CAPABILITY_PROBES[index].1;
-        }
-        index += 1;
+///
+/// Matched exhaustively rather than looked up, so a capability added later
+/// cannot compile without naming the file its probe opens.
+pub const fn probe_file(capability: Capability) -> &'static str {
+    match capability {
+        Capability::NodePackage => "package.json",
+        Capability::RustCrate => "Cargo.toml",
+        Capability::GoApplication => "go.mod",
+        Capability::RunnableImage => "Dockerfile",
+        Capability::DevContainerFeature => "devcontainer-feature.json",
     }
-    panic!("every capability probes one file")
 }
 
 /// Every path the publication selection opens, relative to the workspace root.
@@ -601,8 +604,8 @@ pub fn publication_probe_paths(config: &Config) -> BTreeSet<PathBuf> {
         {
             continue;
         }
-        for (_, name) in CAPABILITY_PROBES {
-            paths.insert(release_unit.path.join(name));
+        for capability in Capability::ALL {
+            paths.insert(release_unit.path.join(probe_file(capability)));
         }
         for name in Packager::GoReleaser.configuration_paths() {
             paths.insert(release_unit.path.join(name));
@@ -1038,6 +1041,50 @@ release-units:
                 .expect("no publishers selects nothing")
                 .is_empty(),
             "native package evidence alone never creates publication intent"
+        );
+    }
+
+    /// Every capability the derivation can produce is one this module lists.
+    ///
+    /// Evidence assembly proves each path this selection opens against the
+    /// release commit, and it asks for those paths here rather than restating
+    /// them. `probe_file` matches exhaustively, so a capability added later
+    /// cannot compile without naming its file — but `ALL` could still be left
+    /// short, and a capability missing from it is a read assembly would never
+    /// prove. A workspace carrying every probe file derives one capability per
+    /// entry, which is what binds the list to the derivation rather than to a
+    /// count written beside it.
+    #[test]
+    fn derives_one_capability_for_every_probe_it_enumerates() {
+        let workspace = Workspace::new("every-capability");
+        workspace
+            .write(
+                "component/package.json",
+                r#"{"name":"example-component","version":"1.0.0"}"#,
+            )
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n",
+            )
+            .write("component/go.mod", "module example.test/component\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n")
+            .write("component/Dockerfile", "FROM scratch\n")
+            .write(
+                "component/devcontainer-feature.json",
+                "{\"id\":\"example\"}\n",
+            );
+        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
+            .expect("capabilities derive");
+        assert_eq!(
+            capability_set(&derived),
+            BTreeSet::from(Capability::ALL),
+            "the derivation produces exactly the capabilities the probe list enumerates"
+        );
+        let probes: BTreeSet<&str> = Capability::ALL.into_iter().map(probe_file).collect();
+        assert_eq!(
+            probes.len(),
+            Capability::ALL.len(),
+            "each capability probes a file of its own"
         );
     }
 

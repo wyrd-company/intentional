@@ -2717,6 +2717,46 @@ subjects: []
         );
     }
 
+    /// A checkout filter cannot make a drifted file hash back to the blob.
+    ///
+    /// `git hash-object` applies the path's attributes by default, so a
+    /// repository declaring an end-of-line conversion would have a rewritten
+    /// file hash back to exactly the blob the release published — a comparison
+    /// that agrees about content assembly does not read. Hashing the bytes as
+    /// they are is what makes the comparison about what assembly reads.
+    ///
+    /// The cost is deliberate and is the residual this refusal carries: a
+    /// checkout whose files are legitimately converted on the way out differs
+    /// from the release commit in the bytes assembly reads, and is refused.
+    #[test]
+    fn refuses_a_read_a_checkout_filter_would_hash_back_to_the_blob() {
+        let workspace = ReleasedWorkspace::with(
+            CONFIG,
+            &[
+                (
+                    "component/package.json",
+                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                ),
+                (".gitattributes", "*.yml text eol=crlf\n"),
+            ],
+            "component",
+        );
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        let path = workspace.root.join(CONFIG_PATH);
+        let published = std::fs::read_to_string(&path).expect("published configuration");
+        std::fs::write(&path, published.replace('\n', "\r\n")).expect("converted configuration");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("the bytes assembly reads are not the bytes the release published");
+        assert!(
+            error.to_string().contains(CONFIG_PATH),
+            "the diagnostic names the path whose bytes differ: {error}"
+        );
+    }
+
     /// Repository state assembly never opens is not the release's business.
     ///
     /// The refusal is scoped to what assembly reads, not to whether the
