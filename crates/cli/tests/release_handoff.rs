@@ -5,7 +5,8 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    CandidateFile, ChangeStatus, ChangedPath, ReleaseCandidate, RELEASE_CANDIDATE_MANIFEST,
+    CandidateFile, ChangeStatus, ChangedPath, ReleaseCandidate, MAX_CANDIDATE_FILES,
+    RELEASE_CANDIDATE_MANIFEST,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -972,6 +973,37 @@ fn refuses_a_handoff_that_transports_a_symbolic_link() {
         .assert()
         .failure()
         .stderr(predicates::str::contains("symbolic link"));
+}
+
+/// The entry bound counts directories, so an empty tree cannot be unbounded.
+///
+/// A handoff arrives untrusted, and the walk that reads it is the only thing
+/// standing between an attacker-shaped directory tree and an unbounded walk.
+/// Bounding files alone would leave a handoff built entirely out of empty
+/// directories free to exhaust the walk while transporting nothing, which is
+/// why the count is taken per entry rather than per file.
+#[test]
+fn refuses_a_handoff_built_from_more_directories_than_the_entry_bound() {
+    let fixture = ReleaseFixture::new();
+    fixture.author_release();
+    fixture.prepare();
+    let clone = fixture.privileged_clone("privileged");
+
+    // Empty directories carry no file, so only a per-entry count reaches them.
+    // One past the bound is what the bound claims to refuse.
+    let padding = fixture.handoff.join("candidate/padding");
+    for index in 0..=MAX_CANDIDATE_FILES {
+        std::fs::create_dir_all(padding.join(format!("entry-{index}")))
+            .expect("handoff padding directory");
+    }
+
+    fixture
+        .verify(&clone)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(format!(
+            "contains more than {MAX_CANDIDATE_FILES} entries"
+        )));
 }
 
 #[test]
