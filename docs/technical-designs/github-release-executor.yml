@@ -728,19 +728,37 @@ proposed-design:
     delivery code's to interpret. Intentional generates a call, so the call
     being well formed is its concern and what populates it is not.
 
-    Well formed is decided against the Action itself. The configured path names
-    a file in the configuring repository, so derivation reads it and requires
-    that it is a composite Action, that it declares every reserved input the
-    recipe supplies, that every key the configuration writes is an input the
-    Action declares, that every input the Action requires without a default is
-    covered by one side or the other, and that no configured key falls in the
-    reserved namespace. Reserving a namespace rather than a list of names is
-    what keeps that last check honest: it refuses whatever the recipe reserves
-    today, so an input added later is covered without a second edit somewhere
-    else. It is also the only one of these that guards more than a broken call.
-    A configured key overwriting the sealed digest or the package path would
-    hand delivery a package the establishment step never proved, which is a call
-    that lies rather than a call that fails.
+    Well formed is decided against the Action itself. Configuration names the
+    Action's directory, because that is what a local `uses:` takes, and the
+    derived step spells that directory. Its metadata is the `action.yml` or
+    `action.yaml` within, discovered rather than configured; a directory holding
+    both is refused, since nothing in the pair says which one a run would honour
+    and guessing picks a contract the workflow may not use.
+
+    Derivation reads that metadata and requires that it declares a composite
+    Action, that it declares every reserved input the recipe supplies, that
+    every key the configuration writes is an input it declares, that every input
+    it requires without a default is covered by one side or the other, and that
+    no configured key falls in the reserved namespace. Reserving a namespace
+    rather than a list of names is what keeps that last check honest: it refuses
+    whatever the recipe reserves today, so an input added later is covered
+    without a second edit somewhere else. It is also the only one of these that
+    guards more than a broken call. A configured key overwriting the sealed
+    digest or the package path would hand delivery a package the establishment
+    step never proved, which is a call that lies rather than a call that fails.
+
+    Reading that metadata at derivation alone would bind nothing. The derived
+    workflow spells a directory, so editing the Action changes the contract
+    without changing a line of the file comparison reads, and a removed reserved
+    input, a newly required one, or a rewritten Action kind all leave
+    reconciliation green. Workflow comparison and `intentional check` therefore
+    re-read the referenced metadata and refuse a contract the Action no longer
+    satisfies, in the same way validation already reaches into native packager
+    configuration rather than stopping at the workflow's surface. What makes
+    that sufficient rather than merely narrower is that the Action is local: the
+    publisher job checks out the released commit before its steps run, so the
+    metadata a run honours is the metadata at the revision checking that commit
+    validated, and there is no window between them for the file to change.
 
     Outward, the recipe reads the step's success and nothing else. A delivery
     step that reported what it published would be reporting on itself, and no
