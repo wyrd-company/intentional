@@ -1046,7 +1046,12 @@ proposed-design:
     `intentional verify release VERSION` resolves the GitHub Release and
     configured phase tags,
     downloads `intentional-evidence.yml`, verifies its GitHub artifact
-    attestation and digest, validates its schema and S-to-R-to-tag chain,
+    attestation and digest, accepts only the declared release-evidence schema
+    and contract identities and only a document carrying the members that
+    contract names, no member it does not name, and a value drawn from the
+    closed set wherever it declares one, checks that every Git object and
+    digest the release identity records is written in its complete form,
+    validates the S-to-R-to-tag chain,
     compares applicable phase-tag evidence, and verifies publisher-native
     provenance and subject digests. `--live` repeats fresh destination readback
     and consumer retrieval. For a draft-dependent publisher, this is the first
