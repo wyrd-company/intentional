@@ -723,16 +723,43 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
 /// exist, so the same rule the packager applies is applied here.
 fn aur_package(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Option<String>> {
     let directory = root.join(&release_unit.path);
+    let config = crate::executor::goreleaser::read(&directory)?;
     let Some(project) = crate::executor::goreleaser::subject_identity(&directory)? else {
         return Ok(None);
     };
-    let declared = crate::executor::goreleaser::read(&directory)?
-        .and_then(|config| config.aur_names.into_iter().next())
-        .flatten();
-    Ok(Some(crate::executor::goreleaser::arch_package_name(
-        declared.as_deref(),
-        &project,
-    )))
+    let path = release_unit.path.join(
+        config
+            .as_ref()
+            .map(|config| config.path.as_path())
+            .unwrap_or(Path::new(".goreleaser.yaml")),
+    );
+    let declared_origin = format!("{} aur[0].name", path.display());
+    let project_origin = if config
+        .as_ref()
+        .is_some_and(|config| config.project_name.is_some())
+    {
+        format!("{} project_name", path.display())
+    } else {
+        format!(
+            "{} module basename",
+            release_unit.path.join("go.mod").display()
+        )
+    };
+    let declared = config
+        .as_ref()
+        .and_then(|config| config.aur_names.first())
+        .and_then(Option::as_deref)
+        .map(|value| crate::executor::names::SuppliedName {
+            origin: &declared_origin,
+            value,
+        });
+    let project = crate::executor::names::SuppliedName {
+        origin: &project_origin,
+        value: &project,
+    };
+    crate::executor::goreleaser::arch_package_name(declared.as_ref(), &project)
+        .map(Some)
+        .map_err(Error::Validation)
 }
 
 fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {
@@ -1372,6 +1399,46 @@ release-units:
                 "{declaration:?} derives the package the packager registers"
             );
         }
+    }
+
+    #[test]
+    fn refuses_a_malformed_declared_arch_package_at_the_boundary() {
+        let workspace = Workspace::new("aur-declared-name-boundary");
+        workspace
+            .write("component/go.mod", "module example.test/example-tool\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n")
+            .write(
+                "component/.goreleaser.yaml",
+                "version: 2\nproject_name: example-tool\naur:\n  - name: invalid/name\n",
+            );
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("a malformed declared Arch package is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("component/.goreleaser.yaml aur[0].name is not an Arch package name"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refuses_a_malformed_fallback_arch_package_at_the_boundary() {
+        let workspace = Workspace::new("aur-project-name-boundary");
+        workspace
+            .write("component/go.mod", "module example.test/example-tool\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n")
+            .write(
+                "component/.goreleaser.yaml",
+                "version: 2\nproject_name: invalid/name\naur:\n  - {}\n",
+            );
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("a malformed project-name fallback is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("component/.goreleaser.yaml project_name is not an Arch package name"),
+            "{error}"
+        );
     }
 
     #[test]

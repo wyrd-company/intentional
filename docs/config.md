@@ -252,9 +252,11 @@ executor check` reports the members the selected recipes read: `project_name`,
 which the release seals as the subject identity every destination resolves; the
 distribution pipe each configured publisher promotes, `brews` for Homebrew,
 `nfpms` for RPM and APT, and `aur` for the Arch User Repository; and the
-`nfpms` format each system-package publisher distributes. The command package
-is discovered from the same file's `builds[].main`, from the release-unit root,
-or from the conventional `cmd` directories beneath it.
+`nfpms` format each system-package publisher distributes; and a literal
+`aur[].name` for Arch publication, because the maintained recipe does not
+interpret GoReleaser templates. The command package is discovered from the same
+file's `builds[].main`, from the release-unit root, or from the conventional
+`cmd` directories beneath it.
 
 The build job installs a pinned GoReleaser rather than the newest release. These
 recipes read what the packager wrote, at paths and under names it decides, so

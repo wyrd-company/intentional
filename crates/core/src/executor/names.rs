@@ -70,6 +70,9 @@ const REGISTRY_EXTRA: [char; 2] = ['-', '_'];
 /// Characters a release-unit identifier may carry beyond letters and digits.
 const RELEASE_UNIT_EXTRA: [char; 3] = ['-', '.', '_'];
 
+/// Characters an Arch package name may carry beyond letters and digits.
+const ARCH_PACKAGE_EXTRA: [char; 5] = ['@', '.', '_', '+', '-'];
+
 /// Reject an npm package name a maintained recipe would carry into a script.
 ///
 /// A scoped name is one scope segment and one name segment, each held to the
@@ -101,6 +104,22 @@ pub fn cargo_crate(supplied: &SuppliedName<'_>) -> Result<String, String> {
         &CARGO_EXTRA,
         "a crate name",
         "letters, digits, hyphens and underscores, starting with a letter or digit",
+    )
+}
+
+/// Reject an Arch package name a maintained recipe would carry into a repository URL.
+///
+/// The name becomes the path in
+/// `ssh://aur@aur.archlinux.org/${INTENTIONAL_DESTINATION}.git` inside the
+/// credentialed promotion body. Routing it through `env:` and quoting the
+/// dereference keeps it out of shell source; this rule keeps it one package
+/// name rather than letting a slash select a different clone path.
+pub fn arch_package(supplied: &SuppliedName<'_>) -> Result<String, String> {
+    accept(
+        supplied,
+        &ARCH_PACKAGE_EXTRA,
+        "an Arch package name",
+        "letters, digits, at signs, periods, underscores, plus signs and hyphens, starting with a letter or digit",
     )
 }
 
@@ -444,5 +463,15 @@ mod tests {
             "NPM_TOKEN"
         );
         assert!(secret(Some(&supplied("1TOKEN")), "NPM_TOKEN").is_err());
+        for name in [
+            "example-tool-bin",
+            "example.tool_bin",
+            "example+tool@stable",
+        ] {
+            assert!(arch_package(&supplied(name)).is_ok(), "{name}");
+        }
+        for name in ["invalid/name", "invalid name", "-invalid", ".invalid"] {
+            assert!(arch_package(&supplied(name)).is_err(), "{name}");
+        }
     }
 }

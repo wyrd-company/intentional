@@ -609,8 +609,11 @@ proposed-design:
     package built from released binaries is named that way. The derivation
     applies the same rule, because a destination derived from the declaration
     alone names a package the packager never wrote and the Arch User Repository
-    never carried. Naming both sides exactly is also what keeps a sibling entry
-    out: reading one package's own two files leaves the other's alone, and
+    never carried. GoReleaser also applies its template language to a declared
+    package name. Maintained Arch publication requires a literal name and
+    conformance reports a templated declaration instead of deriving a different
+    destination from it. Naming both sides exactly is also what keeps a sibling
+    entry out: reading one package's own two files leaves the other's alone, and
     installing them under their required names is what makes the result a
     package `makepkg` can read. Multiplicity is where the two adapters differ:
     `brews` publishes every entry, while one Arch publication reaches one

@@ -134,6 +134,15 @@ fn native_packager_findings(
             config.aur_names.len()
         ));
     }
+    if publication.publisher == PublisherKind::Aur
+        && config
+            .aur_names
+            .first()
+            .and_then(Option::as_deref)
+            .is_some_and(|name| name.contains("{{"))
+    {
+        findings.push(format!("{identity} cannot publish templated aur[0].name in {file}; maintained Arch publication requires a literal package name"));
+    }
     Ok(findings)
 }
 
@@ -442,6 +451,25 @@ aur:
             findings.iter().any(|finding| finding
                 .contains("component/aur/primary publishes the first of the 2 aur entries")),
             "a second aur entry is reported: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn reports_a_templated_arch_package_name() {
+        let workspace = go_workspace("check-goreleaser-aur-template", "    aur: {}\n");
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace(
+                "  - name: example-tool-bin\n",
+                "  - name: '{{ .ProjectName }}'\n",
+            ),
+        );
+        let findings = packager_findings(&workspace);
+        assert!(
+            findings.iter().any(|finding| finding.contains(
+                "component/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
+            )),
+            "a templated aur name is reported: {findings:?}"
         );
     }
 

@@ -205,13 +205,15 @@ fn main_directories(document: &serde_yaml::Value) -> Vec<PathBuf> {
 
 /// Arch package identity one `aur` entry resolves to.
 ///
-/// The packager decides this name, not the repository, and it decides it twice.
-/// An entry that declares no name takes the project name, and every name is
-/// then given a `-bin` suffix unless it already carries one, because an Arch
-/// package built from released binaries rather than from source is named that
-/// way by convention. The packager applies the rule before it writes anything,
-/// so `aur: [ { name: example-tool } ]` produces `example-tool-bin.pkgbuild` and
-/// registers `example-tool-bin`.
+/// The packager applies an empty-name fallback, a `-bin` suffix rule, and its
+/// template language. This derivation reproduces the first two. Conformance
+/// reports a templated declaration as unsupported rather than interpreting the
+/// third. An entry that declares no name takes the project name, and every
+/// literal name is then given a `-bin` suffix unless it already carries one,
+/// because an Arch package built from released binaries rather than from source
+/// is named that way by convention. The packager applies the rules before it
+/// writes anything, so `aur: [ { name: example-tool } ]` produces
+/// `example-tool-bin.pkgbuild` and registers `example-tool-bin`.
 ///
 /// Deriving the destination without that rule hands the recipe a name the
 /// packager never wrote and the Arch User Repository never carried, which fails
@@ -225,11 +227,21 @@ fn main_directories(document: &serde_yaml::Value) -> Vec<PathBuf> {
 /// is not a goal when that behaviour lets a name of spaces become a destination
 /// the credentialed promotion body reaches. The rule implemented here may be
 /// stricter than the rule modelled, provided the divergence is stated.
-pub fn arch_package_name(declared: Option<&str>, project: &str) -> String {
-    let name = declared
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
+pub fn arch_package_name(
+    declared: Option<&crate::executor::names::SuppliedName<'_>>,
+    project: &crate::executor::names::SuppliedName<'_>,
+) -> std::result::Result<String, String> {
+    let supplied = declared
+        .filter(|supplied| !supplied.value.trim().is_empty())
         .unwrap_or(project);
+    if supplied.value.contains("{{") {
+        return Ok(suffix_arch_package(supplied.value));
+    }
+    let name = crate::executor::names::arch_package(supplied)?;
+    Ok(suffix_arch_package(&name))
+}
+
+fn suffix_arch_package(name: &str) -> String {
     if name.ends_with(ARCH_BINARY_SUFFIX) {
         name.to_owned()
     } else {
@@ -291,15 +303,23 @@ mod tests {
     // never wrote and the Arch User Repository never carried.
     #[test]
     fn resolves_the_arch_package_the_packager_writes() {
-        for (declared, expected) in [
+        for (declared_value, expected) in [
             (Some("example-tool"), "example-tool-bin"),
             (Some("example-tool-bin"), "example-tool-bin"),
             (None, "example-project-bin"),
         ] {
+            let declared = declared_value.map(|value| crate::executor::names::SuppliedName {
+                origin: "component/.goreleaser.yaml aur[0].name",
+                value,
+            });
+            let project = crate::executor::names::SuppliedName {
+                origin: "component/.goreleaser.yaml project_name",
+                value: "example-project",
+            };
             assert_eq!(
-                arch_package_name(declared, "example-project"),
+                arch_package_name(declared.as_ref(), &project).expect("the package name stands"),
                 expected,
-                "{declared:?} resolves the package the packager writes"
+                "{declared_value:?} resolves the package the packager writes"
             );
         }
     }
@@ -310,8 +330,16 @@ mod tests {
     // promotion body is not behaviour worth reproducing.
     #[test]
     fn treats_a_whitespace_only_arch_name_as_an_absent_one() {
+        let declared = crate::executor::names::SuppliedName {
+            origin: "component/.goreleaser.yaml aur[0].name",
+            value: "  ",
+        };
+        let project = crate::executor::names::SuppliedName {
+            origin: "component/.goreleaser.yaml project_name",
+            value: "example-project",
+        };
         assert_eq!(
-            arch_package_name(Some("  "), "example-project"),
+            arch_package_name(Some(&declared), &project).expect("the fallback name stands"),
             "example-project-bin"
         );
     }
