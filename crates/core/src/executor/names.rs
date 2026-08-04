@@ -482,7 +482,7 @@ mod tests {
         ] {
             assert!(arch_package(&supplied(name)).is_ok(), "{name}");
         }
-        for name in ["invalid/name", "invalid name", "-invalid", ".invalid"] {
+        for name in ["", "invalid/name", "invalid name", "-invalid", ".invalid"] {
             assert!(arch_package(&supplied(name)).is_err(), "{name}");
         }
     }
