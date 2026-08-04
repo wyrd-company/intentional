@@ -202,7 +202,7 @@ def finish(current, entries):
     if missing:
         raise Unreadable(
             current["line"],
-            current["constant"],
+            f'  - constant: {current["constant"]}',
             f"this entry declares no {', '.join(missing)}",
         )
     entries.append(current)

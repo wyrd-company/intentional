@@ -207,6 +207,9 @@ if run_check "$directory" "$directory/pins.yml"; then
 elif ! grep -q "HALF_READ_ACTION" "$directory/stderr" "$directory/stdout"; then
   echo "the check refused the incomplete entry without naming HALF_READ_ACTION" >&2
   report "$directory"
+elif ! grep -q "line 10.*'  - constant: HALF_READ_ACTION'" "$directory/stderr"; then
+  echo "the incomplete entry message did not identify its header as the offending line" >&2
+  report "$directory"
 fi
 
 # An entry header carrying no fields at all.
