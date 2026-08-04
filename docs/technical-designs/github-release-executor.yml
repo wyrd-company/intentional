@@ -551,17 +551,30 @@ proposed-design:
     read the same — the recipe removes the condition rather than trying to tell
     the messages apart.
 
-    Removing one such condition is not the same as removing the class. A probe
-    that inherits the released repository's own client configuration can be
-    redirected by any key in it: one makes the client answer offline, another
-    substitutes the source it reads, another replaces the index outright, and
-    each produces the same misclassification by a different route. A maintained
-    recipe's probe therefore inherits no configuration at all. What an alternate
-    destination needs in order to resolve — its registry index — is read at
-    derivation, validated like every other repository-supplied value, and passed
-    to the probe as the one thing that crosses. The same applies to a client
-    that resolves a scoped name through configuration: the probe states the
-    registry for that scope rather than letting a configuration answer it.
+    Removing one such condition is not the same as removing the class. A client
+    reads its configuration from two places, and a repository controls both: a
+    file discovered by walking up from the working directory, and the process
+    environment, which a repository's own workflow supplies through a top-level
+    `env:` block the executor preserves deliberately. Either can make a client
+    answer offline, substitute the source it reads, or replace the index
+    outright, and each is the same misclassification by a different route.
+
+    A maintained recipe's probe therefore reads no configuration it was not
+    given. It runs outside the checkout so no file is discovered, and it runs in
+    an environment cleared and rebuilt from what derivation names, so a variable
+    nobody enumerated cannot reach it. That is the difference between an
+    allowlist and a list of closed routes: the first is a property, the second
+    is a record of what has been noticed. What an alternate destination needs in
+    order to resolve — its registry index — is read at derivation, validated
+    like every other repository-supplied value, and named in that environment as
+    the one thing that crosses. A client that resolves a scoped name through
+    configuration is told which registry serves the scope rather than being left
+    to look it up.
+
+    Two variables remain inherited and are named as such: the executable search
+    path and the home directory are the runner's own process contract, and a
+    repository able to redirect those has redirected every step of the job
+    rather than this probe.
 
     Every name a recipe reads out of the repository it releases is validated
     where it enters the model rather than escaped where it is used. These names
