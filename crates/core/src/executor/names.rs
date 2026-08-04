@@ -115,12 +115,21 @@ pub fn cargo_crate(supplied: &SuppliedName<'_>) -> Result<String, String> {
 /// dereference keeps it out of shell source; this rule keeps it one package
 /// name rather than letting a slash select a different clone path.
 pub fn arch_package(supplied: &SuppliedName<'_>) -> Result<String, String> {
-    accept(
-        supplied,
-        &ARCH_PACKAGE_EXTRA,
-        "an Arch package name",
-        "letters, digits, at signs, periods, underscores, plus signs and hyphens, starting with a letter or digit",
-    )
+    let name = supplied.value;
+    if !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || ARCH_PACKAGE_EXTRA.contains(&character)
+        })
+    {
+        Ok(name.to_owned())
+    } else {
+        Err(refusal(
+            supplied,
+            "an Arch package name",
+            "letters, digits, at signs, periods, underscores, plus signs and hyphens, not starting with a hyphen or period",
+        ))
+    }
 }
 
 /// Reject a configured Cargo registry name a maintained recipe will not name.
@@ -467,6 +476,9 @@ mod tests {
             "example-tool-bin",
             "example.tool_bin",
             "example+tool@stable",
+            "@stable",
+            "_private",
+            "+instrumented",
         ] {
             assert!(arch_package(&supplied(name)).is_ok(), "{name}");
         }
