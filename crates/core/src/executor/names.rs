@@ -341,20 +341,6 @@ mod tests {
         "+instrumented",
     ];
 
-    #[test]
-    fn accepted_arch_fixtures_witness_digits() {
-        assert!(ACCEPTED_ARCH_NAMES
-            .iter()
-            .any(|name| name.chars().any(|character| character.is_ascii_digit())));
-    }
-
-    #[test]
-    fn accepted_arch_fixtures_witness_uppercase_letters() {
-        assert!(ACCEPTED_ARCH_NAMES
-            .iter()
-            .any(|name| name.chars().any(|character| character.is_ascii_uppercase())));
-    }
-
     fn supplied(value: &str) -> SuppliedName<'_> {
         SuppliedName {
             origin: "component",
@@ -497,8 +483,29 @@ mod tests {
             "NPM_TOKEN"
         );
         assert!(secret(Some(&supplied("1TOKEN")), "NPM_TOKEN").is_err());
-        for name in ACCEPTED_ARCH_NAMES {
-            assert!(arch_package(&supplied(name)).is_ok(), "{name}");
+        let accepted_arch_names = ACCEPTED_ARCH_NAMES
+            .into_iter()
+            .map(|name| (name, arch_package(&supplied(name))))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            accepted_arch_names.iter().fold(
+                (false, false),
+                |(has_digit, has_uppercase), (_, accepted)| {
+                    let accepted = accepted.as_deref().unwrap_or_default();
+                    (
+                        has_digit || accepted.chars().any(|character| character.is_ascii_digit()),
+                        has_uppercase
+                            || accepted
+                                .chars()
+                                .any(|character| character.is_ascii_uppercase()),
+                    )
+                }
+            ),
+            (true, true),
+            "accepted Arch derivations witness digits and uppercase letters"
+        );
+        for (name, accepted) in accepted_arch_names {
+            assert!(accepted.is_ok(), "{name}");
         }
         for name in ["", "invalid/name", "invalid name", "-invalid", ".invalid"] {
             assert!(arch_package(&supplied(name)).is_err(), "{name}");
