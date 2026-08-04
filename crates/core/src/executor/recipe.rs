@@ -1129,6 +1129,22 @@ release-units:
             (identities(&empty.selected), empty.diagnostics),
             "the selection opens a probe file the reader does not name"
         );
+
+        // The other direction costs nothing to hold and is not harmless: a
+        // path named but never opened is a path evidence assembly refuses a
+        // release over without ever having read it.
+        let probes = publication_probe_paths(&config);
+        let named: BTreeSet<&Path> = probes.iter().filter_map(|path| path.parent()).collect();
+        let opened: BTreeSet<&Path> = config
+            .release_units
+            .values()
+            .filter(|release_unit| selects_publications(release_unit))
+            .map(|release_unit| release_unit.path.as_path())
+            .collect();
+        assert_eq!(
+            named, opened,
+            "the reader names a release unit the selection never opens"
+        );
     }
 
     /// Publication identities, in the order the selection produced them.
