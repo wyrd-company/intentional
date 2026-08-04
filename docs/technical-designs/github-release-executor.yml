@@ -187,15 +187,22 @@ proposed-design:
 
     Intentional owns required entries under `on`, the release concurrency
     policy, the safe top-level permission default, and every job whose
-    identifier begins with the configured job prefix, plus every prefixed step
-    inside those jobs. Every managed job also
-    contains the stable sentinel step ID `intentional_executor_contract`, which
-    is reserved independently of the configurable prefix and identifies
-    Intentional ownership across prefix changes. A missing reserved job is
-    inserted and an existing reserved job is replaced in full. A repository job
-    that uses a reserved identifier or sentinel is replaced. Additional
-    triggers, repository-owned jobs, expressions, comments, and unrelated metadata are
-    preserved. Configured gate job identifiers are added to the `needs` lists of
+    identifier begins with the configured job prefix or carries the stable
+    sentinel step ID `intentional_executor_contract`. Every managed job carries
+    that sentinel. It is reserved independently of the configurable prefix and
+    identifies Intentional ownership across prefix changes, so a repository job
+    that takes a reserved identifier or carries the sentinel is Intentional's
+    however it came to be there. Ownership is decided per job and never per
+    step. An owned job is replaced in full and its steps are derived from the
+    contract, so no step is claimed on its own; a step inside a job Intentional
+    does not own is repository content whatever it is named. The configurable
+    prefix therefore reserves nothing inside a repository-owned job, and the
+    sentinel reaches into one only by making the whole job Intentional's rather
+    than by editing a step within it. A missing reserved job is inserted and an
+    existing reserved job is replaced in full. Additional triggers,
+    repository-owned jobs and their steps, expressions, comments, and unrelated
+    metadata are preserved. Configured gate job identifiers are added to the
+    `needs` lists of
     the reserved jobs their authority governs, without modifying the gate jobs
     themselves. A release gate precedes the reserved authority transition. A
     publish gate precedes both evidence assembly and closure, so a gate
