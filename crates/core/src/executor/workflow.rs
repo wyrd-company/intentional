@@ -6143,6 +6143,16 @@ exit 0
                 "kdshpm/devcontainer-feature.json",
                 r#"{"id":"nfxkbd","version":"1.0.0"}"#,
             )
+            // The Go release unit is what puts a GoReleaser build body, a
+            // Homebrew promote body and an AUR promote body in front of the
+            // sweep. Without it the gate reads three of the five packagers and
+            // reports clean over the two it never derived.
+            .write("xnrjgb/go.mod", "module vhzmlk.example/svqtwm\n")
+            .write(
+                "xnrjgb/cmd/svqtwm/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write("xnrjgb/.goreleaser.yaml", SENTINEL_GORELEASER)
             .write(
                 "vkjmtd/Cargo.toml",
                 "[package]\nname = \"hbzqvn\"\nversion = \"1.0.0\"\npublish = [\"mtdlgw\"]\n",
@@ -6151,6 +6161,25 @@ exit 0
             .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
         workspace
     }
+
+    /// Native GoReleaser configuration whose every author-typed value is distinctive.
+    ///
+    /// `archlinux` is declared for a reason the roster below states: it is the
+    /// one nfpm format whose package does not carry the format's own name, so
+    /// it is the only declared format that can witness the difference between a
+    /// value the derivation maps to a literal it owns and a value it passes
+    /// through. `rpm` and `deb` would satisfy either.
+    const SENTINEL_GORELEASER: &str = r#"version: 2
+project_name: svqtwm
+builds:
+  - main: ./cmd/svqtwm
+brews:
+  - repository: { owner: zlfrhd, name: cbnwvk }
+nfpms:
+  - formats: [ rpm, deb, archlinux ]
+aur:
+  - name: jgtxpz
+"#;
 
     /// Configuration whose every author-typed value is distinctive.
     const SENTINEL_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
@@ -6183,6 +6212,15 @@ release-units:
     path: kdshpm
     oci:
       ghcr: {}
+    tags:
+      staged:
+        role: primary
+        template: '{id}/staged@{version}'
+        require-phase: before-publication
+  wpdklc:
+    path: xnrjgb
+    homebrew: { repository: zlfrhd/cbnwvk }
+    aur: {}
     tags:
       staged:
         role: primary
@@ -6285,7 +6323,7 @@ release-units:
     /// before derivation ever sees it. The gate derives under a renamed prefix
     /// and requires the default spelling to be absent from shell, so an
     /// exception that had stopped being true would fail here.
-    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 22] = [
+    const REPOSITORY_SUPPLIED_VALUES: [(&str, &str, &str, Surface); 28] = [
         (
             "qhwzru",
             "qhwzru",
@@ -6420,6 +6458,43 @@ release-units:
             "the global release tag suffix",
             Surface::Plain,
         ),
+        // The Go surface. Every value here is routed correctly today; the
+        // defect the rows close is that nothing looked, because no gate
+        // fixture had ever derived a GoReleaser release unit.
+        (
+            "wpdklc",
+            "wpdklc",
+            "the Go release-unit identifier",
+            Surface::Plain,
+        ),
+        ("xnrjgb", "xnrjgb", "the Go release-unit path", Surface::Plain),
+        (
+            "svqtwm",
+            "svqtwm",
+            "the GoReleaser subject identity, from the native project name",
+            Surface::Plain,
+        ),
+        (
+            "zlfrhd",
+            "zlfrhd",
+            "the Homebrew tap repository owner",
+            Surface::Plain,
+        ),
+        (
+            "cbnwvk",
+            "cbnwvk",
+            "the Homebrew tap repository name",
+            Surface::Plain,
+        ),
+        // The Arch package name is the declared `aur[].name` with the
+        // packager's `-bin` rule applied, so the row carries the normalised
+        // spelling and windows the declared token inside it.
+        (
+            "jgtxpz-bin",
+            "jgtxpz",
+            "the Arch package name, normalised by the -bin rule",
+            Surface::Plain,
+        ),
     ];
 
     /// Managed jobs the sentinel configuration derives, without their prefix.
@@ -6438,6 +6513,7 @@ release-units:
                 "build_qhwzru_cargo",
                 "build_qhwzru_npm",
                 "build_rtwzlf_devcontainer_cli",
+                "build_wpdklc_goreleaser",
                 "close_release",
                 "publish_jdmcvx_oci_dockerhub",
                 "publish_jdmcvx_oci_ghcr",
@@ -6445,8 +6521,17 @@ release-units:
                 "publish_qhwzru_npm_github",
                 "publish_qhwzru_npm_primary",
                 "publish_rtwzlf_oci_ghcr",
+                "publish_wpdklc_aur_primary",
+                "publish_wpdklc_homebrew_primary",
                 "tag_after_publication",
                 "tag_before_publication",
+                // Task 179's deliverable-upload job comes into the sweep here
+                // because the sentinel configuration derives a GoReleaser
+                // publication, not because anything registered it: the sweep
+                // recognises a managed job by its ownership sentinel, so a new
+                // managed job joins the swept set the moment it is derived and
+                // fails this enumeration until it is written down.
+                "upload_deliverables",
                 "verify_tag",
             ],
         ),
