@@ -5746,6 +5746,95 @@ release-units:
     /// A value no derivation produces, recognisable wherever it surfaces.
     const HOSTILE_ENVIRONMENT: &str = "repository-supplied.example";
 
+    /// Every `if:` a managed job or step of one derived workflow carries.
+    ///
+    /// GitHub evaluates `if:` as an expression whether or not it is delimited,
+    /// so a value spliced into a bare one is expression source the delimited
+    /// sweep cannot see. The derivation emits none, and that is asserted rather
+    /// than assumed: a managed `if:` added later has to come with the rule that
+    /// covers it.
+    fn managed_conditions(root: &Path, role: WorkflowRole) -> Vec<(String, String)> {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        let mut conditions = Vec::new();
+        for (id, steps) in sentinel_jobs(root, role) {
+            if let Some(condition) = document["jobs"][&id]["if"].as_str() {
+                conditions.push((id.clone(), condition.to_owned()));
+            }
+            for step in steps {
+                if let Some(condition) = step["if"].as_str() {
+                    conditions.push((id.clone(), condition.to_owned()));
+                }
+            }
+        }
+        conditions
+    }
+
+    /// Every `${{ }}` expression a managed job of one derived workflow carries.
+    fn managed_expressions(root: &Path, role: WorkflowRole) -> Vec<(String, String)> {
+        let document: Value = serde_yaml::from_str(&workflow(root, role)).expect("result parses");
+        let mut expressions = Vec::new();
+        for (id, _) in sentinel_jobs(root, role) {
+            // The whole job body rather than its steps: a job-level `env:` is
+            // expression source a step-only sweep would not read.
+            let rendered = serde_yaml::to_string(&document["jobs"][&id]).expect("job renders");
+            let mut rest = rendered.as_str();
+            while let Some(open) = rest.find("${{") {
+                rest = &rest[open + 3..];
+                let Some(close) = rest.find("}}") else { break };
+                expressions.push((id.clone(), rest[..close].trim().to_owned()));
+                rest = &rest[close + 2..];
+            }
+        }
+        expressions
+    }
+
+    // Expression source is the other place a repository-supplied value lands,
+    // and it is not shell: a credential name reaches `${{ vars.X }}` and can
+    // reach nothing else. The rule there is that every expression is a
+    // reference whose name is one GitHub resolves, so a value that arrived as
+    // arbitrary text would not match any of these shapes.
+    #[test]
+    fn every_managed_expression_is_a_reference_to_a_named_value() {
+        let workspace = sentinel_workspace("workflow-expression-source", None);
+        // Action outputs are kebab-case by convention, so a segment admits a
+        // hyphen; nothing else in a reference does.
+        let identifier = |name: &str| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        };
+        let mut seen = 0usize;
+        let mut conditions = 0usize;
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            conditions += managed_conditions(workspace.root(), role).len();
+            for (job, expression) in managed_expressions(workspace.root(), role) {
+                seen += 1;
+                let accepted = match expression.split_once('.') {
+                    Some(("vars" | "secrets", name)) => identifier(name),
+                    Some(("runner", name)) => identifier(name),
+                    Some(("github" | "steps" | "needs" | "inputs", rest)) => {
+                        rest.split('.').all(identifier)
+                    }
+                    _ => false,
+                };
+                assert!(
+                    accepted,
+                    "{job} in the {role} workflow carries the expression {expression:?}, which is not a reference to a named value"
+                );
+            }
+        }
+        assert!(
+            seen > 0,
+            "the expression sweep read nothing, so every rule it states is vacuous"
+        );
+        assert_eq!(
+            conditions, 0,
+            "a managed job or step gained an `if:`, which GitHub evaluates as expression source with no delimiters; extend this rule to cover it rather than letting it past the delimited sweep"
+        );
+    }
+
     // The refusal test below proves a hostile value cannot be derived. It does
     // not prove that an accepted one stays out of shell source, and those are
     // different claims: `example-component` is a perfectly legal crate name,
