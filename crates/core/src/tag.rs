@@ -1720,11 +1720,15 @@ phase-tags: []
         );
     }
 
-    // The after-publication job stages every artifact in the evidence
-    // namespace, which includes the document the before-publication job
-    // uploaded. Classification by schema identity is what keeps that harmless,
-    // and nothing asserted it: a loader that stopped skipping foreign documents
-    // would seal a phase document into the phase tag with the suite green.
+    // A staged directory can hold a document the phase does not seal. The
+    // graph's own artifact names no longer collide -- the after-publication job
+    // stages `<prefix>evidence-*` and the sealed documents carry
+    // `<prefix>phase-*` -- but a rerun, a hand-staged file, or an adapter that
+    // writes beside the fragments all produce the same input. Classification by
+    // schema identity is what keeps that harmless independently of what the
+    // graph names its artifacts, and nothing asserted it: a loader that stopped
+    // skipping foreign documents would seal a phase document into the phase tag
+    // with the suite green.
     #[test]
     fn an_after_publication_tag_ignores_a_phase_document_staged_beside_its_fragments() {
         let workspace = phase_workspace("tag-phase-foreign-document");
@@ -1732,8 +1736,8 @@ phase-tags: []
         let input = stage_publisher_evidence(&workspace, object);
         let staged = stage_built_subject(&workspace, "sample-library");
         // The before-publication document is written into the same staged
-        // directory the after-publication job downloads, which is what the
-        // shared `evidence-` artifact namespace produces on a runner.
+        // directory the after-publication job downloads, which is what any of
+        // those producers leaves behind.
         plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &staged)
             .expect("before-publication tags")
             .write_sealed_phase_evidence(&input)
