@@ -1889,6 +1889,7 @@ release-units:
                 )
             })
             .collect::<BTreeSet<_>>();
+        let mut reached = BTreeSet::new();
 
         for (fixture, workspace) in [
             ("base", workspace("workflow-action-pins-base")),
@@ -1924,10 +1925,15 @@ release-units:
                             declared.contains(action),
                             "{fixture} {role} {job_id} uses the declared identity: {action}"
                         );
+                        reached.insert(action.to_owned());
                     }
                 }
             }
         }
+        assert_eq!(
+            reached, declared,
+            "the fixture set reaches every declared external Action"
+        );
     }
 
     const REPOSITORY_RELEASE_WORKFLOW: &str = r#"# maintained by the repository
