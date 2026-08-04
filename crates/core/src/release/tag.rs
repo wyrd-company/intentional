@@ -884,6 +884,38 @@ pub(crate) mod tests {
         assert!(error.to_string().contains("binds plan digest"), "{error}");
     }
 
+    /// The record's interpretation contract is bound to the checkout's own.
+    ///
+    /// Evidence assembly deletes a reconciliation of the plan's contract with
+    /// the assembling configuration, and this comparison is one of the two
+    /// reasons that reconciliation could not fail. The prose recording that
+    /// ground is what a future reader will use to decide whether restoring the
+    /// deleted guard is warranted, so the claim is held by an assertion rather
+    /// than left to the prose.
+    #[test]
+    fn rejects_a_record_written_under_another_interpretation_contract() {
+        let workspace = ReleasedWorkspace::new();
+        let object = workspace.mktag(
+            &workspace
+                .record(
+                    &workspace.release,
+                    &workspace.tag_name,
+                    &workspace.plan_digest,
+                )
+                .replace("contract: contract-1", "contract: contract-2"),
+        );
+        workspace.unpublish();
+        workspace.publish(&workspace.tag_name.clone(), &object);
+        let error = workspace
+            .verify()
+            .expect_err("the record was written under another interpretation contract");
+        assert!(
+            error.to_string().contains("records contract contract-2")
+                && error.to_string().contains("requires contract-1"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn rejects_a_projection_that_no_longer_matches_the_sealed_plan() {
         let workspace = ReleasedWorkspace::new();
