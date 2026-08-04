@@ -324,13 +324,16 @@ impl RecipeSteps {
 fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
     let identity = context.publication.identity();
     // RPM and APT distribute the deliverable itself rather than a descriptor
-    // that points at one, so their consumer path is the GitHub Release asset and
-    // the managed upload job places it there. What these adapters still lack is
-    // a maintained recipe of their own: nothing authenticates a package index,
-    // reads the destination back, or retrieves the release the way a consumer
-    // would. Deriving a publisher job without one would verify a publication it
-    // never performed, so the refusal names the recipe rather than the upload
-    // the design has since settled and this workflow now derives.
+    // that points at one, so the managed upload job places it on the draft
+    // Release and their publisher job resolves it from there. What these
+    // adapters still lack is a maintained recipe of their own, and the reason
+    // is the formats: neither defines a publishing protocol, so there is no
+    // destination a recipe could aim at and no command that reaches one. The
+    // repository that configures the publication supplies both, as
+    // `system-package-distribution` describes; until a recipe reads that
+    // configuration, a derived publisher job would verify a publication it
+    // never performed. The refusal names the recipe rather than the upload the
+    // design has since settled and this workflow now derives.
     if !recipe_is_derived(context.publication.packager, context.publication.publisher) {
         return Err(StepsRefusal {
             code: "maintained-recipe-underived",
