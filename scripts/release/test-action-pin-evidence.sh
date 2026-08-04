@@ -457,6 +457,20 @@ elif ! grep -q "declares no Action" "$directory/stderr"; then
   report "$directory"
 fi
 
+# Entries without their sequence key are not an Action pin table. They may fit
+# every entry rule, but no consumer can reach them as `declaration["actions"]`.
+case_number=$((case_number + 1))
+directory="$(new_case sequence-key-missing)"
+stub_git "$directory" "${AGREEING[@]}"
+declaration | tail -n +2 >"$directory/pins.yml"
+if run_check "$directory" "$directory/pins.yml"; then
+  echo "expected a declaration without its actions key to fail the check, but it passed" >&2
+  report "$directory"
+elif ! grep -q "carries no actions sequence key" "$directory/stderr"; then
+  echo "the missing actions key was refused without naming what was absent" >&2
+  report "$directory"
+fi
+
 # An entry header carrying anything beyond the constant is not the header
 # shape. Reading the constant and stepping over the rest of the line is exactly
 # the partial read this reader exists to refuse.

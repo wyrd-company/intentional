@@ -134,6 +134,7 @@ def declarations(text):
     entries = []
     current = None
     constants = set()
+    sequence_seen = False
     for number, line in enumerate(text.split("\n"), start=1):
         found = [character for character in line if character in AMBIGUOUS_BREAKS]
         if found:
@@ -149,6 +150,7 @@ def declarations(text):
         if SEQUENCE_KEY.fullmatch(line):
             if entries or current:
                 raise Unreadable(number, line, "the entry sequence reopens")
+            sequence_seen = True
             continue
         header = HEADER.fullmatch(line)
         if header:
@@ -182,6 +184,8 @@ def declarations(text):
             current and current["constant"],
         )
     finish(current, entries)
+    if not sequence_seen:
+        raise SystemExit("the declaration carries no actions sequence key")
     return entries
 
 
