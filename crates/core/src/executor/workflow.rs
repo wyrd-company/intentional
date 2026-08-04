@@ -3912,11 +3912,20 @@ exit 0
             })
             .collect::<BTreeMap<_, _>>();
 
+        // Derived from the Action rather than written down, so an identity the
+        // Action gains is projected the day it gains it instead of the day
+        // somebody remembers this list.
         assert_eq!(
-            projected.keys().cloned().collect::<Vec<_>>(),
-            ["global-tag", "plan-digest", "release-sha", "source-sha"],
-            "the four identities the handoff declares are projected"
+            projected.keys().cloned().collect::<BTreeSet<_>>(),
+            declared,
+            "the job projects exactly the identities its Action exposes"
         );
+        for identity in ["global-tag", "plan-digest", "release-sha", "source-sha"] {
+            assert!(
+                projected.contains_key(identity),
+                "the handoff declares {identity}, so the graph has to carry it"
+            );
+        }
         for (name, value) in &projected {
             assert_eq!(
                 value,

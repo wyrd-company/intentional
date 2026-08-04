@@ -482,6 +482,7 @@ permissions:
   contents: read
 outputs:
   global-tag: ${{ steps.@JOB@verified.outputs.global-tag }}
+  global-tag-object: ${{ steps.@JOB@verified.outputs.global-tag-object }}
   source-sha: ${{ steps.@JOB@verified.outputs.source-sha }}
   release-sha: ${{ steps.@JOB@verified.outputs.release-sha }}
   plan-digest: ${{ steps.@JOB@verified.outputs.plan-digest }}

@@ -29,6 +29,9 @@ outputs:
   global-tag:
     description: "Verified name of the annotated global release tag"
     value: ${{ steps.verify.outputs.global-tag }}
+  global-tag-object:
+    description: "Verified identity of the annotated global release tag object"
+    value: ${{ steps.verify.outputs.global-tag-object }}
   plan-digest:
     description: "Verified digest sealed inside the release plan"
     value: ${{ steps.verify.outputs.plan-digest }}
@@ -53,4 +56,4 @@ runs:
         set -euo pipefail
         intentional --directory "$INPUT_WORKING_DIRECTORY" verify release-tag |
           "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
-            source-sha release-sha global-tag plan-digest
+            source-sha release-sha global-tag global-tag-object plan-digest

@@ -22,7 +22,7 @@ for KEY in "$@"; do
   fi
   VALUE="$(printf '%s\n' "$INPUT" | sed -n "s/^$KEY: //p")"
   case "$KEY" in
-    source-sha | release-sha)
+    source-sha | release-sha | global-tag-object)
       if [[ ! "$VALUE" =~ ^[0-9a-f]{40}$ && ! "$VALUE" =~ ^[0-9a-f]{64}$ ]]; then
         echo "::error::$KEY is not a complete Git object identity."
         exit 1

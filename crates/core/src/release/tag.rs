@@ -44,6 +44,12 @@ pub struct VerifiedReleaseTag {
     pub release: String,
     /// Rendered name of the annotated global release tag.
     pub global_tag: String,
+    /// Identity of the annotated global tag object itself.
+    ///
+    /// Reproduction proves this object, not merely the name pointing at it, so
+    /// a consumer that binds evidence to a tag object is binding to something
+    /// this verification rebuilt from the accepted source commit.
+    pub global_tag_object: String,
     /// Digest sealed inside the release plan the tag binds.
     pub plan_digest: String,
     /// Version the reproduced plan assigns each release unit.
@@ -62,6 +68,7 @@ impl VerifiedReleaseTag {
             format!("source-sha: {}", self.source),
             format!("release-sha: {}", self.release),
             format!("global-tag: {}", self.global_tag),
+            format!("global-tag-object: {}", self.global_tag_object),
             format!("plan-digest: {}", self.plan_digest),
         ]
     }
@@ -90,6 +97,7 @@ pub fn verify_release_tag(root: &Path) -> Result<VerifiedReleaseTag> {
         source,
         release,
         global_tag: tag.name,
+        global_tag_object: tag.object,
         plan_digest,
         versions,
     })
@@ -459,7 +467,7 @@ fn discard_released_tags(clone: &Path, release: &str) -> Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
     const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
@@ -634,14 +642,88 @@ pub(crate) mod tests {
         assert_eq!(verified.release, workspace.release);
         assert_eq!(verified.global_tag, workspace.tag_name);
         assert_eq!(verified.plan_digest, workspace.plan_digest);
+        assert_eq!(verified.global_tag_object, workspace.tag_object);
         assert_eq!(
             verified.projections(),
             vec![
                 format!("source-sha: {}", workspace.source),
                 format!("release-sha: {}", workspace.release),
                 format!("global-tag: {}", workspace.tag_name),
+                format!("global-tag-object: {}", workspace.tag_object),
                 format!("plan-digest: {}", workspace.plan_digest),
             ]
+        );
+    }
+
+    /// The projected keys, the Action's outputs, and the projector's key list.
+    ///
+    /// Three documents have to spell one set and nothing joins them. A key this
+    /// command projects that the Action does not request is silently dropped;
+    /// one the Action declares an output for but never requests resolves empty
+    /// in a consumer's `needs` expression. Neither is a parse error and neither
+    /// fails a run that never reads the value, so the agreement is asserted
+    /// here rather than discovered by a consumer.
+    #[test]
+    fn projects_exactly_the_identities_its_action_declares_and_requests() {
+        let projected = ReleasedWorkspace::new()
+            .verify()
+            .expect("verified release tag")
+            .projections()
+            .iter()
+            .map(|line| {
+                line.split_once(": ")
+                    .expect("a projection is a key: value line")
+                    .0
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../actions/verify-release-tag/action.yml");
+        let document: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&path).expect("the Action document is readable"),
+        )
+        .expect("the Action document parses");
+
+        let declared = document
+            .get("outputs")
+            .and_then(serde_yaml::Value::as_mapping)
+            .expect("the Action declares outputs")
+            .keys()
+            .filter_map(serde_yaml::Value::as_str)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            declared, projected,
+            "the Action declares an output for exactly the identities the command projects"
+        );
+
+        // The requested keys are the ones the projector validates and writes.
+        // Reading them out of the rendered step body rather than repeating them
+        // keeps this bound to what the Action actually runs.
+        let body = document["runs"]["steps"]
+            .as_sequence()
+            .expect("the Action runs steps")
+            .iter()
+            .filter_map(|step| step.get("run").and_then(serde_yaml::Value::as_str))
+            .find(|run| run.contains("project-identities.sh"))
+            .expect("the Action projects through the shared projector");
+        let requested = body
+            .rsplit_once("project-identities.sh")
+            .expect("the projector invocation")
+            .1
+            .split_whitespace()
+            // Everything the invocation carries besides its keys is shell: the
+            // closing quote of the projector path, the quoted output file, and
+            // the line continuations. A key is what is left, so a mistyped one
+            // survives this filter and fails the comparison rather than being
+            // quietly skipped by a pattern that only matches valid keys.
+            .filter(|word| !word.contains(['"', '$', '\\']))
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            requested, projected,
+            "the Action requests exactly the identities the command projects"
         );
     }
 
