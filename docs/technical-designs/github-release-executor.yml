@@ -549,7 +549,10 @@ proposed-design:
     never carried. Naming both sides exactly is also what keeps a sibling entry
     out: reading one package's own two files leaves the other's alone, and
     installing them under their required names is what makes the result a
-    package `makepkg` can read.
+    package `makepkg` can read. Multiplicity is where the two adapters differ:
+    `brews` publishes every entry, while one Arch publication reaches one
+    package, so a second `aur` entry is built and never published and
+    conformance reports it.
 
     Authority follows the destination. Homebrew's tap is a GitHub repository, so
     its recipe mints an installation token naming that repository alone. The

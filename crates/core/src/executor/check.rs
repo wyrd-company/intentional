@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 use crate::executor::goreleaser;
 use crate::executor::recipe::{resolve_publications, Packager, SelectedPublication};
 use crate::executor::workflow::{compare_configured_workflow, ComparisonStatus};
+use crate::model::PublisherKind;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -121,6 +122,17 @@ fn native_packager_findings(
                 ));
             }
         }
+    }
+    // `brews` handles multiplicity by promoting every generated formula; `aur`
+    // cannot. One publication reaches one Arch package, so a second entry is
+    // built by the packager and then silently left unpublished. Saying so here
+    // is the only place an author learns it, because the derivation resolves the
+    // first entry and reports nothing about the rest.
+    if publication.publisher == PublisherKind::Aur && config.aur_names.len() > 1 {
+        findings.push(format!(
+            "{identity} publishes the first of the {} aur entries {file} declares; a maintained Arch publication reaches one package, so the others are built and never published",
+            config.aur_names.len()
+        ));
     }
     Ok(findings)
 }
@@ -409,6 +421,28 @@ aur:
                 "an nfpms declaration without the {format} format is reported: {findings:?}"
             );
         }
+    }
+
+    // A second entry is built by the packager and then never published, and the
+    // derivation says nothing about it: it resolves the first entry and stops.
+    // Conformance is the only place an author can learn this, so an author who
+    // declares two Arch packages and sees one appear has to be told which.
+    #[test]
+    fn reports_an_arch_declaration_a_maintained_publication_cannot_reach() {
+        let workspace = go_workspace("check-goreleaser-aur-multiple", "    aur: {}\n");
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace(
+                "  - name: example-tool-bin\n",
+                "  - name: example-tool-bin\n  - name: example-other-bin\n",
+            ),
+        );
+        let findings = packager_findings(&workspace);
+        assert!(
+            findings.iter().any(|finding| finding
+                .contains("component/aur/primary publishes the first of the 2 aur entries")),
+            "a second aur entry is reported: {findings:?}"
+        );
     }
 
     #[test]
