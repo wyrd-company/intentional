@@ -235,6 +235,21 @@ elif [[ "$(invocations_for "$directory" example-owner/example-action)" -ne 1 ]];
   report "$directory"
 fi
 
+# The ceiling asserted above is read out of the check itself, so it proves the
+# loop honours whatever it states and cannot notice the number changing. The
+# number is a claim of its own -- the check's docstring says it follows the
+# bounded-attempt shape the publication scripts already use -- so it is held to
+# that convention rather than to itself.
+case_number=$((case_number + 1))
+convention="$(grep -oE 'for _attempt in \{1\.\.[0-9]+\}' "$root/scripts/release/ensure-npm.sh" | grep -oE '[0-9]+' | tail -1 || true)"
+if [[ -z "$convention" ]]; then
+  echo "scripts/release/ensure-npm.sh no longer states the retry convention to hold the check to" >&2
+  failures=$((failures + 1))
+elif [[ "$ceiling" != "$convention" ]]; then
+  echo "the check retries $ceiling times but the repository convention is $convention attempts" >&2
+  failures=$((failures + 1))
+fi
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures of $case_number Action-pin evidence cases did not behave as stated." >&2
   exit 1
