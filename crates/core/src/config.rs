@@ -563,7 +563,7 @@ pub struct WorkspaceTagConfig {
     pub tag_after: Vec<String>,
 }
 
-/// One configured tag that declares no executor phase.
+/// One workspace tag that declares no executor phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnphasedTag {
     /// Canonical tag id.
