@@ -2452,7 +2452,7 @@ const PUBLISH_UPLOAD_STEP: &str = r#"  - name: @DELIVERABLE_NAME@
       for @ENVVAR@DELIVERABLE in "${@ENVVAR@DELIVERABLES[@]}"; do
         @ENVVAR@ASSET="$(basename "${@ENVVAR@DELIVERABLE}")"
         case "${@ENVVAR@ASSET}" in
-          ''|[-.]*|*[!A-Za-z0-9._+-]*)
+          -*|.*|*[!A-Za-z0-9._+-]*)
             printf 'the %s build produced Release asset name %s, which this release cannot carry: an asset name is written into a quoted handoff scalar and passed as its own argument, so it is held to letters, digits, dots, underscores, plus signs and inner hyphens\n' \
               "${@ENVVAR@SUBJECT_IDENTITY}" "${@ENVVAR@ASSET}" >&2
             exit 1
@@ -3638,13 +3638,27 @@ aur:
     // exists and is not wired in is the failure this prevents.
     #[test]
     fn derives_one_upload_job_every_build_precedes_and_every_publisher_follows() {
-        let workspace = go_workspace("workflow-upload-graph");
+        // The mixed workspace is what makes "every build job" mean more than
+        // "every build job that produces something for this job to place". A
+        // release whose every subject is hosted cannot tell the two apart, and
+        // the difference is only inert while a before-publication tag happens to
+        // order the rest.
+        let workspace = mixed_workspace("workflow-upload-graph");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
 
         let needs = job_needs(&jobs, UPLOAD_JOB);
         let builds = job_ids(&jobs, "intentional_build_");
-        assert!(!builds.is_empty(), "the release builds a subject");
+        assert!(
+            builds.len() > 1,
+            "the release builds a subject this job places and one it does not: {builds:?}"
+        );
+        assert!(
+            builds
+                .iter()
+                .any(|build| build.contains("library") && build.contains("npm")),
+            "one of those builds produces nothing for this job to place: {builds:?}"
+        );
         for build in &builds {
             assert!(
                 needs.contains(build),
@@ -3889,9 +3903,19 @@ aur:
     /// run; and the formula and package sources are descriptors their publisher
     /// jobs promote into repositories. One fixture carries all five kinds so a
     /// selection rule that admitted or dropped the wrong one is visible.
-    const GO_DISTRIBUTION: [(&str, &str); 9] = [
-        ("example-tool_1.0.0_linux_amd64.tar.gz", "amd64 archive"),
-        ("example-tool_1.0.0_linux_arm64.tar.gz", "arm64 archive"),
+    const GO_DISTRIBUTION: [(&str, &str); 11] = [
+        // No two of these carry the same number of bytes, and the stub serves a
+        // media type derived from each name. A fixture whose files agree on
+        // either cannot witness a document that records one asset's size or
+        // media type against another's name.
+        (
+            "example-tool_1.0.0_linux_amd64.tar.gz",
+            "linux amd64 archive bytes",
+        ),
+        (
+            "example-tool_1.0.0_linux_arm64.tar.gz",
+            "linux arm64 archive",
+        ),
         ("checksums.txt", "the published checksums"),
         ("example-tool_1.0.0_amd64.deb", "the Debian package"),
         ("example-tool-1.0.0.x86_64.rpm", "the RPM package"),
@@ -3900,7 +3924,12 @@ aur:
             "example-tool-1.0.0-1-x86_64.pkg.tar.zst",
             "the Arch package",
         ),
+        // All three documents the packager writes about its own run are staged,
+        // because the rule that excludes them names all three and a fixture
+        // carrying one witnesses only one of those exclusions.
         ("artifacts.json", "[]"),
+        ("metadata.json", "{}"),
+        ("config.yaml", "version: 2"),
         ("homebrew/Formula/example-tool.rb", "class ExampleTool"),
     ];
 
@@ -3948,6 +3977,17 @@ aur:
     const GH_RELEASE_STUB: &str = r#"#!/usr/bin/env bash
 printf '%s\n' "$*" >> "${GH_STUB_LOG}"
 touch "${GH_STUB_ASSETS}"
+media_type() {
+  if [ -n "${GH_STUB_MEDIA}" ]; then printf '%s' "${GH_STUB_MEDIA}"; return; fi
+  case "$1" in
+    *.tar.gz) printf 'application/gzip' ;;
+    *.tar.zst) printf 'application/zstd' ;;
+    *.deb) printf 'application/vnd.debian.binary-package' ;;
+    *.rpm) printf 'application/x-rpm' ;;
+    *.apk) printf 'application/vnd.android.package-archive' ;;
+    *) printf 'text/plain' ;;
+  esac
+}
 case "$1 $2" in
   "release view")
     if [ "${GH_STUB_RESOLVES}" != yes ]; then
@@ -3965,7 +4005,7 @@ case "$1 $2" in
       fi
       printf '%s\t%s\t%s\t%s\n' "${name}" \
         "$(( $(wc -l < "${GH_STUB_ASSETS}") + 100 ))" \
-        "$(wc -c < "${candidate}")" "${GH_STUB_MEDIA}" >> "${GH_STUB_ASSETS}"
+        "$(wc -c < "${candidate}")" "$(media_type "${name}")" >> "${GH_STUB_ASSETS}"
     done
     ;;
   "api --paginate")
@@ -3984,7 +4024,7 @@ exit 0
             .setting("GH_STUB_DRAFT", "true")
             .setting("GH_STUB_TAG", UPLOAD_TAG)
             .setting("GH_STUB_RELEASE", UPLOAD_RELEASE_ID)
-            .setting("GH_STUB_MEDIA", "application/octet-stream");
+            .setting("GH_STUB_MEDIA", "");
         stage_subject(
             &runner
                 .temp()
@@ -4124,6 +4164,33 @@ exit 0
             .collect::<BTreeMap<_, _>>();
 
         let handoff = written_handoff(&runner, "component_homebrew_primary");
+        // The inventory's heterogeneity is load-bearing rather than incidental.
+        // If every asset agreed on its size, or on its media type, a document
+        // that recorded one asset's value against another's name would read as
+        // correct below. Asserting it here keeps a later fixture edit from
+        // quietly retiring those comparisons.
+        assert_eq!(
+            handoff
+                .assets
+                .iter()
+                .map(|asset| asset.size)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            handoff.assets.len(),
+            "no two inventoried assets share a size: {:?}",
+            handoff.assets
+        );
+        assert!(
+            handoff
+                .assets
+                .iter()
+                .map(|asset| asset.media_type.as_str())
+                .collect::<BTreeSet<_>>()
+                .len()
+                > 1,
+            "the inventoried assets do not all share one media type: {:?}",
+            handoff.assets
+        );
         assert_eq!(handoff.identity(), "component/homebrew/primary");
         assert_eq!(handoff.repository, REPOSITORY_IDENTITY);
         assert_eq!(handoff.release_id.to_string(), UPLOAD_RELEASE_ID);
@@ -4274,12 +4341,32 @@ exit 0
         }
     }
 
-    /// A deliverable name no YAML scalar and no argument vector can carry.
+    /// Deliverable names this release cannot carry, and what each one reaches.
     ///
-    /// The name is a basename of whatever the packager wrote, and GoReleaser
+    /// A name is a basename of whatever the packager wrote, and GoReleaser
     /// builds its filenames from a repository-controlled `name_template`, so
-    /// this is a value the repository chooses in all but spelling.
-    const HOSTILE_ASSET: &str = "example-tool_1.0.0\"_linux_amd64.tar.gz";
+    /// each of these is a value the repository chooses in all but spelling.
+    ///
+    /// They are listed separately because they are separate claims reaching
+    /// separate sinks. The quote closes the handoff's YAML scalar; the leading
+    /// hyphen is an option rather than a name wherever the value reaches an
+    /// argument vector, which is every `gh` invocation that places it. A rule
+    /// written as one pattern is still several guarantees, and only a witness
+    /// each can tell which of them is still standing.
+    const HOSTILE_ASSETS: [(&str, &str); 3] = [
+        (
+            "example-tool_1.0.0\"_linux_amd64.tar.gz",
+            "a quote closes the handoff scalar the name is written into",
+        ),
+        (
+            "-oProxyCommand.tar.gz",
+            "a leading hyphen is an option rather than a name on the command line that places it",
+        ),
+        (
+            ".example-tool_1.0.0_linux_amd64.tar.gz",
+            "a leading dot is not a Release asset a consumer resolves",
+        ),
+    ];
 
     // The handoff is emitted by a shell writer that prints each scalar between
     // double quotes, so a name carrying a quote emits a document its consumer
@@ -4288,44 +4375,47 @@ exit 0
     // carries an asset no handoff can name. The refusal is therefore in the
     // placing step, before the first byte reaches the Release.
     #[test]
-    fn refuses_a_deliverable_name_no_handoff_scalar_could_carry_before_placing_it() {
+    fn refuses_every_deliverable_name_this_release_cannot_carry_before_placing_it() {
         let workspace = go_workspace("workflow-upload-hostile-name");
         converge(workspace.root(), WorkflowRole::Publish);
-        let inventory = Workspace::new("workflow-upload-hostile-name-inventory");
-        let runner = upload_runner(
-            "workflow-upload-hostile-name-runner",
-            &inventory.root().join("assets"),
-        );
-        std::fs::write(
-            runner
-                .temp()
-                .join("intentional_subject/intentional_subject-component_goreleaser/bytes")
-                .join(HOSTILE_ASSET),
-            "an archive named by a template",
-        )
-        .expect("the packager wrote the name it was told to");
 
-        let (script, environment) = upload_scripts(workspace.root(), &runner)
-            .into_iter()
-            .find(|(script, _)| script.contains("gh release upload"))
-            .expect("the job places deliverables");
-        let executed = runner.execute(&script, &environment);
+        for (index, (hostile, reaches)) in HOSTILE_ASSETS.into_iter().enumerate() {
+            let inventory = Workspace::new(&format!("workflow-upload-hostile-{index}-inventory"));
+            let runner = upload_runner(
+                &format!("workflow-upload-hostile-{index}-runner"),
+                &inventory.root().join("assets"),
+            );
+            std::fs::write(
+                runner
+                    .temp()
+                    .join("intentional_subject/intentional_subject-component_goreleaser/bytes")
+                    .join(hostile),
+                "an archive named by a template",
+            )
+            .expect("the packager wrote the name it was told to");
 
-        assert!(
-            !executed.succeeded,
-            "the name is refused: {}",
-            executed.invocations
-        );
-        assert!(
-            !executed.invocations.contains("release upload"),
-            "nothing is placed before the name is refused: {}",
-            executed.invocations
-        );
-        assert!(
-            executed.diagnostics.contains("Release asset name"),
-            "the refusal names what it refused: {:?}",
-            executed.diagnostics
-        );
+            let (script, environment) = upload_scripts(workspace.root(), &runner)
+                .into_iter()
+                .find(|(script, _)| script.contains("gh release upload"))
+                .expect("the job places deliverables");
+            let executed = runner.execute(&script, &environment);
+
+            assert!(
+                !executed.succeeded,
+                "{hostile:?} is refused, because {reaches}: {}",
+                executed.invocations
+            );
+            assert!(
+                !executed.invocations.contains("release upload"),
+                "nothing is placed before {hostile:?} is refused: {}",
+                executed.invocations
+            );
+            assert!(
+                executed.diagnostics.contains("Release asset name"),
+                "the refusal of {hostile:?} names what it refused: {:?}",
+                executed.diagnostics
+            );
+        }
     }
 
     // The media type is GitHub's rather than the packager's, and it reaches the
@@ -4517,6 +4607,22 @@ exit 0
             placed, PLACED_ASSETS,
             "the packager's own build metadata and its descriptors are not deliverables"
         );
+        // The rule names three self-documents, so all three are staged. A tree
+        // carrying one witnesses one exclusion and leaves the other two free to
+        // be dropped, which is the same fixture shape that let a barrier, a
+        // format mapping and a build dependency go unheld on this change.
+        for document in ["artifacts.json", "metadata.json", "config.yaml"] {
+            assert!(
+                GO_DISTRIBUTION
+                    .iter()
+                    .any(|(relative, _)| *relative == document),
+                "{document} is staged, so the exclusion that names it has a witness"
+            );
+            assert!(
+                !placed.contains(&document.to_owned()),
+                "{document} describes the packager's run rather than the release"
+            );
+        }
 
         // The formats come from the fixture's own packager configuration rather
         // than from a list this test also chose, so a derivation that stopped
