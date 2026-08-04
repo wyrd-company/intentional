@@ -140,10 +140,11 @@ proposed-design:
     names bound to secret names. Delivery is the one step whose authority
     Intentional does not derive, and a composite Action reads no secrets of its
     own, so a credential it needs arrives as an input the derived job passes.
-    Both names are validated at derivation. The list is empty for a destination
-    whose delivery needs no credential, and an empty list is written rather than
-    omitted, because a delivery that silently receives nothing and one that
-    needs nothing are different claims.
+    Derivation establishes that both names are well formed; whether the named
+    secret exists is answered in the job, where the repository's secrets are.
+    The list is empty for a destination whose delivery needs no credential, and
+    an empty list is written rather than omitted, because a delivery that
+    silently receives nothing and one that needs nothing are different claims.
 
     Every concrete publisher target supports a target-scoped `omit` list when
     its maintained recipe defines attached components. An adapter-level `omit`
@@ -715,10 +716,21 @@ proposed-design:
     version and architecture the release sealed, the sealed digest, and the
     index coordinates the publication configured. A composite Action reads no
     secrets of its own, so any credential delivery needs is passed as an input
-    from a secret the configuration names; a named secret is validated at
-    derivation and reaches the step as an input rather than an expression
-    expanded into a script. The publisher job itself holds `contents: read` and
-    mints nothing.
+    from a secret the configuration names, and reaches the step as an input
+    rather than an expression expanded into a script. The publisher job itself
+    holds `contents: read` and mints nothing.
+
+    Where a named secret is answered for is not where it is named. Derivation
+    runs against configuration and a repository's secret inventory is not there,
+    and a workflow that references a secret the repository never set is not
+    refused at run time either — the reference resolves to an empty string and
+    the step proceeds. Derivation therefore establishes the shape of both names
+    and stops. The derived job reads each resolved secret before it invokes
+    delivery and fails on an empty one, naming the input whose secret did not
+    resolve and never the value it read. The two cases this cannot separate, a
+    secret the repository never set and one it set empty, have the same answer:
+    an empty credential is not a credential, and delivery must not be handed one
+    and left to discover it.
 
     Outward, the recipe reads the step's success and nothing else. A delivery
     step that reported what it published would be reporting on itself, and no
