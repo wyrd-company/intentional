@@ -242,7 +242,7 @@ pub fn arch_package_name(
 }
 
 /// Whether one native package declaration invokes GoReleaser's template language.
-pub fn is_templated_name(name: &str) -> bool {
+pub(crate) fn is_templated_name(name: &str) -> bool {
     name.contains("{{")
 }
 
@@ -289,7 +289,7 @@ pub fn subject_identity(directory: &Path) -> Result<Option<String>> {
 }
 
 /// Resolve the subject identity from native evidence already read by a caller.
-pub fn subject_identity_from(
+pub(crate) fn subject_identity_from(
     directory: &Path,
     config: Option<&GoReleaserConfig>,
 ) -> Result<Option<String>> {
