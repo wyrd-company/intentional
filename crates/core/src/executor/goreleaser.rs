@@ -197,6 +197,13 @@ fn main_directories(document: &serde_yaml::Value) -> Vec<PathBuf> {
 /// at the file it looks for and would otherwise push one project's sources to
 /// another project's package. The rule therefore lives here, once, and both the
 /// declared-name and project-name paths go through it.
+///
+/// One deliberate divergence: a name of nothing but whitespace is treated as an
+/// absent one, where the packager tests for the empty string exactly and would
+/// carry the spaces into the file it writes. Reproducing a packager's behaviour
+/// is not a goal when that behaviour lets a name of spaces become a destination
+/// the credentialed promotion body reaches. The rule implemented here may be
+/// stricter than the rule modelled, provided the divergence is stated.
 pub fn arch_package_name(declared: Option<&str>, project: &str) -> String {
     let name = declared
         .map(str::trim)
@@ -266,7 +273,6 @@ mod tests {
         for (declared, expected) in [
             (Some("example-tool"), "example-tool-bin"),
             (Some("example-tool-bin"), "example-tool-bin"),
-            (Some("  "), "example-project-bin"),
             (None, "example-project-bin"),
         ] {
             assert_eq!(
@@ -275,6 +281,18 @@ mod tests {
                 "{declared:?} resolves the package the packager writes"
             );
         }
+    }
+
+    // Stated as the divergence it is rather than as the packager's rule: the
+    // packager tests for the empty string exactly and would carry the spaces
+    // into the name it writes. A name of spaces reaching the credentialed
+    // promotion body is not behaviour worth reproducing.
+    #[test]
+    fn treats_a_whitespace_only_arch_name_as_an_absent_one() {
+        assert_eq!(
+            arch_package_name(Some("  "), "example-project"),
+            "example-project-bin"
+        );
     }
 
     // Position is the identity. An entry that names itself is not necessarily
