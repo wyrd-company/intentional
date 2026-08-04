@@ -484,4 +484,70 @@ mod tests {
             "an agreeing document reports nothing"
         );
     }
+
+    /// The same battery over the four components a phase document carries.
+    ///
+    /// A phase document is compared by a shorter list than a fragment, so its
+    /// components need a battery of their own: a comparison that stopped
+    /// reading one of them would still be caught by the fragment battery on the
+    /// components the two lists share, and never on the ones they do not.
+    #[test]
+    fn names_each_identity_component_a_phase_document_spells_differently() {
+        let expected = identity();
+        /// One named component of a phase document, and how to spell it wrongly.
+        type Corruption = (&'static str, fn(&mut [String; 4]));
+        let corruptions: [Corruption; 4] = [
+            ("source-commit", |observed| {
+                observed[0] = "9".repeat(40);
+            }),
+            ("release-commit", |observed| {
+                observed[1] = "9".repeat(40);
+            }),
+            ("global-tag.name", |observed| {
+                observed[2] = "release/9.9.9".to_owned();
+            }),
+            ("plan-digest", |observed| {
+                observed[3] = format!("sha256:{}", "8".repeat(64));
+            }),
+        ];
+        let agreeing = [
+            expected.source_commit.clone(),
+            expected.release_commit.clone(),
+            expected.global_tag.name.clone(),
+            expected.plan_digest.clone(),
+        ];
+        for (field, corrupt) in corruptions {
+            let mut observed = agreeing.clone();
+            corrupt(&mut observed);
+            let findings = phase_disagreements(
+                "phase.yml",
+                &expected,
+                &observed[0],
+                &observed[1],
+                &observed[2],
+                &observed[3],
+            );
+            assert_eq!(
+                findings.len(),
+                1,
+                "corrupting {field} alone reports {field} alone: {findings:?}"
+            );
+            assert!(
+                findings[0].contains(field),
+                "the {field} finding names {field}: {findings:?}"
+            );
+        }
+        assert!(
+            phase_disagreements(
+                "phase.yml",
+                &expected,
+                &agreeing[0],
+                &agreeing[1],
+                &agreeing[2],
+                &agreeing[3],
+            )
+            .is_empty(),
+            "an agreeing document reports nothing"
+        );
+    }
 }

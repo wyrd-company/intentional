@@ -2562,6 +2562,57 @@ subjects: []
         );
     }
 
+    /// A plan whose own seal is stale is refused even when the manifest agrees.
+    ///
+    /// The manifest here claims the digest the rewritten payload really
+    /// produces, so the comparison against the recomputed digest is satisfied
+    /// and only the plan's own seal is wrong. That is the input `verify_digest`
+    /// exists for, and without it a self-inconsistent plan would be accepted.
+    /// It is also what makes reading the recomputed digest rather than the seal
+    /// a choice with a witness: taking `plan.digest` here would refuse for the
+    /// other reason and this assertion would name the wrong one.
+    #[test]
+    fn refuses_a_sealed_plan_whose_own_seal_is_stale_though_the_manifest_agrees() {
+        let workspace = workspace("assemble-plan-stale-seal");
+        let input = workspace.root().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        std::fs::write(
+            input.join("publisher-evidence.yml"),
+            fragment("component", "npm", "primary"),
+        )
+        .expect("fragment");
+        let handoff = candidate(&workspace);
+
+        // The release notes are covered by the seal and read by nothing in
+        // assembly, so this rewrite reaches the digest and no other binding.
+        let mut rewritten = sealed_plan();
+        let stale = rewritten.digest.clone();
+        rewritten.release_units[0].release_notes = "## 1.0.0\n\nrewritten\n".to_owned();
+        let recomputed = rewritten.payload_digest().expect("recompute");
+        assert_ne!(recomputed, stale, "the rewrite reached the payload");
+        rewritten.digest = stale;
+        let bytes = format!("{}\n", rewritten.to_canonical_json().expect("plan bytes"));
+        std::fs::write(handoff.join(RELEASE_PLAN_FILE), &bytes).expect("plan");
+        std::fs::write(
+            handoff.join(RELEASE_CANDIDATE_MANIFEST),
+            candidate_manifest()
+                .replace(
+                    &crate::evidence::digest_bytes(sealed_plan_bytes().as_bytes()),
+                    &crate::evidence::digest_bytes(bytes.as_bytes()),
+                )
+                .replace(&plan_digest(), &recomputed),
+        )
+        .expect("manifest");
+
+        let output = workspace.root().join("release-evidence");
+        let error = assemble(&request(&workspace, &handoff, &input, &output))
+            .expect_err("a plan whose own seal is stale is refused");
+        assert!(
+            error.to_string().contains("release plan digest mismatch"),
+            "the plan's own seal is what disagreed: {error}"
+        );
+    }
+
     /// The transported plan bytes are the ones the manifest inventoried.
     #[test]
     fn refuses_a_sealed_plan_the_manifest_did_not_inventory() {
