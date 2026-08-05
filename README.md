@@ -139,6 +139,13 @@ interpretation contract, and plan digest. Named workspace tags provide
 repository-level records and continuous-delivery triggers without becoming a
 release unit's version authority.
 
+Intentional uses one workspace-root release unit for its shared Cargo and npm
+version. Its unphased `{version}` workspace tag triggers the release workflow,
+while `intentional@{version}` records the release unit before publication. The
+unit contains three publication packages: `core` at `crates/core` and `cli` at
+`crates/cli` publish with Cargo, and `launcher` at `npm` publishes with npm.
+Homebrew remains undeclared until a maintained non-Go route exists.
+
 When init reconciles an existing configuration, current non-development npm
 manifest dependencies own edges between npm release units. Removing such a
 manifest dependency removes its `depends-on` edge. Configured edges to release

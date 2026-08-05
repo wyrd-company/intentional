@@ -3,22 +3,93 @@ contract: contract-2
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility
+discovery:
+  managed-paths:
+  - detector: cargo-package
+    path: crates/cli/Cargo.toml
+    release-unit: intentional
+    package: cli
+  - detector: cargo-package
+    path: crates/core/Cargo.toml
+    release-unit: intentional
+    package: core
+  - detector: npm-package
+    path: npm/package.json
+    release-unit: intentional
+    package: launcher
+  excluded-paths:
+  - detector: cargo-package
+    path: crates/core/tests/fixtures/ecosystems/Cargo.toml
+    evidence-digest: sha256:81b3cca51daeff8ab13484d713c7d68823008ee25de8927505bbedc8ef8ed854
+  - detector: github-action
+    path: action.yml
+    evidence-digest: sha256:38aa808d9c07d45f3b3702280c27aca0fed36ab28084a3a0aff41dd88ca8fd9a
+  - detector: github-action
+    path: actions/assemble-evidence/action.yml
+    evidence-digest: sha256:620d4e539bea664d9cd45c2f73bb2bad2eb74f759898c829794ebbefdb415f28
+  - detector: github-action
+    path: actions/contribute/action.yml
+    evidence-digest: sha256:f6fdfcdd99e071316e60501ce147a323a025a6d2bb9d788da1e190ad050e2d43
+  - detector: github-action
+    path: actions/prepare-release/action.yml
+    evidence-digest: sha256:2150218f061bff170c6721883d272d506f4aae7e552817f11f759c36c51c5a7c
+  - detector: github-action
+    path: actions/record-built-subject/action.yml
+    evidence-digest: sha256:2c84cfdc5a5b35adffc8dc5094134582fca3b53a2bf1672e6f971cc3331a90a0
+  - detector: github-action
+    path: actions/seal-phase-tags/action.yml
+    evidence-digest: sha256:7c2669a43f2b780da1461b38092be9ba5e61f56416320cf5381d3a5419809254
+  - detector: github-action
+    path: actions/verify-handoff/action.yml
+    evidence-digest: sha256:5108fe4c95aa4c8e69719ffcaeba52647fc6ac4b4069a55a8f491e55429b2089
+  - detector: github-action
+    path: actions/verify-publication/action.yml
+    evidence-digest: sha256:1be0cc02c7a1a295645b3fb4b372ae8ee2f70d3b701bb9c1c7e95619d316def2
+  - detector: github-action
+    path: actions/verify-release-tag/action.yml
+    evidence-digest: sha256:91c078816a56b864a5b4404fe77fc6088e8cfc9b8384feaab43041992dbee54a
+  - detector: npm-package
+    path: crates/core/tests/fixtures/ecosystems/package.json
+    evidence-digest: sha256:afa191b447a065141db78ba646e99b81e111434cad86ff49e4952b83ed478956
+  - detector: npm-package
+    path: scripts/release/fixtures/garden-notes/package.json
+    evidence-digest: sha256:57ca7d4eeec53cdbda8a2b7f5c4e0b66b694b82f72a95335c8ccad5d3be54036
 release-units:
   intentional:
     path: .
     projections:
-      - adapter: toml
-        file: Cargo.toml
-        pointer: /workspace/package/version
-        mode: committed
-      - adapter: toml
-        file: crates/cli/Cargo.toml
-        pointer: /dependencies/intentional-core/version
-        mode: committed
-      - adapter: npm
-        file: npm/package.json
-        mode: committed
+    - adapter: toml
+      file: Cargo.toml
+      mode: committed
+      pointer: /workspace/package/version
+    - adapter: toml
+      file: crates/cli/Cargo.toml
+      mode: committed
+      pointer: /dependencies/intentional-core/version
+    - adapter: npm
+      file: npm/package.json
+      mode: committed
     tags:
       primary:
         role: primary
-        template: "{version}"
+        template: 'intentional@{version}'
+        require-phase: before-publication
+    packages:
+      cli:
+        path: crates/cli
+        cargo: {}
+      core:
+        path: crates/core
+        cargo: {}
+      launcher:
+        path: npm
+        npm: {}
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release:
+      path: .github/workflows/release.yml
+    publish:
+      path: .github/workflows/publish.yml

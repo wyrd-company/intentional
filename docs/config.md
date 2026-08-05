@@ -178,6 +178,14 @@ and derives the protected release environment from the job namespace. The
 default reserves `intentional_`, `INTENTIONAL_`, and the `intentional-release`
 environment. A gate may not use the reserved job namespace.
 
+Intentional's own configuration keeps its two workspace-versioned crates and
+npm launcher in one release unit. The unit has three packages and three
+publications: `core` at `crates/core` and `cli` at `crates/cli` declare `cargo`,
+and `launcher` at `npm` declares `npm`. The unphased workspace tag is
+`{version}`. The release-unit tag is `intentional@{version}` with
+`require-phase: before-publication`. Homebrew is not configured until a
+maintained non-Go route exists.
+
 `intentional executor init` creates or resumes
 `.intentional/executor-init-plan.yml`. Set each candidate `resolution` to
 `accept` or `decline` and rerun the command; it exits with code `2` while any
