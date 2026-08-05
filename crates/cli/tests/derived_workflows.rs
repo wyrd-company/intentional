@@ -165,6 +165,23 @@ fn minimum_rust_job_installs_the_actionlint_version_its_tests_require() {
     );
 }
 
+#[test]
+fn hosted_gate_queries_every_check_for_the_selected_pull_request() {
+    let taskfile = std::fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
+    let document: Value = serde_yaml::from_str(&taskfile).expect("Taskfile parses");
+    let gate = &document["tasks"]["hosted:check"];
+    assert_eq!(
+        gate["requires"]["vars"].as_sequence(),
+        Some(&vec![Value::String("PR".to_owned())]),
+        "hosted status requires an explicit pull request"
+    );
+    assert_eq!(
+        gate["cmds"][0].as_str(),
+        Some("gh pr checks {{ .PR }}"),
+        "hosted status reads every check instead of trusting the local gate set"
+    );
+}
+
 /// Recipe identity carried by a derived publisher's shell environment.
 fn recipe_identity(step: &Value) -> Option<(String, String, String)> {
     let environment = step["env"].as_mapping()?;
