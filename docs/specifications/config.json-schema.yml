@@ -196,9 +196,9 @@ $defs:
       homebrew:
         $ref: "#/$defs/homebrew-publisher"
       rpm:
-        $ref: "#/$defs/system-package-publisher"
+        $ref: "#/$defs/rpm-publisher"
       apt:
-        $ref: "#/$defs/system-package-publisher"
+        $ref: "#/$defs/apt-publisher"
       aur:
         $ref: "#/$defs/system-package-publisher"
       oci:
@@ -239,6 +239,39 @@ $defs:
   system-package-publisher:
     type: object
     additionalProperties: false
+  system-package-delivery:
+    type: object
+    required:
+      - delivery-action
+      - base-url
+      - public-signing-key-url
+      - observation-deadline
+      - with
+    properties:
+      delivery-action: { type: string, minLength: 1 }
+      base-url: { type: string, minLength: 1 }
+      public-signing-key-url: { type: string, minLength: 1 }
+      observation-deadline: { type: integer, minimum: 1 }
+      with:
+        type: object
+        additionalProperties: { type: string }
+  rpm-publisher:
+    unevaluatedProperties: false
+    allOf:
+      - $ref: "#/$defs/system-package-delivery"
+      - type: object
+        required: [ channel ]
+        properties:
+          channel: { type: string, minLength: 1 }
+  apt-publisher:
+    unevaluatedProperties: false
+    allOf:
+      - $ref: "#/$defs/system-package-delivery"
+      - type: object
+        required: [ suite, component ]
+        properties:
+          suite: { type: string, minLength: 1 }
+          component: { type: string, minLength: 1 }
   github-repository:
     type: string
     pattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"

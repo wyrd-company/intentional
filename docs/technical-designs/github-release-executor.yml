@@ -170,11 +170,12 @@ proposed-design:
     because their formats define no destination to derive one from. Each mapping
     names the repository-owned delivery Action, the base URL its consumers read,
     the URL serving the public signing key that authenticates its index, the
-    retrieval mode its destination admits, the deadline its arrangement requires
-    expressed in seconds, and
-    the index coordinates the format needs: a suite and component for APT, a
-    channel for RPM. A mapping missing any of these is a semantic configuration
-    failure, because each one is a thing no evidence can supply.
+    deadline its arrangement requires expressed in seconds, and the index
+    coordinates the format needs: a suite and component for APT, a channel for
+    RPM. These adapters support public repositories, and their consumer
+    retrieval is always anonymous. A mapping missing any required member is a
+    semantic configuration failure, because each one is a thing no evidence can
+    supply.
 
     A mapping also carries the `with:` block its delivery Action requires,
     written as the workflow would spell it. Delivery is the one step whose
@@ -1112,10 +1113,8 @@ proposed-design:
     derivation. RPM and APT recipe changes integrate on top of this contract and
     identify the package whose native artifact they distribute. Package identity
     changes selection and evidence addressing; it grants no retrieval authority.
-    An RPM or APT destination requiring authenticated consumer retrieval still
-    needs a credential-bearing scratch-client seam that can consume sealed
-    configuration without exposing delivery `with:` values. No evidence records
-    authenticated retrieval until that seam exists.
+    RPM and APT destinations are public, and their retrieval runs without a
+    credential.
 
   external-publisher-authentication: >-
     Publisher adapters prefer registry-supported trusted publishing. Each
@@ -1337,11 +1336,10 @@ proposed-design:
     evidence fragment may record is fixed before the retrieval runs, so a
     recipe never chooses between reporting its retrieval faithfully and passing
     verification. A recipe whose destination it knows fixes the mode itself. A
-    system-package recipe reaches a destination its configuration supplies, and
-    that configuration fixes the mode instead, because whether a repository
-    serves an anonymous client is a property of the repository rather than of
-    the format. Each adapter defines a bounded eventual-consistency policy
-    containing retryable pending responses, intervals, backoff, and a deadline,
+    system-package recipe reaches a public destination its configuration
+    supplies and fixes public retrieval itself. Each adapter defines a bounded
+    eventual-consistency policy containing retryable pending responses,
+    intervals, backoff, and a deadline,
     and an adapter whose destination is configured takes its deadline from that
     configuration. A missing or not-yet-indexed result
     remains pending until the deadline, while an observable identity, checksum,

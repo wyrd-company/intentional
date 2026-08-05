@@ -1862,6 +1862,11 @@ fn publication_jobs(
         "${{{{ runner.temp }}}}/{}evidence/{slug}.yml",
         namespaces.job
     );
+    let delivery_namespace = namespaces
+        .job
+        .trim_end_matches('_')
+        .replace('_', "-")
+        .to_lowercase();
     // The recipe's own steps are written by the module that owns each
     // destination, and they read the sealed subject from the build job's
     // outputs rather than from a value they assert, so the observation they
@@ -1875,6 +1880,7 @@ fn publication_jobs(
         observation: &observation,
         root,
         work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
+        delivery_namespace: &delivery_namespace,
     })
     .map_err(|refusal| {
         let path = refusal
@@ -3016,6 +3022,491 @@ aur:
             )
             .write("component/.goreleaser.yaml", GORELEASER_CONFIG);
         workspace
+    }
+
+    const SYSTEM_PACKAGE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release: { template: '{version}' }
+github:
+  prefix: release-automation
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml, gates: [ artifact_check ] }
+release-units:
+  component:
+    path: component
+    packages:
+      package:
+        path: .
+        rpm:
+          delivery-action: .github/actions/deliver-rpm
+          base-url: https://packages.invalid/rpm
+          public-signing-key-url: https://packages.invalid/key.asc
+          observation-deadline: 47
+          channel: stable
+          with:
+            credential: '${{ secrets.DELIVERY_TOKEN }}'
+            variable: '${{ vars.DELIVERY_BUCKET }}'
+            literal: unchanged
+            unavailable-context: '${{ matrix.destination }}'
+        apt:
+          delivery-action: .github/actions/deliver-apt
+          base-url: https://packages.invalid/apt
+          public-signing-key-url: https://packages.invalid/key.asc
+          observation-deadline: 53
+          suite: current
+          component: main
+          with: {}
+    tags:
+      staged: { role: primary, template: '{id}/staged@{version}', require-phase: before-publication }
+      published: { role: projection, template: '{id}/published@{version}', require-phase: after-publication }
+"#;
+
+    fn delivery_action(inputs: &[&str], using: &str) -> String {
+        let inputs = inputs
+            .iter()
+            .map(|name| format!("  {name}: {{}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("name: delivery\ninputs:\n{inputs}\nruns:\n  using: {using}\n  steps:\n    - shell: bash\n      run: 'true'\n")
+    }
+
+    fn system_package_workspace(label: &str) -> Workspace {
+        let workspace = go_workspace(label);
+        workspace.write(".intentional/config.yml", SYSTEM_PACKAGE_CONFIG);
+        let common = [
+            "release-automation-package-path",
+            "release-automation-format",
+            "release-automation-name",
+            "release-automation-version",
+            "release-automation-architecture",
+            "release-automation-digest",
+        ];
+        let mut rpm = common.to_vec();
+        rpm.extend([
+            "release-automation-rpm-channel",
+            "credential",
+            "variable",
+            "literal",
+            "unavailable-context",
+        ]);
+        let mut apt = common.to_vec();
+        apt.extend([
+            "release-automation-apt-suite",
+            "release-automation-apt-component",
+        ]);
+        workspace
+            .write(
+                ".github/actions/deliver-rpm/action.yml",
+                &delivery_action(&rpm, "composite"),
+            )
+            .write(
+                ".github/actions/deliver-apt/action.yaml",
+                &delivery_action(&apt, "composite"),
+            );
+        workspace
+    }
+
+    fn blocked_diagnostics(workspace: &Workspace) -> Vec<String> {
+        let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+            .expect("comparison runs");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        comparison
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn derives_system_package_delivery_calls_under_the_non_default_prefix() {
+        let workspace = system_package_workspace("system-package-prefix");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow parses");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        for (job, coordinate) in [
+            (
+                "release_automation_publish_component_package_rpm_primary",
+                "release-automation-rpm-channel",
+            ),
+            (
+                "release_automation_publish_component_package_apt_primary",
+                "release-automation-apt-suite",
+            ),
+        ] {
+            let step = jobs[job]["steps"]
+                .as_sequence()
+                .expect("steps")
+                .iter()
+                .find(|step| {
+                    step["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Deliver "))
+                })
+                .expect("delivery step");
+            assert!(step["with"]
+                .get("release-automation-package-path")
+                .is_some());
+            assert!(step["with"].get(coordinate).is_some());
+            assert!(step["with"].get("intentional-package-path").is_none());
+            assert!(step["uses"]
+                .as_str()
+                .expect("uses")
+                .starts_with("./.github/actions/deliver-"));
+        }
+        let rpm = &jobs["release_automation_publish_component_package_rpm_primary"]["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Deliver "))
+            })
+            .expect("delivery step")["with"];
+        assert_eq!(
+            rpm["credential"].as_str(),
+            Some("${{ secrets.DELIVERY_TOKEN }}")
+        );
+        assert_eq!(
+            rpm["variable"].as_str(),
+            Some("${{ vars.DELIVERY_BUCKET }}")
+        );
+        assert_eq!(rpm["literal"].as_str(), Some("unchanged"));
+        assert_eq!(
+            rpm["unavailable-context"].as_str(),
+            Some("${{ matrix.destination }}")
+        );
+    }
+
+    #[test]
+    fn refuses_a_delivery_action_that_is_not_composite() {
+        let workspace = system_package_workspace("system-package-kind");
+        workspace.write(
+            ".github/actions/deliver-rpm/action.yml",
+            &delivery_action(&[], "node20"),
+        );
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("runs.using: composite")));
+    }
+
+    #[test]
+    fn refuses_a_delivery_action_missing_a_reserved_input() {
+        let workspace = system_package_workspace("system-package-reserved");
+        workspace.write(
+            ".github/actions/deliver-rpm/action.yml",
+            &delivery_action(&["release-automation-format"], "composite"),
+        );
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("reserved input release-automation-package-path")));
+    }
+
+    #[test]
+    fn refuses_a_configured_delivery_key_the_action_does_not_declare() {
+        let workspace = system_package_workspace("system-package-configured-key");
+        let metadata = std::fs::read_to_string(
+            workspace
+                .root()
+                .join(".github/actions/deliver-rpm/action.yml"),
+        )
+        .expect("metadata");
+        workspace.write(
+            ".github/actions/deliver-rpm/action.yml",
+            &metadata.replace("  credential: {}\n", ""),
+        );
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("configured input \"credential\"")));
+    }
+
+    #[test]
+    fn refuses_an_uncovered_required_delivery_input() {
+        let workspace = system_package_workspace("system-package-required");
+        let path = workspace
+            .root()
+            .join(".github/actions/deliver-rpm/action.yml");
+        let metadata = std::fs::read_to_string(&path)
+            .expect("metadata")
+            .replace("inputs:\n", "inputs:\n  uncovered: { required: true }\n");
+        workspace.write(".github/actions/deliver-rpm/action.yml", &metadata);
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("requires input \"uncovered\" without a default")));
+    }
+
+    #[test]
+    fn refuses_any_configured_key_inside_the_derived_namespace() {
+        let workspace = system_package_workspace("system-package-namespace");
+        let config = SYSTEM_PACKAGE_CONFIG.replace(
+            "          with:\n            credential:",
+            "          with:\n            release-automation-future: plain\n            credential:",
+        );
+        workspace.write(".intentional/config.yml", &config);
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("release-automation-future")
+                && message.contains("reserved namespace")));
+    }
+
+    #[test]
+    fn comparison_revalidates_delivery_metadata_without_workflow_drift() {
+        let workspace = system_package_workspace("system-package-revalidate");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let before = workflow(workspace.root(), WorkflowRole::Publish);
+        let path = workspace
+            .root()
+            .join(".github/actions/deliver-rpm/action.yml");
+        let metadata = std::fs::read_to_string(&path)
+            .expect("metadata")
+            .replace("  release-automation-digest: {}\n", "");
+        workspace.write(".github/actions/deliver-rpm/action.yml", &metadata);
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("release-automation-digest")));
+        assert_eq!(workflow(workspace.root(), WorkflowRole::Publish), before);
+    }
+
+    fn run_apt_establishment(
+        label: &str,
+        name: &str,
+        version: &str,
+        architecture: &str,
+    ) -> (bool, String) {
+        let workspace = system_package_workspace(label);
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow");
+        let job = &document["jobs"]["release_automation_publish_component_package_apt_primary"];
+        let step = job["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Establish "))
+            })
+            .expect("establishment step");
+        let temporary = workspace.root().join("runner");
+        let subject = PathBuf::from(
+            step["env"]
+                .as_mapping()
+                .expect("environment")
+                .iter()
+                .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_SUBJECT")))
+                .and_then(|(_, value)| value.as_str())
+                .expect("subject path")
+                .replace("${{ runner.temp }}", &temporary.display().to_string()),
+        );
+        std::fs::create_dir_all(&subject).expect("subject");
+        let package = subject.join("sample-command_1.2.3.deb");
+        std::fs::write(&package, "sealed package bytes").expect("package");
+        let digest = crate::evidence::digest_bytes(b"sealed package bytes");
+        let stubs = temporary.join("stubs");
+        std::fs::create_dir_all(&stubs).expect("stubs");
+        let dpkg = stubs.join("dpkg-deb");
+        std::fs::write(&dpkg, "#!/usr/bin/env bash\ncase \"${*: -1}\" in Package) printf '%s\\n' \"${FAKE_NAME}\" ;; Version) printf '%s\\n' \"${FAKE_VERSION}\" ;; Architecture) printf '%s\\n' \"${FAKE_ARCHITECTURE}\" ;; esac\n").expect("stub");
+        let status = std::process::Command::new("chmod")
+            .args(["+x", dpkg.to_str().expect("path")])
+            .status()
+            .expect("chmod");
+        assert!(status.success());
+        let output_file = temporary.join("outputs");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(step["run"].as_str().expect("run"))
+            .current_dir(workspace.root())
+            .env_clear()
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("GITHUB_OUTPUT", &output_file)
+            .env("FAKE_NAME", name)
+            .env("FAKE_VERSION", version)
+            .env("FAKE_ARCHITECTURE", architecture);
+        for (key, value) in step["env"].as_mapping().expect("env") {
+            let value = value
+                .as_str()
+                .expect("value")
+                .replace("${{ runner.temp }}", &temporary.display().to_string())
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.version }}",
+                    "1.2.3",
+                )
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.digest }}",
+                    &digest,
+                );
+            command.env(key.as_str().expect("key"), value);
+        }
+        let output = command.output().expect("establishment runs");
+        (
+            output.status.success(),
+            format!(
+                "{}{}",
+                std::fs::read_to_string(output_file).unwrap_or_default(),
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        )
+    }
+
+    #[test]
+    fn refuses_a_package_whose_declared_name_disagrees_with_the_release() {
+        assert!(!run_apt_establishment("system-package-name", "other-command", "1.2.3", "amd64").0);
+    }
+
+    #[test]
+    fn refuses_a_package_whose_declared_version_disagrees_with_the_release() {
+        assert!(
+            !run_apt_establishment("system-package-version", "example-tool", "1.2.2", "amd64").0
+        );
+    }
+
+    #[test]
+    fn passes_each_package_declared_architecture_without_comparing_it() {
+        for architecture in ["amd64", "arm64"] {
+            let (success, outputs) = run_apt_establishment(
+                &format!("system-package-architecture-{architecture}"),
+                "example-tool",
+                "1.2.3",
+                architecture,
+            );
+            assert!(success, "{architecture} establishes: {outputs}");
+            assert!(outputs
+                .lines()
+                .any(|line| line == format!("architecture={architecture}")));
+        }
+    }
+
+    fn run_apt_readback(label: &str, scenario: &str) -> bool {
+        let workspace = system_package_workspace(label);
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow");
+        let step = document["jobs"]["release_automation_publish_component_package_apt_primary"]
+            ["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Read back "))
+            })
+            .expect("readback step");
+        let temporary = workspace.root().join("runner-readback");
+        let subject = PathBuf::from(
+            step["env"]
+                .as_mapping()
+                .expect("environment")
+                .iter()
+                .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_SUBJECT")))
+                .and_then(|(_, value)| value.as_str())
+                .expect("subject path")
+                .replace("${{ runner.temp }}", &temporary.display().to_string()),
+        );
+        std::fs::create_dir_all(&subject).expect("subject");
+        std::fs::write(subject.join("sample-command.deb"), "sealed package bytes")
+            .expect("package");
+        let digest = crate::evidence::digest_bytes(b"sealed package bytes");
+        let packages = "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 7c2aa18a7daff6559702550c3f6c3a15e1234a870a81d36402f26650211b9708\n\n";
+        let packages_digest = crate::evidence::digest_bytes(packages.as_bytes())
+            .trim_start_matches("sha256:")
+            .to_owned();
+        let stubs = temporary.join("stubs");
+        std::fs::create_dir_all(&stubs).expect("stubs");
+        for (name, body) in [
+            ("curl", r#"#!/usr/bin/env bash
+set -euo pipefail
+output=${*: -1}; url=${*: -3:1}
+case "${url}" in
+  *InRelease)
+    [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
+    digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
+    printf 'SHA256:\n %s 1 main/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
+  *Packages)
+    if [ "${FAKE_SCENARIO}" = package-absent ]; then printf 'Package: another\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: deadbeef\n\n' > "${output}"; else printf '%s' "${FAKE_PACKAGES}" > "${output}"; fi ;;
+  *) printf 'key served today' > "${output}" ;;
+esac
+"#),
+            ("gpg", "#!/usr/bin/env bash\nset -euo pipefail\nout=\"$5\"; in=\"$6\"; cp \"${in}\" \"${out}\"\n"),
+            ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
+            ("dpkg-deb", "#!/usr/bin/env bash\nprintf 'amd64\\n'\n"),
+            ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
+            ("apt", "#!/usr/bin/env bash\nprintf 'apt 2.0\\n'\n"),
+            ("apt-get", "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \" $* \" == *' download '* ]]; then printf 'sealed package bytes' > retrieved.deb; fi\n"),
+        ] {
+            let path = stubs.join(name);
+            std::fs::write(&path, body).expect("stub");
+            let status = std::process::Command::new("chmod").args(["+x", path.to_str().expect("path")]).status().expect("chmod");
+            assert!(status.success());
+        }
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(step["run"].as_str().expect("run"))
+            .current_dir(workspace.root())
+            .env_clear()
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("FAKE_SCENARIO", scenario)
+            .env("FAKE_PACKAGES", packages)
+            .env("FAKE_PACKAGES_DIGEST", packages_digest);
+        for (key, value) in step["env"].as_mapping().expect("env") {
+            let value = value
+                .as_str()
+                .expect("value")
+                .replace("${{ runner.temp }}", &temporary.display().to_string())
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.version }}",
+                    "1.2.3",
+                )
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.digest }}",
+                    &digest,
+                );
+            command.env(key.as_str().expect("key"), value);
+        }
+        command.status().expect("readback runs").success()
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_absent_index() {
+        assert!(!run_apt_readback("apt-absent-index", "absent-index"));
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_index_with_an_unverified_signature() {
+        assert!(!run_apt_readback("apt-bad-signature", "bad-signature"));
+    }
+
+    #[test]
+    fn apt_readback_refuses_a_followed_digest_that_disagrees() {
+        assert!(!run_apt_readback("apt-followed-digest", "followed-digest"));
+    }
+
+    #[test]
+    fn apt_readback_refuses_a_package_absent_from_the_signed_index() {
+        assert!(!run_apt_readback("apt-package-absent", "package-absent"));
     }
 
     // The sealed subject identity is what a publisher fragment is compared
@@ -4553,51 +5044,17 @@ exit 0
         );
     }
 
-    // The deliverable RPM and APT distribute is the GitHub Release asset itself,
-    // and the managed upload job now places it. What is still missing is their
-    // own maintained recipe, so the refusal has to say that: a reader told the
-    // deliverable reaches nothing goes looking for an upload that is already
-    // there, and a reader told the ownership is unsettled goes looking for a
-    // decision that was already made.
+    // Every current catalog pair derives. A synthetic future pair keeps the
+    // generic refusal observable without withholding a real recipe.
     #[test]
     fn refuses_a_publication_whose_maintained_recipe_is_not_derived() {
-        for publisher in ["rpm", "apt"] {
-            let workspace = go_workspace("workflow-go-unsettled");
-            workspace.write(
-                ".intentional/config.yml",
-                &GO_CONFIG.replace(
-                    "        aur: {}\n",
-                    &format!("        aur: {{}}\n        {publisher}: {{}}\n"),
-                ),
-            );
-            let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
-                .expect("comparison runs");
-            assert_eq!(comparison.status, ComparisonStatus::Blocked);
-            let diagnostic = comparison
-                .diagnostics
-                .iter()
-                .find(|diagnostic| diagnostic.code == "maintained-recipe-underived")
-                .unwrap_or_else(|| panic!("{publisher} is refused: {:?}", comparison.diagnostics));
-            assert!(
-                diagnostic
-                    .message
-                    .contains(&format!("component/package/{publisher}/primary")),
-                "{}",
-                diagnostic.message
-            );
-            assert!(
-                diagnostic.message.contains("no maintained")
-                    && diagnostic.message.contains("recipe is derived"),
-                "the refusal names what is missing rather than what has since landed: {}",
-                diagnostic.message
-            );
-            assert!(
-                !diagnostic.message.contains("nothing uploads")
-                    && !diagnostic.message.contains("is not derived yet"),
-                "the refusal does not send an operator looking for the upload job: {}",
-                diagnostic.message
-            );
-        }
+        let refusal = crate::executor::steps::underived_recipe_refusal(
+            "component/future/primary",
+            PublisherKind::Rpm,
+        );
+        assert_eq!(refusal.code, "maintained-recipe-underived");
+        assert!(refusal.message.contains("component/future/primary"));
+        assert!(refusal.message.contains("no maintained rpm recipe"));
     }
 
     /// Id the Dev Container Feature fixture names itself by.
@@ -5209,6 +5666,7 @@ release-units:
             packager,
             components: Vec::new(),
             retrieval: CleanClientMode::Public,
+            observation_deadline: None,
         };
 
         for (packager, capability, expected) in [
@@ -5273,6 +5731,7 @@ release-units:
             packager,
             components: Vec::new(),
             retrieval: CleanClientMode::Public,
+            observation_deadline: None,
         };
         let owner = Path::new("component/first");
 

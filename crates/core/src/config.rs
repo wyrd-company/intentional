@@ -408,10 +408,10 @@ pub struct PackageConfig {
     pub homebrew: Option<HomebrewPublisher>,
     /// Explicit RPM publication intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rpm: Option<SystemPackagePublisher>,
+    pub rpm: Option<RpmPublisher>,
     /// Explicit APT publication intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apt: Option<SystemPackagePublisher>,
+    pub apt: Option<AptPublisher>,
     /// Explicit Arch User Repository publication intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aur: Option<SystemPackagePublisher>,
@@ -473,12 +473,12 @@ impl ReleaseUnitConfig {
     }
 
     /// First configured RPM publisher in stable package order.
-    pub fn rpm(&self) -> Option<&SystemPackagePublisher> {
+    pub fn rpm(&self) -> Option<&RpmPublisher> {
         self.package_with(|package| package.rpm.as_ref())
     }
 
     /// First configured APT publisher in stable package order.
-    pub fn apt(&self) -> Option<&SystemPackagePublisher> {
+    pub fn apt(&self) -> Option<&AptPublisher> {
         self.package_with(|package| package.apt.as_ref())
     }
 
@@ -562,7 +562,34 @@ pub struct HomebrewPublisher {
     pub repository: String,
 }
 
-/// RPM, APT, and AUR publication intent carried entirely by native packager configuration.
+/// RPM publication intent for a configured repository arrangement.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct RpmPublisher {
+    pub delivery_action: PathBuf,
+    pub base_url: String,
+    pub public_signing_key_url: String,
+    pub observation_deadline: u64,
+    pub channel: String,
+    #[serde(rename = "with")]
+    pub inputs: BTreeMap<String, String>,
+}
+
+/// APT publication intent for a configured repository arrangement.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct AptPublisher {
+    pub delivery_action: PathBuf,
+    pub base_url: String,
+    pub public_signing_key_url: String,
+    pub observation_deadline: u64,
+    pub suite: String,
+    pub component: String,
+    #[serde(rename = "with")]
+    pub inputs: BTreeMap<String, String>,
+}
+
+/// AUR publication intent carried entirely by native packager configuration.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct SystemPackagePublisher {}
@@ -1763,6 +1790,93 @@ release-units:
         let reparsed = Config::from_yaml(&config.to_yaml().expect("serializes"))
             .expect("serialized config reparses");
         assert_eq!(reparsed, config);
+    }
+
+    #[test]
+    fn system_package_with_values_survive_configuration_round_trip_unread() {
+        let text = with_github("").replace(
+            "    path: packages/application\n",
+            r#"    path: packages/application
+    packages:
+      application:
+        path: .
+        rpm:
+          delivery-action: .github/actions/deliver
+          base-url: https://packages.invalid/rpm
+          public-signing-key-url: https://packages.invalid/signing-key.asc
+          observation-deadline: 47
+          channel: stable
+          with:
+            credential: ${{ secrets.PACKAGE_TOKEN }}
+            variable: ${{ vars.PACKAGE_BUCKET }}
+            literal: untouched
+            unavailable-context: ${{ matrix.destination }}
+"#,
+        );
+        let parsed = Config::from_yaml(&text).expect("workflow expressions parse as strings");
+        let inputs = &parsed.release_units["application"].packages["application"]
+            .rpm
+            .as_ref()
+            .expect("rpm publisher")
+            .inputs;
+        assert_eq!(inputs["credential"], "${{ secrets.PACKAGE_TOKEN }}");
+        assert_eq!(inputs["variable"], "${{ vars.PACKAGE_BUCKET }}");
+        assert_eq!(inputs["literal"], "untouched");
+        assert_eq!(inputs["unavailable-context"], "${{ matrix.destination }}");
+
+        let rendered = parsed.to_yaml().expect("configuration serializes");
+        let round_tripped = Config::from_yaml(&rendered).expect("serialized configuration parses");
+        assert_eq!(
+            round_tripped.release_units["application"].packages["application"]
+                .rpm
+                .as_ref()
+                .expect("rpm publisher")
+                .inputs,
+            *inputs
+        );
+    }
+
+    #[test]
+    fn every_system_package_configuration_member_is_required_by_the_runtime_parser() {
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../schemas/config.yml")).expect("schema");
+        for publisher in ["rpm", "apt"] {
+            let definition = &schema["$defs"][format!("{publisher}-publisher")];
+            let mut members = schema["$defs"]["system-package-delivery"]["required"]
+                .as_sequence()
+                .expect("shared required members")
+                .iter()
+                .chain(
+                    definition["allOf"][1]["required"]
+                        .as_sequence()
+                        .expect("format required members"),
+                )
+                .map(|member| member.as_str().expect("member").to_owned())
+                .collect::<Vec<_>>();
+            members.sort();
+            for member in members {
+                let coordinates = if publisher == "rpm" {
+                    "          channel: stable\n"
+                } else {
+                    "          suite: current\n          component: main\n"
+                };
+                let source = with_github("").replace(
+                    "    path: packages/application\n",
+                    &format!(
+                        "    path: packages/application\n    packages:\n      application:\n        path: .\n        {publisher}:\n          delivery-action: .github/actions/deliver\n          base-url: https://packages.invalid/repository\n          public-signing-key-url: https://packages.invalid/key.asc\n          observation-deadline: 47\n{coordinates}          with: {{}}\n"
+                    ),
+                );
+                let mut document: serde_yaml::Value = serde_yaml::from_str(&source).expect("yaml");
+                document["release-units"]["application"]["packages"]["application"][publisher]
+                    .as_mapping_mut()
+                    .expect("publisher mapping")
+                    .remove(serde_yaml::Value::String(member.clone()));
+                let error = Config::from_yaml(&serde_yaml::to_string(&document).expect("yaml"))
+                    .expect_err("missing member is refused")
+                    .to_string();
+                assert!(error.contains(&member), "{publisher}.{member}: {error}");
+            }
+        }
     }
 
     #[test]

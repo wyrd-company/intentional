@@ -40,7 +40,7 @@
 //! anything, and both treat an unanswered check as a publication that is not
 //! observable yet, which is what a bounded wait is for.
 
-use crate::config::ReleaseUnitConfig;
+use crate::config::{AptPublisher, ReleaseUnitConfig, RpmPublisher};
 use crate::executor::names::{self, SuppliedName};
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
 use crate::executor::workflow::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
@@ -67,6 +67,8 @@ pub(super) struct RecipeContext<'a> {
     pub observation: &'a str,
     /// Scratch directory the readback and retrieval work in.
     pub work: &'a str,
+    /// Configured job prefix converted to kebab case for delivery inputs.
+    pub delivery_namespace: &'a str,
     /// Workspace root, read for the native configuration a probe must not inherit.
     pub root: &'a std::path::Path,
 }
@@ -272,13 +274,8 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
 
 /// Whether workflow derivation has a complete publisher recipe for this pair.
 pub(super) const fn recipe_is_derived(packager: Packager, publisher: PublisherKind) -> bool {
-    !matches!(
-        (packager, publisher),
-        (
-            Packager::GoReleaser,
-            PublisherKind::Rpm | PublisherKind::Apt
-        )
-    )
+    let _ = (packager, publisher);
+    true
 }
 
 /// One publication's recipe steps before the shared placeholders are rendered.
@@ -318,24 +315,17 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, Ste
     let identity = context.publication.identity();
     // RPM and APT distribute the deliverable itself rather than a descriptor
     // that points at one, so the managed upload job places it on the draft
-    // Release and their publisher job resolves it from there. What these
-    // adapters still lack is a maintained recipe of their own, and the reason
-    // is the formats: neither defines a publishing protocol, so there is no
-    // destination a recipe could aim at and no command that reaches one. The
-    // repository that configures the publication supplies both, as
-    // `system-package-distribution` describes; until a recipe reads that
-    // configuration, a derived publisher job would verify a publication it
-    // never performed. The refusal names the recipe rather than the upload the
-    // design has since settled and this workflow now derives.
     if !recipe_is_derived(context.publication.packager, context.publication.publisher) {
-        return Err(StepsRefusal {
-            code: "maintained-recipe-underived",
-            message: format!(
-                "publication {identity} distributes a GitHub-hosted deliverable the managed upload job places on the draft Release, but no maintained {} recipe is derived to reach its package index, so the publisher job would verify a publication it never performed",
-                context.publication.publisher
-            ),
-            path: None,
-        });
+        return Err(underived_recipe_refusal(
+            &identity,
+            context.publication.publisher,
+        ));
+    }
+    if matches!(
+        context.publication.publisher,
+        PublisherKind::Rpm | PublisherKind::Apt
+    ) {
+        return system_package_steps(context);
     }
     let destination = context.publication.destination.clone().ok_or(StepsRefusal {
         code: "destination-underived",
@@ -385,6 +375,410 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, Ste
         scalar(context.subject_identity),
     ))
 }
+
+pub(super) fn underived_recipe_refusal(identity: &str, publisher: PublisherKind) -> StepsRefusal {
+    StepsRefusal {
+        code: "maintained-recipe-underived",
+        message: format!(
+            "publication {identity} has no maintained {publisher} recipe derived for its publisher job"
+        ),
+        path: None,
+    }
+}
+
+struct DeliveryConfiguration<'a> {
+    action: &'a std::path::Path,
+    base_url: &'a str,
+    public_key_url: &'a str,
+    inputs: &'a std::collections::BTreeMap<String, String>,
+    coordinates: Vec<(&'static str, &'a str)>,
+}
+
+fn reserved_input(namespace: &str, stem: &str) -> String {
+    format!("{namespace}-{stem}")
+}
+
+fn delivery_input_names(context: &RecipeContext<'_>, publisher: PublisherKind) -> Vec<String> {
+    let mut stems = vec![
+        "package-path",
+        "format",
+        "name",
+        "version",
+        "architecture",
+        "digest",
+    ];
+    match publisher {
+        PublisherKind::Apt => stems.extend(["apt-suite", "apt-component"]),
+        PublisherKind::Rpm => stems.push("rpm-channel"),
+        _ => unreachable!(),
+    }
+    stems
+        .into_iter()
+        .map(|stem| reserved_input(context.delivery_namespace, stem))
+        .collect()
+}
+
+fn system_package_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+    let package = &context.unit.packages[&context.publication.package];
+    let configured = match context.publication.publisher {
+        PublisherKind::Rpm => {
+            let RpmPublisher {
+                delivery_action,
+                base_url,
+                public_signing_key_url,
+                channel,
+                inputs,
+                ..
+            } = package.rpm.as_ref().expect("selected rpm configuration");
+            DeliveryConfiguration {
+                action: delivery_action,
+                base_url,
+                public_key_url: public_signing_key_url,
+                inputs,
+                coordinates: vec![("rpm-channel", channel)],
+            }
+        }
+        PublisherKind::Apt => {
+            let AptPublisher {
+                delivery_action,
+                base_url,
+                public_signing_key_url,
+                suite,
+                component,
+                inputs,
+                ..
+            } = package.apt.as_ref().expect("selected apt configuration");
+            DeliveryConfiguration {
+                action: delivery_action,
+                base_url,
+                public_key_url: public_signing_key_url,
+                inputs,
+                coordinates: vec![("apt-suite", suite), ("apt-component", component)],
+            }
+        }
+        _ => unreachable!(),
+    };
+    let reserved = delivery_input_names(context, context.publication.publisher);
+    let declared = validate_delivery_action(context, &configured, &reserved)?;
+    let supplied = reserved
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    for (name, definition) in &declared {
+        let required = definition
+            .get("required")
+            .and_then(serde_yaml::Value::as_bool)
+            .unwrap_or(false);
+        let defaulted = definition.get("default").is_some();
+        if required
+            && !defaulted
+            && !supplied.contains(name.as_str())
+            && !configured.inputs.contains_key(name)
+        {
+            return Err(action_refusal(context, &configured, format!("delivery Action requires input {name:?} without a default, but neither the recipe nor its configured with block supplies it")));
+        }
+    }
+    let mut with = String::new();
+    for (stem, value) in [
+        (
+            "package-path",
+            "${{ steps.intentional_establish.outputs.path }}".to_owned(),
+        ),
+        ("format", context.publication.publisher.as_str().to_owned()),
+        (
+            "name",
+            "${{ steps.intentional_establish.outputs.name }}".to_owned(),
+        ),
+        (
+            "version",
+            "${{ steps.intentional_establish.outputs.version }}".to_owned(),
+        ),
+        (
+            "architecture",
+            "${{ steps.intentional_establish.outputs.architecture }}".to_owned(),
+        ),
+        (
+            "digest",
+            "${{ steps.intentional_establish.outputs.digest }}".to_owned(),
+        ),
+    ] {
+        let name = reserved_input(context.delivery_namespace, stem);
+        with.push_str(&format!("      {name}: {}\n", scalar(&value)));
+    }
+    for (stem, value) in &configured.coordinates {
+        let name = reserved_input(context.delivery_namespace, stem);
+        with.push_str(&format!("      {name}: {}\n", scalar(value)));
+    }
+    for (name, value) in configured.inputs {
+        with.push_str(&format!("      {}: {}\n", scalar(name), scalar(value)));
+    }
+    let format = context.publication.publisher.as_str();
+    let metadata = if context.publication.publisher == PublisherKind::Apt {
+        "name=$(dpkg-deb -f \"${package}\" Package)\n      version=$(dpkg-deb -f \"${package}\" Version)\n      architecture=$(dpkg-deb -f \"${package}\" Architecture)"
+    } else {
+        "name=$(rpm -qp --qf '%{NAME}' \"${package}\")\n      version=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' \"${package}\")\n      architecture=$(rpm -qp --qf '%{ARCH}' \"${package}\")"
+    };
+    let readback = system_package_readback(context, &configured);
+    Ok(format!(
+        "  - id: intentional_establish\n    name: {}\n    env:\n{}    run: |\n      set -euo pipefail\n      mapfile -t packages < <(find \"${{@ENVVAR@SUBJECT}}\" -type f -maxdepth 1 -print)\n      test \"${{#packages[@]}}\" -eq 1\n      package=${{packages[0]}}\n      digest=sha256:$(sha256sum \"${{package}}\" | cut -d' ' -f1)\n      test \"${{digest}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n      {metadata}\n      test \"${{name}}\" = \"${{@ENVVAR@SUBJECT_IDENTITY}}\"\n      test \"${{version}}\" = \"${{@ENVVAR@VERSION}}\"\n      printf 'path=%s\\nname=%s\\nversion=%s\\narchitecture=%s\\ndigest=%s\\n' \"${{package}}\" \"${{name}}\" \"${{version}}\" \"${{architecture}}\" \"${{digest}}\" >> \"${{GITHUB_OUTPUT}}\"\n  - name: {}\n    uses: {}\n    with:\n{with}{readback}",
+        scalar(&format!("Establish the {} package", format.to_uppercase())),
+        subject_environment(context),
+        scalar(&format!("Deliver {}", context.publication.identity())),
+        scalar(&local_action_uses(configured.action)?),
+    ))
+}
+
+fn local_action_uses(action: &std::path::Path) -> Result<String, StepsRefusal> {
+    if action.is_absolute()
+        || action
+            .extension()
+            .is_some_and(|extension| extension == "yml" || extension == "yaml")
+        || action
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(StepsRefusal {
+            code: "delivery-action-invalid",
+            message: format!(
+                "delivery Action path {} must name a workspace-relative directory",
+                action.display()
+            ),
+            path: Some(action.display().to_string()),
+        });
+    }
+    Ok(format!("./{}", action.display()))
+}
+
+fn action_refusal(
+    context: &RecipeContext<'_>,
+    configured: &DeliveryConfiguration<'_>,
+    message: String,
+) -> StepsRefusal {
+    StepsRefusal {
+        code: "delivery-action-invalid",
+        message: format!(
+            "publication {} names {}: {message}",
+            context.publication.identity(),
+            configured.action.display()
+        ),
+        path: Some(configured.action.display().to_string()),
+    }
+}
+
+fn validate_delivery_action(
+    context: &RecipeContext<'_>,
+    configured: &DeliveryConfiguration<'_>,
+    reserved: &[String],
+) -> Result<std::collections::BTreeMap<String, serde_yaml::Value>, StepsRefusal> {
+    local_action_uses(configured.action)?;
+    let context_identity = format!("{} delivery Action", context.publication.publisher);
+    let directory = context.root.join(configured.action);
+    let candidates = [directory.join("action.yml"), directory.join("action.yaml")];
+    let found = candidates
+        .iter()
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    let [metadata] = found.as_slice() else {
+        return Err(StepsRefusal { code: "delivery-action-invalid", message: format!("{context_identity} directory {} must contain exactly one of action.yml or action.yaml", configured.action.display()), path: Some(configured.action.display().to_string()) });
+    };
+    let text = std::fs::read_to_string(metadata).map_err(|error| StepsRefusal {
+        code: "delivery-action-invalid",
+        message: format!("cannot read {}: {error}", metadata.display()),
+        path: Some(metadata.display().to_string()),
+    })?;
+    let document: serde_yaml::Value =
+        serde_yaml::from_str(&text).map_err(|error| StepsRefusal {
+            code: "delivery-action-invalid",
+            message: format!(
+                "{} is not valid Action metadata: {error}",
+                metadata.display()
+            ),
+            path: Some(metadata.display().to_string()),
+        })?;
+    if document["runs"]["using"].as_str() != Some("composite") {
+        return Err(StepsRefusal {
+            code: "delivery-action-invalid",
+            message: format!(
+                "{} does not declare runs.using: composite",
+                metadata.display()
+            ),
+            path: Some(metadata.display().to_string()),
+        });
+    }
+    let inputs = document["inputs"]
+        .as_mapping()
+        .ok_or_else(|| StepsRefusal {
+            code: "delivery-action-invalid",
+            message: format!("{} declares no inputs mapping", metadata.display()),
+            path: Some(metadata.display().to_string()),
+        })?;
+    let declared = inputs
+        .iter()
+        .filter_map(|(name, value)| name.as_str().map(|name| (name.to_owned(), value.clone())))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for name in reserved {
+        if !declared.contains_key(name) {
+            return Err(StepsRefusal {
+                code: "delivery-action-invalid",
+                message: format!(
+                    "{} does not declare reserved input {name}",
+                    metadata.display()
+                ),
+                path: Some(metadata.display().to_string()),
+            });
+        }
+    }
+    for name in configured.inputs.keys() {
+        let prefix = format!("{}-", context.delivery_namespace);
+        if name.starts_with(&prefix) {
+            return Err(StepsRefusal {
+                code: "delivery-action-invalid",
+                message: format!("configured input {name:?} is inside reserved namespace {prefix}"),
+                path: Some(configured.action.display().to_string()),
+            });
+        }
+        if !declared.contains_key(name) {
+            return Err(StepsRefusal {
+                code: "delivery-action-invalid",
+                message: format!(
+                    "{} does not declare configured input {name:?}",
+                    metadata.display()
+                ),
+                path: Some(metadata.display().to_string()),
+            });
+        }
+    }
+    Ok(declared)
+}
+
+fn system_package_readback(
+    context: &RecipeContext<'_>,
+    configured: &DeliveryConfiguration<'_>,
+) -> String {
+    let client = if context.publication.publisher == PublisherKind::Apt {
+        "apt"
+    } else {
+        "dnf"
+    };
+    let coordinate = configured
+        .coordinates
+        .iter()
+        .map(|(name, value)| {
+            format!(
+                "      @ENVVAR@{}: {}\n",
+                name.replace('-', "_").to_uppercase(),
+                scalar(value)
+            )
+        })
+        .collect::<String>();
+    let probe = if context.publication.publisher == PublisherKind::Apt {
+        APT_READBACK
+    } else {
+        RPM_READBACK
+    };
+    format!("  - name: {}\n    env:\n{}{}{}      @ENVVAR@DESTINATION: {}\n      @ENVVAR@PUBLIC_KEY_URL: {}\n{}    run: |\n      set -euo pipefail\n{}      @ENVVAR@PACKAGER_VERSION=$(goreleaser --version | head -n1)\n      @ENVVAR@RETRIEVAL_VERSION=$({client} --version 2>&1 | head -n1)\n{probe}      @ENVVAR@observe_present\n",
+        scalar(&format!("Read back and retrieve {}", context.publication.identity())),
+        subject_environment(context),
+        observation_environment(context, "package", "goreleaser", client),
+        coordinate,
+        scalar(configured.base_url),
+        scalar(configured.public_key_url),
+        policy_environment(context.publication.publisher, context.publication.observation_deadline),
+        OBSERVE,
+    )
+}
+
+const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+      mkdir -p "${@ENVVAR@WORK}/state/lists/partial" "${@ENVVAR@WORK}/cache/archives/partial" "${@ENVVAR@WORK}/etc/apt"
+      package=$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -type f -print -quit)
+      package_name=${@ENVVAR@SUBJECT_IDENTITY}
+      package_version=${@ENVVAR@VERSION}
+      package_architecture=$(dpkg-deb -f "${package}" Architecture)
+      package_sha256=${@ENVVAR@SUBJECT_DIGEST#sha256:}
+      curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
+      gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
+      index="${@ENVVAR@WORK}/InRelease"
+      if ! curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/InRelease" --output "${index}"; then
+        @ENVVAR@observe_state pending
+        exit 75
+      fi
+      gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}"
+      relative="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}/Packages"
+      expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
+      test -n "${expected}"
+      packages="${@ENVVAR@WORK}/Packages"
+      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" --output "${packages}"
+      test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}"
+      indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
+        $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
+      ' "${packages}")
+      test "${indexed}" = yes
+      printf 'deb [signed-by=%s] %s %s %s\n' "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@DESTINATION}" "${@ENVVAR@APT_SUITE}" "${@ENVVAR@APT_COMPONENT}" > "${@ENVVAR@WORK}/etc/apt/sources.list"
+      apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" -o APT::Get::List-Cleanup=0 update
+      (cd "${@ENVVAR@WORK}" && apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" download "${package_name}=${package_version}")
+      retrieved=$(find "${@ENVVAR@WORK}" -maxdepth 1 -type f -name '*.deb' -print -quit)
+      @ENVVAR@DESTINATION_DIGEST="${@ENVVAR@SUBJECT_DIGEST}"
+      @ENVVAR@RETRIEVED_DIGEST=sha256:$(sha256sum "${retrieved}" | cut -d' ' -f1)
+      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@SUBJECT_DIGEST}"
+"#;
+
+const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+      mkdir -p "${@ENVVAR@WORK}/state" "${@ENVVAR@WORK}/cache" "${@ENVVAR@WORK}/etc/yum.repos.d" "${@ENVVAR@WORK}/retrieved"
+      package=$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -type f -print -quit)
+      package_name=${@ENVVAR@SUBJECT_IDENTITY}
+      package_version=${@ENVVAR@VERSION}
+      package_architecture=$(rpm -qp --qf '%{ARCH}' "${package}")
+      package_sha256=${@ENVVAR@SUBJECT_DIGEST#sha256:}
+      curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
+      gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
+      index="${@ENVVAR@WORK}/repomd.xml"
+      if ! curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
+        @ENVVAR@observe_state pending
+        exit 75
+      fi
+      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"
+      gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
+      read -r expected relative < <(python3 - "${index}" <<'PY'
+      import sys, xml.etree.ElementTree as ET
+      root = ET.parse(sys.argv[1]).getroot()
+      data = next(node for node in root if node.tag.endswith('data') and node.attrib.get('type') == 'primary')
+      checksum = next(node.text for node in data if node.tag.endswith('checksum'))
+      location = next(node.attrib['href'] for node in data if node.tag.endswith('location'))
+      print(checksum, location)
+      PY
+      )
+      primary="${@ENVVAR@WORK}/primary"
+      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" --output "${primary}"
+      test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}"
+      python3 - "${primary}" "${package_name}" "${package_version}" "${package_architecture}" "${package_sha256}" <<'PY'
+      import bz2, gzip, lzma, pathlib, sys, xml.etree.ElementTree as ET
+      path = pathlib.Path(sys.argv[1])
+      raw = path.read_bytes()
+      for opener in (gzip.decompress, bz2.decompress, lzma.decompress):
+          try:
+              raw = opener(raw)
+              break
+          except Exception:
+              pass
+      root = ET.fromstring(raw)
+      for package in root:
+          fields = {node.tag.rsplit('}', 1)[-1]: node for node in package}
+          checksum = fields.get('checksum')
+          version = fields.get('version')
+          if (fields.get('name') is not None and fields['name'].text == sys.argv[2]
+              and version is not None and f"{version.attrib.get('ver')}-{version.attrib.get('rel')}" == sys.argv[3]
+              and fields.get('arch') is not None and fields['arch'].text == sys.argv[4]
+              and checksum is not None and checksum.text == sys.argv[5]):
+              sys.exit(0)
+      sys.exit(1)
+      PY
+      printf '[intentional]\nname=Intentional scratch\nbaseurl=%s/%s\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "${@ENVVAR@DESTINATION%/}" "${@ENVVAR@RPM_CHANNEL}" "${@ENVVAR@WORK}/key" > "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo"
+      dnf --config "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo" --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
+      retrieved=$(find "${@ENVVAR@WORK}/retrieved" -type f -name '*.rpm' -print -quit)
+      @ENVVAR@DESTINATION_DIGEST="${@ENVVAR@SUBJECT_DIGEST}"
+      @ENVVAR@RETRIEVED_DIGEST=sha256:$(sha256sum "${retrieved}" | cut -d' ' -f1)
+      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@SUBJECT_DIGEST}"
+"#;
 
 /// Published ED25519 host key fingerprint of the Arch User Repository.
 ///
@@ -542,8 +936,10 @@ fn environment_fragment(registry: &str) -> String {
 /// applies to what it reports. Rendering it from the maintained policy is what
 /// keeps the two from drifting into a recipe that gives up before the command
 /// would, or one that outlives the job.
-fn policy_environment(publisher: PublisherKind) -> String {
-    let policy = ConsistencyPolicy::maintained(publisher);
+fn policy_environment(publisher: PublisherKind, configured_deadline: Option<u64>) -> String {
+    let maintained = ConsistencyPolicy::maintained(publisher);
+    let policy =
+        configured_deadline.map_or(maintained, |seconds| maintained.with_deadline(seconds));
     format!(
         "      @ENVVAR@INTERVAL: {}\n      @ENVVAR@BACKOFF: {}\n      @ENVVAR@MAXIMUM_INTERVAL: {}\n      @ENVVAR@DEADLINE: {}\n",
         scalar(&policy.interval.as_secs().to_string()),
@@ -769,7 +1165,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         },
         subject_environment(context),
         observation_environment(context, "npm-package", "npm", "npm"),
-        policy_environment(context.publication.publisher),
+        policy_environment(context.publication.publisher, context.publication.observation_deadline),
         STRICT_MODE,
         if primary {
             ""
@@ -1171,7 +1567,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         scalar(registry),
         subject_environment(context),
         observation_environment(context, "cargo-crate", "cargo", "cargo"),
-        policy_environment(context.publication.publisher),
+        policy_environment(context.publication.publisher, context.publication.observation_deadline),
         STRICT_MODE,
         OBSERVE,
         CARGO_RESOLVE,
@@ -1499,7 +1895,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
             publication.packager.as_str(),
             "crane",
         ),
-        policy_environment(publication.publisher),
+        policy_environment(publication.publisher, publication.observation_deadline),
         destination,
         scalar(&components),
         STRICT_MODE,

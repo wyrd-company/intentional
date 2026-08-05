@@ -28,10 +28,10 @@ pub mod yaml_edit;
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
-    CargoPublisher, Config, DiscoveryConfig, DockerhubTarget, ExcludedPathReceipt, ExecutorPrefix,
-    GhcrTarget, GithubConfig, GithubWorkflow, GithubWorkflows, HomebrewPublisher,
+    AptPublisher, CargoPublisher, Config, DiscoveryConfig, DockerhubTarget, ExcludedPathReceipt,
+    ExecutorPrefix, GhcrTarget, GithubConfig, GithubWorkflow, GithubWorkflows, HomebrewPublisher,
     ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher, OciPublisher,
-    PackageConfig, PrefixNamespaces, Projection, ReleaseUnitConfig, Settings,
+    PackageConfig, PrefixNamespaces, Projection, ReleaseUnitConfig, RpmPublisher, Settings,
     SystemPackagePublisher, TagConfig, UnphasedTag, WorkflowRole, WorkspaceTagConfig, CONFIG_PATH,
     CURRENT_CONTRACT, DEFAULT_ENVVAR_PREFIX, DEFAULT_JOB_PREFIX, DEFAULT_PUBLISH_WORKFLOW,
     DEFAULT_RELEASE_WORKFLOW,

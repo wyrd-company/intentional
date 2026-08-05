@@ -300,9 +300,12 @@ pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<Veri
         request.target,
     )?;
     let identity = selected.identity();
-    let policy = request
-        .policy
-        .unwrap_or_else(|| ConsistencyPolicy::maintained(request.publisher));
+    let policy = request.policy.unwrap_or_else(|| {
+        let maintained = ConsistencyPolicy::maintained(request.publisher);
+        selected
+            .observation_deadline
+            .map_or(maintained, |deadline| maintained.with_deadline(deadline))
+    });
     let observation = observe(request.observation, &identity, &policy, request.clock)?;
     let release = request
         .context

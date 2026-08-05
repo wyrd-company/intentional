@@ -263,6 +263,12 @@ pub struct ConsistencyPolicy {
 }
 
 impl ConsistencyPolicy {
+    /// Replace the adapter default with a repository-configured deadline.
+    pub const fn with_deadline(mut self, seconds: u64) -> Self {
+        self.deadline = Duration::from_secs(seconds);
+        self
+    }
+
     /// Maintained policy for one publisher adapter.
     ///
     /// Registry-indexed destinations lag behind their own accepted writes far

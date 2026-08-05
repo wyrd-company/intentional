@@ -209,7 +209,8 @@ release-units:
         workspace
             .write(".intentional/config.yml", &config)
             .write(".github/workflows/release.yml", REPOSITORY_WORKFLOW)
-            .write(".github/workflows/publish.yml", REPOSITORY_WORKFLOW);
+            .write(".github/workflows/publish.yml", REPOSITORY_WORKFLOW)
+            .write(".github/actions/deliver/action.yml", RECIPE_DELIVERY_ACTION);
         workspace
     }
 
@@ -245,8 +246,8 @@ release-units:
                 PublisherKind::Homebrew => {
                     configured.push_str("    homebrew: { repository: sample-owner/sample-tap }\n")
                 }
-                PublisherKind::Rpm => configured.push_str("    rpm: {}\n"),
-                PublisherKind::Apt => configured.push_str("    apt: {}\n"),
+                PublisherKind::Rpm => configured.push_str("    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n"),
+                PublisherKind::Apt => configured.push_str("    apt:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/apt\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      suite: current\n      component: main\n      with: {}\n"),
                 PublisherKind::Aur => configured.push_str("    aur: {}\n"),
                 PublisherKind::Oci => {
                     configured.push_str("    oci:\n");
@@ -326,6 +327,8 @@ nfpms:
 aur:
   - name: sample-application-bin
 "#;
+
+    const RECIPE_DELIVERY_ACTION: &str = "name: delivery\ninputs:\n  intentional-package-path: {}\n  intentional-format: {}\n  intentional-name: {}\n  intentional-version: {}\n  intentional-architecture: {}\n  intentional-digest: {}\n  intentional-rpm-channel: {}\n  intentional-apt-suite: {}\n  intentional-apt-component: {}\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: 'true'\n";
 
     /// Derive both managed workflows in a workspace someone else owns.
     ///

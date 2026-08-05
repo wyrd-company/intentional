@@ -199,7 +199,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Rpm,
         target: PRIMARY_TARGET,
         components: &[],
-        retrieval: CleanClientMode::AuthenticatedDraft,
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -207,7 +207,7 @@ const CATALOG: &[Recipe] = &[
         publisher: PublisherKind::Apt,
         target: PRIMARY_TARGET,
         components: &[],
-        retrieval: CleanClientMode::AuthenticatedDraft,
+        retrieval: CleanClientMode::Public,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -304,6 +304,8 @@ pub struct SelectedPublication {
     pub components: Vec<AttachedComponent>,
     /// Consumer retrieval the selected recipe's destination admits.
     pub retrieval: CleanClientMode,
+    /// Configured observation deadline for a repository-defined destination.
+    pub observation_deadline: Option<u64>,
 }
 
 impl SelectedPublication {
@@ -496,14 +498,34 @@ fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Co
             },
         ));
     }
-    for (publisher, present) in [
-        (PublisherKind::Rpm, package.rpm.is_some()),
-        (PublisherKind::Apt, package.apt.is_some()),
-        (PublisherKind::Aur, package.aur.is_some()),
-    ] {
-        if present {
-            targets.push((publisher, PRIMARY_TARGET.to_owned(), Configured::default()));
-        }
+    if let Some(rpm) = &package.rpm {
+        targets.push((
+            PublisherKind::Rpm,
+            PRIMARY_TARGET.to_owned(),
+            Configured {
+                destination: Some(rpm.base_url.clone()),
+                observation_deadline: Some(rpm.observation_deadline),
+                ..Configured::default()
+            },
+        ));
+    }
+    if let Some(apt) = &package.apt {
+        targets.push((
+            PublisherKind::Apt,
+            PRIMARY_TARGET.to_owned(),
+            Configured {
+                destination: Some(apt.base_url.clone()),
+                observation_deadline: Some(apt.observation_deadline),
+                ..Configured::default()
+            },
+        ));
+    }
+    if package.aur.is_some() {
+        targets.push((
+            PublisherKind::Aur,
+            PRIMARY_TARGET.to_owned(),
+            Configured::default(),
+        ));
     }
     if let Some(oci) = &package.oci {
         if let Some(dockerhub) = &oci.dockerhub {
@@ -514,6 +536,7 @@ fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Co
                     destination: dockerhub.repository.clone(),
                     omit: dockerhub.omit.clone(),
                     destination_required: true,
+                    ..Configured::default()
                 },
             ));
         }
@@ -525,6 +548,7 @@ fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Co
                     destination: ghcr.repository.clone(),
                     omit: ghcr.omit.clone(),
                     destination_required: false,
+                    ..Configured::default()
                 },
             ));
         }
@@ -537,6 +561,7 @@ struct Configured {
     destination: Option<String>,
     omit: Vec<AttachedComponent>,
     destination_required: bool,
+    observation_deadline: Option<u64>,
 }
 
 struct SelectionContext<'a> {
@@ -643,6 +668,7 @@ fn select_one(
             .filter(|component| !configured.omit.contains(component))
             .collect(),
         retrieval,
+        observation_deadline: configured.observation_deadline,
     })
 }
 
@@ -1447,6 +1473,25 @@ release-units:
     }
 
     #[test]
+    fn system_package_selection_fixes_public_retrieval_and_carries_configured_deadline() {
+        let workspace = Workspace::new("system-package-selection");
+        workspace
+            .write("component/go.mod", "module example.test/sample-command\n")
+            .write("component/main.go", "package main\nfunc main() {}\n")
+            .write(
+                "component/.goreleaser.yaml",
+                "version: 2\nproject_name: sample-command\nbuilds: [ { main: . } ]\nnfpms: [ { formats: [ rpm ] } ]\n",
+            );
+        let config = config(
+            "    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n",
+        );
+        let selected = select_publications(workspace.root(), &config).expect("selection");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].retrieval, CleanClientMode::Public);
+        assert_eq!(selected[0].observation_deadline, Some(47));
+    }
+
+    #[test]
     fn derives_capabilities_from_native_evidence_only() {
         let workspace = Workspace::new("capabilities");
         workspace
@@ -2087,18 +2132,17 @@ release-units:
         );
     }
 
-    // Two tables now state which destinations resolve a GitHub Release asset:
-    // the catalog's retrieval mode and the draft handoff's publisher list. The
-    // handoff builds an asset inventory for the publishers in its list, and the
-    // recipe that consumes one is the recipe whose retrieval is
-    // authenticated-draft, so a destination in one table and not the other is
-    // either handed assets no recipe retrieves or asked for a retrieval no
-    // handoff supplies.
+    // A draft-dependent recipe either retrieves the draft asset directly or
+    // delivers that asset to a public system-package repository before its
+    // clean-client retrieval. Every draft-dependent publisher must take one of
+    // those paths, and no other publisher may take either.
     #[test]
     fn agrees_with_the_draft_handoff_about_which_destinations_read_a_draft_asset() {
         for recipe in catalog() {
+            let consumes_draft = recipe.retrieval == CleanClientMode::AuthenticatedDraft
+                || matches!(recipe.publisher, PublisherKind::Rpm | PublisherKind::Apt);
             assert_eq!(
-                recipe.retrieval == CleanClientMode::AuthenticatedDraft,
+                consumes_draft,
                 crate::publication::draft::is_draft_dependent(recipe.publisher),
                 "{}/{} disagrees with the draft handoff about draft-asset retrieval",
                 recipe.publisher,

@@ -272,6 +272,10 @@ release-units:
     const PUBLISH_WORKFLOW: &str =
         "name: publish\non: { push: { tags: [ '*' ] } }\njobs:\n  placeholder:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";
 
+    const RPM: &str = "    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n";
+    const APT: &str = "    apt:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/apt\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      suite: current\n      component: main\n      with: {}\n";
+    const DELIVERY_ACTION: &str = "name: delivery\ninputs:\n  intentional-package-path: {}\n  intentional-format: {}\n  intentional-name: {}\n  intentional-version: {}\n  intentional-architecture: {}\n  intentional-digest: {}\n  intentional-rpm-channel: {}\n  intentional-apt-suite: {}\n  intentional-apt-component: {}\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: 'true'\n";
+
     fn workspace(label: &str, publisher: &str) -> Workspace {
         let workspace = Workspace::new(label);
         let package = publisher
@@ -289,7 +293,8 @@ release-units:
                 ),
             )
             .write(".github/workflows/release.yml", RELEASE_WORKFLOW)
-            .write(".github/workflows/publish.yml", PUBLISH_WORKFLOW);
+            .write(".github/workflows/publish.yml", PUBLISH_WORKFLOW)
+            .write(".github/actions/deliver/action.yml", DELIVERY_ACTION);
         workspace
     }
 
@@ -346,7 +351,7 @@ release-units:
 
     #[test]
     fn reports_missing_native_packager_configuration() {
-        let workspace = workspace("check-packager", "    rpm: {}\n");
+        let workspace = workspace("check-packager", RPM);
         workspace
             .write("component/go.mod", "module example.test/component\n")
             .write("component/main.go", "package main\n\nfunc main() {}\n");
@@ -398,7 +403,7 @@ aur:
     fn accepts_native_goreleaser_configuration_that_declares_every_promoted_pipe() {
         let workspace = go_workspace(
             "check-goreleaser-conforming",
-            "    homebrew: { repository: example-org/homebrew-tap }\n    rpm: {}\n    apt: {}\n    aur: {}\n",
+            &format!("    homebrew: {{ repository: example-org/homebrew-tap }}\n{RPM}{APT}    aur: {{}}\n"),
         );
         assert!(
             packager_findings(&workspace).is_empty(),
@@ -451,7 +456,7 @@ aur:
             ),
             (
                 "nfpms",
-                "    rpm: {}\n",
+                RPM,
                 "component/package/rpm/primary promotes what the nfpms pipe produces",
             ),
             (
@@ -476,8 +481,8 @@ aur:
     #[test]
     fn reports_a_system_package_format_no_nfpms_entry_declares() {
         for (property, format, identity) in [
-            ("    rpm: {}\n", "rpm", "component/package/rpm/primary"),
-            ("    apt: {}\n", "deb", "component/package/apt/primary"),
+            (RPM, "rpm", "component/package/rpm/primary"),
+            (APT, "deb", "component/package/apt/primary"),
         ] {
             let workspace = go_workspace("check-goreleaser-format", property);
             workspace.write(

@@ -675,6 +675,8 @@ fn offered_targets(
 fn required_configuration(publisher: PublisherKind, target: &str) -> Option<&'static str> {
     match (publisher, target) {
         (PublisherKind::Homebrew, _) => Some("a tap repository"),
+        (PublisherKind::Rpm, _) => Some("an RPM repository arrangement"),
+        (PublisherKind::Apt, _) => Some("an APT repository arrangement"),
         (PublisherKind::Oci, "dockerhub") => Some("a Docker Hub repository"),
         _ => None,
     }
@@ -1156,10 +1158,10 @@ fn enable_package_publisher(
             package.cargo.get_or_insert_with(Default::default);
         }
         (PublisherKind::Rpm, _) => {
-            package.rpm.get_or_insert_with(Default::default);
+            return Err(explicit_configuration_error(publisher, target));
         }
         (PublisherKind::Apt, _) => {
-            package.apt.get_or_insert_with(Default::default);
+            return Err(explicit_configuration_error(publisher, target));
         }
         (PublisherKind::Aur, _) => {
             package.aur.get_or_insert_with(Default::default);
@@ -1608,7 +1610,7 @@ release-units:
         resolve(
             workspace.root(),
             "go-application",
-            "rpm/primary",
+            "aur/primary",
             ACCEPT_CHOICE,
         );
         run(&workspace);
@@ -1618,28 +1620,18 @@ release-units:
             "goreleaser",
             ACCEPT_CHOICE,
         );
-        run(&workspace);
-        run(&workspace);
-        resolve(
-            workspace.root(),
-            "go-application",
-            "apt/primary",
-            DECLINE_CHOICE,
-        );
-        resolve(
-            workspace.root(),
-            "go-application",
-            "aur/primary",
-            DECLINE_CHOICE,
-        );
         let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::Ready);
         assert!(
-            !result.plan.candidates.iter().any(|candidate| candidate
-                .choices
+            !result
+                .plan
+                .candidates
                 .iter()
-                .any(|choice| choice.publisher == Some(PublisherKind::Homebrew))),
-            "a publisher needing a tap repository is configured directly"
+                .any(|candidate| candidate.choices.iter().any(|choice| matches!(
+                    choice.publisher,
+                    Some(PublisherKind::Homebrew | PublisherKind::Rpm | PublisherKind::Apt)
+                ))),
+            "publishers needing destination configuration are configured directly"
         );
         let baseline = workspace.root().join("component/.goreleaser.yaml");
         assert!(
@@ -1653,7 +1645,7 @@ release-units:
         assert!(Config::load(workspace.root())
             .expect("config loads")
             .release_units["component"]
-            .rpm()
+            .aur()
             .is_some());
     }
 
@@ -2027,7 +2019,7 @@ github:
                     "{}github:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\n",
                     CONFIG.replace(
                         "    path: component\n",
-                        "    path: .\n    packages:\n      alpha: { path: component/alpha, rpm: {} }\n      beta: { path: component/beta, rpm: {} }\n",
+                        "    path: .\n    packages:\n      alpha: { path: component/alpha, aur: {} }\n      beta: { path: component/beta, aur: {} }\n",
                     )
                 ),
             )
@@ -2098,7 +2090,7 @@ github:
                     "{}github:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\n",
                     CONFIG.replace(
                         "    path: component\n",
-                        "    path: component\n    packages:\n      alpha: { path: alpha, rpm: {} }\n      beta: { path: beta, rpm: {} }\n",
+                        "    path: component\n    packages:\n      alpha: { path: alpha, aur: {} }\n      beta: { path: beta, aur: {} }\n",
                     )
                 ),
             )
@@ -2359,8 +2351,8 @@ github:
             .write("component/go.mod", "module example.test/component\n")
             .write("component/main.go", "package main\n\nfunc main() {}\n");
         let candidate = &run(&workspace).plan.candidates[0];
-        assert!(candidate.choices.len() > 2);
-        assert_eq!(candidate.recommended, None);
+        assert_eq!(candidate.choices.len(), 2);
+        assert_eq!(candidate.recommended, Some(candidate.choices[0].id.clone()));
     }
 
     #[test]
