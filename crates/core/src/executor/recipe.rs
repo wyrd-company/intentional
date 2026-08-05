@@ -1253,6 +1253,48 @@ release-units:
         derive_capabilities(root, config, "component")
     }
 
+    fn assert_publication_segment_is_refused(config: &str, expected_origin: &str) {
+        let workspace = Workspace::new("publication-identity-segment");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.0.0"}"#,
+        );
+        let config = Config::from_yaml(config).expect("fixture config");
+        let selection = resolve_publications(workspace.root(), &config)
+            .expect("invalid publication names are reported as diagnostics");
+        assert!(
+            selection.selected.is_empty(),
+            "an invalid segment must not select a publication: {selection:?}"
+        );
+        let message = selection.diagnostics.join("\n");
+        assert!(message.contains(expected_origin), "{message}");
+        assert!(message.contains("is not a"), "{message}");
+    }
+
+    #[test]
+    fn refuses_a_release_unit_identifier_containing_the_identity_separator() {
+        assert_publication_segment_is_refused(
+            &GITHUB
+                .replace("  component:\n", "  component/part:\n")
+                .replace(
+                    "    path: component\n",
+                    "    path: component\n    packages:\n      package:\n        path: .\n        npm: {}\n",
+                ),
+            "release unit component/part",
+        );
+    }
+
+    #[test]
+    fn refuses_a_package_identifier_containing_the_identity_separator() {
+        assert_publication_segment_is_refused(
+            &GITHUB.replace(
+                "    path: component\n",
+                "    path: component\n    packages:\n      package/part:\n        path: .\n        npm: {}\n",
+            ),
+            "release unit component package package/part",
+        );
+    }
+
     #[test]
     fn derives_capabilities_from_native_evidence_only() {
         let workspace = Workspace::new("capabilities");

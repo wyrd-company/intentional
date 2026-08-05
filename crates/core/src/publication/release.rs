@@ -405,9 +405,9 @@ impl ObservedPublications {
     /// The encoding is reversible, and that is the point rather than tidiness.
     /// This observer exists to keep one publication's proved retrieval from
     /// standing in for another's, and a lossy name defeats it directly: folding
-    /// every separator to one character makes `component/package/homebrew/primary` and a
-    /// release unit named `component-homebrew` publishing `primary` resolve to
-    /// the same file. `%` is itself encoded, so no two identities can collide.
+    /// every separator to one character makes `component/package-homebrew/npm/primary`
+    /// and `component-package/homebrew/npm/primary` resolve to the same file.
+    /// `%` is itself encoded, so no two identities can collide.
     ///
     /// The name is derived here rather than read from the document, so a
     /// document written for another publication is read as the publication whose
@@ -2344,12 +2344,12 @@ retrieval:
             Path::new("observations/component%2Fpackage%2Fhomebrew%2Fprimary.yml")
         );
         assert_ne!(
-            observer.path("component/package/homebrew/primary"),
-            observer.path("component-homebrew/primary"),
+            observer.path("component/package-homebrew/npm/primary"),
+            observer.path("component-package/homebrew/npm/primary"),
         );
         assert_ne!(
-            observer.path("component%2Fhomebrew/primary"),
-            observer.path("component/package/homebrew/primary"),
+            observer.path("component%2Fpackage/homebrew/npm/primary"),
+            observer.path("component/package/homebrew/npm/primary"),
         );
     }
 

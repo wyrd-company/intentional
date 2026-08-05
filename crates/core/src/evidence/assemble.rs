@@ -1852,6 +1852,55 @@ phase-tags: []
     }
 
     #[test]
+    fn refuses_publisher_evidence_with_an_empty_package() {
+        let workspace = workspace();
+        let mut evidence: PublisherEvidence =
+            serde_yaml::from_str(&fragment(&workspace, "component", "npm", "primary"))
+                .expect("publisher evidence");
+        evidence.package.clear();
+
+        let findings = publisher_findings(&evidence, "fragment.yml");
+
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.contains("empty release unit, package, or target")),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn nests_two_packages_of_one_release_unit_under_distinct_keys() {
+        let workspace = workspace();
+        let first: PublisherEvidence =
+            serde_yaml::from_str(&fragment(&workspace, "component", "npm", "primary"))
+                .expect("first publisher evidence");
+        let mut second = first.clone();
+        second.package = "companion".to_owned();
+        let fragments = vec![
+            (PathBuf::from("first.yml"), first),
+            (PathBuf::from("second.yml"), second),
+        ];
+        let expected = fragments
+            .iter()
+            .map(|(_, fragment)| fragment.identity())
+            .collect();
+        let mut findings = Vec::new();
+
+        let accepted = accept_publisher_evidence(&fragments, &expected, &mut findings);
+
+        assert!(findings.is_empty(), "{findings:?}");
+        assert_eq!(
+            accepted["component"]
+                .packages
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["companion", "package"]
+        );
+    }
+
+    #[test]
     fn preserves_arbitrary_contributor_yaml_without_interpretation() {
         let workspace = workspace();
         let input = workspace.scratch().join("artifacts");

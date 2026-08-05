@@ -9,11 +9,12 @@ use intentional_core::{
     assemble, check_executor, check_workspace, compare_workflow, contribute, initialize,
     initialize_executor, prepare_release, record_built_subject, verify_handoff, verify_publication,
     verify_release_observed, verify_release_tag, ApplyResult, AssembleRequest, Bump,
-    CheckoutContext, ComparisonStatus, Config, ContributionRequest, DestinationObserver,
+    CheckoutContext, Clock, ComparisonStatus, Config, ContributionRequest, DestinationObserver,
     ExecutorInitState, GhReleaseSource, InitState, IntentDraft, ObservedPublications,
-    PublisherKind, ReleasePlan, ReleaseSource, StampResult, SystemClock, TagPhase, TagResult,
-    VerifyPublicationRequest, WorkflowIdentity, WorkflowRole, WorkspaceStatus, CONFIG_PATH,
-    LOCAL_JOB, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    PublicationContext, PublisherKind, ReleasePlan, ReleaseSource, StampResult, SystemClock,
+    TagPhase, TagResult, VerifiedPublication, VerifyPublicationRequest, WorkflowIdentity,
+    WorkflowRole, WorkspaceStatus, CONFIG_PATH, LOCAL_JOB, MISSING_BASELINE_CODE,
+    MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -417,16 +418,39 @@ fn release_tag(root: &std::path::Path) -> Result<()> {
 }
 
 fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
+    let needs_release_source = args.draft_handoff.is_some();
+    let clock = SystemClock::new();
+    let context = CheckoutContext::new();
+    // Release access proves only a supplied handoff. A public consumer path
+    // carries no handoff and verifies without GitHub access.
+    let source = needs_release_source.then(|| GhReleaseSource::new(root));
+    let verified = verify_publication_command(
+        root,
+        args,
+        &clock,
+        &context,
+        source.as_ref().map(|source| source as &dyn ReleaseSource),
+    )?;
+    if verified.reused {
+        println!("reused the sealed publisher evidence");
+    }
+    // The Action projects exactly this line, so the fragment a consumer reads
+    // is the one this invocation proved rather than a path it guessed.
+    println!("evidence-path: {}", verified.path.display());
+    Ok(())
+}
+
+fn verify_publication_command(
+    root: &std::path::Path,
+    args: PublicationArgs,
+    clock: &dyn Clock,
+    context: &dyn PublicationContext,
+    release_source: Option<&dyn ReleaseSource>,
+) -> Result<VerifiedPublication> {
     let observation = resolve(root, args.observation);
     let output = resolve(root, args.output);
     let handoff = args.draft_handoff.map(|path| resolve(root, path));
-    let clock = SystemClock::new();
-    let context = CheckoutContext::new();
-    // The Release access exists only to prove a supplied handoff. A publication
-    // that consumes no draft asset never reaches it, so a publisher whose
-    // consumer path is public still verifies without any GitHub access at all.
-    let source = handoff.as_ref().map(|_| GhReleaseSource::new(root));
-    let verified = verify_publication(&VerifyPublicationRequest {
+    Ok(verify_publication(&VerifyPublicationRequest {
         root,
         release_unit: &args.release_unit,
         package: &args.package,
@@ -435,18 +459,11 @@ fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
         observation: &observation,
         output: &output,
         policy: None,
-        clock: &clock,
-        context: &context,
+        clock,
+        context,
         draft_handoff: handoff.as_deref(),
-        release_source: source.as_ref().map(|source| source as &dyn ReleaseSource),
-    })?;
-    if verified.reused {
-        println!("reused the sealed publisher evidence");
-    }
-    // The Action projects exactly this line, so the fragment a consumer reads
-    // is the one this invocation proved rather than a path it guessed.
-    println!("evidence-path: {}", verified.path.display());
-    Ok(())
+        release_source,
+    })?)
 }
 
 fn release(root: &std::path::Path, args: ReleaseArgs) -> Result<()> {
@@ -870,6 +887,116 @@ fn prompt(label: &str) -> Result<String> {
     Ok(value.trim().to_owned())
 }
 
+#[cfg(test)]
+mod publication_command_tests {
+    use super::*;
+    use intentional_core::evidence::assemble::TagIdentity;
+    use intentional_core::executor::fixture::Workspace;
+    use intentional_core::{
+        PlannedRelease, PublisherEvidence, ReleaseIdentity, PUBLICATION_OBSERVATION_CONTRACT,
+        PUBLICATION_OBSERVATION_SCHEMA,
+    };
+    use std::time::Duration;
+
+    struct StillClock;
+
+    impl Clock for StillClock {
+        fn elapsed(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn wait(&self, _duration: Duration) {}
+    }
+
+    struct Context;
+
+    impl PublicationContext for Context {
+        fn planned_release(
+            &self,
+            _root: &std::path::Path,
+            release_unit: &str,
+        ) -> intentional_core::Result<PlannedRelease> {
+            assert_eq!(release_unit, "component");
+            Ok(PlannedRelease {
+                identity: ReleaseIdentity {
+                    source_commit: "1".repeat(40),
+                    release_commit: "2".repeat(40),
+                    global_tag: TagIdentity {
+                        name: "release/1.2.3".to_owned(),
+                        object: "3".repeat(40),
+                        target: "2".repeat(40),
+                    },
+                    plan_digest: format!("sha256:{}", "4".repeat(64)),
+                },
+                version: "1.2.3".to_owned(),
+            })
+        }
+
+        fn sealed_fragment(
+            &self,
+            _root: &std::path::Path,
+            _release_commit: &str,
+            _identity: &str,
+        ) -> intentional_core::Result<Option<PublisherEvidence>> {
+            Ok(None)
+        }
+
+        fn phase_tags(
+            &self,
+            _root: &std::path::Path,
+            _release_commit: &str,
+            _identity: &str,
+        ) -> intentional_core::Result<Vec<TagIdentity>> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[test]
+    fn verify_publication_binds_distinct_release_unit_and_package_options() {
+        let workspace = Workspace::new("verify-publication-command");
+        workspace.write(
+            ".intentional/config.yml",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n  component:\n    path: component\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+        );
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.2.3"}"#,
+        );
+        workspace.write(
+            "observation.yml",
+            &format!(
+                "$schema: {PUBLICATION_OBSERVATION_SCHEMA}\ncontract: {PUBLICATION_OBSERVATION_CONTRACT}\nrelease-unit: component\npackage: package\npublisher: npm\ntarget: primary\nstate: present\nsubject:\n  kind: npm-package\n  identity: sample-library\n  version: 1.2.3\n  digest: sha256:{digest}\npackager:\n  id: npm\n  version: 10.9.0\ndestination:\n  identity: npmjs\n  version: 1.2.3\n  digest: sha256:{digest}\nretrieval:\n  mode: public\n  client: npm\n  version: 10.9.0\n  digest: sha256:{digest}\n",
+                digest = "a".repeat(64)
+            ),
+        );
+
+        verify_publication_command(
+            workspace.root(),
+            PublicationArgs {
+                release_unit: "component".to_owned(),
+                package: "package".to_owned(),
+                publisher: PublisherKind::Npm,
+                target: None,
+                observation: PathBuf::from("observation.yml"),
+                output: PathBuf::from("publisher-evidence.yml"),
+                draft_handoff: None,
+            },
+            &StillClock,
+            &Context,
+            None,
+        )
+        .expect("publication verifies through the command binding");
+
+        let evidence: PublisherEvidence = serde_yaml::from_str(
+            &std::fs::read_to_string(workspace.root().join("publisher-evidence.yml"))
+                .expect("emitted evidence"),
+        )
+        .expect("publisher evidence");
+        assert_eq!(evidence.release_unit, "component");
+        assert_eq!(evidence.package, "package");
+    }
+}
+
 /// Bind the commands managed workflow jobs run to the parser that accepts them.
 ///
 /// Workflow derivation splices `intentional` commands into privileged jobs
@@ -962,6 +1089,51 @@ mod generated_invocations {
                 (path.display().to_string(), invocations)
             })
             .collect()
+    }
+
+    /// Every command example the command-line specification publishes.
+    fn published_command_examples() -> Vec<Vec<String>> {
+        fn collect(value: &serde_yaml::Value, examples: &mut Vec<Vec<String>>) {
+            match value {
+                serde_yaml::Value::Mapping(mapping) => {
+                    if let Some(sequence) = mapping
+                        .get(serde_yaml::Value::String("examples".to_owned()))
+                        .and_then(serde_yaml::Value::as_sequence)
+                    {
+                        for example in sequence.iter().filter_map(serde_yaml::Value::as_str) {
+                            if example.starts_with("intentional ") || example == "intentional" {
+                                examples.push(shell_words::split(example).unwrap_or_else(
+                                    |error| {
+                                        panic!(
+                                        "published example `{example}` does not tokenize: {error}"
+                                    )
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                    for child in mapping.values() {
+                        collect(child, examples);
+                    }
+                }
+                serde_yaml::Value::Sequence(sequence) => {
+                    for child in sequence {
+                        collect(child, examples);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let specification = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/specifications/command-line-interface.yml");
+        let document: serde_yaml::Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&specification).expect("command-line specification"),
+        )
+        .expect("command-line specification parses");
+        let mut examples = Vec::new();
+        collect(&document, &mut examples);
+        examples
     }
 
     /// Every `intentional` invocation any step of one workflow runs.
@@ -1484,6 +1656,22 @@ mod generated_invocations {
         assert_eq!(
             total, ACTION_INVOCATIONS,
             "the published Actions invoke a known number of commands; an Action that stopped invoking one, or a recognizer that stopped seeing one, must fail here rather than bind fewer commands than it claims"
+        );
+    }
+
+    #[test]
+    fn the_parser_accepts_every_published_command_example() {
+        let examples = published_command_examples();
+        for tokens in &examples {
+            let rendered = shell_words::join(tokens);
+            Cli::try_parse_from(tokens).unwrap_or_else(|error| {
+                panic!("the command-line specification publishes `{rendered}`, which this binary rejects:\n{error}")
+            });
+        }
+        assert_eq!(
+            examples.len(),
+            34,
+            "the command-line specification publishes a known number of executable examples"
         );
     }
 

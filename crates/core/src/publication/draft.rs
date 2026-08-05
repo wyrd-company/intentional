@@ -777,6 +777,23 @@ release-units:
     }
 
     #[test]
+    fn refuses_a_handoff_with_an_empty_package() {
+        let mut document = handoff(b"deliverable bytes");
+        document.package.clear();
+
+        let error =
+            DraftReleaseAssetHandoff::from_yaml(&document.to_yaml().expect("handoff document"))
+                .expect_err("an empty package is refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("empty release unit, package, or target"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn refuses_a_handoff_for_a_publisher_that_does_not_consume_release_assets() {
         let workspace = Workspace::new("handoff-publisher");
         let path = workspace.root().join("draft.yml");

@@ -279,36 +279,6 @@ pub struct VerifyPublicationRequest<'a> {
     pub release_source: Option<&'a dyn ReleaseSource>,
 }
 
-impl<'a> VerifyPublicationRequest<'a> {
-    /// Verify one publication using the adapter's maintained observation policy.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        root: &'a Path,
-        release_unit: &'a str,
-        package: &'a str,
-        publisher: PublisherKind,
-        observation: &'a Path,
-        output: &'a Path,
-        clock: &'a dyn Clock,
-        context: &'a dyn PublicationContext,
-    ) -> Self {
-        Self {
-            root,
-            release_unit,
-            package,
-            publisher,
-            target: None,
-            observation,
-            output,
-            policy: None,
-            clock,
-            context,
-            draft_handoff: None,
-            release_source: None,
-        }
-    }
-}
-
 /// One verified publication and the fragment written for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedPublication {

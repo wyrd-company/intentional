@@ -1564,8 +1564,8 @@ proposed-design:
     publication's document from the file its own identity names: that name is
     the identity with every character outside `A-Za-z0-9._-` written as `%` and
     its two uppercase hexadecimal digits, followed by `.yml`, so
-    `component/homebrew/primary` is read from
-    `component%2Fhomebrew%2Fprimary.yml`. The encoding is reversible so that no
+    `component/package/homebrew/primary` is read from
+    `component%2Fpackage%2Fhomebrew%2Fprimary.yml`. The encoding is reversible so that no
     two publications can resolve to one document, which is the property the
     observer exists for. A publication no supplied observation covers is
     reported rather than passed. The closed Release asset is read back whichever
