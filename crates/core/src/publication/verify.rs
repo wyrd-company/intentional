@@ -919,6 +919,42 @@ release-units:
     }
 
     #[test]
+    fn refuses_a_publisher_configured_only_for_another_package() {
+        let workspace = Workspace::new("verify-package-selector");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "    path: component\n",
+                "    path: component\n    packages:\n      first:\n        path: first\n        npm: {}\n      second:\n        path: second\n        cargo: {}\n",
+            ),
+        );
+        workspace.write(
+            "component/first/package.json",
+            r#"{"name":"sample-library","version":"1.2.3"}"#,
+        );
+        workspace.write(
+            "component/second/Cargo.toml",
+            "[package]\nname = \"sample-crate\"\nversion = \"1.2.3\"\n",
+        );
+
+        let error = select_publication(
+            workspace.root(),
+            "component",
+            "second",
+            PublisherKind::Npm,
+            None,
+        )
+        .expect_err("a publisher from another package must not satisfy the selector");
+
+        assert!(
+            error
+                .to_string()
+                .contains("publication component/second/npm/primary is not configured"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn a_present_observation_produces_a_deterministic_fragment() {
         let workspace = npm_workspace("verify-present");
         workspace.write(
