@@ -1644,25 +1644,20 @@ release-units:
     }
 
     #[test]
-    fn withholds_the_capability_from_a_main_package_outside_the_release_unit() {
-        // An unbounded search would reach a vendored or copied command and
-        // derive a capability for something the release does not publish.
-        let workspace = Workspace::new("go-vendored");
+    fn withholds_the_capability_from_a_command_in_a_nested_go_module() {
+        let workspace = Workspace::new("go-nested-module");
         workspace
             .write("component/go.mod", "module example.test/component\n")
+            .write("component/nested/go.mod", "module example.test/nested\n")
             .write(
-                "component/vendor/example.test/other/main.go",
-                "package main\n\nfunc main() {}\n",
-            )
-            .write(
-                "component/cmd/example/deep/deeper/deepest/main.go",
+                "component/nested/main.go",
                 "package main\n\nfunc main() {}\n",
             );
         let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
             .expect("capabilities derive");
         assert!(
             !capability_set(&derived).contains(&Capability::GoApplication),
-            "a command outside the searched layout derives nothing"
+            "a child module command does not make the parent module publishable"
         );
     }
 
