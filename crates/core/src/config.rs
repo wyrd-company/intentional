@@ -1837,6 +1837,37 @@ release-units:
     }
 
     #[test]
+    fn rejects_an_authenticated_system_package_retrieval_at_its_package_owned_path() {
+        let text = with_github("").replace(
+            "    path: packages/application\n",
+            r#"    path: packages/application
+    packages:
+      application:
+        path: .
+        rpm:
+          delivery-action: .github/actions/deliver
+          base-url: https://packages.invalid/rpm
+          public-signing-key-url: https://packages.invalid/signing-key.asc
+          retrieval-mode: authenticated
+          observation-deadline: 47
+          channel: stable
+          with: {}
+"#,
+        );
+        let error = Config::from_yaml(&text)
+            .expect_err("private repository configuration is not admitted")
+            .to_string();
+        assert!(
+            error.contains("release-units.application.packages.application.rpm"),
+            "the diagnostic names the package-owned publisher mapping: {error}"
+        );
+        assert!(
+            error.contains("unknown field `retrieval-mode`"),
+            "the diagnostic names the removed field: {error}"
+        );
+    }
+
+    #[test]
     fn every_system_package_configuration_member_is_required_by_the_runtime_parser() {
         let schema: serde_yaml::Value =
             serde_yaml::from_str(include_str!("../../../schemas/config.yml")).expect("schema");
