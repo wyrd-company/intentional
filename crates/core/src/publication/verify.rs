@@ -281,6 +281,7 @@ pub struct VerifyPublicationRequest<'a> {
 
 impl<'a> VerifyPublicationRequest<'a> {
     /// Verify one publication using the adapter's maintained observation policy.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         root: &'a Path,
         release_unit: &'a str,
