@@ -126,8 +126,15 @@ jobs:
           scripts/release/verify-linux-gnu-linkage.sh
           "${{ matrix.bin_path }}" "${{ matrix.target }}"
 
+      - name: Install workflow test tools
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+
       - name: Test release source through pinned x86_64 GNU toolchain
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          ACTIONLINT: /project/.ci-tools/bin/actionlint
+          SHELLCHECK: /project/.ci-tools/bin/shellcheck
         run: cross test --workspace --locked --target "${{ matrix.target }}"
 
       - name: Assemble deterministic release archive

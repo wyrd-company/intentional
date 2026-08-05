@@ -16,10 +16,9 @@ use intentional_core::executor::{
 };
 use serde_yaml::Value;
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
-
-const HOSTED_ACTIONLINT_VERSION: &str = "v1.7.7";
 
 /// Collect every `run:` body from a parsed workflow without naming its jobs.
 fn collect_run_bodies(value: &Value, bodies: &mut Vec<String>) {
@@ -71,6 +70,11 @@ impl SyntaxTool {
         }
     }
 
+    fn executable(self) -> OsString {
+        std::env::var_os(self.command().to_ascii_uppercase())
+            .unwrap_or_else(|| self.command().into())
+    }
+
     const fn unchecked(self) -> &'static str {
         match self {
             Self::Actionlint => "derived workflow syntax",
@@ -92,7 +96,7 @@ impl SyntaxTool {
 }
 
 fn actionlint(path: &std::path::Path) -> Result<Output, String> {
-    Command::new(SyntaxTool::Actionlint.command())
+    Command::new(SyntaxTool::Actionlint.executable())
         // Shell bodies are checked one by one below, so this invocation owns
         // workflow syntax and cannot mask a skipped body extraction.
         .arg("-shellcheck=")
@@ -102,7 +106,7 @@ fn actionlint(path: &std::path::Path) -> Result<Output, String> {
 }
 
 fn shellcheck(body: &str) -> Result<Output, String> {
-    let mut child = Command::new(SyntaxTool::Shellcheck.command())
+    let mut child = Command::new(SyntaxTool::Shellcheck.executable())
         .args(["--shell=bash", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -137,43 +141,83 @@ fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
 }
 
 #[test]
-fn every_ci_job_running_workspace_tests_installs_the_actionlint_version_the_tests_require() {
-    let workflow =
-        std::fs::read_to_string("../../.github/workflows/ci.yml").expect("CI workflow is readable");
-    let document: Value = serde_yaml::from_str(&workflow).expect("CI workflow parses");
-    let installation = format!(
-        "go install github.com/rhysd/actionlint/cmd/actionlint@{HOSTED_ACTIONLINT_VERSION}"
-    );
-    for job in ["minimum-rust", "test"] {
-        let steps = document["jobs"][job]["steps"]
-            .as_sequence()
-            .unwrap_or_else(|| panic!("{job} job declares steps"));
-        let install_position = steps
-            .iter()
-            .position(|step| {
-                step["run"].as_str().is_some_and(|run| {
-                    run.lines().any(|line| line == installation)
-                        && run
-                            .lines()
-                            .any(|line| line == "echo \"$(go env GOPATH)/bin\" >> \"$GITHUB_PATH\"")
-                })
-            })
-            .unwrap_or_else(|| {
-                panic!("{job} installs the pinned actionlint required by the test suite")
-            });
-        let test_position = steps
-            .iter()
-            .position(|step| {
-                step["run"]
-                    .as_str()
-                    .is_some_and(|run| run.contains("cargo test --workspace"))
-            })
-            .unwrap_or_else(|| panic!("{job} runs the workspace tests"));
-        assert!(
-            install_position < test_position,
-            "actionlint is available before {job} tests require it"
-        );
+fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_requires() {
+    let directory = std::path::Path::new("../../.github/workflows");
+    let mut reached = Vec::new();
+    for entry in std::fs::read_dir(directory).expect("workflow directory is readable") {
+        let path = entry.expect("workflow entry is readable").path();
+        if !matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("yml" | "yaml")
+        ) {
+            continue;
+        }
+        let workflow = std::fs::read_to_string(&path).expect("workflow is readable");
+        let document: Value = serde_yaml::from_str(&workflow).expect("workflow parses");
+        for (job, body) in document["jobs"]
+            .as_mapping()
+            .expect("workflow declares jobs")
+        {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            for (test_position, test) in steps.iter().enumerate() {
+                let Some(command) = test["run"].as_str() else {
+                    continue;
+                };
+                let cross = command.contains("cross test --workspace");
+                if !cross && !command.contains("cargo test --workspace") {
+                    continue;
+                }
+                let job = job.as_str().expect("job id");
+                let installation = steps[..test_position]
+                    .iter()
+                    .rev()
+                    .find(|step| {
+                        step["run"].as_str().is_some_and(|run| {
+                            run.contains("scripts/ci/install-workflow-test-tools.sh .ci-tools/bin")
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{} job {job} installs workflow test tools before its suite",
+                            path.display()
+                        )
+                    });
+                assert_eq!(
+                    installation["if"],
+                    test["if"],
+                    "{} job {job} installs tools under the same condition that runs tests",
+                    path.display()
+                );
+                if cross {
+                    assert_eq!(
+                        test["env"]["ACTIONLINT"],
+                        "/project/.ci-tools/bin/actionlint"
+                    );
+                    assert_eq!(
+                        test["env"]["SHELLCHECK"],
+                        "/project/.ci-tools/bin/shellcheck"
+                    );
+                } else {
+                    assert!(
+                        installation["run"]
+                            .as_str()
+                            .expect("installation command")
+                            .contains(".ci-tools/bin\" >> \"$GITHUB_PATH"),
+                        "{} job {job} exposes installed tools to native tests",
+                        path.display()
+                    );
+                }
+                reached.push(format!("{}:{job}", path.display()));
+            }
+        }
     }
+    assert_eq!(
+        reached.len(),
+        5,
+        "the derived workspace-test job population: {reached:?}"
+    );
 }
 
 #[test]

@@ -57,7 +57,6 @@ jobs:
           tool: cross@0.2.5
 
       - uses: dtolnay/rust-toolchain@1.85.0
-
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
         with:
@@ -102,6 +101,8 @@ jobs:
         with:
           tool: cross@0.2.5
       - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install workflow test tools
+        run: scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
         with:
@@ -113,6 +114,9 @@ jobs:
             linux-gnu-x86_64-unknown-linux-gnu-${{
             hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
       - name: Run workspace tests through the pinned GNU target
+        env:
+          ACTIONLINT: /project/.ci-tools/bin/actionlint
+          SHELLCHECK: /project/.ci-tools/bin/shellcheck
         run: cross test --workspace --locked --target x86_64-unknown-linux-gnu
 
   smoke-x86_64:
@@ -175,5 +179,9 @@ jobs:
           ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 \
           arm64-ubuntu-24.04
       - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Install workflow test tools
+        run: |
+          scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+          echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
       - name: Run ARM64 library tests natively on host
         run: cargo test --workspace --locked

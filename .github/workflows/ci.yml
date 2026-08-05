@@ -19,10 +19,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85.0
-      - name: Install actionlint
+      - name: Install workflow test tools
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+          echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
       - name: Test the locked workspace with Rust 1.85
         run: cargo test --workspace --locked
 
@@ -39,10 +39,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Install actionlint
+      - name: Install workflow test tools
         run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+          echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
       - name: Test
         run: cargo test --workspace
       - name: Check this repository with intentional
