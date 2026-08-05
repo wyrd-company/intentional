@@ -428,12 +428,16 @@ aur:
                 "component/command/cmd/example-tool/main.go",
                 "package main\n\nfunc main() {}\n",
             )
-            .write("component/command/.goreleaser.yaml", GORELEASER_CONFIG);
+            .write(
+                "component/command/.goreleaser.yaml",
+                &GORELEASER_CONFIG.replace("project_name: example-tool\n", ""),
+            );
 
+        let findings = packager_findings(&workspace);
         assert!(
-            packager_findings(&workspace).is_empty(),
-            "{:?}",
-            packager_findings(&workspace)
+            findings.iter().any(|finding| finding
+                .contains("requires project_name in component/command/.goreleaser.yaml")),
+            "{findings:?}"
         );
     }
 
