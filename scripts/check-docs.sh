@@ -12,7 +12,8 @@ ryl check docs/docs.yml .github/workflows/publish-docs.yml Taskfile.yml
 # so a fenced ```yaml example inside a `|-` section reports one indentation
 # error per nested line. No document linted below can carry a fenced YAML
 # example. State configuration shapes in prose here, and put runnable YAML in
-# docs/*.md, which is linted as Markdown by the command at the end of this file.
+# docs/*.md, which `rumdl check docs/*.md` and `ryl --markdown docs/*.md` lint
+# as Markdown.
 ryl check \
   docs/features/*.yml \
   docs/specifications/*.yml \

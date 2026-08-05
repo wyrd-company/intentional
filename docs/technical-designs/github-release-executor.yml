@@ -222,25 +222,33 @@ proposed-design:
     workspace tag.
 
     Three packages sit inside it. `core` at `crates/core` and `cli` at
-    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`. The
-    `cli` package also declares `homebrew` with the tap repository, because the
-    formula is built from the command this repository already ships.
+    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`. That
+    yields three publications the release-unit identity could not tell apart:
+    `intentional/core/cargo/primary`, `intentional/cli/cargo/primary`, and
+    `intentional/launcher/npm/primary`. The first two differ in their package
+    alone, which is the collision that motivated the axis — the release unit,
+    publisher and target of the two crates are identical.
 
-    That yields four publications the previous identity could not name:
-    `intentional/core/cargo/primary`, `intentional/cli/cargo/primary`,
-    `intentional/cli/homebrew/primary`, and `intentional/launcher/npm/primary`.
-    Two of them differ only in their package, which is the collision that
-    motivated the axis — the release unit, publisher and target of the two
-    crates are identical. The Homebrew route consumes the `cli` package's
-    native release archives from the draft GitHub Release, and it resolves only
-    once a Rust route to Homebrew exists in the catalog; the version boundary is
-    what makes that safe, since one version reaches all four destinations.
+    The `cli` package gains a `homebrew` mapping naming the tap once a route
+    reaches Homebrew from something other than Go tooling, because the formula
+    is built from the command this repository already ships. That publication is
+    `intentional/cli/homebrew/primary`, and it consumes the `cli` package's
+    native release archives from the draft GitHub Release. The version boundary
+    is what makes it safe, since one version reaches every destination. A
+    `homebrew` mapping declared before that route exists resolves to no
+    maintained recipe, so the configuration reaches its full shape in two steps
+    rather than one.
 
-    This repository's own configuration adopts the shape when the contract it
-    is written against exists. A configuration declaring `packages` is a
-    contract-2 document, and a binary that implements only contract-1 refuses
-    it, so the adoption is part of implementing the contract rather than a
-    change that can precede it.
+    The contract token moves before the package declarations do. Every command
+    refuses a document whose contract is not the one the binary implements, so
+    the token in this repository's configuration is raised in the same change
+    that raises `CURRENT_CONTRACT`, or the tool cannot read its own workspace.
+    Nothing else need move with it: a configuration carrying no publisher blocks
+    is already a valid contract-2 document apart from the token, so the package
+    declarations follow once there is a model to declare them against. Between
+    the token bump and record interpretation, a status report notes that an
+    existing tag record carries an unexpected contract; that is the reading of
+    a record sealed under the earlier contract and not a failure.
 
   publication-identity: |-
     A publication is identified by release unit, package, publisher, and target.
