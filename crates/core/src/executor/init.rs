@@ -2023,7 +2023,7 @@ github:
                     "{}github:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\n",
                     CONFIG.replace(
                         "    path: component\n",
-                        "    path: component\n    packages:\n      alpha: { path: alpha, rpm: {} }\n      beta: { path: beta, rpm: {} }\n",
+                        "    path: .\n    packages:\n      alpha: { path: component/alpha, rpm: {} }\n      beta: { path: component/beta, rpm: {} }\n",
                     )
                 ),
             )
@@ -2058,6 +2058,20 @@ github:
             &serde_yaml::to_string(&plan).expect("plan serializes"),
         );
         let result = initialize_executor(workspace.root()).expect("resolved plan runs");
+        assert!(
+            result
+                .planned_writes()
+                .contains(&Path::new("component/alpha/.goreleaser.yaml")),
+            "a root-valued release unit produces a normalized package baseline path: {:?}",
+            result.planned_writes()
+        );
+        assert!(
+            result
+                .planned_writes()
+                .contains(&Path::new("component/beta/.goreleaser.yaml")),
+            "a root-valued release unit produces a normalized package baseline path: {:?}",
+            result.planned_writes()
+        );
         result.apply(workspace.root(), false).expect("plan applies");
         assert!(workspace
             .root()
@@ -2261,7 +2275,12 @@ github:
                 r#"{"name":"example-proposed","version":"1.0.0"}"#,
             );
         let error = initialize_executor(workspace.root()).expect_err("collision is reported");
-        assert!(error.to_string().contains("identifier shared collides"));
+        let message = error.to_string();
+        assert!(message.contains("identifier shared collides"), "{message}");
+        assert!(
+            message.contains("declared and shared/package.json"),
+            "configured package paths are normalized against a root-valued release unit: {message}"
+        );
     }
 
     #[test]
