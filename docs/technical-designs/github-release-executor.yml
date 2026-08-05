@@ -358,6 +358,14 @@ proposed-design:
     image definitions, and command packages therefore retain their distinct
     packaging boundaries inside one version boundary.
 
+    Workflow derivation resolves package-owned native configuration from the
+    selected package path. npm and Cargo manifests, Dockerfiles, and Dev
+    Container Feature manifests therefore name distinct subjects when packages
+    share one release unit and recipe. GoReleaser configuration remains owned by
+    the release unit because its one project name and distribution graph govern
+    every command package in that version boundary. The packager invocation uses
+    the same owner path as the configuration from which its subject was derived.
+
     Locating an artifact is not the same as being allowed to publish it, and the
     change of mechanism keeps both. A manifest that declines publication derives
     no publishable capability: an npm manifest marked private or naming no
