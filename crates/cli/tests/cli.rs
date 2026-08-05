@@ -2051,6 +2051,12 @@ fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) ->
     plan
 }
 
+fn reseal_plan_with_contract(mut plan: ReleasePlan, contract: &str) -> ReleasePlan {
+    plan.contract = contract.to_owned();
+    let generator_version = plan.generator.version.clone();
+    reseal_plan_with_generator(plan, &generator_version)
+}
+
 fn prepare_applied_release_with_prior_plan_generator(
     repo: &TestRepo,
     prior_generator: &str,
@@ -2112,6 +2118,29 @@ fn accepts_prior_version_sealed_plan_for_self_hosted_release() {
     assert_tagger_header(&repo.root, "0.0.1");
     assert_tagger_header(&repo.root, "sample-library@0.0.1");
     git_fsck_strict(&repo.root);
+}
+
+#[test]
+fn accepts_a_supplied_plan_written_under_a_supported_prior_contract() {
+    let repo = TestRepo::new();
+    let current = prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
+    let prior = reseal_plan_with_contract(current, "contract-1");
+    fs::write(
+        repo.root.join("release-plan.json"),
+        prior.to_canonical_json().expect("prior plan JSON"),
+    )
+    .expect("write prior plan");
+
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "create annotated tag sample-library@0.0.1",
+        ));
+    let record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    assert!(record.contains("contract: contract-2"), "{record}");
+    assert!(record.contains(&format!("plan-digest: {}", prior.digest)));
 }
 
 #[test]

@@ -342,7 +342,7 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
     Ok(selection)
 }
 
-/// Resolve each declared package to one native artifact and reject shared ownership.
+/// Reject shared ownership among packages that resolve unambiguously.
 fn validate_package_artifacts(
     root: &Path,
     id: &str,

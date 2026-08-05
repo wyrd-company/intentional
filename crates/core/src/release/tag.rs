@@ -88,7 +88,7 @@ pub fn verify_release_tag(root: &Path) -> Result<VerifiedReleaseTag> {
     let release = git::resolve(root, "HEAD^{commit}")?;
     let tag = resolve_published_tag(root, &release, &configured)?;
     let (tree, source) = release_commit_shape(root, &release)?;
-    verify_record(&tag, &config, &configured)?;
+    verify_record(&tag, &configured)?;
     let plan_digest = tag
         .fields
         .get(PLAN_DIGEST_FIELD)
@@ -282,7 +282,7 @@ fn read_annotated_tag(root: &Path, name: &str, object: &str) -> Result<Annotated
 }
 
 /// Prove the record is a complete, non-baseline release record for this workspace.
-fn verify_record(tag: &AnnotatedTag, _config: &Config, configured: &UnphasedTag) -> Result<()> {
+fn verify_record(tag: &AnnotatedTag, configured: &UnphasedTag) -> Result<()> {
     for field in REQUIRED_FIELDS {
         if !tag.fields.contains_key(field) {
             return Err(Error::Validation(format!(
@@ -900,14 +900,8 @@ pub(crate) mod tests {
         assert!(error.to_string().contains("binds plan digest"), "{error}");
     }
 
-    /// The record's interpretation contract is bound to the checkout's own.
-    ///
-    /// Evidence assembly deletes a reconciliation of the plan's contract with
-    /// the assembling configuration, and this comparison is one of the two
-    /// reasons that reconciliation could not fail. The prose recording that
-    /// ground is what a future reader will use to decide whether restoring the
-    /// deleted guard is warranted, so the claim is held by an assertion rather
-    /// than left to the prose.
+    /// The record is interpreted under the contract it names. A record is
+    /// refused only when no available interpreter implements that contract.
     #[test]
     fn accepts_a_record_written_under_a_supported_prior_interpretation_contract() {
         let workspace = ReleasedWorkspace::new();
@@ -926,7 +920,7 @@ pub(crate) mod tests {
             target: workspace.release.clone(),
             fields,
         };
-        verify_record(&tag, &config, &configured)
+        verify_record(&tag, &configured)
             .expect("a supported historical record is interpreted under its own contract");
     }
 

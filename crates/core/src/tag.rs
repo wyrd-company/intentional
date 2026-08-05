@@ -324,7 +324,6 @@ impl TagResult {
                     &record,
                     &id,
                     &candidate.version,
-                    &config.contract,
                     digest,
                     baseline,
                     head,
@@ -361,7 +360,6 @@ impl TagResult {
                     prerequisite,
                     prerequisite_name,
                     head,
-                    &config.contract,
                     digest,
                     &candidates[prerequisite].version,
                 )?;
@@ -463,7 +461,6 @@ fn validate_existing_candidate(
     record: &ParsedTagRecord,
     id: &str,
     version: &str,
-    contract: &str,
     digest: &str,
     baseline: bool,
     head: gix::ObjectId,
@@ -485,7 +482,6 @@ fn validate_existing_candidate(
     for (field, expected) in [
         ("tag-id", id),
         ("version", version),
-        ("contract", contract),
         ("plan-digest", digest),
         ("baseline", baseline.as_str()),
     ] {
@@ -494,6 +490,15 @@ fn validate_existing_candidate(
                 "existing tag {name} has unexpected {field}"
             )));
         }
+    }
+    if !record
+        .fields
+        .get("contract")
+        .is_some_and(|contract| supports_interpretation_contract(contract))
+    {
+        return Err(Error::Validation(format!(
+            "existing tag {name} has unexpected contract"
+        )));
     }
     Ok(())
 }
@@ -548,7 +553,6 @@ fn existing_tag_set_digest(
                 &render_tag(&tag.template, release_unit_id, version),
                 &id,
                 version,
-                &config.contract,
                 head,
                 baseline,
                 &mut digest,
@@ -565,7 +569,6 @@ fn existing_tag_set_digest(
             &render_tag(&tag.template, tag_id, version),
             &id,
             version,
-            &config.contract,
             head,
             baseline,
             &mut digest,
@@ -730,6 +733,9 @@ fn supplied_release_plan(
                     generator_version,
                 )?,
             };
+            let mut expected = expected;
+            expected.contract.clone_from(&plan.contract);
+            expected.digest.clone_from(&plan.digest);
             if expected != plan {
                 return Err(Error::Validation(
                     "supplied release plan does not match the release recovered from intents"
@@ -741,13 +747,11 @@ fn supplied_release_plan(
     Ok(plan)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn collect_existing_digest(
     repository: &gix::Repository,
     name: &str,
     expected_id: &str,
     expected_version: &str,
-    _expected_contract: &str,
     expected_target: gix::ObjectId,
     expected_baseline: bool,
     digest: &mut Option<String>,
@@ -1156,7 +1160,6 @@ fn verify_existing_prerequisite(
     prerequisite: &str,
     tag_name: &str,
     head: gix::ObjectId,
-    contract: &str,
     digest: &str,
     version: &str,
 ) -> Result<()> {
@@ -1171,7 +1174,6 @@ fn verify_existing_prerequisite(
         )));
     }
     for (field, expected) in [
-        ("contract", contract),
         ("plan-digest", digest),
         ("tag-id", prerequisite),
         ("version", version),
@@ -1181,6 +1183,15 @@ fn verify_existing_prerequisite(
                 "prerequisite tag {prerequisite} has unexpected {field}"
             )));
         }
+    }
+    if !record
+        .fields
+        .get("contract")
+        .is_some_and(|contract| supports_interpretation_contract(contract))
+    {
+        return Err(Error::Validation(format!(
+            "prerequisite tag {prerequisite} has unexpected contract"
+        )));
     }
     Ok(())
 }

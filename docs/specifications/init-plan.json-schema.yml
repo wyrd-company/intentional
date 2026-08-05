@@ -90,7 +90,7 @@ $defs:
       $schema:
         const: https://intentional.foo/schemas/config.yml
       contract:
-        enum: [ contract-1, contract-2 ]
+        const: contract-2
       settings:
         type: object
         additionalProperties: false
