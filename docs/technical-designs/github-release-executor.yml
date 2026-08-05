@@ -143,6 +143,15 @@ proposed-design:
     declared ones, so two artifacts whose names would collide inside one release
     unit are reported rather than silently distinguished.
 
+    Both answers are recorded in configuration, because configuration is what
+    the repository keeps. Accepting writes the package. Declining writes a
+    discovery receipt for the declined path. A receipt for an accepted candidate
+    names the package that owns it rather than the release unit alone, since a
+    path now belongs to a packaging boundary inside a versioning one, and a
+    receipt that resolved only to the release unit could not say which of its
+    packages claimed the path. The initialization plan holds answers in flight;
+    it is not where a decision comes to rest.
+
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
     native package files. Its Intentional property contains only the explicit
@@ -365,22 +374,29 @@ proposed-design:
     again. Exclusion is a decision about a known artifact, not a permanent
     blindfold.
 
-    Go commands are declined where they are proposed. Discovery receipts do not
-    reach them, because the module detector identifies a module rather than each
-    main package inside it and the command walk is not a detector; a receipt is
-    keyed to a detector, so there is nothing for it to key to. Enumerated
-    commands are nonetheless candidates an operator must be able to refuse, or
-    initialization proposes a command the repository has already decided against
-    on every run.
+    Discovery therefore detects commands, not only modules. A module detector
+    that identifies a module and nothing inside it cannot supply evidence at a
+    command's path, so a package declared there would resolve against nothing
+    and derive no capability. Detection produces candidates at both levels: the
+    module as a versioning boundary, and each command within it as a packaging
+    boundary. Capability derivation reads one body of evidence and finds every
+    declared package in it, whatever kind of artifact that package is.
 
-    The executor initialization plan carries that decision. It records a
-    resolution for each candidate, a declined candidate stays declined across
-    reruns, and a converged workspace asks nothing further. So a command is
-    declined as a package candidate in the plan rather than as a path in the
-    discovery receipts, and no second exclusion vocabulary is introduced. The
-    two places a refusal can live correspond to the two things being refused: a
-    discovery receipt declines a path as a versioning boundary, and a plan
-    resolution declines a candidate as a packaging boundary.
+    That is also what makes a refusal durable, and durability is the property
+    that matters. A decision to publish is recorded by the package that
+    configuration declares. A decision *not* to publish has nowhere to live
+    unless discovery can name what was declined, and an initialization plan
+    cannot carry it: the plan is a working file for a resolve-then-rerun loop on
+    one machine's disk, so a fresh clone, another contributor, and every CI run
+    begin with no plan and are asked again. A refusal that survives only on the
+    disk that made it is not a refusal the repository has made.
+
+    A declined command is therefore recorded as a discovery receipt in
+    configuration, which is the tracked artifact, alongside the receipts that
+    decline any other candidate path. It is pinned to the evidence digest it was
+    taken against, so it silences that command while the command is unchanged
+    and returns it to be decided when it changes. One vocabulary covers both
+    levels, because both levels are discovery candidates.
 
   workflow-reconciliation: |-
     The executor derives the required release or publish workflow contract from
