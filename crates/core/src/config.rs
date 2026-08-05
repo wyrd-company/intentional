@@ -929,6 +929,20 @@ impl Config {
                     receipt.release_unit
                 )));
             }
+            let unit = &self.release_units[&receipt.release_unit];
+            let package = &unit.packages[&receipt.package];
+            let owner = join_relative_paths(&unit.path, &package.path);
+            let candidate = discovery_candidate_directory(&receipt.detector, &receipt.path);
+            if owner != candidate {
+                return Err(Error::Validation(format!(
+                    "managed discovery path {} belongs to release unit {} package {} at {}, not {}",
+                    receipt.path.display(),
+                    receipt.release_unit,
+                    receipt.package,
+                    owner.display(),
+                    candidate.display()
+                )));
+            }
             if !identities.insert((&receipt.detector, &receipt.path)) {
                 return Err(Error::Validation(format!(
                     "duplicate discovery receipt for detector {} at {}",
@@ -1129,6 +1143,25 @@ impl Config {
             visit(id, &edges, &mut visiting, &mut visited)?;
         }
         Ok(())
+    }
+}
+
+pub(crate) fn discovery_candidate_directory(detector: &str, path: &Path) -> PathBuf {
+    if matches!(detector, "go-command" | "terraform-module") {
+        return path.to_owned();
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn join_relative_paths(parent: &Path, child: &Path) -> PathBuf {
+    match (parent == Path::new("."), child == Path::new(".")) {
+        (true, true) => PathBuf::from("."),
+        (true, false) => child.to_owned(),
+        (false, true) => parent.to_owned(),
+        (false, false) => parent.join(child),
     }
 }
 
@@ -1482,6 +1515,17 @@ release-units:
             .expect_err("unknown managed package rejected")
             .to_string()
             .contains("unknown package missing in release unit library"));
+
+        let wrong_owner = receipts
+            .replace(
+                "      library: { path: . }",
+                "      library: { path: . }\n      other: { path: other }",
+            )
+            .replace("package: library", "package: other");
+        assert!(Config::from_yaml(&wrong_owner)
+            .expect_err("managed receipt owned by another package rejected")
+            .to_string()
+            .contains("package other at packages/library/other, not packages/library"));
 
         let glob = receipts.replace("examples/package.json", "examples/*.json");
         assert!(Config::from_yaml(&glob)

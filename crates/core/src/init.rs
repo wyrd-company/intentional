@@ -6,9 +6,10 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
-    validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
-    Config, ExcludedPathReceipt, ManagedPathReceipt, PackageConfig, Projection, ReleaseUnitConfig,
-    TagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
+    discovery_candidate_directory, validate_detector_id, validate_exact_discovery_path,
+    validate_sha256, validate_tag_template, Config, ExcludedPathReceipt, ManagedPathReceipt,
+    PackageConfig, Projection, ReleaseUnitConfig, TagConfig, CONFIG_PATH, CONFIG_SCHEMA,
+    CURRENT_CONTRACT,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -2934,22 +2935,9 @@ fn go_command_candidate(
     })
 }
 
-/// Report whether a detector identifies a directory rather than a single file.
-fn directory_scoped_detector(detector: &str) -> bool {
-    detector == TagOnlyArtifact::TerraformSource.detector() || detector == "go-command"
-}
-
 /// Resolve the workspace-relative directory a candidate contributes to its release unit.
 fn candidate_directory(candidate: &DiscoveryCandidate) -> PathBuf {
-    if directory_scoped_detector(&candidate.detector) {
-        return candidate.path.clone();
-    }
-    candidate
-        .path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    discovery_candidate_directory(&candidate.detector, &candidate.path)
 }
 
 /// Select the detector presentation for one ecosystem manifest.
