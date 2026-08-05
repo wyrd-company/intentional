@@ -2435,7 +2435,7 @@ fn rejects_supplied_plan_digest_mismatch() {
 }
 
 #[test]
-fn executor_init_requires_resolutions_then_configures_publication() {
+fn executor_init_requires_resolutions_then_persists_publication_intent() {
     let repo = TestRepo::new();
     repo.write(
         ".intentional/config.yml",
@@ -2485,11 +2485,21 @@ release-units:
     )
     .expect("resolve additional target");
 
-    repo.cli().args(["executor", "init"]).assert().success();
+    repo.cli()
+        .args(["executor", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "update .intentional/config.yml in place",
+        ));
 
     let config = fs::read_to_string(repo.root.join(".intentional/config.yml")).expect("config");
     assert!(config.contains("github:"), "{config}");
     assert!(config.contains("npm:"), "{config}");
+    assert!(
+        config.contains("component/example-component/npm/github"),
+        "{config}"
+    );
 }
 
 #[test]
