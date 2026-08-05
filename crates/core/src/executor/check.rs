@@ -45,19 +45,25 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
     let mut findings = selection.diagnostics;
     for publication in selection.selected {
         let unit = &config.release_units[&publication.release_unit];
+        let package = &unit.packages[&publication.package];
+        let package_path = if package.path == Path::new(".") {
+            unit.path.clone()
+        } else {
+            unit.path.join(&package.path)
+        };
         let configured = publication
             .packager
             .configuration_paths()
             .iter()
-            .any(|relative| root.join(&unit.path).join(relative).is_file());
+            .any(|relative| root.join(&package_path).join(relative).is_file());
         if configured {
-            findings.extend(native_packager_findings(root, unit, &publication)?);
+            findings.extend(native_packager_findings(root, &package_path, &publication)?);
         } else {
             findings.push(format!(
                 "{} requires {} configuration in {}; expected one of {}",
                 publication.identity(),
                 publication.packager,
-                unit.path.display(),
+                package_path.display(),
                 publication.packager.configuration_paths().join(", ")
             ));
         }
@@ -84,18 +90,18 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
 /// stay native; conformance only states which of them the recipe depends on.
 fn native_packager_findings(
     root: &Path,
-    unit: &crate::config::ReleaseUnitConfig,
+    package_path: &Path,
     publication: &SelectedPublication,
 ) -> Result<Vec<String>> {
     if publication.packager != Packager::GoReleaser {
         return Ok(Vec::new());
     }
-    let directory = root.join(&unit.path);
+    let directory = root.join(package_path);
     let Some(config) = goreleaser::read(&directory)? else {
         return Ok(Vec::new());
     };
     let identity = publication.identity();
-    let file = unit.path.join(&config.path);
+    let file = package_path.join(&config.path);
     let file = file.display();
     let mut findings = Vec::new();
     // The sealed subject identity is compared against what a publisher fragment
@@ -323,8 +329,14 @@ release-units:
     #[test]
     fn accepts_a_conforming_workspace() {
         let workspace = workspace("check-conforming", "    npm: {}\n");
+        let config = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+            .expect("fixture config");
         workspace.write(
-            "component/package.json",
+            ".intentional/config.yml",
+            &config.replace("        path: .\n", "        path: launcher\n"),
+        );
+        workspace.write(
+            "component/launcher/package.json",
             r#"{"name":"example-component","version":"1.0.0"}"#,
         );
         converge(workspace.root());
