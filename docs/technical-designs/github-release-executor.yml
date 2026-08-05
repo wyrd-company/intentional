@@ -247,15 +247,28 @@ proposed-design:
     no publisher blocks is already a valid document under the new contract apart
     from the token.
 
-    Record interpretation is not separable from that bump, and raising the token
-    without it leaves the workspace failing its own checks. A binary that
-    requires the contract it writes reports every tag record sealed under the
-    earlier contract as carrying an unexpected one, and workspace validation
-    turns any such report into a refusal. The repository would then refuse
-    itself, on the strength of records that are correct. So the contract change
-    is one change across both populations: the constant, the configuration
-    token, and the interpretation that reads a record under the contract the
-    record names.
+    Record interpretation is not separable from that bump. A record names the
+    contract it was sealed under, and nothing may compare that against the
+    contract the binary would write today. The rule reaches every such
+    comparison rather than the ones that announce themselves, and there are four
+    kinds: the workspace validation that reports a record's fields as
+    unexpected, the verification that reads a published record, the acceptance
+    of a supplied release plan, and the relevance filter that decides which
+    records at a commit describe the release being resumed.
+
+    The last kind is the one a remedy shaped around refusals will miss, and it
+    is the one on the release path. It does not refuse a record whose contract
+    differs; it skips it. A skipped record is an invisible record, so an
+    already-released commit reads as unreleased, the recovery path builds a
+    fresh plan from intents rather than resuming the sealed one, and the guard
+    that compares a recovered plan against existing records never fires, because
+    it fires only when a record was found. A refusal is loud and a filter is
+    silent, and the silent one re-releases.
+
+    So the contract change is one change across both populations: the constant,
+    the configuration token, and every place a record's own contract is read —
+    each interpreting under the contract the record names, whether that reading
+    refuses, verifies, accepts, or selects.
 
   publication-identity: |-
     A publication is identified by release unit, package, publisher, and target.
