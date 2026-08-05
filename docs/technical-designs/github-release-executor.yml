@@ -106,12 +106,21 @@ proposed-design:
     `INTENTIONAL_` for environment variables. The protected release environment
     name is the job prefix converted to kebab case with `-release` appended.
 
-    Each release unit opts into managed publication through optional publisher
-    properties placed directly on that release unit. The supported properties
-    are `npm`, `cargo`, `homebrew`, `rpm`, `apt`, `aur`, and `oci`. A publisher
-    property is invalid unless the top-level `github` configuration is present.
-    Package discovery and native publisher settings never create publication
-    intent implicitly.
+    A release unit is the versioning boundary. It owns one version, projections,
+    dependency edges, and tags. Its optional `packages` mapping declares the
+    packaging boundaries that publish that version. Each package has a stable
+    identifier, a release-unit-relative `path`, and optional `npm`, `cargo`,
+    `homebrew`, `rpm`, `apt`, `aur`, and `oci` publisher properties. Publisher
+    properties are invalid on a release unit and invalid unless the top-level
+    `github` configuration is present. Package discovery and native publisher
+    settings never create publication intent implicitly.
+
+    Package paths may coincide when distinct native artifacts at that path
+    derive distinct capabilities. A package declaration must resolve to exactly
+    one publishable capability. Zero matches report the package path and the
+    evidence considered. Multiple matches report every candidate capability and
+    refuse configuration until the declarations name unambiguous packaging
+    boundaries.
 
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
@@ -161,11 +170,89 @@ proposed-design:
     its mapping is empty. Docker Hub configuration supplies a repository when
     that identity is not derivable. Each peer target owns its own `omit` list.
 
+  intentional-package-configuration: |-
+    Intentional is the worked example, because it is the repository the
+    single-slot identity could not express at all. It has one release unit and
+    three packages.
+
+    The release unit `intentional` is rooted at the workspace root and owns the
+    one version and the projections that carry that version into the Cargo
+    workspace manifest, the CLI crate's dependency on the core crate, and the
+    npm launcher manifest. Nothing about that changes: both crates carry
+    `version.workspace = true`, so the version boundary is the workspace and the
+    configuration says so.
+
+    Its tags take the shape the release workflow requires. The unphased
+    workspace tag `{version}` is the global release tag every plan seals, and
+    the release unit carries its own `intentional@{version}` tag phased
+    `before-publication`. The two namespaces are separate because a release unit
+    must declare a tag and the global tag may not be a release-unit tag; the
+    release-unit namespace needs a baseline tag before its first release, since
+    release-unit versions derive from the release-unit tag rather than the
+    workspace tag.
+
+    Three packages sit inside it. `core` at `crates/core` and `cli` at
+    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`. The
+    `cli` package also declares `homebrew` with the tap repository, because the
+    formula is built from the command this repository already ships.
+
+    That yields four publications the previous identity could not name:
+    `intentional/core/cargo/primary`, `intentional/cli/cargo/primary`,
+    `intentional/cli/homebrew/primary`, and `intentional/launcher/npm/primary`.
+    Two of them differ only in their package, which is the collision that
+    motivated the axis — the release unit, publisher and target of the two
+    crates are identical. The Homebrew route consumes the `cli` package's
+    native release archives from the draft GitHub Release, and it resolves only
+    once a Rust route to Homebrew exists in the catalog; the version boundary is
+    what makes that safe, since one version reaches all four destinations.
+
+    This repository's own configuration adopts the shape when the contract it
+    is written against exists. A configuration declaring `packages` is a
+    contract-2 document, and a binary that implements only contract-1 refuses
+    it, so the adoption is part of implementing the contract rather than a
+    change that can precede it.
+
+  publication-identity: |-
+    A publication is identified by release unit, package, publisher, and target.
+    The package segment is what makes the identity total: without it a release
+    unit publishing two artifacts to one publisher and target has one name for
+    two things, and every consumer of the identity inherits that collision.
+
+    The identity is one contract with several consumers, and each spells all
+    four segments. Publisher evidence fragments record it, so a fragment names
+    the package whose artifact it observed. Phase-tag evidence keys its intended
+    destinations on it, so a before-publication tag states which package it
+    intends to publish where. Publication observation documents carry it.
+    `intentional verify publication` matches on it and takes a `--package`
+    option beside `--release-unit` and `--publisher`, with the target selector
+    still optional. Derived workflow jobs are named from it, so the managed
+    publication and consumer-retrieval job identifiers each carry the package
+    segment between the release unit and the publisher.
+
+    Job naming is the consumer that fails loudest and earliest. Job identifiers
+    are derived rather than authored, and a workflow document cannot hold two
+    jobs of one name, so two packages publishing to one publisher and target
+    collapse into a single job that silently publishes one artifact. The package
+    segment is therefore load-bearing in the derived document, not only in
+    evidence.
+
+    This is a format with no recorded instances. No release has cut evidence
+    under any publication identity, so the change carries no compatibility
+    burden, needs no dual-read period, and migrates nothing. The identity is
+    stated once and every producer and consumer is written to it. The
+    configuration contract is the opposite case and is handled as its own
+    migration, because configurations written against the shipped contract do
+    exist.
+
   recipe-catalog: >-
-    Intentional maintains publication recipes indexed by release-unit
-    capability, packager, publisher adapter, and target. Native project evidence
-    derives capabilities and the one applicable packager; publisher properties
-    and target mappings express intent and destination data. A Go application
+    Intentional maintains publication recipes indexed by package capability,
+    packager, publisher adapter, and target. Native project evidence derives one
+    capability for each declared package; publisher properties and target
+    mappings express intent and destination data. The catalog can carry several
+    routes to one publisher when their capability and packager differ. Homebrew,
+    RPM, APT, and AUR therefore admit maintained routes for each native packager
+    that can produce their required distribution input instead of inheriting a
+    GoReleaser-only entry point. A Go application
     selects GoReleaser, a Dockerfile-backed runnable image selects its supported
     Buildx recipe, and a Dev Container Feature selects the Dev Container CLI.
     Exactly one maintained recipe must match every configured publication.
@@ -193,14 +280,18 @@ proposed-design:
     member of the packager's own configuration; none of them becomes a value
     Intentional configuration supplies.
 
-    A Go release unit's command package is discovered from that same native
-    evidence: the main package directories the packager's configuration names,
-    the release-unit root, and the conventional command directories beneath it
-    to a bounded depth. The bound is what keeps a vendored or copied command
-    from deriving a capability the release does not publish. A Go module with no
-    discoverable command reports that as the reason it derives no publishable
-    capability, because the recipes build a command and a module without one has
-    nothing for the packager to build.
+    Capability derivation consumes the same detector evidence produced by
+    `intentional init`. It filters that lossless evidence to the declared package
+    path and resolves the native artifact there; it does not probe a list of
+    fixed filenames at the release-unit root. npm workspaces, Cargo workspaces,
+    image definitions, and command packages therefore retain their distinct
+    packaging boundaries inside one version boundary.
+
+    Go command discovery returns every main package admitted by native
+    configuration and the bounded detector walk. Recipe selection joins those
+    candidates to declared package paths. It never selects the first match. A
+    declaration matching no command or more than one command is a semantic
+    configuration failure that names every candidate path.
 
   workflow-reconciliation: |-
     The executor derives the required release or publish workflow contract from
@@ -255,7 +346,8 @@ proposed-design:
     `intentional verify publication`, and `intentional verify release`.
 
     `verify publication` identifies the expected contract through required
-    `--release-unit` and `--publisher` options and an optional `--target`.
+    `--release-unit`, `--package`, and `--publisher` options and an optional
+    `--target`.
     Omitting `--target` or passing `primary` selects an adapter's configured
     primary destination. The npm-specific `npmjs` spelling aliases its primary.
     `crates.io` aliases Cargo's primary only when the concrete configured
@@ -537,7 +629,7 @@ proposed-design:
     honest ceiling for a packager with no upload-only path.
 
     The last managed job for each publication then runs `intentional verify
-    publication` with explicit release-unit and publisher identity and the
+    publication` with explicit release-unit, package, and publisher identity and the
     target selector required by the adapter. The command produces the
     schema-backed publisher evidence fragment consumed by
     `intentional evidence assemble`.
@@ -866,6 +958,16 @@ proposed-design:
     `packages: write` and `contents: read`, but never as Git repository-write
     authority.
 
+  system-package-integration-authority: >-
+    Package-scoped publication identity is authoritative for workflow and step
+    derivation. RPM and APT recipe changes integrate on top of this contract and
+    identify the package whose native artifact they distribute. Package identity
+    changes selection and evidence addressing; it grants no retrieval authority.
+    An RPM or APT destination requiring authenticated consumer retrieval still
+    needs a credential-bearing scratch-client seam that can consume sealed
+    configuration without exposing delivery `with:` values. No evidence records
+    authenticated retrieval until that seam exists.
+
   external-publisher-authentication: >-
     Publisher adapters prefer registry-supported trusted publishing. Each
     adapter defines semantic credential roles and conventional secret names,
@@ -1171,10 +1273,10 @@ proposed-design:
   release-evidence: >-
     Every Intentional-owned publisher and verification job writes a
     schema-valid YAML fragment to a temporary workflow artifact. The fragments
-    bind the release unit, publisher and target, S, R, global tag, plan digest,
+    bind the release unit, package, publisher and target, S, R, global tag, plan digest,
     subject identity and digest, native provenance, destination readback, and
     the truthful consumer-verification mode and result. The assembly job rejects
-    missing, duplicate, and unexpected publisher identities, verifies fragment
+    missing, duplicate, and unexpected publication identities, verifies fragment
     bindings and applicable
     phase-tag evidence, and orders the accepted fragments deterministically.
     `intentional evidence assemble` creates one human-readable
@@ -1206,7 +1308,7 @@ proposed-design:
     is the one that plan seals, under the name it seals it by, and every
     published subject carries the version the plan assigns its release unit. The
     expected publication set is derived from the proved checkout's configuration
-    and reconciled against the plan: a release unit with publishers and no
+    and reconciled against the plan: a release unit with package publishers and no
     version bump is not in the plan, and a publication configured for it
     publishes nothing this release sealed. The plan itself is rebuilt from the
     configuration at the accepted source commit, not at the release commit, and

@@ -358,6 +358,26 @@ proposed-design:
     canonical payload sealed by its digest. CD consumes the plan as release
     input and performs publication and forge operations under its own contract.
     The plan's only ordering edges are tag-after prerequisites.
+  release-unit-and-package-model: |-
+    A release unit is a versioning boundary. Every projection, dependency edge,
+    changelog, release plan entry, and tag under the unit moves under one version.
+    A package is a packaging boundary inside that unit. It identifies one native
+    artifact path and derives one publishable capability from initialization's
+    detector evidence.
+
+    Publications belong to packages. Their canonical identity is the ordered
+    tuple `release unit + package + publisher + target`, serialized as
+    `<release-unit>/<package>/<publisher>/<target>`. The package segment keeps
+    two crates, npm packages, or images in one versioned unit distinct even when
+    they share a publisher and target. Publisher evidence, publication
+    observations, draft-asset handoffs, and phase-tag intended destinations all
+    carry the four fields. Release evidence nests publishers beneath packages.
+    Verification selects with all four fields. Derived workflow job and artifact
+    identifiers are escaped from the four-segment identity.
+
+    The publication evidence formats have no recorded release instances and are
+    defined directly by this identity. They carry no compatibility shape for a
+    three-segment identity.
   changelog-model: >-
     apply writes each affected release unit's CHANGELOG.md from the consumed intent
     bodies; a multi-release-unit intent's body lands in each affected release unit's
@@ -388,8 +408,19 @@ proposed-design:
     canonicalization rules, changelog grouping — are versioned as a contract,
     distinct from file-shape schemas. Config declares `contract` (written by
     init); the binary carries an interpreter per contract it supports, so any
-    tool version interpreting a contract-1 workspace applies contract-1
-    semantics regardless of the binary's age. The release plan embeds the
+    tool version interpreting a contract-2 workspace applies contract-2
+    semantics regardless of the binary's age. Contract-2 declares publication
+    packages beneath release units. A contract-1 configuration is refused before
+    typed deserialization with a diagnostic that names contract-2 and instructs
+    the operator to add `release-units.<unit>.packages` and move publisher
+    mappings beneath the package they publish. Reading the contract ahead of the
+    typed parse is what makes that diagnostic reachable at all: publisher
+    mappings leave the release unit under contract-2, and the configuration
+    structs reject unknown fields, so a parse-first order refuses a contract-1
+    document by naming a stray property rather than the contract that moved it.
+    The refusal is therefore ordered, not merely worded. Intentional does not
+    rewrite a shipped configuration contract in place, so comments and
+    package-boundary choices remain operator-controlled. The release plan embeds the
     contract and a plan-generator record (tool name and version of the Intentional
     binary that sealed the plan) inside the digested payload, making the plan
     self-describing evidence of what was decided and under which rules. Tags are
