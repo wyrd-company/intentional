@@ -4534,6 +4534,21 @@ release-units:
                 vec![identity.to_owned()],
                 "publication {package} carries its own package manifest identity"
             );
+            for owner in [
+                format!("intentional_build_component_{package}_devcontainer_cli"),
+                job,
+            ] {
+                let working_directories = job_steps(&jobs, &owner)
+                    .iter()
+                    .filter_map(|step| step["working-directory"].as_str())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    working_directories,
+                    vec![format!("component/{package}")],
+                    "{owner} invokes the packager from the package that owns its manifest"
+                );
+            }
         }
     }
 
