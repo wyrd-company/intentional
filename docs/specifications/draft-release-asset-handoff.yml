@@ -8,7 +8,8 @@ description: >-
   draft-dependent publication, from the draft's live asset inventory and the
   local bytes it placed there, and transports it to that publication's
   publisher job as its own workflow artifact. It binds the source repository, draft Release,
-  global tag, S, R, and release-plan digest to one configured publisher target
+  global tag, S, R, and release-plan digest to one configured package,
+  publisher, and target
   and inventories each required asset by stable GitHub asset identifier, flat
   name, size, media type, and SHA-256 digest. The receiving publisher uses a
   narrowly scoped GitHub App token to download each asset through the
@@ -19,5 +20,5 @@ validation-criteria: >-
   `draft-release-asset-handoff.json-schema.yml`; the source repository's draft
   Release and tag still match the declared release identity; every GitHub asset
   identifier resolves within that draft; downloaded bytes match size and
-  digest; and the publisher and target are expected by the release
+  digest; and the package, publisher, and target are expected by the release
   configuration at R.

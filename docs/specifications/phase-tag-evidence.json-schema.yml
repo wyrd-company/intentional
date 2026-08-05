@@ -56,9 +56,12 @@ properties:
     items:
       type: object
       additionalProperties: false
-      required: [ release-unit, publisher, target ]
+      required: [ release-unit, package, publisher, target ]
       properties:
         release-unit:
+          type: string
+          minLength: 1
+        package:
           type: string
           minLength: 1
         publisher:

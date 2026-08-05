@@ -694,6 +694,7 @@ pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@
     uses: @VERIFY_PUBLICATION_ACTION@
     with:
       release-unit: @RELEASE_UNIT@
+      package: @PACKAGE@
       publisher: @PUBLISHER@
       target: @TARGET@
       observation: @OBSERVATION@
@@ -858,6 +859,7 @@ pub(super) const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
       @ENVVAR@PLAN_DIGEST: ${{ needs.@VERIFY@.outputs.plan-digest }}
       @ENVVAR@RELEASE_ID: ${{ runner.temp }}/@JOB@draft-release
       @ENVVAR@RELEASE_UNIT: @RELEASE_UNIT@
+      @ENVVAR@PACKAGE: @PACKAGE@
       @ENVVAR@PUBLISHER: @PUBLISHER@
       @ENVVAR@TARGET: @TARGET@
       @ENVVAR@PUBLICATION: @PUBLICATION@
@@ -889,6 +891,7 @@ pub(super) const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
         printf 'release-commit: "%s"\n' "${@ENVVAR@RELEASE_COMMIT}"
         printf 'plan-digest: "%s"\n' "${@ENVVAR@PLAN_DIGEST}"
         printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
+        printf 'package: "%s"\n' "${@ENVVAR@PACKAGE}"
         printf 'publisher: %s\n' "${@ENVVAR@PUBLISHER}"
         printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
         printf 'assets:\n'

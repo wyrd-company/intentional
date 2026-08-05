@@ -19,7 +19,7 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{
-    CleanClientMode, PhaseTagEvidence, PublisherEvidence, ReleaseEvidence,
+    CleanClientMode, IntendedDestination, PhaseTagEvidence, PublisherEvidence, ReleaseEvidence,
     PHASE_TAG_EVIDENCE_SCHEMA, RELEASE_EVIDENCE_CONTRACT, RELEASE_EVIDENCE_FILE,
     RELEASE_EVIDENCE_SCHEMA,
 };
@@ -399,13 +399,13 @@ impl ObservedPublications {
     ///
     /// The name is the publication identity with every character outside
     /// `A-Za-z0-9._-` written as `%` and its two uppercase hexadecimal digits,
-    /// followed by `.yml`. So `component/homebrew/primary` is read from
-    /// `component%2Fhomebrew%2Fprimary.yml`.
+    /// followed by `.yml`. So `component/package/homebrew/primary` is read from
+    /// `component%2Fpackage%2Fhomebrew%2Fprimary.yml`.
     ///
     /// The encoding is reversible, and that is the point rather than tidiness.
     /// This observer exists to keep one publication's proved retrieval from
     /// standing in for another's, and a lossy name defeats it directly: folding
-    /// every separator to one character makes `component/homebrew/primary` and a
+    /// every separator to one character makes `component/package/homebrew/primary` and a
     /// release unit named `component-homebrew` publishing `primary` resolve to
     /// the same file. `%` is itself encoded, so no two identities can collide.
     ///
@@ -862,12 +862,7 @@ fn verify_phase_tags(
                         .as_ref()
                         .is_none_or(|unit| &destination.release_unit == unit)
                 })
-                .map(|destination| {
-                    format!(
-                        "{}/{}/{}",
-                        destination.release_unit, destination.publisher, destination.target
-                    )
-                })
+                .map(IntendedDestination::identity)
                 .collect::<BTreeSet<_>>();
             for identity in sealed.difference(&identities) {
                 findings.push(format!(
@@ -962,7 +957,8 @@ fn recorded_fragments(evidence: &ReleaseEvidence) -> Vec<(String, &PublisherEvid
     evidence
         .release_units
         .values()
-        .flat_map(|unit| unit.publishers.values())
+        .flat_map(|unit| unit.packages.values())
+        .flat_map(|package| package.publishers.values())
         .flat_map(|publisher| publisher.targets.values())
         .map(|fragment| (fragment.identity(), fragment))
         .collect()
@@ -1180,8 +1176,8 @@ fn verify_live_readback(
 pub(crate) mod tests {
     use super::*;
     use crate::evidence::assemble::{
-        CleanClient, Destination, EvidenceReference, IntendedDestination, PhaseSubject,
-        PublisherTargets, ReleaseIdentity, ReleaseUnitEvidence, Subject, TagIdentity,
+        CleanClient, Destination, EvidenceReference, IntendedDestination, PackageEvidence,
+        PhaseSubject, PublisherTargets, ReleaseIdentity, ReleaseUnitEvidence, Subject, TagIdentity,
         WorkflowIdentity, PUBLISHER_EVIDENCE_CONTRACT, PUBLISHER_EVIDENCE_SCHEMA,
     };
     use crate::evidence::assemble::{PackagerRecord, PhaseTagEvidence};
@@ -1562,6 +1558,7 @@ release-units:
             schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
             contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
             release_unit: release_unit.to_owned(),
+            package: "package".to_owned(),
             publisher,
             target: "primary".to_owned(),
             source_commit: released.source_commit.clone(),
@@ -1619,6 +1616,11 @@ release-units:
             release_units
                 .entry(fragment.release_unit.clone())
                 .or_insert_with(|| ReleaseUnitEvidence {
+                    packages: BTreeMap::new(),
+                })
+                .packages
+                .entry(fragment.package.clone())
+                .or_insert_with(|| PackageEvidence {
                     publishers: BTreeMap::new(),
                 })
                 .publishers
@@ -1697,6 +1699,7 @@ release-units:
             }],
             intended_destinations: Some(vec![IntendedDestination {
                 release_unit: fragment.release_unit.clone(),
+                package: fragment.package.clone(),
                 publisher: fragment.publisher,
                 target: fragment.target.clone(),
             }]),
@@ -1824,7 +1827,7 @@ release-units:
         assert!(
             report
                 .iter()
-                .any(|line| line.contains("component/homebrew/primary provenance binds")),
+                .any(|line| line.contains("component/package/homebrew/primary provenance binds")),
             "{report:?}"
         );
     }
@@ -1906,7 +1909,8 @@ release-units:
         let fragment = evidence
             .release_units
             .get_mut("component")
-            .and_then(|unit| unit.publishers.get_mut("homebrew"))
+            .and_then(|unit| unit.packages.get_mut("package"))
+            .and_then(|package| package.publishers.get_mut("homebrew"))
             .and_then(|publisher| publisher.targets.get_mut("primary"))
             .expect("recorded fragment");
         fragment.packager.version = "9.9.9".to_owned();
@@ -1928,7 +1932,8 @@ release-units:
         let fragment = evidence
             .release_units
             .get_mut("component")
-            .and_then(|unit| unit.publishers.get_mut("homebrew"))
+            .and_then(|unit| unit.packages.get_mut("package"))
+            .and_then(|package| package.publishers.get_mut("homebrew"))
             .and_then(|publisher| publisher.targets.get_mut("primary"))
             .expect("recorded fragment");
         fragment.subject.digest = replacement.clone();
@@ -1963,7 +1968,7 @@ release-units:
         let report = verification.report();
         assert!(
             report.iter().any(|line| line.contains(
-                "authenticated readback of component/homebrew/primary found subject example-component in Release asset component-1.0.0.tar.gz"
+                "authenticated readback of component/package/homebrew/primary found subject example-component in Release asset component-1.0.0.tar.gz"
             )),
             "{report:?}"
         );
@@ -1978,8 +1983,9 @@ release-units:
         let (released, evidence, source) = scenario("verify-live-claims");
         let verification =
             verify_release(released.workspace.root(), "1.0.0", true, &source).expect("verifies");
-        let destination = &evidence.release_units["component"].publishers["homebrew"].targets
-            ["primary"]
+        let destination = &evidence.release_units["component"].packages["package"].publishers
+            ["homebrew"]
+            .targets["primary"]
             .destination
             .identity;
         let report = verification.report();
@@ -2006,7 +2012,7 @@ release-units:
             .expect_err("the missing observer is reported");
         assert!(
             error.to_string().contains(
-                "live verification of component/npm/primary is unavailable: publisher npm needs a destination observer"
+                "live verification of component/package/npm/primary is unavailable: publisher npm needs a destination observer"
             ),
             "{error}"
         );
@@ -2022,7 +2028,7 @@ release-units:
         assert!(
             error
                 .to_string()
-                .contains("live verification of component/homebrew/primary"),
+                .contains("live verification of component/package/homebrew/primary"),
             "{error}"
         );
         assert_eq!(
@@ -2092,6 +2098,7 @@ release-units:
                 schema: PUBLICATION_OBSERVATION_SCHEMA.to_owned(),
                 contract: PUBLICATION_OBSERVATION_CONTRACT.to_owned(),
                 release_unit: "component".to_owned(),
+                package: "package".to_owned(),
                 publisher: PublisherKind::Npm,
                 target: "primary".to_owned(),
                 state: ObservationState::Present,
@@ -2173,6 +2180,7 @@ release-units:
             schema: PUBLICATION_OBSERVATION_SCHEMA.to_owned(),
             contract: PUBLICATION_OBSERVATION_CONTRACT.to_owned(),
             release_unit: "component".to_owned(),
+            package: "package".to_owned(),
             publisher: PublisherKind::Homebrew,
             target: "primary".to_owned(),
             state: ObservationState::Present,
@@ -2211,6 +2219,7 @@ release-units:
             "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: homebrew
 target: primary
 state: present
@@ -2246,7 +2255,7 @@ retrieval:
         let observer = ObservedPublications::new(&directory);
         std::fs::create_dir_all(&directory).expect("observation directory");
         std::fs::write(
-            observer.path("component/homebrew/primary"),
+            observer.path("component/package/homebrew/primary"),
             public_observation(&digest_bytes(DELIVERABLE)),
         )
         .expect("observation written");
@@ -2261,7 +2270,7 @@ retrieval:
         .expect("the deferred public path verifies");
         let report = verification.report().join("\n");
         assert!(
-            report.contains("live public retrieval of component/homebrew/primary"),
+            report.contains("live public retrieval of component/package/homebrew/primary"),
             "{report}"
         );
     }
@@ -2284,7 +2293,7 @@ retrieval:
         assert!(
             error
                 .to_string()
-                .contains("no post-closure observation of component/homebrew/primary"),
+                .contains("no post-closure observation of component/package/homebrew/primary"),
             "{error}"
         );
     }
@@ -2300,7 +2309,7 @@ retrieval:
         let observer = ObservedPublications::new(&directory);
         std::fs::create_dir_all(&directory).expect("observation directory");
         std::fs::write(
-            observer.path("component/homebrew/primary"),
+            observer.path("component/package/homebrew/primary"),
             public_observation(&digest_bytes(DELIVERABLE)),
         )
         .expect("observation written");
@@ -2315,11 +2324,11 @@ retrieval:
         .expect("both checks verify");
         let report = verification.report().join("\n");
         assert!(
-            report.contains("authenticated readback of component/homebrew/primary"),
+            report.contains("authenticated readback of component/package/homebrew/primary"),
             "the closed-Release readback still ran: {report}"
         );
         assert!(
-            report.contains("live public retrieval of component/homebrew/primary"),
+            report.contains("live public retrieval of component/package/homebrew/primary"),
             "the consumer check ran too: {report}"
         );
     }
@@ -2331,16 +2340,16 @@ retrieval:
     fn distinguishes_identities_that_a_lossy_name_would_collapse() {
         let observer = ObservedPublications::new(Path::new("observations"));
         assert_eq!(
-            observer.path("component/homebrew/primary"),
-            Path::new("observations/component%2Fhomebrew%2Fprimary.yml")
+            observer.path("component/package/homebrew/primary"),
+            Path::new("observations/component%2Fpackage%2Fhomebrew%2Fprimary.yml")
         );
         assert_ne!(
-            observer.path("component/homebrew/primary"),
+            observer.path("component/package/homebrew/primary"),
             observer.path("component-homebrew/primary"),
         );
         assert_ne!(
             observer.path("component%2Fhomebrew/primary"),
-            observer.path("component/homebrew/primary"),
+            observer.path("component/package/homebrew/primary"),
         );
     }
 
@@ -2354,7 +2363,7 @@ retrieval:
         let observer = ObservedPublications::new(&directory);
         std::fs::create_dir_all(&directory).expect("observation directory");
         std::fs::write(
-            observer.path("component/cargo/primary"),
+            observer.path("component/package/cargo/primary"),
             public_observation(&digest_bytes(DELIVERABLE)),
         )
         .expect("observation written");
@@ -2369,7 +2378,7 @@ retrieval:
         assert!(
             error
                 .to_string()
-                .contains("no post-closure observation of component/homebrew/primary"),
+                .contains("no post-closure observation of component/package/homebrew/primary"),
             "{error}"
         );
     }

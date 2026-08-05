@@ -177,6 +177,8 @@ pub struct PublisherEvidence {
     pub contract: String,
     /// Release unit the publication belongs to.
     pub release_unit: String,
+    /// Package the publication belongs to.
+    pub package: String,
     /// Publisher adapter that performed the publication.
     pub publisher: PublisherKind,
     /// Canonical target identity.
@@ -210,7 +212,10 @@ pub struct PublisherEvidence {
 impl PublisherEvidence {
     /// Stable publication identity of this fragment.
     pub fn identity(&self) -> String {
-        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+        format!(
+            "{}/{}/{}/{}",
+            self.release_unit, self.package, self.publisher, self.target
+        )
     }
 }
 
@@ -237,6 +242,8 @@ pub struct PhaseSubject {
 pub struct IntendedDestination {
     /// Release unit intending to publish.
     pub release_unit: String,
+    /// Package intending to publish.
+    pub package: String,
     /// Publisher adapter.
     pub publisher: PublisherKind,
     /// Canonical target identity.
@@ -246,7 +253,10 @@ pub struct IntendedDestination {
 impl IntendedDestination {
     /// Stable publication identity this destination intends.
     pub fn identity(&self) -> String {
-        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+        format!(
+            "{}/{}/{}/{}",
+            self.release_unit, self.package, self.publisher, self.target
+        )
     }
 }
 
@@ -373,11 +383,19 @@ impl WorkflowIdentity {
     }
 }
 
-/// Publisher evidence for one release unit, addressable by publisher and target.
+/// Publisher evidence for one release unit, addressable by package.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseUnitEvidence {
-    /// Publisher adapters that published this release unit.
+    /// Packages published from this release unit.
+    pub packages: BTreeMap<String, PackageEvidence>,
+}
+
+/// Publisher evidence for one package, addressable by publisher and target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageEvidence {
+    /// Publisher adapters that published this package.
     pub publishers: BTreeMap<String, PublisherTargets>,
 }
 
@@ -719,6 +737,11 @@ fn accept_publisher_evidence(
         accepted
             .entry(fragment.release_unit.clone())
             .or_insert_with(|| ReleaseUnitEvidence {
+                packages: BTreeMap::new(),
+            })
+            .packages
+            .entry(fragment.package.clone())
+            .or_insert_with(|| PackageEvidence {
                 publishers: BTreeMap::new(),
             })
             .publishers
@@ -809,8 +832,11 @@ fn publisher_findings(fragment: &PublisherEvidence, label: &str) -> Vec<String> 
     if fragment.global_tag.name.is_empty() {
         findings.push(format!("{label} records an empty global tag name"));
     }
-    if fragment.release_unit.is_empty() || fragment.target.is_empty() {
-        findings.push(format!("{label} records an empty release unit or target"));
+    if fragment.release_unit.is_empty() || fragment.package.is_empty() || fragment.target.is_empty()
+    {
+        findings.push(format!(
+            "{label} records an empty release unit, package, or target"
+        ));
     }
     findings
 }
@@ -1162,7 +1188,8 @@ fn accepted_by_identity(
 ) -> BTreeMap<String, &PublisherEvidence> {
     release_units
         .values()
-        .flat_map(|unit| unit.publishers.values())
+        .flat_map(|unit| unit.packages.values())
+        .flat_map(|package| package.publishers.values())
         .flat_map(|publisher| publisher.targets.values())
         .map(|fragment| (fragment.identity(), fragment))
         .collect()
@@ -1658,6 +1685,7 @@ release-units:
             r#"$schema: {PUBLISHER_EVIDENCE_SCHEMA}
 contract: {PUBLISHER_EVIDENCE_CONTRACT}
 release-unit: {release_unit}
+package: package
 publisher: {publisher}
 target: {target}
 source-commit: {source}
@@ -1796,7 +1824,8 @@ phase-tags: []
             }
         );
         assert_eq!(
-            assembly.evidence.release_units["component"].publishers["npm"].targets["primary"]
+            assembly.evidence.release_units["component"].packages["package"].publishers["npm"]
+                .targets["primary"]
                 .subject
                 .digest,
             SUBJECT_DIGEST
@@ -2081,11 +2110,11 @@ phase-tags: []
             assemble(&request(&workspace, &input, &output)).expect_err("fragments rejected");
         let message = error.to_string();
         assert!(
-            message.contains("unexpected publisher evidence component/cargo/primary"),
+            message.contains("unexpected publisher evidence component/package/cargo/primary"),
             "{message}"
         );
         assert!(
-            message.contains("publisher evidence for component/npm/primary is missing"),
+            message.contains("publisher evidence for component/package/npm/primary is missing"),
             "{message}"
         );
     }
@@ -2178,6 +2207,7 @@ subjects:
     digest: {SUBJECT_DIGEST}
 intended-destinations:
   - release-unit: component
+    package: package
     publisher: npm
     target: primary
 "#
@@ -2263,7 +2293,7 @@ release-units:
             before_publication_evidence(
                 &workspace,
                 VERSION,
-                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+                "  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\n",
             ),
         )
         .expect("phase evidence");
@@ -2288,7 +2318,7 @@ release-units:
             before_publication_evidence(
                 &workspace,
                 VERSION,
-                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+                "  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\n",
             )
             .replace("identity: example-component", "identity: other-component"),
         )
@@ -2316,7 +2346,7 @@ release-units:
         stage_intending(
             workspace,
             input,
-            "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+            "  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\n",
         );
     }
 
@@ -2374,7 +2404,7 @@ intended-destinations:
             before_publication_evidence(
                 &workspace,
                 VERSION,
-                "  - release-unit: component\n    publisher: npm\n    target: primary\n",
+                "  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\n",
             ),
         )
         .expect("before evidence");
@@ -2416,7 +2446,7 @@ publisher-evidence:
             before_publication_evidence(
                 &workspace,
                 VERSION,
-                "  - release-unit: component\n    publisher: cargo\n    target: primary\n",
+                "  - release-unit: component\n    package: package\n    publisher: cargo\n    target: primary\n",
             ),
         )
         .expect("before evidence");
@@ -2424,11 +2454,12 @@ publisher-evidence:
         let error = assemble(&request(&workspace, &input, &output)).expect_err("intent rejected");
         let message = error.to_string();
         assert!(
-            message.contains("intends publication component/cargo/primary"),
+            message.contains("intends publication component/package/cargo/primary"),
             "{message}"
         );
         assert!(
-            message.contains("does not intend configured publication component/npm/primary"),
+            message
+                .contains("does not intend configured publication component/package/npm/primary"),
             "{message}"
         );
     }
@@ -2471,7 +2502,7 @@ publisher-evidence:
         let error = assemble(&request(&workspace, &input, &output)).expect_err("seal rejected");
         assert!(
             error.to_string().contains(
-                "seals publisher evidence component/npm/primary that differs from the accepted"
+                "seals publisher evidence component/package/npm/primary that differs from the accepted"
             ),
             "{error}"
         );
@@ -2495,13 +2526,13 @@ publisher-evidence:
             (
                 "before-with-seal",
                 "before-publication",
-                "intended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\npublisher-evidence: []\n",
+                "intended-destinations:\n  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\npublisher-evidence: []\n",
                 "declares before-publication but carries publisher-evidence",
             ),
             (
                 "after-with-intent",
                 "after-publication",
-                "publisher-evidence: []\nintended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\n",
+                "publisher-evidence: []\nintended-destinations:\n  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\n",
                 "declares after-publication but carries intended-destinations",
             ),
             // The published schema forbids the member itself, so an explicit
@@ -2510,7 +2541,7 @@ publisher-evidence:
             (
                 "before-with-null-seal",
                 "before-publication",
-                "intended-destinations:\n  - release-unit: component\n    publisher: npm\n    target: primary\npublisher-evidence: null\n",
+                "intended-destinations:\n  - release-unit: component\n    package: package\n    publisher: npm\n    target: primary\npublisher-evidence: null\n",
                 "a phase member is present with an explicit null",
             ),
             (
@@ -3041,7 +3072,7 @@ subjects: []
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a publication the plan does not release is refused");
         let message = error.to_string();
-        assert!(message.contains("spare/npm/primary"), "{message}");
+        assert!(message.contains("spare/package/npm/primary"), "{message}");
         assert!(
             message.contains("the sealed release plan does not release"),
             "{message}"
@@ -3105,6 +3136,7 @@ plan-digest: {plan_digest}
 subjects: []
 intended-destinations:
   - release-unit: component
+    package: package
     publisher: npm
     target: primary
 "#

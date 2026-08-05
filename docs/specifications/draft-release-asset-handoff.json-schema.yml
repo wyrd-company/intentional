@@ -17,6 +17,7 @@ required:
   - release-commit
   - plan-digest
   - release-unit
+  - package
   - publisher
   - target
   - assets
@@ -41,6 +42,9 @@ properties:
   plan-digest:
     $ref: "#/$defs/sha256"
   release-unit:
+    type: string
+    minLength: 1
+  package:
     type: string
     minLength: 1
   publisher:

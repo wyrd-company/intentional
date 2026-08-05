@@ -257,6 +257,8 @@ pub struct VerifyPublicationRequest<'a> {
     pub root: &'a Path,
     /// Release unit whose publication is verified.
     pub release_unit: &'a str,
+    /// Package whose publication is verified.
+    pub package: &'a str,
     /// Publisher adapter that performed the publication.
     pub publisher: PublisherKind,
     /// Target selector, absent when the adapter's primary is implied.
@@ -282,6 +284,7 @@ impl<'a> VerifyPublicationRequest<'a> {
     pub fn new(
         root: &'a Path,
         release_unit: &'a str,
+        package: &'a str,
         publisher: PublisherKind,
         observation: &'a Path,
         output: &'a Path,
@@ -291,6 +294,7 @@ impl<'a> VerifyPublicationRequest<'a> {
         Self {
             root,
             release_unit,
+            package,
             publisher,
             target: None,
             observation,
@@ -320,6 +324,7 @@ pub fn verify_publication(request: &VerifyPublicationRequest<'_>) -> Result<Veri
     let selected = select_publication(
         request.root,
         request.release_unit,
+        request.package,
         request.publisher,
         request.target,
     )?;
@@ -457,6 +462,7 @@ struct ObservedPublication<'a> {
 fn select_publication(
     root: &Path,
     release_unit: &str,
+    package: &str,
     publisher: PublisherKind,
     selector: Option<&str>,
 ) -> Result<SelectedPublication> {
@@ -466,7 +472,9 @@ fn select_publication(
         .selected
         .iter()
         .filter(|publication| {
-            publication.release_unit == release_unit && publication.publisher == publisher
+            publication.release_unit == release_unit
+                && publication.package == package
+                && publication.publisher == publisher
         })
         .collect();
     let target = canonical_target(publisher, selector, &configured)?;
@@ -486,7 +494,7 @@ fn select_publication(
                     .join(", ")
             };
             Error::Validation(format!(
-                "publication {release_unit}/{publisher}/{target} is not configured; configured publications are {expected}"
+                "publication {release_unit}/{package}/{publisher}/{target} is not configured; configured publications are {expected}"
             ))
         })
 }
@@ -636,6 +644,7 @@ fn construct(
         schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
         contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
         release_unit: selected.release_unit.clone(),
+        package: selected.package.clone(),
         publisher: selected.publisher,
         target: selected.target.clone(),
         source_commit: release.source_commit.clone(),
@@ -887,6 +896,7 @@ release-units:
         VerifyPublicationRequest {
             root: workspace.root(),
             release_unit: "component",
+            package: "package",
             publisher,
             target,
             observation,
@@ -964,7 +974,10 @@ destination-aliases:
         ))
         .expect("the publication verifies");
         assert!(!verified.reused);
-        assert_eq!(verified.evidence.identity(), "component/npm/primary");
+        assert_eq!(
+            verified.evidence.identity(),
+            "component/package/npm/primary"
+        );
         assert_eq!(verified.evidence.target, PRIMARY_TARGET);
         assert_eq!(verified.evidence.destination.identity, "npmjs");
         assert_eq!(verified.evidence.schema, PUBLISHER_EVIDENCE_SCHEMA);
@@ -1164,8 +1177,8 @@ destination-aliases:
         assert!(
             error
                 .to_string()
-                .contains("publication component/npm/github is not configured")
-                && error.to_string().contains("component/npm/primary"),
+                .contains("publication component/package/npm/github is not configured")
+                && error.to_string().contains("component/package/npm/primary"),
             "{error}"
         );
         assert!(
@@ -1289,6 +1302,7 @@ destination-aliases:
             verify_publication(&VerifyPublicationRequest {
                 root: &self.released.root,
                 release_unit: "component",
+                package: "package",
                 publisher: PublisherKind::Homebrew,
                 target: None,
                 observation: &self.observation,
@@ -1725,6 +1739,7 @@ release-units:
             schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
             contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
             release_unit: "component".to_owned(),
+            package: "package".to_owned(),
             publisher: PublisherKind::Npm,
             target: PRIMARY_TARGET.to_owned(),
             source_commit: context.release.source_commit.clone(),
@@ -1785,7 +1800,7 @@ destination-aliases:
         let sealed = sealed_fragment(&context);
         context
             .sealed
-            .insert("component/npm/primary".to_owned(), sealed.clone());
+            .insert("component/package/npm/primary".to_owned(), sealed.clone());
         let clock = clock();
         let output = workspace.root().join("evidence.yml");
         let verified = verify_publication(&request(
@@ -1819,7 +1834,7 @@ destination-aliases:
         sealed.subject.digest = digest("bb");
         context
             .sealed
-            .insert("component/npm/primary".to_owned(), sealed);
+            .insert("component/package/npm/primary".to_owned(), sealed);
         let clock = clock();
         let output = workspace.root().join("evidence.yml");
         let error = verify_publication(&request(
@@ -1845,7 +1860,7 @@ destination-aliases:
         sealed.plan_digest = digest("ff");
         context
             .sealed
-            .insert("component/npm/primary".to_owned(), sealed);
+            .insert("component/package/npm/primary".to_owned(), sealed);
         let clock = clock();
         let error = verify_publication(&request(
             &workspace,
@@ -1882,7 +1897,7 @@ destination-aliases:
         assert!(
             error
                 .to_string()
-                .contains("describes publication other-component/npm/primary"),
+                .contains("describes publication other-component/package/npm/primary"),
             "{error}"
         );
     }
@@ -1918,6 +1933,7 @@ destination-aliases:
                 "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: {}

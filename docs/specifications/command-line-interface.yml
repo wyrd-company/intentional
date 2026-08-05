@@ -1026,6 +1026,18 @@ commands:
               arity:
                 min: 1
                 max: 1
+          - name: package
+            flags:
+              - --package
+            kind: option
+            description: Package identifier whose publication is verified.
+            required: true
+            repeatable: false
+            value:
+              type: string
+              arity:
+                min: 1
+                max: 1
           - name: publisher
             flags:
               - --publisher
@@ -1129,11 +1141,11 @@ commands:
         examples:
           - >-
             intentional verify publication --release-unit sample-library
-            --publisher npm --observation observation.yml --output
+            --package library --publisher npm --observation observation.yml --output
             publisher-evidence.yml
           - >-
             intentional verify publication --release-unit sample-application
-            --publisher oci --target ghcr --observation observation.yml
+            --package application --publisher oci --target ghcr --observation observation.yml
             --output publisher-evidence.yml
         notes:
           - >-
@@ -1216,8 +1228,8 @@ commands:
               publication is read from one file whose name is its publication
               identity with every character outside A-Za-z0-9._- written as %
               and its two uppercase hexadecimal digits, followed by .yml, so
-              component/homebrew/primary is read from
-              component%2Fhomebrew%2Fprimary.yml.
+              component/package/homebrew/primary is read from
+              component%2Fpackage%2Fhomebrew%2Fprimary.yml.
             required: false
             repeatable: false
             value:

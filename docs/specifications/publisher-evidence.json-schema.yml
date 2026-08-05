@@ -11,6 +11,7 @@ required:
   - $schema
   - contract
   - release-unit
+  - package
   - publisher
   - target
   - source-commit
@@ -31,6 +32,9 @@ properties:
   contract:
     const: publisher-evidence-1
   release-unit:
+    type: string
+    minLength: 1
+  package:
     type: string
     minLength: 1
   publisher:

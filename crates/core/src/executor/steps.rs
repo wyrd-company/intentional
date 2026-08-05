@@ -588,9 +588,10 @@ fn observation_environment(
     client: &str,
 ) -> String {
     format!(
-        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n      @ENVVAR@RETRIEVAL_CLIENT: {}\n",
+        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PACKAGE: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n      @ENVVAR@RETRIEVAL_CLIENT: {}\n",
         scalar(context.observation),
         scalar(&context.publication.release_unit),
+        scalar(&context.publication.package),
         scalar(context.publication.publisher.as_str()),
         scalar(&context.publication.target),
         scalar(context.work),
@@ -616,6 +617,7 @@ const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
         printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
         printf 'contract: publication-observation-1\n'
         printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
+        printf 'package: "%s"\n' "${@ENVVAR@PACKAGE}"
         printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
         printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
       }

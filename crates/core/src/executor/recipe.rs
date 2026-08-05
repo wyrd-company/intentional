@@ -5,6 +5,7 @@
 
 //! Release-unit capability derivation and maintained publication recipe selection.
 
+use super::names;
 use crate::config::{discovery_candidate_directory, Config, PackageConfig, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::evidence::assemble::CleanClientMode;
@@ -259,6 +260,8 @@ pub struct CapabilityEvidence {
 pub struct SelectedPublication {
     /// Configured release unit.
     pub release_unit: String,
+    /// Configured package.
+    pub package: String,
     /// Publisher adapter carrying the publication intent.
     pub publisher: PublisherKind,
     /// Canonical target identity recorded by publisher evidence.
@@ -278,7 +281,10 @@ pub struct SelectedPublication {
 impl SelectedPublication {
     /// Stable identity used by diagnostics and evidence.
     pub fn identity(&self) -> String {
-        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+        format!(
+            "{}/{}/{}/{}",
+            self.release_unit, self.package, self.publisher, self.target
+        )
     }
 }
 
@@ -336,6 +342,7 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
                 let context = SelectionContext {
                     root,
                     id,
+                    package_id,
                     release_unit,
                     package,
                     capabilities: &capabilities,
@@ -507,6 +514,7 @@ struct Configured {
 struct SelectionContext<'a> {
     root: &'a Path,
     id: &'a str,
+    package_id: &'a str,
     release_unit: &'a ReleaseUnitConfig,
     package: &'a PackageConfig,
     capabilities: &'a BTreeSet<Capability>,
@@ -521,10 +529,21 @@ fn select_one(
     let SelectionContext {
         root,
         id,
+        package_id,
         release_unit,
         package,
         capabilities,
     } = context;
+    names::release_unit(&names::SuppliedName {
+        origin: &format!("release unit {id}"),
+        value: id,
+    })
+    .map_err(Error::Validation)?;
+    names::package(&names::SuppliedName {
+        origin: &format!("release unit {id} package {package_id}"),
+        value: package_id,
+    })
+    .map_err(Error::Validation)?;
     let matches = recipes_for(capabilities, publisher)
         .into_iter()
         .filter(|recipe| recipe.target == target)
@@ -538,17 +557,17 @@ fn select_one(
             // discovered it names the wrong thing entirely.
             if let Some(reason) = withheld_capability_reason(root, release_unit, capabilities)? {
                 return Err(Error::Validation(format!(
-                    "no maintained publication recipe matches the configured target {id}/{publisher}/{target}: {reason}"
+                    "no maintained publication recipe matches the configured target {id}/{package_id}/{publisher}/{target}: {reason}"
                 )));
             }
             return Err(Error::Validation(format!(
-                "no maintained publication recipe matches the configured target {id}/{publisher}/{target}; derived capabilities are {}",
+                "no maintained publication recipe matches the configured target {id}/{package_id}/{publisher}/{target}; derived capabilities are {}",
                 capability_names(capabilities)
             )))
         }
         many => {
             return Err(Error::Validation(format!(
-                "configured target {id}/{publisher}/{target} matches {} maintained recipes ({}); the release unit must derive one publishable capability",
+                "configured target {id}/{package_id}/{publisher}/{target} matches {} maintained recipes ({}); the package must derive one publishable capability",
                 many.len(),
                 many.iter()
                     .map(|recipe| recipe.capability.as_str())
@@ -560,7 +579,7 @@ fn select_one(
     for component in &configured.omit {
         if !recipe.components.contains(component) {
             return Err(Error::Validation(format!(
-                "omitted component {component} is not supported by the target recipe for {id}/{publisher}/{target}"
+                "omitted component {component} is not supported by the target recipe for {id}/{package_id}/{publisher}/{target}"
             )));
         }
     }
@@ -571,11 +590,11 @@ fn select_one(
         // own configuration is where that name lives: explicitly under `aur`,
         // and otherwise as the binary package of the declared project.
         (None, PublisherKind::Aur) => {
-            aur_package(root, release_unit, &format!("{id}/{publisher}/{target}"))?
+            aur_package(root, release_unit, &format!("{id}/{package_id}/{publisher}/{target}"))?
         }
         (None, _) if configured.destination_required => {
             return Err(Error::Validation(format!(
-                "configured target {id}/{publisher}/{target} requires an explicit repository; its destination identity is not derivable"
+                "configured target {id}/{package_id}/{publisher}/{target} requires an explicit repository; its destination identity is not derivable"
             )))
         }
         (None, _) => None,
@@ -583,6 +602,7 @@ fn select_one(
     let retrieval = retrieval_mode(&recipe, destination.as_deref());
     Ok(SelectedPublication {
         release_unit: (*id).to_owned(),
+        package: (*package_id).to_owned(),
         publisher,
         target,
         destination,
@@ -1533,9 +1553,9 @@ release-units:
         assert_eq!(
             identities,
             vec![
-                "component/oci/ghcr".to_owned(),
-                "component/npm/primary".to_owned(),
-                "component/npm/github".to_owned(),
+                "component/image/oci/ghcr".to_owned(),
+                "component/node/npm/primary".to_owned(),
+                "component/node/npm/github".to_owned(),
             ]
         );
         assert_eq!(selected[0].capability, Capability::RunnableImage);
@@ -1799,6 +1819,17 @@ release-units:
                 .map(|publication| publication.packager)
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([Packager::Buildx, Packager::DevContainerCli])
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .map(SelectedPublication::identity)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "component/feature/oci/ghcr".to_owned(),
+                "component/image/oci/ghcr".to_owned(),
+            ]),
+            "the package segment distinguishes two publications sharing the other three segments"
         );
     }
 
@@ -2190,7 +2221,7 @@ release-units:
             .expect_err("a templated Arch package never becomes a destination");
         assert!(
             error.to_string().contains(
-                "component/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
+                "component/package/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
             ),
             "{error}"
         );

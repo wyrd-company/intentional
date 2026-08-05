@@ -115,6 +115,10 @@ struct PublicationArgs {
     #[arg(long)]
     release_unit: String,
 
+    /// Package identifier whose publication is verified.
+    #[arg(long)]
+    package: String,
+
     /// Configured publisher adapter identifier.
     #[arg(long)]
     publisher: PublisherKind,
@@ -425,6 +429,7 @@ fn publication(root: &std::path::Path, args: PublicationArgs) -> Result<()> {
     let verified = verify_publication(&VerifyPublicationRequest {
         root,
         release_unit: &args.release_unit,
+        package: &args.package,
         publisher: args.publisher,
         target: args.target.as_deref(),
         observation: &observation,

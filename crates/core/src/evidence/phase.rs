@@ -634,6 +634,7 @@ mod tests {
     fn destination(publisher: PublisherKind, target: &str) -> IntendedDestination {
         IntendedDestination {
             release_unit: "component".to_owned(),
+            package: "package".to_owned(),
             publisher,
             target: target.to_owned(),
         }
@@ -644,6 +645,7 @@ mod tests {
             schema: PUBLISHER_EVIDENCE_SCHEMA.to_owned(),
             contract: PUBLISHER_EVIDENCE_CONTRACT.to_owned(),
             release_unit: "component".to_owned(),
+            package: "package".to_owned(),
             publisher: PublisherKind::Npm,
             target: target.to_owned(),
             source_commit: SOURCE.to_owned(),
@@ -800,7 +802,10 @@ mod tests {
                 .iter()
                 .map(PublisherEvidence::identity)
                 .collect::<Vec<_>>(),
-            vec!["component/npm/github", "component/npm/primary"]
+            vec![
+                "component/package/npm/github",
+                "component/package/npm/primary"
+            ]
         );
         assert_eq!(evidence.subjects.len(), 1, "one subject, two destinations");
         assert_eq!(evidence.subjects[0].digest, SUBJECT_DIGEST);

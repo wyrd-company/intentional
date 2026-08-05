@@ -19,9 +19,10 @@ description: >-
   recorded there is the digest the reproduced plan's own payload determines, so
   the statement's plan binding rests on a derivation rather than on agreement
   between claims. Its deterministic
-  release-unit sections contain the complete accepted publisher-evidence
-  fragments. Repository-owned contribution values appear unchanged under their
-  isolated namespaces without interpretation by Intentional. The separate
+  release-unit sections nest package sections containing the complete accepted
+  publisher-evidence fragments by publisher and target. Repository-owned
+  contribution values appear unchanged under their isolated namespaces without
+  interpretation by Intentional. The separate
   `contribution-attachments` inventory binds every accepted contributed Release
   asset's flat name and SHA-256 digest to its contributor namespace.
 validation-criteria: >-
@@ -29,7 +30,7 @@ validation-criteria: >-
   `release-evidence.json-schema.yml`, its artifact attestation verifies the
   exact asset digest and producing workflow, its release identity matches the
   immutable GitHub Release, and assembly confirms exactly one expected fragment
-  for every configured publisher target with no unexpected identities or
+  for every configured package, publisher, and target with no unexpected identities or
   semantic disagreement with applicable phase-tag evidence. A release that
   configures no publisher target expects no fragment and conforms with an empty
   `release-units` section; its identity requirements do not weaken. Assembly also

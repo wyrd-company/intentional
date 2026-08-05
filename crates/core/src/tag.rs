@@ -1360,6 +1360,7 @@ fn sealed_phase_evidence(
                 .into_iter()
                 .map(|publication| IntendedDestination {
                     release_unit: publication.release_unit,
+                    package: publication.package,
                     publisher: publication.publisher,
                     target: publication.target,
                 })
@@ -1556,6 +1557,7 @@ release-units:
                 r#"$schema: {PUBLISHER_EVIDENCE_SCHEMA}
 contract: {PUBLISHER_EVIDENCE_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 source-commit: "{tag_object}"
@@ -1643,7 +1645,7 @@ phase-tags: []
                 .iter()
                 .map(IntendedDestination::identity)
                 .collect::<Vec<_>>(),
-            vec!["component/npm/primary"]
+            vec!["component/package/npm/primary"]
         );
         assert_eq!(evidence.subjects[0].digest, SUBJECT_DIGEST);
     }
@@ -1658,7 +1660,7 @@ phase-tags: []
         let evidence = sealed(&result.tags[0].message);
         let fragments = evidence.publisher_evidence.expect("sealed fragments");
         assert_eq!(fragments.len(), 1);
-        assert_eq!(fragments[0].identity(), "component/npm/primary");
+        assert_eq!(fragments[0].identity(), "component/package/npm/primary");
         assert_eq!(fragments[0].source_commit, object);
         assert!(
             evidence.intended_destinations.is_none(),
@@ -1895,7 +1897,7 @@ phase-tags: []
                 .iter()
                 .map(PublisherEvidence::identity)
                 .collect::<Vec<_>>(),
-            vec!["component/npm/primary".to_owned()],
+            vec!["component/package/npm/primary".to_owned()],
             "a phase document beside the fragments is not sealed as one"
         );
         assert_eq!(evidence.subjects.len(), 1);
@@ -1945,11 +1947,11 @@ phase-tags: []
             "the refusal names the completeness rule: {message}"
         );
         assert!(
-            message.contains("library/npm/primary"),
+            message.contains("library/package/npm/primary"),
             "the refusal names the publication whose evidence is absent: {message}"
         );
         assert!(
-            !message.contains("component/npm/primary"),
+            !message.contains("component/package/npm/primary"),
             "the publication whose evidence was staged is not named as missing: {message}"
         );
     }

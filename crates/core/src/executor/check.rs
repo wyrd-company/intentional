@@ -331,7 +331,7 @@ release-units:
         let result = check_executor(workspace.root()).expect("check runs");
         assert_eq!(
             result.publications,
-            vec!["component/npm/primary".to_owned()]
+            vec!["component/package/npm/primary".to_owned()]
         );
         assert!(result.conforms(), "{:?}", result.findings);
     }
@@ -405,17 +405,17 @@ aur:
             (
                 "brews",
                 "    homebrew: { repository: example-org/homebrew-tap }\n",
-                "component/homebrew/primary promotes what the brews pipe produces",
+                "component/package/homebrew/primary promotes what the brews pipe produces",
             ),
             (
                 "nfpms",
                 "    rpm: {}\n",
-                "component/rpm/primary promotes what the nfpms pipe produces",
+                "component/package/rpm/primary promotes what the nfpms pipe produces",
             ),
             (
                 "aur",
                 "    aur: {}\n",
-                "component/aur/primary promotes what the aur pipe produces",
+                "component/package/aur/primary promotes what the aur pipe produces",
             ),
         ] {
             let workspace = go_workspace("check-goreleaser-pipe", property);
@@ -434,8 +434,8 @@ aur:
     #[test]
     fn reports_a_system_package_format_no_nfpms_entry_declares() {
         for (property, format, identity) in [
-            ("    rpm: {}\n", "rpm", "component/rpm/primary"),
-            ("    apt: {}\n", "deb", "component/apt/primary"),
+            ("    rpm: {}\n", "rpm", "component/package/rpm/primary"),
+            ("    apt: {}\n", "deb", "component/package/apt/primary"),
         ] {
             let workspace = go_workspace("check-goreleaser-format", property);
             workspace.write(
@@ -467,8 +467,9 @@ aur:
         );
         let findings = packager_findings(&workspace);
         assert!(
-            findings.iter().any(|finding| finding
-                .contains("component/aur/primary publishes the first of the 2 aur entries")),
+            findings.iter().any(|finding| finding.contains(
+                "component/package/aur/primary publishes the first of the 2 aur entries"
+            )),
             "a second aur entry is reported: {findings:?}"
         );
     }
@@ -486,7 +487,7 @@ aur:
         let findings = packager_findings(&workspace);
         assert!(
             findings.iter().any(|finding| finding.contains(
-                "component/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
+                "component/package/aur/primary cannot publish templated aur[0].name in component/.goreleaser.yaml"
             )),
             "a templated aur name is reported: {findings:?}"
         );

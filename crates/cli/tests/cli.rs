@@ -2434,7 +2434,7 @@ fn executor_check_reports_locally_observable_nonconformance() {
         .assert()
         .code(1)
         .stdout(predicate::str::contains(
-            "publication: component/npm/primary",
+            "publication: component/package/npm/primary",
         ))
         .stdout(predicate::str::contains(
             "release workflow: .github/workflows/release.yml does not exist",
@@ -2664,6 +2664,7 @@ fn evidence_fragment(released: &BTreeMap<String, String>) -> String {
         r#"$schema: https://intentional.foo/schemas/publisher-evidence/v1
 contract: publisher-evidence-1
 release-unit: sample-library
+package: package
 publisher: npm
 target: primary
 source-commit: {source}
@@ -2838,6 +2839,7 @@ subjects:
     digest: sha256:5555555555555555555555555555555555555555555555555555555555555555
 intended-destinations:
   - release-unit: sample-library
+    package: package
     publisher: npm
     target: primary
 "#

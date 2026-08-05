@@ -71,19 +71,26 @@ properties:
     additionalProperties:
       type: object
       additionalProperties: false
-      required: [ publishers ]
+      required: [ packages ]
       properties:
-        publishers:
+        packages:
           type: object
           additionalProperties:
             type: object
             additionalProperties: false
-            required: [ targets ]
+            required: [ publishers ]
             properties:
-              targets:
+              publishers:
                 type: object
                 additionalProperties:
-                  $ref: "https://intentional.foo/schemas/publisher-evidence/v1"
+                  type: object
+                  additionalProperties: false
+                  required: [ targets ]
+                  properties:
+                    targets:
+                      type: object
+                      additionalProperties:
+                        $ref: "https://intentional.foo/schemas/publisher-evidence/v1"
   contributions:
     type: object
     additionalProperties: true

@@ -13,6 +13,9 @@ inputs:
   release-unit:
     description: "Release-unit identifier whose publication is verified"
     required: true
+  package:
+    description: "Package identifier whose publication is verified"
+    required: true
   publisher:
     description: "Configured publisher adapter identifier"
     required: true
@@ -60,6 +63,7 @@ runs:
       shell: bash
       env:
         INPUT_RELEASE_UNIT: ${{ inputs.release-unit }}
+        INPUT_PACKAGE: ${{ inputs.package }}
         INPUT_PUBLISHER: ${{ inputs.publisher }}
         INPUT_TARGET: ${{ inputs.target }}
         INPUT_OBSERVATION: ${{ inputs.observation }}
@@ -84,6 +88,7 @@ runs:
         fi
         intentional --directory "$INPUT_WORKING_DIRECTORY" verify publication \
           --release-unit "$INPUT_RELEASE_UNIT" \
+          --package "$INPUT_PACKAGE" \
           --publisher "$INPUT_PUBLISHER" \
           "${SELECTOR[@]}" \
           --observation "$INPUT_OBSERVATION" \

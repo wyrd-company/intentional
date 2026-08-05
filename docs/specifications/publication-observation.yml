@@ -10,8 +10,8 @@ description: >-
   `intentional verify publication` learns about a destination. Its
   `--observation` option names the file.
 
-  The observation identifies one publication by release unit, publisher, and
-  canonical target, and reports what the readback found as `state`. `present`
+  The observation identifies one publication by release unit, package,
+  publisher, and canonical target, and reports what the readback found as `state`. `present`
   records the observed subject, the packager that produced it, native build
   provenance, the metadata components actually attached, the destination
   readback, the closure-time retrieval, and the mutable destination aliases
@@ -81,8 +81,8 @@ description: >-
   across runners.
 validation-criteria: >-
   An observation conforms when it validates against
-  `publication-observation.json-schema.yml`; its release unit, publisher, and
-  canonical target name a publication the workspace configuration selects; its
+  `publication-observation.json-schema.yml`; its release unit, package,
+  publisher, and canonical target name a publication the workspace configuration selects; its
   destination identity is the configured registry or repository; its subject and
   destination versions are the release plan's version for that release unit; and
   its state carries exactly the members that state admits. `intentional verify

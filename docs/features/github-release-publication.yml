@@ -281,10 +281,11 @@ rules:
           - given: One release unit publishes through an adapter with an explicit target
             world:
               release_unit_option: example-component
+              package_option: example-package
               publisher_option: oci
               target_option: ghcr
           - when: Intentional verify publication runs with the named identity options
-          - then: Verification selects exactly that release unit, publisher, and target contract
+          - then: Verification selects exactly that release unit, package, publisher, and target contract
             world:
               evidence_verifies: true
       identify-implicit-primary-target-canonically:
@@ -293,9 +294,10 @@ rules:
           - given: An npm publisher uses its implicit primary destination
             world:
               release_unit_option: example-component
+              package_option: example-package
               publisher_option: npm
               target_option: npmjs
-          - when: Intentional verify publication runs with all three named identity options
+          - when: Intentional verify publication runs with all four named identity options
           - then: Verification selects the primary and records its canonical target identity
             world:
               evidence_verifies: true

@@ -11,6 +11,7 @@ required:
   - $schema
   - contract
   - release-unit
+  - package
   - publisher
   - target
   - state
@@ -20,6 +21,9 @@ properties:
   contract:
     const: publication-observation-1
   release-unit:
+    type: string
+    minLength: 1
+  package:
     type: string
     minLength: 1
   publisher:

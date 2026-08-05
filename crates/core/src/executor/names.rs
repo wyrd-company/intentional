@@ -70,6 +70,9 @@ const REGISTRY_EXTRA: [char; 2] = ['-', '_'];
 /// Characters a release-unit identifier may carry beyond letters and digits.
 const RELEASE_UNIT_EXTRA: [char; 3] = ['-', '.', '_'];
 
+/// Characters a package identifier may carry beyond letters and digits.
+const PACKAGE_EXTRA: [char; 3] = ['-', '.', '_'];
+
 /// Characters an Arch package name may carry beyond letters and digits.
 const ARCH_PACKAGE_EXTRA: [char; 5] = ['@', '.', '_', '+', '-'];
 
@@ -209,6 +212,16 @@ pub fn release_unit(supplied: &SuppliedName<'_>) -> Result<String, String> {
         &RELEASE_UNIT_EXTRA,
         "a release-unit identifier that publishes",
         "letters, digits, hyphens, dots and underscores, starting with a letter or digit; a release unit that publishes is named in its recipe's scripts and evidence, so rename it or remove its publisher configuration",
+    )
+}
+
+/// Reject a package identifier that cannot be one publication-identity segment.
+pub fn package(supplied: &SuppliedName<'_>) -> Result<String, String> {
+    accept(
+        supplied,
+        &PACKAGE_EXTRA,
+        "a package identifier that publishes",
+        "letters, digits, hyphens, dots and underscores, starting with a letter or digit; a package that publishes is named in evidence, so rename it or remove its publisher configuration",
     )
 }
 
@@ -402,6 +415,10 @@ mod tests {
             assert!(
                 release_unit(&supplied).is_err(),
                 "a release-unit identifier admits {hostile:?}"
+            );
+            assert!(
+                package(&supplied).is_err(),
+                "a package identifier admits {hostile:?}"
             );
             assert!(
                 secret(Some(&supplied), "CONVENTIONAL").is_err(),

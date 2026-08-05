@@ -4,8 +4,8 @@ format: json-schema
 description: >-
   A publisher-evidence fragment is the affirmative YAML result emitted by one
   `intentional verify publication` invocation. The required `--release-unit`,
-  `--publisher`, and `--output` options name one publication and its fragment
-  path; optional `--target` selects a non-primary configured target. An implicit
+  `--package`, `--publisher`, and `--output` options name one publication and
+  its fragment path; optional `--target` selects a non-primary configured target. An implicit
   primary selection serializes as `target: primary`. The concrete registry or
   repository identity is recorded separately as `destination.identity`. The
   fragment binds the selected publication
@@ -50,7 +50,7 @@ description: >-
 validation-criteria: >-
   A fragment conforms when it validates against
   `publisher-evidence.json-schema.yml`; its release identities match the
-  verified candidate; the publisher, target, subject, and phase tags are
+  verified candidate; the package, publisher, target, subject, and phase tags are
   expected by configuration and the selected recipe; and its native
   provenance, destination readback, and the accurately classified retrieval can be
   independently verified. The command writes the fragment only after those

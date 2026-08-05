@@ -6,7 +6,8 @@ description: >-
   annotated tag record when a configured tag has publication-phase semantics.
   Every phase records S, R, the release-plan digest, the global tag, and built
   subject identities. Before-publication evidence records intended
-  destinations and build provenance without claiming destination observation.
+  destinations by release unit, package, publisher, and target, plus build
+  provenance, without claiming destination observation.
   After-publication evidence embeds the completed publisher-evidence fragments
   valid when the tag is created. Large native attestations remain digest-bound
   references. The value identifies itself with

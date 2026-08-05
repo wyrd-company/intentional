@@ -69,6 +69,8 @@ pub struct PublicationObservation {
     pub contract: String,
     /// Release unit the observed publication belongs to.
     pub release_unit: String,
+    /// Package the observed publication belongs to.
+    pub package: String,
     /// Publisher adapter that performed the publication.
     pub publisher: PublisherKind,
     /// Canonical target identity the recipe observed.
@@ -104,7 +106,10 @@ pub struct PublicationObservation {
 impl PublicationObservation {
     /// Stable publication identity this observation describes.
     pub fn identity(&self) -> String {
-        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+        format!(
+            "{}/{}/{}/{}",
+            self.release_unit, self.package, self.publisher, self.target
+        )
     }
 
     /// Read and validate one observation document.
@@ -399,6 +404,7 @@ pub(crate) mod tests {
             "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: present
@@ -429,6 +435,7 @@ retrieval:
             "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: pending
@@ -443,13 +450,13 @@ state: pending
         let clock = TestClock::new();
         let observed = observe(
             &workspace.root().join("observation.yml"),
-            "component/npm/primary",
+            "component/package/npm/primary",
             &policy(),
             &clock,
         )
         .expect("a present observation is accepted");
         assert_eq!(observed.state, ObservationState::Present);
-        assert_eq!(observed.identity(), "component/npm/primary");
+        assert_eq!(observed.identity(), "component/package/npm/primary");
         assert!(
             clock.waits.borrow().is_empty(),
             "an observable publication never waits"
@@ -484,7 +491,7 @@ state: pending
             path: &path,
             document: &document,
         };
-        let observed = observe(&path, "component/npm/primary", &policy(), &clock)
+        let observed = observe(&path, "component/package/npm/primary", &policy(), &clock)
             .expect("the observation is accepted once it appears");
         assert_eq!(observed.state, ObservationState::Present);
         assert_eq!(clock.waits.get(), 1, "the loop re-read the destination");
@@ -521,7 +528,7 @@ state: pending
             path: &path,
             document: &document,
         };
-        let observed = observe(&path, "component/npm/primary", &policy(), &clock)
+        let observed = observe(&path, "component/package/npm/primary", &policy(), &clock)
             .expect("a publication that becomes observable is accepted");
         assert_eq!(observed.state, ObservationState::Present);
         assert_eq!(clock.waits.get(), 3, "each pending read waited once");
@@ -538,7 +545,7 @@ state: pending
         let clock = TestClock::new();
         let error = observe(
             &workspace.root().join("observation.yml"),
-            "component/npm/primary",
+            "component/package/npm/primary",
             &policy(),
             &clock,
         )
@@ -571,6 +578,7 @@ state: pending
                 "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: conflict
@@ -584,7 +592,7 @@ conflict: >-
         let clock = TestClock::new();
         let error = observe(
             &workspace.root().join("observation.yml"),
-            "component/npm/primary",
+            "component/package/npm/primary",
             &policy(),
             &clock,
         )
@@ -605,6 +613,7 @@ conflict: >-
                 "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: absent
@@ -614,7 +623,7 @@ state: absent
         let clock = TestClock::new();
         let error = observe(
             &workspace.root().join("observation.yml"),
-            "component/npm/primary",
+            "component/package/npm/primary",
             &policy(),
             &clock,
         )
@@ -696,6 +705,7 @@ state: absent
                 "$schema: {PUBLICATION_OBSERVATION_SCHEMA}
 contract: {PUBLICATION_OBSERVATION_CONTRACT}
 release-unit: component
+package: package
 publisher: npm
 target: primary
 state: pending

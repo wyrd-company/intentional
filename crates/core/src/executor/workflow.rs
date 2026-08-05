@@ -1383,9 +1383,10 @@ fn concurrency(group: &str) -> Value {
 /// Managed job identifier for one resolved publication.
 fn publication_job_id(namespaces: &PrefixNamespaces, publication: &SelectedPublication) -> String {
     format!(
-        "{}publish_{}_{}_{}",
+        "{}publish_{}_{}_{}_{}",
         namespaces.job,
         identifier(&publication.release_unit),
+        identifier(&publication.package),
         publication.publisher.as_str(),
         identifier(&publication.target)
     )
@@ -1394,9 +1395,10 @@ fn publication_job_id(namespaces: &PrefixNamespaces, publication: &SelectedPubli
 /// Managed job identifier for one consumer retrieval separated from publication.
 fn retrieval_job_id(namespaces: &PrefixNamespaces, publication: &SelectedPublication) -> String {
     format!(
-        "{}retrieve_{}_{}_{}",
+        "{}retrieve_{}_{}_{}_{}",
         namespaces.job,
         identifier(&publication.release_unit),
+        identifier(&publication.package),
         publication.publisher.as_str(),
         identifier(&publication.target)
     )
@@ -1566,6 +1568,7 @@ fn upload_job(
                     "@RELEASE_UNIT@",
                     &scalar(&consumer.publication.release_unit),
                 ),
+                ("@PACKAGE@", &scalar(&consumer.publication.package)),
                 (
                     "@PUBLISHER@",
                     &scalar(consumer.publication.publisher.as_str()),
@@ -1709,6 +1712,7 @@ fn publication_jobs(
                 &scalar(&format!("Upload the {identity} evidence fragment")),
             )
             .replace("@RELEASE_UNIT@", &scalar(&publication.release_unit))
+            .replace("@PACKAGE@", &scalar(&publication.package))
             .replace("@PUBLISHER@", &scalar(publication.publisher.as_str()))
             .replace("@TARGET@", &scalar(&target))
             .replace("@OBSERVATION@", &scalar(&observation))
@@ -2312,7 +2316,7 @@ jobs:
             "the repository's own tag trigger survives: {updated}"
         );
         assert!(
-            updated.contains("intentional_publish_component_cargo_primary:"),
+            updated.contains("intentional_publish_component_package_cargo_primary:"),
             "the resolved publication derives a managed job: {updated}"
         );
         assert!(
@@ -2923,7 +2927,7 @@ aur:
         let workspace = go_workspace("workflow-go-token");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
-        let homebrew = "intentional_publish_component_homebrew_primary";
+        let homebrew = "intentional_publish_component_package_homebrew_primary";
 
         let token = job_steps(&jobs, homebrew)
             .into_iter()
@@ -2954,7 +2958,7 @@ aur:
         let workspace = go_workspace("workflow-go-aur");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
-        let aur = "intentional_publish_component_aur_primary";
+        let aur = "intentional_publish_component_package_aur_primary";
 
         assert!(
             !job_steps(&jobs, aur)
@@ -3187,7 +3191,7 @@ aur:
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
 
-        let registry = job_ids(&jobs, "intentional_publish_library_npm");
+        let registry = job_ids(&jobs, "intentional_publish_library_package_npm");
         assert_eq!(
             registry.len(),
             1,
@@ -3209,7 +3213,7 @@ aur:
             job_needs(&jobs, registry)
         );
 
-        let consumer = job_ids(&jobs, "intentional_publish_component_homebrew");
+        let consumer = job_ids(&jobs, "intentional_publish_component_package_homebrew");
         assert_eq!(
             consumer.len(),
             1,
@@ -3659,7 +3663,7 @@ exit 0
             })
             .collect::<BTreeMap<_, _>>();
 
-        let handoff = written_handoff(&runner, "component_homebrew_primary");
+        let handoff = written_handoff(&runner, "component_package_homebrew_primary");
         // The inventory's heterogeneity is load-bearing rather than incidental.
         // If every asset agreed on its size, or on its media type, a document
         // that recorded one asset's value against another's name would read as
@@ -3687,7 +3691,7 @@ exit 0
             "the inventoried assets do not all share one media type: {:?}",
             handoff.assets
         );
-        assert_eq!(handoff.identity(), "component/homebrew/primary");
+        assert_eq!(handoff.identity(), "component/package/homebrew/primary");
         assert_eq!(handoff.repository, REPOSITORY_IDENTITY);
         assert_eq!(handoff.release_id.to_string(), UPLOAD_RELEASE_ID);
         assert_eq!(handoff.global_tag, UPLOAD_TAG);
@@ -3735,8 +3739,8 @@ exit 0
             assert_eq!(asset.size, contents.len() as u64, "{}", asset.name);
         }
 
-        let arch = written_handoff(&runner, "component_aur_primary");
-        assert_eq!(arch.identity(), "component/aur/primary");
+        let arch = written_handoff(&runner, "component_package_aur_primary");
+        assert_eq!(arch.identity(), "component/package/aur/primary");
         assert_eq!(
             arch.assets
                 .iter()
@@ -3774,8 +3778,8 @@ exit 0
             repeated.diagnostics
         );
         assert_eq!(
-            written_handoff(&first, "component_homebrew_primary"),
-            written_handoff(&second, "component_homebrew_primary"),
+            written_handoff(&first, "component_package_homebrew_primary"),
+            written_handoff(&second, "component_package_homebrew_primary"),
             "the rerun hands off the same inventory rather than a second one"
         );
     }
@@ -4084,7 +4088,9 @@ exit 0
             executed
                 .diagnostics
                 .contains("is not an asset of draft Release")
-                && executed.diagnostics.contains("component/homebrew/primary"),
+                && executed
+                    .diagnostics
+                    .contains("component/package/homebrew/primary"),
             "the refusal names the asset and the publication that could not retrieve it: {:?}",
             executed.diagnostics
         );
@@ -4375,7 +4381,7 @@ exit 0
             assert!(
                 diagnostic
                     .message
-                    .contains(&format!("component/{publisher}/primary")),
+                    .contains(&format!("component/package/{publisher}/primary")),
                 "{}",
                 diagnostic.message
             );
@@ -6177,7 +6183,7 @@ exit 0
                 assert_eq!(observed.state, state);
                 assert_eq!(
                     observed.identity(),
-                    format!("component/{publisher}/{PRIMARY_TARGET}"),
+                    format!("component/package/{publisher}/{PRIMARY_TARGET}"),
                     "the observation names the publication its job publishes"
                 );
                 if state != ObservationState::Present {
@@ -7152,15 +7158,15 @@ release-units:
                 "build_rtwzlf_devcontainer_cli",
                 "build_wpdklc_goreleaser",
                 "close_release",
-                "publish_jdmcvx_oci_dockerhub",
-                "publish_jdmcvx_oci_ghcr",
-                "publish_qhwzru_cargo_primary",
-                "publish_qhwzru_npm_github",
-                "publish_qhwzru_npm_primary",
-                "publish_rtwzlf_oci_ghcr",
-                "publish_wpdklc_aur_primary",
-                "publish_wpdklc_homebrew_primary",
-                "retrieve_qhwzru_npm_github",
+                "publish_jdmcvx_package_oci_dockerhub",
+                "publish_jdmcvx_package_oci_ghcr",
+                "publish_qhwzru_rust_cargo_primary",
+                "publish_qhwzru_node_npm_github",
+                "publish_qhwzru_node_npm_primary",
+                "publish_rtwzlf_package_oci_ghcr",
+                "publish_wpdklc_package_aur_primary",
+                "publish_wpdklc_package_homebrew_primary",
+                "retrieve_qhwzru_node_npm_github",
                 "tag_after_publication",
                 "tag_before_publication",
                 // Task 179's deliverable-upload job comes into the sweep here
@@ -8476,8 +8482,9 @@ release-units:
             // expected side is `resolve_publications`, production's own
             // resolution of this same workspace, which knows nothing about the
             // sweep; the read side parses each swept job identifier by the
-            // shape `publication_job_id` builds -- `publish_<unit>_<publisher>_
-            // <target>` -- rather than filtering its segments through an
+            // shape `publication_job_id` builds --
+            // `publish_<unit>_<package>_<publisher>_<target>` -- rather than
+            // filtering its segments through an
             // expectation. A constant filtered through itself cannot fail: the
             // read side could never hold anything the constant did not, so
             // dropping a packager from it left the whole suite green, and
@@ -8940,8 +8947,8 @@ release-units:
         let workspace = npm_workspace("workflow-github-package-reader");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
-        let publisher = "intentional_publish_component_npm_github";
-        let retrieval = "intentional_retrieve_component_npm_github";
+        let publisher = "intentional_publish_component_package_npm_github";
+        let retrieval = "intentional_retrieve_component_package_npm_github";
         let build = "intentional_build_component_npm";
         let publisher_job = jobs
             .get(Value::String(publisher.to_owned()))
@@ -9028,7 +9035,7 @@ release-units:
         converge(workspace.root(), WorkflowRole::Publish);
         let readback = managed_job_steps(
             workspace.root(),
-            "intentional_retrieve_component_npm_github",
+            "intentional_retrieve_component_package_npm_github",
         )
         .into_iter()
         .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
@@ -9639,8 +9646,8 @@ release-units:
         use crate::executor::fixture::Workspace;
         use std::path::PathBuf;
 
-        const HOMEBREW_JOB: &str = "intentional_publish_component_homebrew_primary";
-        const AUR_JOB: &str = "intentional_publish_component_aur_primary";
+        const HOMEBREW_JOB: &str = "intentional_publish_component_package_homebrew_primary";
+        const AUR_JOB: &str = "intentional_publish_component_package_aur_primary";
         /// Package identity the Arch destination resolves, from native evidence.
         const AUR_PACKAGE: &str = "example-tool-bin";
 
@@ -10803,8 +10810,8 @@ for tag in ${tags}; do
 done
 "#;
 
-        const DOCKERHUB_JOB: &str = "intentional_publish_component_oci_dockerhub";
-        const GHCR_JOB: &str = "intentional_publish_component_oci_ghcr";
+        const DOCKERHUB_JOB: &str = "intentional_publish_component_package_oci_dockerhub";
+        const GHCR_JOB: &str = "intentional_publish_component_package_oci_ghcr";
         const FEATURE_REPOSITORY: &str = "ghcr.io/example-owner/example-repository/example-feature";
         /// Docker Hub repository the fixture publishes to, registry included.
         ///

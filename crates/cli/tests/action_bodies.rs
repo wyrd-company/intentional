@@ -200,6 +200,7 @@ fn recorded_invocation(supplied: &BTreeMap<&str, String>) -> Vec<String> {
 fn required() -> BTreeMap<&'static str, String> {
     BTreeMap::from([
         ("release-unit", "example-unit".to_owned()),
+        ("package", "example-package".to_owned()),
         ("publisher", "example-publisher".to_owned()),
         ("observation", "observation.yml".to_owned()),
         ("working-directory", ".".to_owned()),
@@ -225,6 +226,12 @@ fn omits_an_absent_selector_and_handoff_from_the_verification_command() {
     // the Action declares — the shape every non-draft-dependent publication has
     // on the live path.
     let arguments = recorded_invocation(&required());
+
+    assert_eq!(
+        option_value(&arguments, "--package"),
+        Some("example-package"),
+        "the required package reaches the command: {arguments:?}"
+    );
 
     assert_eq!(
         option_value(&arguments, "--target"),

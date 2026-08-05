@@ -88,6 +88,8 @@ pub struct DraftReleaseAssetHandoff {
     pub plan_digest: String,
     /// Release unit whose deliverables are handed off.
     pub release_unit: String,
+    /// Package whose deliverables are handed off.
+    pub package: String,
     /// Publisher adapter that consumes the assets.
     pub publisher: PublisherKind,
     /// Canonical target identity the publisher publishes to.
@@ -99,7 +101,10 @@ pub struct DraftReleaseAssetHandoff {
 impl DraftReleaseAssetHandoff {
     /// Stable publication identity this handoff serves.
     pub fn identity(&self) -> String {
-        format!("{}/{}/{}", self.release_unit, self.publisher, self.target)
+        format!(
+            "{}/{}/{}/{}",
+            self.release_unit, self.package, self.publisher, self.target
+        )
     }
 
     /// Render the handoff as its transported YAML document.
@@ -170,8 +175,9 @@ impl DraftReleaseAssetHandoff {
                 self.plan_digest
             ));
         }
-        if self.release_unit.is_empty() || self.target.is_empty() {
-            findings.push("draft handoff records an empty release unit or target".to_owned());
+        if self.release_unit.is_empty() || self.package.is_empty() || self.target.is_empty() {
+            findings
+                .push("draft handoff records an empty release unit, package, or target".to_owned());
         }
         if !is_draft_dependent(self.publisher) {
             findings.push(format!(
@@ -244,6 +250,8 @@ pub struct HandoffRequest<'a> {
     pub plan_digest: &'a str,
     /// Release unit whose deliverables are handed off.
     pub release_unit: &'a str,
+    /// Package whose deliverables are handed off.
+    pub package: &'a str,
     /// Publisher adapter that consumes the assets.
     pub publisher: PublisherKind,
     /// Canonical target identity the publisher publishes to.
@@ -272,6 +280,7 @@ pub fn write_handoff(request: &HandoffRequest<'_>) -> Result<DraftReleaseAssetHa
         release_commit: request.release_commit.to_owned(),
         plan_digest: request.plan_digest.to_owned(),
         release_unit: request.release_unit.to_owned(),
+        package: request.package.to_owned(),
         publisher: request.publisher,
         target: request.target.to_owned(),
         assets,
@@ -692,6 +701,7 @@ release-units:
             release_commit: RELEASE.to_owned(),
             plan_digest: PLAN_DIGEST.to_owned(),
             release_unit: "component".to_owned(),
+            package: "package".to_owned(),
             publisher: PublisherKind::Homebrew,
             target: "primary".to_owned(),
             assets: vec![HandoffAsset {
@@ -732,6 +742,7 @@ release-units:
             release_commit: RELEASE,
             plan_digest: PLAN_DIGEST,
             release_unit: "component",
+            package: "package",
             publisher: PublisherKind::Apt,
             target: "primary",
             assets: &assets,
@@ -777,6 +788,7 @@ release-units:
             release_commit: RELEASE,
             plan_digest: PLAN_DIGEST,
             release_unit: "component",
+            package: "package",
             publisher: PublisherKind::Npm,
             target: "primary",
             assets: &[HandoffAsset {
@@ -839,7 +851,7 @@ release-units:
             &workspace.source(bytes),
         )
         .expect("the handoff verifies");
-        assert_eq!(verified.identity, "component/homebrew/primary");
+        assert_eq!(verified.identity, "component/package/homebrew/primary");
         assert_eq!(
             verified.retrieval.mode(),
             CleanClientMode::AuthenticatedDraft
@@ -857,7 +869,7 @@ release-units:
         assert!(
             error
                 .to_string()
-                .contains("component/homebrew/sample-library"),
+                .contains("component/package/homebrew/sample-library"),
             "{error}"
         );
     }
