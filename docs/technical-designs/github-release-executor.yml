@@ -754,11 +754,22 @@ proposed-design:
     reconciliation green. Workflow comparison and `intentional check` therefore
     re-read the referenced metadata and refuse a contract the Action no longer
     satisfies, in the same way validation already reaches into native packager
-    configuration rather than stopping at the workflow's surface. What makes
-    that sufficient rather than merely narrower is that the Action is local: the
-    publisher job checks out the released commit before its steps run, so the
-    metadata a run honours is the metadata at the revision checking that commit
-    validated, and there is no window between them for the file to change.
+    configuration rather than stopping at the workflow's surface. That is where
+    the divergence is worth catching, because it is quiet: a delivery step
+    handed an input its Action no longer declares is warned about rather than
+    failed, so the run proceeds, delivers nothing the index will show, and
+    surfaces as a publication that never appeared. The check names the Action.
+    The deadline would have named the destination.
+
+    What that reaches is the Action as comparison finds it on disk. The
+    publisher job checks the released commit out, and steps running before
+    delivery could rewrite the checked-out metadata the runner then loads; no
+    revalidation the recipe performs sits above steps running beside it. That
+    window is uncovered, and deliberately. Reaching it means a release job
+    rewriting its own checkout mid-run, which is a repository undermining a
+    workflow it owns rather than a destination, a packager, or a delivery step
+    behaving badly, and these recipes draw their trust boundary where the rest
+    of this design draws it.
 
     Outward, the recipe reads the step's success and nothing else. A delivery
     step that reported what it published would be reporting on itself, and no
