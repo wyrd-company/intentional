@@ -1156,7 +1156,7 @@ pub(crate) fn discovery_candidate_directory(detector: &str, path: &Path) -> Path
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn join_relative_paths(parent: &Path, child: &Path) -> PathBuf {
+pub(crate) fn join_relative_paths(parent: &Path, child: &Path) -> PathBuf {
     match (parent == Path::new("."), child == Path::new(".")) {
         (true, true) => PathBuf::from("."),
         (true, false) => child.to_owned(),

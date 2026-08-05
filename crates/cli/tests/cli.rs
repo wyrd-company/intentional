@@ -2194,6 +2194,50 @@ fn baseline_adds_a_release_unit_namespace_after_the_global_tag_moves() {
 }
 
 #[test]
+fn baseline_accepts_a_release_unit_tag_moved_from_another_unit_tag_id() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".intentional/config.yml",
+        &config("committed").replace(
+            "      primary:\n        role: primary\n        template: 'sample@{version}'\n",
+            "      primary: { role: primary, template: 'sample@{version}' }\n      legacy: { role: projection, template: 'legacy@{version}' }\n",
+        ),
+    );
+    repo.commit("establish the original release unit tags");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+
+    repo.write(
+        ".intentional/config.yml",
+        &config("committed").replace("sample@{version}", "legacy@{version}"),
+    );
+    repo.commit("move the release unit primary tag id");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+
+    assert_eq!(
+        git(&repo.root, &["tag", "--list"]),
+        "legacy@1.0.0\nsample@1.0.0"
+    );
+}
+
+#[test]
+fn baseline_does_not_treat_a_lightweight_tag_as_an_established_identity() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.commit("add baseline fixture");
+    repo.tag("sample@1.0.0");
+
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "existing tag sample@1.0.0 is not an annotated Intentional record",
+        ));
+}
+
+#[test]
 fn tag_object_identity_is_independent_of_ambient_git_identity_and_timezone() {
     let repo = TestRepo::new();
     let plan = prepare_applied_release(&repo);

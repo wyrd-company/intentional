@@ -211,8 +211,7 @@ impl TagResult {
             let canonical = Config::workspace_tag_id(id);
             if repository.has_matching_tag(id, &tag.template)? {
                 let version = repository.current_version(id, &tag.template)?;
-                versions.insert(canonical, version.to_string());
-                let canonical = Config::workspace_tag_id(id);
+                versions.insert(canonical.clone(), version.to_string());
                 let name = render_tag(&tag.template, id, &version.to_string());
                 if tag_belongs_to_another_identity(&git, &name, &canonical)? {
                     established.insert(canonical);
@@ -330,6 +329,12 @@ impl TagResult {
                 .collect::<BTreeMap<_, _>>()
         };
         if selected.is_empty() {
+            if baseline && !established.is_empty() {
+                return Ok(Self {
+                    tags: Vec::new(),
+                    sealed_phase_evidence: None,
+                });
+            }
             return Err(Error::Validation(match phase {
                 Some(phase) => format!("no release tags require --phase {phase}"),
                 None => "no unphased release tags are available".to_owned(),

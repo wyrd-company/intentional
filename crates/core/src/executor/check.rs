@@ -5,7 +5,7 @@
 
 //! Locally observable GitHub executor conformance.
 
-use crate::config::{Config, GithubConfig, WorkflowRole, CONFIG_PATH};
+use crate::config::{join_relative_paths, Config, GithubConfig, WorkflowRole, CONFIG_PATH};
 use crate::error::{Error, Result};
 use crate::executor::goreleaser;
 use crate::executor::recipe::{resolve_publications, Packager, SelectedPublication};
@@ -46,11 +46,7 @@ pub fn check_executor(root: &Path) -> Result<ExecutorCheck> {
     for publication in selection.selected {
         let unit = &config.release_units[&publication.release_unit];
         let package = &unit.packages[&publication.package];
-        let package_path = if package.path == Path::new(".") {
-            unit.path.clone()
-        } else {
-            unit.path.join(&package.path)
-        };
+        let package_path = join_relative_paths(&unit.path, &package.path);
         let configured = publication
             .packager
             .configuration_paths()
@@ -404,6 +400,36 @@ aur:
             "check-goreleaser-conforming",
             "    homebrew: { repository: example-org/homebrew-tap }\n    rpm: {}\n    apt: {}\n    aur: {}\n",
         );
+        assert!(
+            packager_findings(&workspace).is_empty(),
+            "{:?}",
+            packager_findings(&workspace)
+        );
+    }
+
+    #[test]
+    fn reads_goreleaser_configuration_from_a_nested_package() {
+        let workspace = go_workspace(
+            "check-goreleaser-nested-package",
+            "    homebrew: { repository: example-org/homebrew-tap }\n",
+        );
+        let path = workspace.root().join(".intentional/config.yml");
+        let config = std::fs::read_to_string(&path).expect("fixture config");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &config.replace("        path: .\n", "        path: command\n"),
+            )
+            .write(
+                "component/command/go.mod",
+                "module example.test/example-tool\n",
+            )
+            .write(
+                "component/command/cmd/example-tool/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write("component/command/.goreleaser.yaml", GORELEASER_CONFIG);
+
         assert!(
             packager_findings(&workspace).is_empty(),
             "{:?}",

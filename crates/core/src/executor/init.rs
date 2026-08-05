@@ -536,7 +536,12 @@ fn package_candidates(
     let mut identifiers = release_unit_config
         .packages
         .iter()
-        .map(|(id, package)| (id.clone(), release_unit_config.path.join(&package.path)))
+        .map(|(id, package)| {
+            (
+                id.clone(),
+                crate::config::join_relative_paths(&release_unit_config.path, &package.path),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     for artifact in derive_package_candidates(root, config, release_unit)? {
         let path = artifact
@@ -1055,12 +1060,13 @@ fn apply_candidate(
                     candidate.id, candidate.release_unit
                 ))
             })?;
-            let relative = release_unit.path.join(&package.path).join(
-                packager
-                    .configuration_paths()
-                    .first()
-                    .expect("packager declares configuration paths"),
-            );
+            let relative = crate::config::join_relative_paths(&release_unit.path, &package.path)
+                .join(
+                    packager
+                        .configuration_paths()
+                        .first()
+                        .expect("packager declares configuration paths"),
+                );
             if root.join(&relative).is_file() {
                 return Ok(());
             }

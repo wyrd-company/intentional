@@ -1023,11 +1023,7 @@ fn matching_detector_candidates(
 }
 
 fn package_path(release_unit: &ReleaseUnitConfig, package: &PackageConfig) -> PathBuf {
-    if package.path == Path::new(".") {
-        release_unit.path.clone()
-    } else {
-        release_unit.path.join(&package.path)
-    }
+    crate::config::join_relative_paths(&release_unit.path, &package.path)
 }
 
 fn path_contains(parent: &Path, child: &Path) -> bool {
