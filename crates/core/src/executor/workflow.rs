@@ -4727,6 +4727,10 @@ release-units:
             .iter()
             .find(|diagnostic| diagnostic.code == "subject-identity-invalid")
             .expect("the missing package identity blocks derivation");
+        assert_eq!(
+            diagnostic.path.as_deref(),
+            Some("release-units.component.packages.second")
+        );
         assert!(
             diagnostic
                 .message
