@@ -129,6 +129,20 @@ proposed-design:
     same bytes twice under distinct identities, which collides nowhere and so
     would be reported by nothing.
 
+    Executor initialization proposes the packages rather than requiring an
+    operator to find them. It enumerates every publishable artifact inside each
+    configured release unit — each manifest of a workspace, each image
+    definition, each command of a module — and offers one package candidate per
+    artifact, with its proposed identifier taken from the artifact's own
+    directory or native name and its publisher choices taken from the capability
+    that artifact derives. The accept or decline plan carries one resolution per
+    candidate, so accepting writes the package and its publisher opt-in while
+    declining is remembered and the candidate is not offered again. A repository
+    whose packages are all resolved converges and is asked nothing further.
+    Proposed identifiers are subject to the same set-level constraint as
+    declared ones, so two artifacts whose names would collide inside one release
+    unit are reported rather than silently distinguished.
+
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
     native package files. Its Intentional property contains only the explicit
@@ -316,11 +330,28 @@ proposed-design:
     publication, rather than resolving. Reading richer evidence must not turn a
     manifest's own refusal into a publication.
 
-    Go command discovery returns every main package admitted by native
-    configuration and the bounded detector walk. Recipe selection joins those
-    candidates to declared package paths. It never selects the first match. A
-    declaration matching no command or more than one command is a semantic
-    configuration failure that names every candidate path.
+    A Go module is a versioning boundary and each command inside it is a
+    packaging boundary, so one module holds as many packages as it holds
+    commands. Go command discovery returns every main package admitted by native
+    configuration and the bounded detector walk, and initialization proposes each
+    one as its own package candidate rather than reporting the module alone.
+    Recipe selection joins those candidates to declared package paths. It never
+    selects the first match. A declaration matching no command or more than one
+    command is a semantic configuration failure that names every candidate path.
+
+    Enumerating them is what lets one command publish where another does not.
+    Three commands in one module are three artifacts, and each declares its own
+    publishers, so one may reach a tap while its siblings reach nothing. Their
+    identities differ in the package segment alone, which is the same shape as
+    two crates in one Cargo workspace and is exactly the collision the package
+    axis exists to resolve.
+
+    They share the module's version, because versioning in Go is per module and
+    a command ships at the version of the module containing it. Independent
+    publication and independent versioning are different requests: the first is
+    a package-level decision this model expresses, and the second requires
+    nested modules, which are separate versioning boundaries and therefore
+    separate release units.
 
     Every refusal that enumerates candidates enumerates only live ones.
     Configuration already records what an operator has declined, as a discovery
@@ -334,15 +365,22 @@ proposed-design:
     again. Exclusion is a decision about a known artifact, not a permanent
     blindfold.
 
-    Go commands are the one candidate set discovery receipts do not reach,
-    because the module detector identifies a module rather than each main
-    package inside it, and the command walk is not a detector. They need no
-    exclusion vocabulary of their own: a package declares a path, and a path
-    naming one command directory resolves to one command. The refusal is
-    therefore the prompt to make the declaration specific, and pointing the
-    package at the command is what answers it. Only a package path spanning
-    several commands can be ambiguous, and that is a declaration to narrow
-    rather than a candidate to exclude.
+    Go commands are declined where they are proposed. Discovery receipts do not
+    reach them, because the module detector identifies a module rather than each
+    main package inside it and the command walk is not a detector; a receipt is
+    keyed to a detector, so there is nothing for it to key to. Enumerated
+    commands are nonetheless candidates an operator must be able to refuse, or
+    initialization proposes a command the repository has already decided against
+    on every run.
+
+    The executor initialization plan carries that decision. It records a
+    resolution for each candidate, a declined candidate stays declined across
+    reruns, and a converged workspace asks nothing further. So a command is
+    declined as a package candidate in the plan rather than as a path in the
+    discovery receipts, and no second exclusion vocabulary is introduced. The
+    two places a refusal can live correspond to the two things being refused: a
+    discovery receipt declines a path as a versioning boundary, and a plan
+    resolution declines a candidate as a packaging boundary.
 
   workflow-reconciliation: |-
     The executor derives the required release or publish workflow contract from
