@@ -4819,36 +4819,65 @@ release-units:
         );
         let archive = temporary.join("linux.tar.gz");
         let listing = std::process::Command::new("tar")
-            .args(["-tzf", archive.to_str().expect("archive path")])
+            .args([
+                "--full-time",
+                "-tvzf",
+                archive.to_str().expect("archive path"),
+            ])
             .output()
             .expect("archive lists");
         assert!(listing.status.success());
-        assert_eq!(String::from_utf8_lossy(&listing.stdout), "sample-tool\n");
+        let listing = String::from_utf8_lossy(&listing.stdout);
+        assert!(
+            listing.contains("-rwxr-xr-x"),
+            "archive keeps executable mode: {listing}"
+        );
+        assert!(
+            listing.contains("1970-01-01 00:00:00"),
+            "archive fixes time: {listing}"
+        );
+        assert!(
+            listing.ends_with(" sample-tool\n"),
+            "archive names the binary: {listing}"
+        );
     }
 
     #[test]
     fn rust_homebrew_refusal_names_the_package_and_undetermined_formula() {
-        let workspace = rust_homebrew_workspace(
-            "rust-homebrew-formula-refusal",
-            "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\n",
-        );
-        let config = Config::load(workspace.root()).expect("configuration loads");
-        let github = config.github.as_ref().expect("GitHub configuration");
-        let diagnostics = derive_contract(workspace.root(), &config, github, WorkflowRole::Publish)
-            .expect_err("a library determines no Homebrew formula");
-        let diagnostic = diagnostics
-            .iter()
-            .find(|diagnostic| diagnostic.code == "homebrew-formula-underived")
-            .expect("named formula refusal");
-        assert_eq!(
-            diagnostic.path.as_deref(),
-            Some("release-units.component.packages.command.homebrew")
-        );
-        assert!(diagnostic
-            .message
-            .contains("component/command/homebrew/primary"));
-        assert!(diagnostic.message.contains("component/Cargo.toml"));
-        assert!(diagnostic.message.contains("exactly one [[bin]].name"));
+        for (label, manifest) in [
+            (
+                "rust-homebrew-library-refusal",
+                "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\n",
+            ),
+            (
+                "rust-homebrew-multiple-binaries-refusal",
+                "[package]\nname = \"sample-cli\"\nversion = \"1.2.3\"\n\n[[bin]]\nname = \"first\"\npath = \"src/first.rs\"\n\n[[bin]]\nname = \"second\"\npath = \"src/second.rs\"\n",
+            ),
+        ] {
+            let workspace = rust_homebrew_workspace(label, manifest);
+            let config = Config::load(workspace.root()).expect("configuration loads");
+            let github = config.github.as_ref().expect("GitHub configuration");
+            let diagnostics = derive_contract(
+                workspace.root(),
+                &config,
+                github,
+                WorkflowRole::Publish,
+            )
+            .expect_err("the package determines no single Homebrew formula");
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "homebrew-formula-underived")
+                .expect("named formula refusal");
+            assert_eq!(
+                diagnostic.path.as_deref(),
+                Some("release-units.component.packages.command.homebrew")
+            );
+            assert!(diagnostic
+                .message
+                .contains("component/command/homebrew/primary"));
+            assert!(diagnostic.message.contains("component/Cargo.toml"));
+            assert!(diagnostic.message.contains("exactly one [[bin]].name"));
+        }
     }
 
     #[test]
