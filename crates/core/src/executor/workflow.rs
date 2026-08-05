@@ -1537,6 +1537,7 @@ fn build_job(
     subject: &DistinctSubject,
     global_tag: &str,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
+    let tools = toolchain_steps(subject.packager).replace("@SLUG@", &subject.slug);
     job(
         PUBLISH_BUILD_JOB,
         namespaces,
@@ -1564,7 +1565,7 @@ fn build_job(
             ),
             ("@BUILD_COMMAND@", &build_command(subject.packager)),
             ("@BUILD_ENV@", &build_environment(subject, global_tag)),
-            ("@TOOLCHAIN_STEPS@", toolchain_steps(subject.packager)),
+            ("@TOOLCHAIN_STEPS@", &tools),
             ("@RELEASE_UNIT@", &scalar(&subject.release_unit)),
             ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
             ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
@@ -4720,13 +4721,42 @@ release-units:
                 .is_some_and(|body| body.contains("cargo build --release --locked --bin"))
         }));
         let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
-        assert!(aggregate.iter().any(|step| {
-            step["run"].as_str().is_some_and(|body| {
-                body.contains("linux_digest")
-                    && body.contains("macos_digest")
-                    && body.contains("homebrew/Formula/${binary}.rb")
-            })
-        }));
+        let aggregate_body = aggregate
+            .iter()
+            .find_map(|step| step["run"].as_str())
+            .expect("aggregate build body");
+        for agreement in [
+            "linux_digest=\"$(sha256sum",
+            "macos_digest=\"$(sha256sum",
+            "homebrew/Formula/${binary}.rb",
+            "${linux_digest}",
+            "${macos_digest}",
+        ] {
+            assert!(
+                aggregate_body.contains(agreement),
+                "aggregate body carries {agreement}:\n{aggregate_body}"
+            );
+        }
+        let needs = jobs["intentional_build_component_cargo_archive"]["needs"]
+            .as_sequence()
+            .expect("aggregate needs");
+        for producer in [
+            "intentional_build_component_cargo_archive_linux",
+            "intentional_build_component_cargo_archive_macos",
+        ] {
+            assert!(
+                needs.iter().any(|need| need.as_str() == Some(producer)),
+                "the sealed aggregate waits for {producer}"
+            );
+        }
+        let download_pattern = aggregate
+            .iter()
+            .find_map(|step| step["with"]["pattern"].as_str())
+            .expect("archive download pattern");
+        assert_eq!(
+            download_pattern,
+            "intentional_archive-component_cargo_archive-*"
+        );
         let publisher = job_steps(
             &jobs,
             "intentional_publish_component_command_homebrew_primary",
@@ -4741,6 +4771,59 @@ release-units:
                 .as_str()
                 .is_none_or(|body| !body.contains("cargo build"))
         }));
+
+        // Execute the product-shaped platform body. The stub replaces only
+        // Cargo's external build boundary; Python and gzip create the real
+        // archive the generated job uploads.
+        let build = platform
+            .iter()
+            .find(|step| step["run"].is_string())
+            .expect("platform build body");
+        let temporary = workspace.root().join("platform-execution");
+        let stubs = temporary.join("stubs");
+        std::fs::create_dir_all(&stubs).expect("stub directory");
+        let cargo = stubs.join("cargo");
+        std::fs::write(
+            &cargo,
+            "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p target/release\nprintf 'native executable' > target/release/sample-tool\nchmod 755 target/release/sample-tool\n",
+        )
+        .expect("Cargo stub");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
+                .expect("executable stub");
+        }
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(build["run"].as_str().expect("build script"))
+            .current_dir(workspace.root().join("component"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("RUNNER_TEMP", &temporary);
+        for (key, value) in step_environment(build) {
+            command.env(key, value);
+        }
+        let output = command.output().expect("platform build runs");
+        assert!(
+            output.status.success(),
+            "generated platform build failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let archive = temporary.join("linux.tar.gz");
+        let listing = std::process::Command::new("tar")
+            .args(["-tzf", archive.to_str().expect("archive path")])
+            .output()
+            .expect("archive lists");
+        assert!(listing.status.success());
+        assert_eq!(String::from_utf8_lossy(&listing.stdout), "sample-tool\n");
     }
 
     #[test]
