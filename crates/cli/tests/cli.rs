@@ -1055,6 +1055,8 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
     let repo = TestRepo::new();
     repo.write("go.mod", "module example.invalid/sample-tool\n\ngo 1.22\n");
     repo.write("cmd/alpha/main.go", "package main\n\nfunc main() {}\n");
+    repo.write("apps/delta/main.go", "package main\n\nfunc main() {}\n");
+    repo.write("cmd/a/b/c/d/main.go", "package main\n\nfunc main() {}\n");
     repo.write(
         "cmd/beta/main.go",
         "//go:build !ignored\n\npackage main // import \"example.invalid/sample-tool/cmd/beta\"\n\nfunc main() {}\n",
@@ -1086,6 +1088,8 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
             })
             .collect::<std::collections::BTreeSet<_>>(),
         [
+            ("go-command", "apps/delta".to_owned()),
+            ("go-command", "cmd/a/b/c/d".to_owned()),
             ("go-command", "cmd/alpha".to_owned()),
             ("go-command", "cmd/beta".to_owned()),
             ("go-command", "tools/gamma".to_owned()),
@@ -1112,6 +1116,7 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
                 package: "alpha".to_owned(),
                 target_candidate: Some(module.clone()),
             },
+            "apps/delta" | "cmd/a/b/c/d" => CandidateResolution::Excluded,
             "cmd/beta" => CandidateResolution::Excluded,
             "tools/gamma" => CandidateResolution::Excluded,
             path => panic!("unexpected Go candidate {path}"),
@@ -1147,9 +1152,14 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
             .iter()
             .map(|receipt| receipt.path.as_path())
             .collect::<std::collections::BTreeSet<_>>(),
-        [Path::new("cmd/beta"), Path::new("tools/gamma")]
-            .into_iter()
-            .collect()
+        [
+            Path::new("apps/delta"),
+            Path::new("cmd/a/b/c/d"),
+            Path::new("cmd/beta"),
+            Path::new("tools/gamma"),
+        ]
+        .into_iter()
+        .collect()
     );
 
     repo.commit("record Go discovery decisions");

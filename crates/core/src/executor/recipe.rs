@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 /// Canonical target identity of an adapter's implicit primary destination.
 pub const PRIMARY_TARGET: &str = "primary";
@@ -605,7 +606,7 @@ fn withheld_capability_reason(
         return Ok(None);
     }
     Ok(Some(format!(
-        "release unit {} is a Go module but declares no discoverable main package, so it derives no {} capability; the maintained recipes build a command, and the packager finds one in the release-unit root, under cmd to {COMMAND_SEARCH_DEPTH} directories deep, or wherever the native GoReleaser configuration's builds[].main names",
+        "release unit {} is a Go module but declares no discoverable main package, so it derives no {} capability; the maintained recipes build a command, and the packager finds every directory in the module that declares package main",
         release_unit.path.display(),
         Capability::GoApplication
     )))
@@ -916,26 +917,6 @@ fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Strin
     }
 }
 
-/// Directories a Go module's command package can be discovered in.
-///
-/// Real Go repositories place the command a release publishes in one of three
-/// shapes, and the derivation reads all three because the packager can only
-/// build what one of them names.
-///
-/// The packager's own configuration is the first and most authoritative source:
-/// GoReleaser's `builds[].main` states the main package directory outright, so
-/// a repository whose command lives somewhere idiosyncratic has already said
-/// where. The conventional `cmd/<name>` layout is the second, read to a bounded
-/// depth because `cmd/<name>/<platform>` and `cmd/<name>/internal` both occur.
-/// The module root is the third, which is the whole layout of a single-binary
-/// tool.
-///
-/// Depth is bounded rather than unbounded on purpose. An unbounded walk of a
-/// release unit would read `vendor/`, `testdata/`, and every dependency copied
-/// into the tree, and would derive a publishable capability from a `package
-/// main` that belongs to something the release does not publish.
-const COMMAND_SEARCH_DEPTH: usize = 3;
-
 /// Where one release unit's Go command package lives, when it can be found.
 ///
 /// Discovery returns the directory rather than a boolean because the reason a
@@ -947,66 +928,21 @@ fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
 
 /// Every discoverable main-package directory in one Go module.
 pub(crate) fn go_main_package_directories(directory: &Path) -> Result<Vec<PathBuf>> {
-    command_search_roots(directory)?
-        .into_iter()
-        .filter(|root| root.starts_with(directory))
-        .filter_map(|root| match declares_main_package(&root) {
-            Ok(true) => Some(Ok(root)),
-            Ok(false) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect()
-}
-
-/// Every directory the main package could be discovered in, in priority order.
-fn command_search_roots(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut roots = Vec::new();
-    let mut prefixes = vec![directory.join("cmd")];
-    if let Some(config) = crate::executor::goreleaser::read(directory)? {
-        for relative in config.main_directories {
-            // GoReleaser accepts an ellipsis import path, which names every
-            // main package beneath a prefix rather than one package. Reading it
-            // as a directory would look for a directory literally called `...`.
-            match relative.file_name().and_then(|name| name.to_str()) {
-                Some("...") => {
-                    prefixes.push(directory.join(relative.parent().unwrap_or(Path::new(""))))
-                }
-                _ => roots.push(directory.join(relative)),
-            }
+    for entry in WalkDir::new(directory).into_iter().filter_entry(|entry| {
+        entry.depth() == 0 || !entry.file_type().is_dir() || !entry.path().join("go.mod").is_file()
+    }) {
+        let entry = entry.map_err(|error| {
+            Error::Validation(format!(
+                "cannot inspect Go module {}: {error}",
+                directory.display()
+            ))
+        })?;
+        if entry.file_type().is_dir() && declares_main_package(entry.path())? {
+            roots.push(entry.into_path());
         }
     }
-    roots.push(directory.to_owned());
-    for prefix in prefixes {
-        collect_command_directories(&prefix, COMMAND_SEARCH_DEPTH, &mut roots)?;
-    }
-    let mut seen = BTreeSet::new();
-    roots.retain(|root| root.is_dir() && seen.insert(root.clone()));
     Ok(roots)
-}
-
-/// Collect `cmd` subdirectories to a bounded depth.
-fn collect_command_directories(
-    directory: &Path,
-    remaining: usize,
-    collected: &mut Vec<PathBuf>,
-) -> Result<()> {
-    if remaining == 0 || !directory.is_dir() {
-        return Ok(());
-    }
-    let entries = std::fs::read_dir(directory).map_err(|error| Error::io(directory, error))?;
-    let mut children = Vec::new();
-    for entry in entries {
-        let path = entry.map_err(|error| Error::io(directory, error))?.path();
-        if path.is_dir() {
-            children.push(path);
-        }
-    }
-    children.sort();
-    for child in children {
-        collected.push(child.clone());
-        collect_command_directories(&child, remaining - 1, collected)?;
-    }
-    Ok(())
 }
 
 /// Whether the Go files directly inside one directory declare `package main`.
@@ -1584,7 +1520,7 @@ release-units:
     /// files that make it that shape. Deriving the capability from one layout
     /// and not another would leave a publishable repository reporting that no
     /// maintained recipe matches its configured target.
-    const GO_LAYOUTS: [(&str, &[(&str, &str)]); 6] = [
+    const GO_LAYOUTS: [(&str, &[(&str, &str)]); 8] = [
         (
             "a single-binary tool with main at the module root",
             &[("component/main.go", "package main\n\nfunc main() {}\n")],
@@ -1600,6 +1536,20 @@ release-units:
             "a command nested below cmd/<name>",
             &[(
                 "component/cmd/example/app/main.go",
+                "package main\n\nfunc main() {}\n",
+            )],
+        ),
+        (
+            "a deeply nested command",
+            &[(
+                "component/cmd/a/b/c/d/main.go",
+                "package main\n\nfunc main() {}\n",
+            )],
+        ),
+        (
+            "a command outside conventional roots",
+            &[(
+                "component/apps/example/main.go",
                 "package main\n\nfunc main() {}\n",
             )],
         ),

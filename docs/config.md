@@ -324,6 +324,11 @@ in their own files and take their version authority from a canonical Git tag:
 | Terraform module | `terraform-module` | a directory holding `.tf` files, keyed on the directory |
 | Terraform provider | `terraform-provider` | `go.mod` with a direct `require` on a Terraform plugin module |
 | Docker/OCI image | `docker-image` | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile` |
+
+`init` also recognizes packaging boundaries inside a versioning boundary:
+
+| Package | Detector | Evidence |
+| --- | --- | --- |
 | Go command | `go-command` | directory containing files that declare `package main` |
 
 Each candidate contains source evidence, extracted identity and version when
