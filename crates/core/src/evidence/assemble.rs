@@ -14,7 +14,9 @@ use crate::evidence::contribution::{
 };
 use crate::evidence::identity::{fragment_disagreements, phase_disagreements, proved_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
-use crate::executor::recipe::{publication_probe_paths, resolve_publications, SelectedPublication};
+use crate::executor::recipe::{
+    publication_probe_paths, resolve_publications, selects_publications, SelectedPublication,
+};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use crate::release::git::GitCommand;
 use serde::{Deserialize, Serialize};
@@ -911,6 +913,15 @@ fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &
         }
     };
     paths.insert(PathBuf::from(CONFIG_PATH));
+    for release_unit in config
+        .release_units
+        .values()
+        .filter(|release_unit| selects_publications(release_unit))
+    {
+        if go_module_present(root, release, &release_unit.path) {
+            paths.extend(go_sources(root, release, &release_unit.path));
+        }
+    }
 
     let mut differing = Vec::new();
     for path in &paths {
@@ -975,6 +986,85 @@ fn disk_blob(root: &Path, path: &Path) -> Result<Option<String>> {
         return Err(Error::Git(output.diagnostic()));
     }
     Ok(Some(output.line()?))
+}
+
+/// Whether either side carries a Go module beneath one publishing release unit.
+fn go_module_present(root: &Path, release: &str, unit: &Path) -> bool {
+    !tree_paths(root, release, unit, |path| path.ends_with("go.mod")).is_empty()
+        || disk_contains(root.join(unit), |path| {
+            path.file_name().is_some_and(|name| name == "go.mod")
+        })
+}
+
+/// Every Go source beneath one publishing release unit, from both sides.
+fn go_sources(root: &Path, release: &str, unit: &Path) -> BTreeSet<PathBuf> {
+    let mut sources = tree_paths(root, release, unit, |path| path.ends_with(".go"));
+    collect_go_sources(&root.join(unit), unit, &mut sources);
+    sources
+}
+
+fn tree_paths(
+    root: &Path,
+    release: &str,
+    unit: &Path,
+    accepts: impl Fn(&str) -> bool,
+) -> BTreeSet<PathBuf> {
+    let mut paths = BTreeSet::new();
+    let listing = GitCommand::new(root)
+        .args([
+            "ls-tree",
+            "-r",
+            "--name-only",
+            "-z",
+            release,
+            "--",
+            &unit.display().to_string(),
+        ])
+        .output();
+    if let Ok(listing) = listing {
+        if listing.succeeded() {
+            if let Ok(text) = listing.text() {
+                paths.extend(
+                    text.split('\0')
+                        .filter(|path| accepts(path))
+                        .map(PathBuf::from),
+                );
+            }
+        }
+    }
+    paths
+}
+
+fn disk_contains(directory: PathBuf, accepts: impl Fn(&Path) -> bool + Copy) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        if entry.file_name() == ".git" {
+            return false;
+        }
+        accepts(&path) || path.is_dir() && disk_contains(path, accepts)
+    })
+}
+
+fn collect_go_sources(directory: &Path, relative: &Path, sources: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let child = relative.join(&name);
+        let path = entry.path();
+        if path.is_dir() {
+            collect_go_sources(&path, &child, sources);
+        } else if child.extension().is_some_and(|extension| extension == "go") {
+            sources.insert(child);
+        }
+    }
 }
 
 /// Prove the configured publications describe the release the plan sealed.
@@ -2610,9 +2700,9 @@ subjects: []
     /// The other half. This does not replace a proved read; it adds one. A
     /// release unit that carried no Cargo manifest at the release commit
     /// derives no Rust capability, and a manifest appearing on disk is how an
-    /// unresolvable publication becomes a selected one. The comparison covers
-    /// it because the path is one the capability probe opens by name, whether
-    /// or not the release commit has anything there.
+    /// unresolvable publication becomes a selected one. Current detector
+    /// evidence names the new disk manifest, and comparing that named path to
+    /// the release commit witnesses that the committed side has no blob.
     #[test]
     fn refuses_a_file_at_a_path_it_reads_that_the_release_never_published() {
         let workspace = workspace();
@@ -2677,7 +2767,7 @@ subjects: []
         );
     }
 
-    /// A Go source the release never published is a read like any other.
+    /// A non-command Go source the release never published is a read like any other.
     ///
     /// Go discovery is the one read that opens files by pattern: it walks for
     /// `*.go` and reads what it finds, so its paths cannot be named in advance
@@ -2702,16 +2792,49 @@ subjects: []
         std::fs::create_dir_all(&input).expect("artifacts");
         stage_intending(&workspace, &input, "  []\n");
         let output = workspace.scratch().join("release-evidence");
-        let command = workspace.root.join("component/cmd/tool");
-        std::fs::create_dir_all(&command).expect("command directory");
-        std::fs::write(command.join("main.go"), "package main\n\nfunc main() {}\n")
+        let internal = workspace.root.join("component/internal");
+        std::fs::create_dir_all(&internal).expect("internal directory");
+        std::fs::write(internal.join("helper.go"), "package internal\n")
             .expect("source the release never published");
 
         let error = assemble(&request(&workspace, &input, &output))
             .expect_err("a Go source the release never published is refused");
         assert!(
-            error.to_string().contains("component/cmd/tool/main.go"),
+            error.to_string().contains("component/internal/helper.go"),
             "the diagnostic names the source: {error}"
+        );
+    }
+
+    /// A Go source published by the release cannot disappear from the checkout.
+    #[test]
+    fn refuses_a_published_go_source_missing_from_disk() {
+        let workspace = ReleasedWorkspace::with(
+            CONFIG,
+            &[
+                (
+                    "component/package.json",
+                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                ),
+                ("component/go.mod", "module example.test/component\n"),
+                (
+                    "component/cmd/tool/main.go",
+                    "package main\n\nfunc main() {}\n",
+                ),
+            ],
+            "component",
+        );
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::remove_file(workspace.root.join("component/cmd/tool/main.go"))
+            .expect("remove published source from disk");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("a published source absent from disk is refused");
+        assert!(
+            error.to_string().contains("component/cmd/tool/main.go"),
+            "the diagnostic names the missing source: {error}"
         );
     }
 

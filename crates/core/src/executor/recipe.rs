@@ -303,30 +303,33 @@ pub fn selects_publications(release_unit: &ReleaseUnitConfig) -> bool {
         && !release_unit.publishers().is_empty()
 }
 
-/// Resolve every configured publication, collecting each failure instead of
-/// stopping at the first, so one run reports every unresolved target.
+/// Resolve every configured publication, collecting each package and target
+/// failure instead of stopping at the first.
 pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationSelection> {
     let mut selection = PublicationSelection::default();
     for (id, release_unit) in &config.release_units {
         if !selects_publications(release_unit) {
             continue;
         }
-        if let Err(Error::Validation(message)) =
-            validate_package_artifacts(root, config, id, release_unit)
-        {
-            selection.diagnostics.push(message);
-            continue;
-        }
+        let mut owners = BTreeMap::<PathBuf, String>::new();
         for (package_id, package) in &release_unit.packages {
-            let capabilities =
-                match derive_package_capabilities(root, config, id, package_id, package) {
-                    Ok(derived) => capability_set(&derived),
-                    Err(Error::Validation(message)) => {
-                        selection.diagnostics.push(message);
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
+            let derived = match validate_package_artifact(
+                root,
+                config,
+                id,
+                release_unit,
+                package_id,
+                package,
+                &mut owners,
+            ) {
+                Ok(derived) => derived,
+                Err(Error::Validation(message)) => {
+                    selection.diagnostics.push(message);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let capabilities = capability_set(&derived);
             for (publisher, target, configured) in configured_targets(package) {
                 let context = SelectionContext {
                     root,
@@ -346,17 +349,19 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
     Ok(selection)
 }
 
-/// Reject shared ownership among packages that resolve unambiguously.
-fn validate_package_artifacts(
+/// Resolve one package artifact and reject shared ownership without preventing
+/// the remaining package declarations from being checked.
+fn validate_package_artifact(
     root: &Path,
     config: &Config,
     id: &str,
     release_unit: &ReleaseUnitConfig,
-) -> Result<()> {
-    let mut owners = BTreeMap::<PathBuf, String>::new();
-    for (package_id, package) in &release_unit.packages {
-        let candidates = derive_package_capabilities(root, config, id, package_id, package)?;
-        let artifact = match candidates.as_slice() {
+    package_id: &str,
+    package: &PackageConfig,
+    owners: &mut BTreeMap<PathBuf, String>,
+) -> Result<Vec<CapabilityEvidence>> {
+    let candidates = derive_package_capabilities(root, config, id, package_id, package)?;
+    let artifact = match candidates.as_slice() {
             [evidence] => &evidence.evidence.path,
             [] => {
                 let detected = matching_detector_candidates(root, config, id, package_id, package)?;
@@ -394,15 +399,14 @@ fn validate_package_artifacts(
                         .join(", ")
                 )))
             }
-        };
-        if let Some(first) = owners.insert(artifact.clone(), package_id.clone()) {
-            return Err(Error::Validation(format!(
-                "release unit {id} packages {first} and {package_id} resolve to the same native artifact {}",
-                artifact.display()
-            )));
-        }
+    };
+    if let Some(first) = owners.insert(artifact.clone(), package_id.to_owned()) {
+        return Err(Error::Validation(format!(
+            "release unit {id} packages {first} and {package_id} resolve to the same native artifact {}",
+            artifact.display()
+        )));
     }
-    Ok(())
+    Ok(candidates)
 }
 
 /// Resolve every configured publication, failing on the first unresolved target.
@@ -673,15 +677,30 @@ pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<
         return Ok(paths);
     }
     for candidate in detector_candidates(root)? {
+        let candidate_path = discovery_candidate_directory(&candidate.detector, &candidate.path);
+        if !publishing_units
+            .iter()
+            .any(|release_unit| path_contains(&release_unit.path, &candidate_path))
+        {
+            continue;
+        }
         paths.extend(
             candidate
                 .evidence
                 .into_iter()
                 .map(|evidence| evidence.path)
+                // A Go command candidate carries a digest for its directory as
+                // well as its member files. Only files have release blobs to
+                // compare, so the directory evidence is deliberately omitted.
                 .filter(|path| root.join(path).is_file()),
         );
     }
     for release_unit in publishing_units {
+        collect_go_source_paths(
+            &root.join(&release_unit.path),
+            &release_unit.path,
+            &mut paths,
+        );
         if release_unit.aur().is_some() {
             for name in Packager::GoReleaser.configuration_paths() {
                 let path = release_unit.path.join(name);
@@ -695,13 +714,34 @@ pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<
     Ok(paths)
 }
 
+fn collect_go_source_paths(directory: &Path, relative: &Path, paths: &mut BTreeSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        let child = relative.join(&name);
+        let path = entry.path();
+        if path.is_dir() {
+            collect_go_source_paths(&path, &child, paths);
+        } else if child.extension().is_some_and(|extension| extension == "go") {
+            paths.insert(child);
+        }
+    }
+}
+
 /// Derive every publishable capability of one release unit from its native evidence.
 pub fn derive_capabilities(
     root: &Path,
     config: &Config,
     release_unit_id: &str,
 ) -> Result<Vec<CapabilityEvidence>> {
-    let release_unit = &config.release_units[release_unit_id];
+    let release_unit = config.release_units.get(release_unit_id).ok_or_else(|| {
+        Error::Validation(format!("release unit {release_unit_id} is not configured"))
+    })?;
     let mut derived = Vec::new();
     if release_unit.packages.is_empty() {
         let package = PackageConfig::new(PathBuf::from("."));
@@ -723,21 +763,13 @@ fn derive_package_capabilities(
     root: &Path,
     config: &Config,
     release_unit_id: &str,
-    _package_id: &str,
+    package_id: &str,
     package: &PackageConfig,
 ) -> Result<Vec<CapabilityEvidence>> {
-    let configured = package.publishers().into_iter().collect::<BTreeSet<_>>();
-    matching_detector_candidates(root, config, release_unit_id, _package_id, package)?
+    matching_detector_candidates(root, config, release_unit_id, package_id, package)?
         .into_iter()
         .filter_map(|candidate| {
             let capability = detector_capability(&candidate.detector)?;
-            if !configured.is_empty()
-                && !configured.iter().any(|publisher| {
-                    !recipes_for(&BTreeSet::from([capability]), *publisher).is_empty()
-                })
-            {
-                return None;
-            }
             Some(
                 candidate_is_publishable(root, &candidate, capability).map(|publishable| {
                     publishable.then(|| CapabilityEvidence {
@@ -763,7 +795,9 @@ fn matching_detector_candidates(
     package_id: &str,
     package: &PackageConfig,
 ) -> Result<Vec<DiscoveryCandidate>> {
-    let release_unit = &config.release_units[release_unit_id];
+    let release_unit = config.release_units.get(release_unit_id).ok_or_else(|| {
+        Error::Validation(format!("release unit {release_unit_id} is not configured"))
+    })?;
     let path = package_path(release_unit, package);
     let receipts = config
         .discovery
@@ -778,7 +812,7 @@ fn matching_detector_candidates(
             if receipts.is_empty() {
                 let candidate_path =
                     discovery_candidate_directory(&candidate.detector, &candidate.path);
-                candidate_path == path || candidate_path.starts_with(&path)
+                path_contains(&path, &candidate_path)
             } else {
                 receipts.contains(&(&candidate.detector, &candidate.path))
             }
@@ -787,11 +821,17 @@ fn matching_detector_candidates(
             if candidate.detector != "go-command" {
                 return true;
             }
-            let module = release_unit.path.join("go.mod");
-            candidate
+            let module_directory = candidate
                 .evidence
                 .iter()
-                .any(|evidence| evidence.path == module)
+                .find(|evidence| {
+                    evidence
+                        .path
+                        .file_name()
+                        .is_some_and(|name| name == "go.mod")
+                })
+                .and_then(|evidence| evidence.path.parent());
+            module_directory.is_some_and(|module| path.starts_with(module))
         })
         .filter(|candidate| detector_capability(&candidate.detector).is_some())
         .collect())
@@ -803,6 +843,10 @@ fn package_path(release_unit: &ReleaseUnitConfig, package: &PackageConfig) -> Pa
     } else {
         release_unit.path.join(&package.path)
     }
+}
+
+fn path_contains(parent: &Path, child: &Path) -> bool {
+    parent == Path::new(".") || child == parent || child.starts_with(parent)
 }
 
 fn detector_capability(detector: &str) -> Option<Capability> {
@@ -864,7 +908,7 @@ fn considered_candidate_paths(
         .into_iter()
         .filter(|candidate| detector_capability(&candidate.detector).is_some())
         .map(|candidate| candidate.path)
-        .filter(|path| release_unit.path == Path::new(".") || path.starts_with(&release_unit.path))
+        .filter(|path| path_contains(&release_unit.path, path))
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
     Ok(if paths.is_empty() {
@@ -1221,7 +1265,7 @@ release-units:
     }
 
     #[test]
-    fn permits_coincident_package_paths_for_distinct_native_artifacts() {
+    fn refuses_one_package_declaration_that_matches_distinct_native_artifacts() {
         let workspace = Workspace::new("coincident-package-paths");
         workspace
             .write(
@@ -1237,37 +1281,21 @@ release-units:
             "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: {}\n      node:\n        path: .\n        npm: {}\n",
         );
         let config = Config::from_yaml(&text).expect("package declarations");
-        let selected = select_publications(workspace.root(), &config)
-            .expect("distinct artifacts may share a package path");
-        assert_eq!(selected.len(), 2);
+        let error = select_publications(workspace.root(), &config)
+            .expect_err("each coincident declaration remains ambiguous without receipts");
+        assert!(
+            error
+                .to_string()
+                .contains("matches 2 publishable detector candidates"),
+            "{error}"
+        );
     }
 
-    /// The reader names every path the selection opens, for every unit.
+    /// Detector evidence is named only beneath publishing release units.
     ///
-    /// `publication_probe_paths` exists so evidence assembly can prove what the
-    /// selection read, and the two agree only if they skip the same release
-    /// units. Sharing `selects_publications` makes them agree by construction,
-    /// but construction is what a later edit undoes, and neither side's own
-    /// tests can see the divergence: the selection would open probe files the
-    /// reader never names, the comparison would pass over paths nobody
-    /// compared, and every assertion on either side would stay green.
-    ///
-    /// Held here by outcome rather than by inspection. A workspace carrying
-    /// every probe file for a publishing unit, a suspended one and one with no
-    /// publisher, with exactly the named paths deleted, must resolve to what an
-    /// empty workspace resolves to. A reader that skipped a unit the selection
-    /// probes would leave that unit's files in place, and the two results
-    /// would differ.
-    ///
-    /// An outcome test can only see a read whose result reaches the outcome,
-    /// and a unit with no configured target derives capabilities and discards
-    /// them — so a selection widened onto one reads files nothing compares
-    /// while every result stays identical. A suspended unit is not that case:
-    /// it configures a target, so widening onto it moves the outcome on its
-    /// own. The target-less unit therefore carries a probe file the derivation
-    /// cannot parse, because that failure becomes a diagnostic and the read
-    /// stops being invisible. Stocking it with well-formed content is what
-    /// makes this assertion unable to fail.
+    /// Go's pattern-based source walk is proved end to end by evidence assembly
+    /// tests. This assertion covers the fixed evidence members and the unit
+    /// boundary without restating the old filename-probe mechanism.
     #[test]
     fn names_every_path_the_selection_opens() {
         let workspace = Workspace::new("detector-evidence-paths");
@@ -1277,6 +1305,7 @@ release-units:
                 "component/cmd/tool/main.go",
                 "package main\n\nfunc main() {}\n",
             )
+            .write("component/internal/helper.go", "package internal\n")
             .write("component/.goreleaser.yaml", "version: 2\n")
             .write("unrelated/package.json", r#"{"name":"example-package"}"#);
         let config = config_at(
@@ -1289,7 +1318,7 @@ release-units:
             BTreeSet::from([
                 PathBuf::from("component/cmd/tool/main.go"),
                 PathBuf::from("component/go.mod"),
-                PathBuf::from("unrelated/package.json"),
+                PathBuf::from("component/internal/helper.go"),
             ]),
             "the reader is derived from every detector evidence member the selection scan opens"
         );
@@ -1475,7 +1504,7 @@ release-units:
         assert!(
             error
                 .to_string()
-                .contains("matches no publishable detector candidate"),
+                .contains("derived capabilities are rust-crate"),
             "{error}"
         );
 
@@ -1496,6 +1525,83 @@ release-units:
                 && error
                     .to_string()
                     .contains("component/devcontainer-feature.json"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn refuses_ambiguity_before_filtering_candidates_by_publisher() {
+        let workspace = Workspace::new("cross-publisher-ambiguity");
+        workspace
+            .write(
+                "component/package.json",
+                r#"{"name":"example-package","version":"1.0.0"}"#,
+            )
+            .write("component/Dockerfile", "FROM scratch\n");
+        let error = select_publications(workspace.root(), &config("    npm: {}\n"))
+            .expect_err("one declaration cannot silently choose its publisher's artifact");
+        let message = error.to_string();
+        assert!(
+            message.contains("matches 2 publishable detector candidates"),
+            "{message}"
+        );
+        assert!(message.contains("component/package.json"), "{message}");
+        assert!(message.contains("component/Dockerfile"), "{message}");
+    }
+
+    #[test]
+    fn reports_every_refusing_package_in_one_run() {
+        let workspace = Workspace::new("multiple-refusing-packages");
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      first:\n        path: first\n        npm: {}\n      second:\n        path: second\n        cargo: {}\n",
+        );
+        let config = Config::from_yaml(&text).expect("package declarations");
+        let selection = resolve_publications(workspace.root(), &config).expect("selection runs");
+        assert_eq!(
+            selection.diagnostics.len(),
+            2,
+            "{:?}",
+            selection.diagnostics
+        );
+        assert!(selection
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("package first")));
+        assert!(selection
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("package second")));
+    }
+
+    #[test]
+    fn root_scoped_packages_match_candidates_below_the_workspace_root() {
+        let workspace = Workspace::new("root-scoped-package");
+        workspace.write(
+            "nested/package.json",
+            r#"{"name":"example-package","version":"1.0.0"}"#,
+        );
+        let text = GITHUB
+            .replace("    path: component\n", "    path: .\n")
+            .replace("        path: component\n", "        path: .\n");
+        let config = Config::from_yaml(&text).expect("root release unit");
+        let derived = derive_capabilities(workspace.root(), &config, "component")
+            .expect("root package derives nested evidence");
+        assert_eq!(
+            capability_set(&derived),
+            BTreeSet::from([Capability::NodePackage])
+        );
+    }
+
+    #[test]
+    fn unknown_release_unit_is_a_validation_error() {
+        let workspace = Workspace::new("unknown-release-unit");
+        let error = derive_capabilities(workspace.root(), &config(""), "absent")
+            .expect_err("unknown identities are refused without a panic");
+        assert!(
+            error
+                .to_string()
+                .contains("release unit absent is not configured"),
             "{error}"
         );
     }
@@ -1862,6 +1968,23 @@ release-units:
     }
 
     #[test]
+    fn derives_a_declared_package_from_its_own_nested_go_module() {
+        let workspace = Workspace::new("declared-nested-go-module");
+        workspace
+            .write("component/tool/go.mod", "module example.test/tool\n")
+            .write("component/tool/main.go", "package main\n\nfunc main() {}\n");
+        let selected = select_publications(
+            workspace.root(),
+            &config_at(
+                "tool",
+                "    homebrew: { repository: example-org/homebrew-tap }\n",
+            ),
+        )
+        .expect("the package owns the module at its declared path");
+        assert_eq!(selected[0].capability, Capability::GoApplication);
+    }
+
+    #[test]
     fn withholds_the_capability_from_commands_go_excludes_from_recursive_packages() {
         let workspace = Workspace::new("go-excluded-packages");
         workspace
@@ -1901,7 +2024,9 @@ release-units:
         let error = select_publications(workspace.root(), &config("    npm: {}\n"))
             .expect_err("an unsupported combination is refused");
         assert!(
-            error.to_string().contains("evidence considered: component"),
+            error
+                .to_string()
+                .contains("derived capabilities are go-application"),
             "{error}"
         );
         assert!(

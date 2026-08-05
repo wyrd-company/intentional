@@ -2111,6 +2111,15 @@ jobs:
     }
 
     fn converge(root: &Path, role: WorkflowRole) -> WorkflowComparison {
+        let configured = std::fs::read_to_string(root.join(".intentional/config.yml"))
+            .expect("fixture configuration readable");
+        if !configured.contains("        cargo:") {
+            let manifest = root.join("component/Cargo.toml");
+            if manifest.is_file() {
+                std::fs::remove_file(manifest)
+                    .expect("remove the fixture's unconfigured Cargo artifact");
+            }
+        }
         let comparison = compare_workflow(root, role, None).expect("comparison runs");
         assert_eq!(
             comparison.status,
@@ -2795,6 +2804,8 @@ aur:
 
     fn go_workspace(label: &str) -> Workspace {
         let workspace = workspace(label);
+        std::fs::remove_file(workspace.root().join("component/Cargo.toml"))
+            .expect("remove the fixture's unconfigured Cargo artifact");
         workspace
             .write(".intentional/config.yml", GO_CONFIG)
             // The module's last element is deliberately not the release-unit
@@ -4395,6 +4406,8 @@ exit 0
     /// A release unit that publishes one Dev Container Feature to GHCR.
     fn feature_workspace(label: &str) -> Workspace {
         let workspace = workspace(label);
+        std::fs::remove_file(workspace.root().join("component/Cargo.toml"))
+            .expect("remove the fixture's unconfigured Cargo artifact");
         workspace
             .write(
                 ".intentional/config.yml",
@@ -4412,6 +4425,8 @@ exit 0
 
     fn two_destination_workspace(label: &str) -> Workspace {
         let workspace = workspace(label);
+        std::fs::remove_file(workspace.root().join("component/Cargo.toml"))
+            .expect("remove the fixture's unconfigured Cargo artifact");
         workspace
             .write(".intentional/config.yml", TWO_DESTINATION_CONFIG)
             .write("component/Dockerfile", DOCKERFILE);
@@ -6700,6 +6715,16 @@ github:
   workflows:
     release: { path: .github/workflows/release.yml }
     publish: { path: .github/workflows/publish.yml, gates: [ wzrjkd ] }
+discovery:
+  managed-paths:
+    - detector: npm-package
+      path: vkjmtd/package.json
+      release-unit: qhwzru
+      package: node
+    - detector: cargo-package
+      path: vkjmtd/Cargo.toml
+      release-unit: qhwzru
+      package: rust
 release-units:
   jdmcvx:
     path: bgqnwt
