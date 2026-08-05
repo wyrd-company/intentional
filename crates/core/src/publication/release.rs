@@ -2347,6 +2347,8 @@ retrieval:
             observer.path("component/package-homebrew/npm/primary"),
             observer.path("component-package/homebrew/npm/primary"),
         );
+        // Reversibility applies to every string this path function receives;
+        // this pair deliberately exceeds the narrower validated identity domain.
         assert_ne!(
             observer.path("component%2Fpackage/homebrew/npm/primary"),
             observer.path("component/package/homebrew/npm/primary"),
