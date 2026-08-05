@@ -2170,6 +2170,30 @@ fn baseline_tags_include_deterministic_tagger_and_pass_strict_fsck() {
 }
 
 #[test]
+fn baseline_adds_a_release_unit_namespace_after_the_global_tag_moves() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".intentional/config.yml",
+        &config("committed").replace("sample@{version}", "{version}"),
+    );
+    repo.commit("establish the original global tag");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+
+    repo.write(
+        ".intentional/config.yml",
+        &config("committed").replace(
+            "release-units:\n",
+            "workspace-tags:\n  release: { template: '{version}' }\nrelease-units:\n",
+        ),
+    );
+    repo.commit("move the global tag and add the unit namespace");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+
+    assert_eq!(git(&repo.root, &["tag", "--list"]), "1.0.0\nsample@1.0.0");
+}
+
+#[test]
 fn tag_object_identity_is_independent_of_ambient_git_identity_and_timezone() {
     let repo = TestRepo::new();
     let plan = prepare_applied_release(&repo);

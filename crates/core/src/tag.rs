@@ -126,7 +126,7 @@ impl TagResult {
             None => recovered_release_plan(root, &config, &release_unit_versions, channel)?,
         };
         let versions = plan_versions(&plan)?;
-        match existing_tag_set_digest(&git, &config, &versions, false)? {
+        match existing_tag_set_digest(&git, &config, &versions, false, &BTreeSet::new())? {
             Some(existing) if existing != plan.digest => {
                 return Err(Error::Validation(
                     "release plan disagrees with existing release records".to_owned(),
@@ -152,11 +152,13 @@ impl TagResult {
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions = BTreeMap::new();
+        let mut established = BTreeSet::new();
         for (id, release_unit) in &config.release_units {
-            let (_, primary) = config.primary_tag(id)?;
+            let (primary_id, primary) = config.primary_tag(id)?;
             if repository.has_matching_tag(id, &primary.template)? {
                 let version = repository.current_version(id, &primary.template)?;
                 versions.insert(id.clone(), version.to_string());
+                established.insert(Config::release_unit_tag_id(id, primary_id));
                 continue;
             }
             let mut evidence = Vec::new();
@@ -206,6 +208,7 @@ impl TagResult {
             if repository.has_matching_tag(id, &tag.template)? {
                 let version = repository.current_version(id, &tag.template)?;
                 versions.insert(canonical, version.to_string());
+                established.insert(Config::workspace_tag_id(id));
                 continue;
             }
             let version = explicit.get(&canonical).ok_or_else(|| {
@@ -215,8 +218,8 @@ impl TagResult {
             })?;
             versions.insert(canonical, version.to_string());
         }
-        let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
-        Self::from_versions(
+        let digest = existing_tag_set_digest(&git, &config, &versions, true, &established)?;
+        Self::from_versions_skipping(
             root,
             &config,
             &versions,
@@ -224,6 +227,7 @@ impl TagResult {
             true,
             digest.as_deref(),
             None,
+            &established,
         )
     }
 
@@ -236,6 +240,29 @@ impl TagResult {
         baseline: bool,
         release_digest: Option<&str>,
         evidence_input: Option<&Path>,
+    ) -> Result<Self> {
+        Self::from_versions_skipping(
+            root,
+            config,
+            versions,
+            phase,
+            baseline,
+            release_digest,
+            evidence_input,
+            &BTreeSet::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_versions_skipping(
+        root: &Path,
+        config: &Config,
+        versions: &BTreeMap<String, String>,
+        phase: Option<TagPhase>,
+        baseline: bool,
+        release_digest: Option<&str>,
+        evidence_input: Option<&Path>,
+        established: &BTreeSet<String>,
     ) -> Result<Self> {
         let payload = TagDigestPayload {
             contract: &config.contract,
@@ -282,7 +309,11 @@ impl TagResult {
             );
         }
         let selected = if baseline {
-            candidates.clone()
+            candidates
+                .iter()
+                .filter(|(id, _)| !established.contains(*id))
+                .map(|(id, candidate)| (id.clone(), candidate.clone()))
+                .collect()
         } else {
             candidates
                 .iter()
@@ -536,6 +567,7 @@ fn existing_tag_set_digest(
     config: &Config,
     versions: &BTreeMap<String, String>,
     baseline: bool,
+    established: &BTreeSet<String>,
 ) -> Result<Option<String>> {
     let head = repository
         .head_id()
@@ -548,6 +580,9 @@ fn existing_tag_set_digest(
         };
         for (tag_id, tag) in &release_unit.tags {
             let id = Config::release_unit_tag_id(release_unit_id, tag_id);
+            if established.contains(&id) {
+                continue;
+            }
             collect_existing_digest(
                 repository,
                 &render_tag(&tag.template, release_unit_id, version),
@@ -561,6 +596,9 @@ fn existing_tag_set_digest(
     }
     for (tag_id, tag) in &config.workspace_tags {
         let id = Config::workspace_tag_id(tag_id);
+        if established.contains(&id) {
+            continue;
+        }
         let Some(version) = versions.get(&id) else {
             continue;
         };
@@ -695,7 +733,7 @@ fn supplied_release_plan(
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let partial_digest = existing_head_release_digest(&repository, config)?;
     let plan_versions = plan_versions(&plan)?;
-    match existing_tag_set_digest(&repository, config, &plan_versions, false)? {
+    match existing_tag_set_digest(&repository, config, &plan_versions, false, &BTreeSet::new())? {
         Some(existing) if existing != plan.digest => {
             return Err(Error::Validation(
                 "supplied release plan disagrees with existing release records".to_owned(),
