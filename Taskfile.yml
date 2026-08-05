@@ -40,7 +40,8 @@ tasks:
     deps: [ docs:check, fmt-check, lint, npm:test, release:check, self-check, test ]
 
   hosted:check:
-    desc: Require every completed check on a GitHub pull request to pass
+    desc: >-
+      Require every completed check on a GitHub pull request to pass
     requires:
       vars: [ PR ]
     cmds:

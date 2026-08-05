@@ -75,24 +75,21 @@ runs:
         # An omitted selector must reach the command as an absent option rather
         # than as an empty one, because omission is what selects an adapter's
         # configured primary destination.
-        SELECTOR=()
+        ARGS=(--directory "$INPUT_WORKING_DIRECTORY" verify publication
+          --release-unit "$INPUT_RELEASE_UNIT"
+          --package "$INPUT_PACKAGE"
+          --publisher "$INPUT_PUBLISHER"
+          --observation "$INPUT_OBSERVATION"
+          --output "$INPUT_OUTPUT")
         if [[ -n "$INPUT_TARGET" ]]; then
-          SELECTOR=(--target "$INPUT_TARGET")
+          ARGS+=(--target "$INPUT_TARGET")
         fi
         # Only a draft-dependent publisher consumes a handoff, and supplying one
         # for any other publisher is refused, so an empty input has to reach the
         # command as an absent option rather than as an empty path.
-        HANDOFF=()
         if [[ -n "$INPUT_DRAFT_HANDOFF" ]]; then
-          HANDOFF=(--draft-handoff "$INPUT_DRAFT_HANDOFF")
+          ARGS+=(--draft-handoff "$INPUT_DRAFT_HANDOFF")
         fi
-        intentional --directory "$INPUT_WORKING_DIRECTORY" verify publication \
-          --release-unit "$INPUT_RELEASE_UNIT" \
-          --package "$INPUT_PACKAGE" \
-          --publisher "$INPUT_PUBLISHER" \
-          ${SELECTOR[@]+"${SELECTOR[@]}"} \
-          --observation "$INPUT_OBSERVATION" \
-          --output "$INPUT_OUTPUT" \
-          ${HANDOFF[@]+"${HANDOFF[@]}"} |
+        intentional "${ARGS[@]}" |
           "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
             evidence-path
