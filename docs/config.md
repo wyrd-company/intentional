@@ -180,7 +180,7 @@ default reserves `intentional_`, `INTENTIONAL_`, and the `intentional-release`
 environment. A gate may not use the reserved job namespace.
 
 Intentional's own configuration keeps its two workspace-versioned crates and
-npm launcher in one release unit. The unit has three packages and three
+npm launcher in one release unit. The unit has three packages and four
 publications: `core` at `crates/core` declares `cargo`, `cli` at `crates/cli`
 declares `cargo` and `homebrew`, and `launcher` at `npm` declares `npm`. The
 Homebrew destination is `wyrd-company/homebrew-tools`. The unphased workspace

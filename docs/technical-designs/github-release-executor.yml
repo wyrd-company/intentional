@@ -222,22 +222,18 @@ proposed-design:
     workspace tag.
 
     Three packages sit inside it. `core` at `crates/core` and `cli` at
-    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`. That
-    yields three publications the release-unit identity could not tell apart:
-    `intentional/core/cargo/primary`, `intentional/cli/cargo/primary`, and
-    `intentional/launcher/npm/primary`. The first two differ in their package
-    alone, which is the collision that motivated the axis — the release unit,
-    publisher and target of the two crates are identical.
+    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`; and
+    `cli` also declares a `homebrew` mapping naming the tap. Together they yield
+    four publications: `intentional/core/cargo/primary`,
+    `intentional/cli/cargo/primary`, `intentional/launcher/npm/primary`, and
+    `intentional/cli/homebrew/primary`. The two Cargo publications differ in
+    their package alone, which is the collision that motivated the axis — the
+    release unit, publisher and target of the two crates are identical.
 
-    The `cli` package gains a `homebrew` mapping naming the tap once a route
-    reaches Homebrew from something other than Go tooling, because the formula
-    is built from the command this repository already ships. That publication is
-    `intentional/cli/homebrew/primary`, and it consumes the `cli` package's
-    native release archives from the draft GitHub Release. The version boundary
-    is what makes it safe, since one version reaches every destination. A
-    `homebrew` mapping declared before that route exists resolves to no
-    maintained recipe, so the configuration reaches its full shape in two steps
-    rather than one.
+    The Homebrew formula is built from the command this repository ships and
+    consumes the `cli` package's native release archives from the draft GitHub
+    Release. The version boundary makes that safe, since one version reaches
+    every destination.
 
     The contract token moves before the package declarations do. Every command
     refuses a document whose contract is not the one the binary implements, so
