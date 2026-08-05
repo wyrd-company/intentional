@@ -149,7 +149,14 @@ fn minimum_rust_job_installs_the_actionlint_version_its_tests_require() {
     );
     let install_position = steps
         .iter()
-        .position(|step| step["run"].as_str() == Some(&installation))
+        .position(|step| {
+            step["run"].as_str().is_some_and(|run| {
+                run.lines().any(|line| line == installation)
+                    && run
+                        .lines()
+                        .any(|line| line == "echo \"$(go env GOPATH)/bin\" >> \"$GITHUB_PATH\"")
+            })
+        })
         .expect("minimum-rust installs the pinned actionlint required by the test suite");
     let test_position = steps
         .iter()
