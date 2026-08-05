@@ -1711,6 +1711,13 @@ phase-tags: []
     #[test]
     fn accepts_an_existing_prerequisite_written_under_a_supported_prior_contract() {
         let workspace = phase_workspace("tag-phase-prior-prerequisite");
+        workspace.write(
+            ".intentional/config.yml",
+            &PHASE_CONFIG.replace(
+                "        require-phase: after-publication\n",
+                "        require-phase: after-publication\n        tag-after: [release-unit/component/primary]\n",
+            ),
+        );
         let config = Config::load(workspace.root()).expect("configuration");
         let versions = BTreeMap::from([
             ("workspace/release".to_owned(), "1.0.0".to_owned()),
