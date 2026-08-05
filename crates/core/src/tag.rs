@@ -735,6 +735,10 @@ fn supplied_release_plan(
             };
             let mut expected = expected;
             expected.contract.clone_from(&plan.contract);
+            // verify_digest proved this caller-supplied seal before recovery.
+            // ReleasePlan equality compares every field payload_digest hashes,
+            // so copying the verified digest only excludes contract identity
+            // from this semantic comparison; it does not weaken the payload check.
             expected.digest.clone_from(&plan.digest);
             if expected != plan {
                 return Err(Error::Validation(
@@ -1481,6 +1485,37 @@ release-units:
         );
     }
 
+    fn git_output(root: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 git output")
+            .trim_end()
+            .to_owned()
+    }
+
+    fn rewrite_tag_contract(root: &Path, name: &str, contract: &str) {
+        let message = git_output(
+            root,
+            &[
+                "for-each-ref",
+                "--format=%(contents)",
+                &format!("refs/tags/{name}"),
+            ],
+        )
+        .replace("contract: contract-2", &format!("contract: {contract}"));
+        git(root, &["tag", "-d", name]);
+        git(root, &["tag", "-a", name, "-m", &message, "HEAD"]);
+    }
+
     /// A workspace whose HEAD is a release commit with exactly one parent.
     fn phase_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
@@ -1655,6 +1690,52 @@ phase-tags: []
                 .contains(&format!("unexpected {PHASE_EVIDENCE_FIELD}")),
             "{error}"
         );
+    }
+
+    #[test]
+    fn accepts_an_existing_candidate_written_under_a_supported_prior_contract() {
+        let workspace = phase_workspace("tag-phase-prior-candidate");
+        let input = stage_built_subject(&workspace, "sample-library");
+        let planned = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("before-publication tags");
+        planned
+            .apply(workspace.root(), false)
+            .expect("tags created");
+        rewrite_tag_contract(workspace.root(), "component/staged@1.0.0", "contract-1");
+
+        let repeat = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect("a supported historical candidate is completed work");
+        assert!(repeat.tags.is_empty(), "a completed tag is not recreated");
+    }
+
+    #[test]
+    fn accepts_an_existing_prerequisite_written_under_a_supported_prior_contract() {
+        let workspace = phase_workspace("tag-phase-prior-prerequisite");
+        let config = Config::load(workspace.root()).expect("configuration");
+        let versions = BTreeMap::from([
+            ("workspace/release".to_owned(), "1.0.0".to_owned()),
+            ("component".to_owned(), "1.0.0".to_owned()),
+        ]);
+        let unphased = TagResult::from_versions(
+            workspace.root(),
+            &config,
+            &versions,
+            None,
+            false,
+            Some(PLAN_DIGEST),
+            None,
+        )
+        .expect("unphased tags");
+        unphased
+            .apply(workspace.root(), false)
+            .expect("tags created");
+        rewrite_tag_contract(workspace.root(), "component@1.0.0", "contract-1");
+
+        let object = "6666666666666666666666666666666666666666";
+        let input = stage_publisher_evidence(&workspace, object);
+        let planned = plan_phase_tags(workspace.root(), TagPhase::AfterPublication, &input)
+            .expect("a supported historical prerequisite is accepted");
+        assert_eq!(planned.tags[0].name, "component/published@1.0.0");
     }
 
     #[test]
