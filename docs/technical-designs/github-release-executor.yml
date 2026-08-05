@@ -322,6 +322,28 @@ proposed-design:
     declaration matching no command or more than one command is a semantic
     configuration failure that names every candidate path.
 
+    Every refusal that enumerates candidates enumerates only live ones.
+    Configuration already records what an operator has declined, as a discovery
+    receipt naming a detector and an exact path, and a candidate carrying such a
+    receipt is not a candidate. So a declaration is ambiguous only when more than
+    one *unexcluded* candidate remains, and a repository that has already
+    declined the artifacts it does not publish sees no finding about them. An
+    exclusion is pinned to the evidence digest it was taken against, so it
+    silences a candidate without silencing a later change to it: when the
+    artifact changes, the receipt lapses and the candidate returns to be decided
+    again. Exclusion is a decision about a known artifact, not a permanent
+    blindfold.
+
+    Go commands are the one candidate set discovery receipts do not reach,
+    because the module detector identifies a module rather than each main
+    package inside it, and the command walk is not a detector. They need no
+    exclusion vocabulary of their own: a package declares a path, and a path
+    naming one command directory resolves to one command. The refusal is
+    therefore the prompt to make the declaration specific, and pointing the
+    package at the command is what answers it. Only a package path spanning
+    several commands can be ambiguous, and that is a declaration to narrow
+    rather than a candidate to exclude.
+
   workflow-reconciliation: |-
     The executor derives the required release or publish workflow contract from
     `.intentional/config.yml`, native package evidence, and the maintained
