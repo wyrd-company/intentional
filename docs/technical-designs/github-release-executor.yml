@@ -243,12 +243,19 @@ proposed-design:
     refuses a document whose contract is not the one the binary implements, so
     the token in this repository's configuration is raised in the same change
     that raises `CURRENT_CONTRACT`, or the tool cannot read its own workspace.
-    Nothing else need move with it: a configuration carrying no publisher blocks
-    is already a valid contract-2 document apart from the token, so the package
-    declarations follow once there is a model to declare them against. Between
-    the token bump and record interpretation, a status report notes that an
-    existing tag record carries an unexpected contract; that is the reading of
-    a record sealed under the earlier contract and not a failure.
+    The package declarations follow separately, because a configuration carrying
+    no publisher blocks is already a valid document under the new contract apart
+    from the token.
+
+    Record interpretation is not separable from that bump, and raising the token
+    without it leaves the workspace failing its own checks. A binary that
+    requires the contract it writes reports every tag record sealed under the
+    earlier contract as carrying an unexpected one, and workspace validation
+    turns any such report into a refusal. The repository would then refuse
+    itself, on the strength of records that are correct. So the contract change
+    is one change across both populations: the constant, the configuration
+    token, and the interpretation that reads a record under the contract the
+    record names.
 
   publication-identity: |-
     A publication is identified by release unit, package, publisher, and target.
