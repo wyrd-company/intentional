@@ -130,8 +130,9 @@ proposed-design:
     configuration and everything about where it goes from their own mapping,
     because their formats define no destination to derive one from. Each mapping
     names the repository-owned delivery Action, the base URL its consumers read,
-    the public signing key that authenticates its index, the retrieval mode its
-    destination admits, the observation deadline its arrangement requires, and
+    the URL serving the public signing key that authenticates its index, the
+    retrieval mode its destination admits, the deadline its arrangement requires
+    expressed in seconds, and
     the index coordinates the format needs: a suite and component for APT, a
     channel for RPM. A mapping missing any of these is a semantic configuration
     failure, because each one is a thing no evidence can supply.
@@ -694,7 +695,7 @@ proposed-design:
     records the result. Only delivery varies, and only delivery is configured.
 
     Configuration supplies the delivery step, the repository's base URL, the
-    public half of the key that signs its index, the observation deadline, and
+    URL its index signing key is served from, the observation deadline, and
     the inputs the delivery step takes. The delivery step is a
     repository-owned composite Action named by path, invoked as a step of the
     publisher job. It is a composite Action rather than a reusable workflow
@@ -718,8 +719,17 @@ proposed-design:
     release rather than settings: the path is where the job placed the asset it
     pulled from the draft Release, the identity is what establishment read out
     of the package, and the digest is the one the release sealed. They occupy a
-    reserved input namespace the delivery Action declares. The publisher job
-    itself holds `contents: read` and mints nothing.
+    reserved input namespace the delivery Action declares, spelled as the
+    configured job prefix in kebab case — the derivation the protected release
+    environment name already uses — so a repository that renamed Intentional's
+    namespace carries that name across jobs, steps, environment variables and
+    inputs alike. Under it sit the package's path, format, name, version,
+    architecture and digest, and the index coordinates each format needs: a
+    suite and a component for APT, a channel for RPM. A delivery Action that
+    does not declare the names a repository's prefix produces is one that
+    repository cannot use, which is a property of the Action it chose rather
+    than something the recipe reconciles. The publisher job itself holds
+    `contents: read` and mints nothing.
 
     Whatever else the Action needs, configuration supplies as a literal `with:`
     block that the derived step carries unread. A credential, a plain value, a
@@ -781,10 +791,18 @@ proposed-design:
     Establishing the package precedes delivery, because a step that delivered
     first would have nothing left to refuse. The recipe reads identity out of
     the package itself — `dpkg-deb` for a Debian package, `rpm` for an RPM — and
-    requires the name, version, and architecture it reports to equal the ones
-    the release sealed, against the digest the draft-asset handoff carries. A
-    package whose own metadata disagrees with the release never reaches a
-    destination.
+    requires the name and version it reports to equal the ones the release
+    sealed, against the digest the draft-asset handoff carries. A package whose
+    own metadata disagrees with the release never reaches a destination.
+
+    Architecture is read from the same place and compared with nothing, because
+    it is an input rather than a claim. A pool path and a package directory are
+    per-architecture, so delivery cannot place the file without knowing which
+    one it holds, and the package's own declaration is the most authoritative
+    account of that there is. Nothing above it seals an architecture to check it
+    against, and nothing needs to: the digest already binds these bytes to the
+    ones the release built, so an architecture read here is a fact about a file
+    whose provenance is settled rather than an assertion awaiting one.
 
     Readback walks the format's published chain from the configured key, so what
     it proves is what a client would prove. For APT the recipe retrieves
@@ -798,6 +816,17 @@ proposed-design:
     index served without a signature the configured key verifies is not a
     readback, because an unsigned list of packages is a file somebody served
     rather than a statement the repository stands behind.
+
+    That key is fetched from its configured URL the way the destination's own
+    install instructions tell a consumer to fetch it, and is not pinned. What
+    the recipe answers is whether this release can be installed, so it asks it
+    as a consumer arriving today would, and a consumer arriving today accepts
+    the key the repository is serving. A destination that has rotated its
+    signing key therefore reads as a success, correctly: a new consumer
+    installs, while a consumer holding the old key sees a verification failure
+    and updates the fingerprint they pinned. Whether a rotation kept the old key
+    valid alongside the new one is a property of the repository's own rotation
+    procedure and is tested where that procedure lives.
 
     Consumer retrieval installs the package through the format's ordinary client
     under a scratch configuration holding only the configured key and the
