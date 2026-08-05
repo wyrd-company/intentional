@@ -1,5 +1,5 @@
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 release-units:
   garden-notes:
     path: .
@@ -11,3 +11,6 @@ release-units:
       - adapter: npm
         file: package.json
         mode: committed
+    packages:
+      garden-notes:
+        path: .

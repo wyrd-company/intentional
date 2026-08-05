@@ -45,6 +45,13 @@ SUPPORTED_SHELLS = ("bash",)
 
 EXPANSION = re.compile(r"\$\{\{")
 
+# Bash releases used by the pinned Linux GNU baseline treat a bare expansion of
+# an empty array as an unbound variable under `set -u`. The `+word` form emits
+# nothing when the array is unset or empty and preserves each argument when it
+# is populated.
+UNSAFE_ARRAY_EXPANSION = re.compile(r'(?<!\+)"\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"')
+EMPTY_ARRAY_DECLARATION = re.compile(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)=\(\)\s*$")
+
 # A complete commit identity is the full 40-character object name. An
 # abbreviation is not a commit identity: it names whatever object currently
 # shares that prefix.
@@ -166,6 +173,14 @@ def check_step(step: dict, position: int, location: str) -> list[str]:
                 f"{where} interpolates a ${{{{ ... }}}} expansion into its run: "
                 "script; pass the value through env: and read it as a shell "
                 "variable instead"
+            )
+
+        maybe_empty = set(EMPTY_ARRAY_DECLARATION.findall(script))
+        unsafe_arrays = sorted(maybe_empty.intersection(UNSAFE_ARRAY_EXPANSION.findall(script)))
+        for name in unsafe_arrays:
+            findings.append(
+                f"{where} expands possibly-empty array {name} without the "
+                "nounset-safe +word form"
             )
 
         shell = step.get("shell")

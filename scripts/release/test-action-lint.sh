@@ -85,6 +85,25 @@ PY
 
 expect_pass "the repository's own action documents"
 
+cat > "$temporary/empty-array-under-nounset.yml" <<'FIXTURE'
+name: "fixture"
+description: "An optional argument list under nounset"
+runs:
+  using: "composite"
+  steps:
+    - name: Invoke
+      shell: bash
+      run: |
+        set -euo pipefail
+        OPTIONAL=()
+        command fixture "${OPTIONAL[@]}"
+FIXTURE
+
+expect_failure_matching \
+  "a possibly-empty array expanded unsafely under nounset" \
+  "possibly-empty array OPTIONAL.*nounset-safe" \
+  "$temporary/empty-array-under-nounset.yml"
+
 for action in actions/contribute/action.yml actions/assemble-evidence/action.yml; do
   expect_pass "$action" "$action"
 

@@ -19,6 +19,8 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
+const HOSTED_ACTIONLINT_VERSION: &str = "v1.7.7";
+
 /// Collect every `run:` body from a parsed workflow without naming its jobs.
 fn collect_run_bodies(value: &Value, bodies: &mut Vec<String>) {
     match value {
@@ -131,6 +133,35 @@ fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
             "actionlint is missing; derived workflow syntax was not checked",
             "shellcheck is missing; derived run-body shell syntax was not checked",
         ]
+    );
+}
+
+#[test]
+fn minimum_rust_job_installs_the_actionlint_version_its_tests_require() {
+    let workflow =
+        std::fs::read_to_string("../../.github/workflows/ci.yml").expect("CI workflow is readable");
+    let document: Value = serde_yaml::from_str(&workflow).expect("CI workflow parses");
+    let steps = document["jobs"]["minimum-rust"]["steps"]
+        .as_sequence()
+        .expect("minimum-rust job declares steps");
+    let installation = format!(
+        "go install github.com/rhysd/actionlint/cmd/actionlint@{HOSTED_ACTIONLINT_VERSION}"
+    );
+    let install_position = steps
+        .iter()
+        .position(|step| step["run"].as_str() == Some(&installation))
+        .expect("minimum-rust installs the pinned actionlint required by the test suite");
+    let test_position = steps
+        .iter()
+        .position(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|run| run.contains("cargo test --workspace --locked"))
+        })
+        .expect("minimum-rust runs the locked workspace tests");
+    assert!(
+        install_position < test_position,
+        "actionlint is available before the tests require it"
     );
 }
 

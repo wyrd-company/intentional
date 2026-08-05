@@ -90,9 +90,9 @@ runs:
           --release-unit "$INPUT_RELEASE_UNIT" \
           --package "$INPUT_PACKAGE" \
           --publisher "$INPUT_PUBLISHER" \
-          "${SELECTOR[@]}" \
+          ${SELECTOR[@]+"${SELECTOR[@]}"} \
           --observation "$INPUT_OBSERVATION" \
           --output "$INPUT_OUTPUT" \
-          "${HANDOFF[@]}" |
+          ${HANDOFF[@]+"${HANDOFF[@]}"} |
           "$GITHUB_ACTION_PATH/../../scripts/action/project-identities.sh" "$GITHUB_OUTPUT" \
             evidence-path
