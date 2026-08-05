@@ -1501,6 +1501,14 @@ release-units:
                 r#"{"id":"example","version":"1.0.0"}"#,
             );
         let mut config = config("    oci:\n      ghcr: {}\n");
+        let ambiguity = select_publications(workspace.root(), &config)
+            .expect_err("the fixture reaches ambiguity before exclusion");
+        assert!(
+            ambiguity
+                .to_string()
+                .contains("matches 2 publishable detector candidates"),
+            "{ambiguity}"
+        );
         let excluded = detector_candidates(workspace.root())
             .expect("detector candidates")
             .into_iter()
@@ -1526,6 +1534,72 @@ release-units:
             .expect("one live image candidate resolves");
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].capability, Capability::RunnableImage);
+
+        workspace.write(
+            "component/devcontainer-feature.json",
+            r#"{"id":"example","version":"2.0.0"}"#,
+        );
+        let stale = select_publications(workspace.root(), &config)
+            .expect_err("changed evidence reopens the excluded candidate");
+        assert!(
+            stale
+                .to_string()
+                .contains("matches 2 publishable detector candidates"),
+            "{stale}"
+        );
+    }
+
+    #[test]
+    fn managed_receipt_selects_one_candidate_at_a_coincident_path() {
+        let workspace = Workspace::new("managed-package-receipt");
+        workspace
+            .write(
+                "component/package.json",
+                r#"{"name":"example-package","version":"1.0.0"}"#,
+            )
+            .write("component/Dockerfile", "FROM scratch\n");
+        let mut config = config("");
+        config
+            .discovery
+            .managed_paths
+            .push(crate::config::ManagedPathReceipt {
+                detector: "npm-package".to_owned(),
+                path: PathBuf::from("component/package.json"),
+                release_unit: "component".to_owned(),
+                package: "package".to_owned(),
+            });
+
+        let derived = derive_component(workspace.root(), &config).expect("capability derives");
+        assert_eq!(
+            capability_set(&derived),
+            BTreeSet::from([Capability::NodePackage])
+        );
+    }
+
+    #[test]
+    fn one_publisher_is_reached_through_multiple_package_capabilities() {
+        let workspace = Workspace::new("multiple-oci-package-routes");
+        workspace
+            .write("component/image/Dockerfile", "FROM scratch\n")
+            .write(
+                "component/feature/devcontainer-feature.json",
+                r#"{"id":"example","version":"1.0.0"}"#,
+            );
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      feature:\n        path: feature\n        oci: { ghcr: {} }\n      image:\n        path: image\n        oci: { ghcr: {} }\n",
+        );
+        let config = Config::from_yaml(&text).expect("package declarations");
+
+        let selected = select_publications(workspace.root(), &config)
+            .expect("each package selects its own route");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|publication| publication.packager)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([Packager::Buildx, Packager::DevContainerCli])
+        );
     }
 
     #[test]
