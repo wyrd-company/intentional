@@ -3041,7 +3041,7 @@ release-units:
         path: .
         rpm:
           delivery-action: .github/actions/deliver-rpm
-          base-url: https://packages.invalid/rpm
+          base-url: https://packages.invalid/rpm/
           public-signing-key-url: https://packages.invalid/key.asc
           observation-deadline: 47
           channel: stable
@@ -3127,14 +3127,16 @@ release-units:
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow parses");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        for (job, coordinate) in [
+        for (job, coordinate, base_url) in [
             (
                 "release_automation_publish_component_package_rpm_primary",
                 "release-automation-rpm-channel",
+                "https://packages.invalid/rpm/",
             ),
             (
                 "release_automation_publish_component_package_apt_primary",
                 "release-automation-apt-suite",
+                "https://packages.invalid/apt",
             ),
         ] {
             let step = jobs[job]["steps"]
@@ -3156,6 +3158,25 @@ release-units:
                 .as_str()
                 .expect("uses")
                 .starts_with("./.github/actions/deliver-"));
+            let readback = jobs[job]["steps"]
+                .as_sequence()
+                .expect("steps")
+                .iter()
+                .find(|step| {
+                    step["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Read back "))
+                })
+                .expect("readback step");
+            assert_eq!(
+                readback["env"]["RELEASE_AUTOMATION_DESTINATION"].as_str(),
+                Some(base_url),
+                "the product-shaped base URL reaches the readback unchanged"
+            );
+            assert_eq!(
+                readback["env"]["RELEASE_AUTOMATION_PUBLIC_KEY_URL"].as_str(),
+                Some("https://packages.invalid/key.asc")
+            );
         }
         let rpm = &jobs["release_automation_publish_component_package_rpm_primary"]["steps"]
             .as_sequence()
