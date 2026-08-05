@@ -2123,6 +2123,19 @@ release-units:
                 .all(|choice| choice.target.as_deref() != Some("github")),
             "npm GitHub remains unavailable until primary publication is accepted"
         );
+
+        let single_segment = Workspace::new("init-single-segment-scope");
+        single_segment
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write("package.json", r#"{"name":"@thing","version":"1.0.0"}"#);
+        assert_eq!(
+            run(&single_segment).plan.candidates[0].package.as_deref(),
+            Some("thing"),
+            "a single-segment native scope marker is not part of package identity"
+        );
     }
 
     #[test]
