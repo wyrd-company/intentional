@@ -158,7 +158,11 @@ impl TagResult {
             if repository.has_matching_tag(id, &primary.template)? {
                 let version = repository.current_version(id, &primary.template)?;
                 versions.insert(id.clone(), version.to_string());
-                established.insert(Config::release_unit_tag_id(id, primary_id));
+                let canonical = Config::release_unit_tag_id(id, primary_id);
+                let name = render_tag(&primary.template, id, &version.to_string());
+                if tag_belongs_to_another_identity(&git, &name, &canonical)? {
+                    established.insert(canonical);
+                }
                 continue;
             }
             let mut evidence = Vec::new();
@@ -208,7 +212,11 @@ impl TagResult {
             if repository.has_matching_tag(id, &tag.template)? {
                 let version = repository.current_version(id, &tag.template)?;
                 versions.insert(canonical, version.to_string());
-                established.insert(Config::workspace_tag_id(id));
+                let canonical = Config::workspace_tag_id(id);
+                let name = render_tag(&tag.template, id, &version.to_string());
+                if tag_belongs_to_another_identity(&git, &name, &canonical)? {
+                    established.insert(canonical);
+                }
                 continue;
             }
             let version = explicit.get(&canonical).ok_or_else(|| {
@@ -613,6 +621,16 @@ fn existing_tag_set_digest(
         )?;
     }
     Ok(digest)
+}
+
+fn tag_belongs_to_another_identity(
+    repository: &gix::Repository,
+    name: &str,
+    expected_id: &str,
+) -> Result<bool> {
+    Ok(read_tag_record(repository, name)?
+        .and_then(|record| record.fields.get("tag-id").cloned())
+        .is_some_and(|id| id != expected_id))
 }
 
 fn existing_head_release_digest(
