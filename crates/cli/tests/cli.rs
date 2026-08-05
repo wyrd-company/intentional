@@ -2398,10 +2398,17 @@ release-units:
     let plan = fs::read_to_string(&plan_path).expect("plan written");
     fs::write(
         &plan_path,
-        plan.replace("resolution: null", "resolution: accept"),
+        plan.replace("resolution: null", "resolution: accept-npm-primary"),
     )
     .expect("resolve plan");
 
+    repo.cli()
+        .args(["executor", "init"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "configure package example-component for npm primary",
+        ));
     repo.cli().args(["executor", "init"]).assert().code(2);
     let plan = fs::read_to_string(&plan_path).expect("plan written");
     fs::write(
@@ -2410,13 +2417,7 @@ release-units:
     )
     .expect("resolve additional target");
 
-    repo.cli()
-        .args(["executor", "init"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "configure the npm primary publisher",
-        ));
+    repo.cli().args(["executor", "init"]).assert().success();
 
     let config = fs::read_to_string(repo.root.join(".intentional/config.yml")).expect("config");
     assert!(config.contains("github:"), "{config}");

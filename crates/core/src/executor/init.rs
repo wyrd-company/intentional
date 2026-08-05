@@ -6,14 +6,15 @@
 //! Executor initialization plan creation, resumption, and application.
 
 use crate::config::{
-    Config, GithubConfig, GithubWorkflow, GithubWorkflows, NpmAdditionalTargets, NpmGithubTarget,
-    NpmPublisher, OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH,
-    DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
+    Config, ExcludedPathReceipt, GithubConfig, GithubWorkflow, GithubWorkflows, ManagedPathReceipt,
+    NpmAdditionalTargets, NpmGithubTarget, NpmPublisher, OciPublisher, PackageConfig,
+    ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
 use crate::executor::recipe::{
-    capability_set, derive_capabilities, recipes_for, select_publications, Capability,
-    CapabilityEvidence, Packager, PRIMARY_TARGET,
+    capability_set, derive_capabilities, derive_package_candidates, recipes_for,
+    select_publications, Capability, CapabilityEvidence, PackageCandidateEvidence, Packager,
+    PRIMARY_TARGET,
 };
 use crate::init::SourceEvidence;
 use crate::model::{PublisherKind, ReleaseUnitDisposition};
@@ -68,6 +69,8 @@ impl std::fmt::Display for ExecutorInitState {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CandidateKind {
+    /// Whether one discovered native artifact becomes a configured package.
+    Package,
     /// Whether a derived capability publishes through one publisher target.
     PublicationIntent,
     /// Whether Intentional creates a native packager baseline.
@@ -103,6 +106,15 @@ pub struct ExecutorCandidate {
     pub kind: CandidateKind,
     /// Configured release unit the decision applies to.
     pub release_unit: String,
+    /// Proposed package identifier, for a package candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// Release-unit-relative package directory, for a package candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    /// Detector whose exact artifact is accepted or declined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<String>,
     /// Derived capability supporting the decision.
     pub capability: String,
     /// Native evidence the decision rests on.
@@ -126,6 +138,7 @@ impl ExecutorCandidate {
     ) -> String {
         let mut identity = Sha256::new();
         identity.update(match kind {
+            CandidateKind::Package => b"package".as_slice(),
             CandidateKind::PublicationIntent => b"publication-intent".as_slice(),
             CandidateKind::Packager => b"packager".as_slice(),
         });
@@ -142,6 +155,14 @@ impl ExecutorCandidate {
     }
 
     fn validate(&self) -> Result<()> {
+        if self.kind == CandidateKind::Package
+            && (self.package.is_none() || self.path.is_none() || self.detector.is_none())
+        {
+            return Err(Error::Validation(format!(
+                "executor package candidate {} must name its package, path, and detector",
+                self.id
+            )));
+        }
         if self.evidence.is_empty() {
             return Err(Error::Validation(format!(
                 "executor candidate {} must carry evidence",
@@ -466,6 +487,11 @@ fn derive_candidates(
         if release_unit.disposition != ReleaseUnitDisposition::Managed {
             continue;
         }
+        let packages = package_candidates(root, config, id, release_unit, resolutions)?;
+        candidates.extend(packages);
+        if release_unit.packages.is_empty() {
+            continue;
+        }
         let derived = derive_capabilities(root, config, id)?;
         let capabilities = capability_set(&derived);
         for evidence in &derived {
@@ -487,6 +513,101 @@ fn derive_candidates(
     }
     candidates.extend(packager_candidates(root, config, &candidates, resolutions)?);
     Ok(candidates)
+}
+
+fn package_candidates(
+    root: &Path,
+    config: &Config,
+    release_unit: &str,
+    release_unit_config: &ReleaseUnitConfig,
+    resolutions: &Resolutions,
+) -> Result<Vec<ExecutorCandidate>> {
+    let mut proposed = Vec::new();
+    let mut identifiers = release_unit_config
+        .packages
+        .iter()
+        .map(|(id, package)| (id.clone(), release_unit_config.path.join(&package.path)))
+        .collect::<BTreeMap<_, _>>();
+    for artifact in derive_package_candidates(root, config, release_unit)? {
+        let path = artifact
+            .directory
+            .strip_prefix(&release_unit_config.path)
+            .unwrap_or(&artifact.directory);
+        let path = if path.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            path.to_owned()
+        };
+        let package = proposed_package_id(&artifact, &path)?;
+        if let Some(first) = identifiers.insert(package.clone(), artifact.evidence.path.clone()) {
+            return Err(Error::Validation(format!(
+                "release unit {release_unit} package candidate identifier {package} collides for artifacts {} and {}",
+                first.display(), artifact.evidence.path.display()
+            )));
+        }
+        let capability = artifact.capability.as_str();
+        let scope = artifact.evidence.path.display().to_string();
+        let id =
+            ExecutorCandidate::stable_id(CandidateKind::Package, release_unit, capability, &scope);
+        let capabilities = BTreeSet::from([artifact.capability]);
+        let mut choices = offered_targets(artifact.capability, &capabilities)
+            .into_iter()
+            .filter(|(publisher, target)| !(*publisher == PublisherKind::Npm && target == "github"))
+            .map(|(publisher, target)| Choice {
+                id: format!("accept-{publisher}-{target}"),
+                label: format!(
+                    "Configure package {package} at {} for {publisher} {target}",
+                    path.display()
+                ),
+                publisher: Some(publisher),
+                target: Some(target),
+                packager: None,
+            })
+            .collect::<Vec<_>>();
+        choices.push(Choice {
+            id: DECLINE_CHOICE.to_owned(),
+            label: format!(
+                "Do not publish the artifact at {}",
+                artifact.evidence.path.display()
+            ),
+            publisher: None,
+            target: None,
+            packager: None,
+        });
+        proposed.push(ExecutorCandidate {
+            resolution: carried_resolution(&id, resolutions),
+            id,
+            kind: CandidateKind::Package,
+            release_unit: release_unit.to_owned(),
+            package: Some(package),
+            path: Some(path),
+            detector: Some(artifact.detector),
+            capability: capability.to_owned(),
+            evidence: vec![artifact.evidence],
+            recommended: (choices.len() == 2).then(|| choices[0].id.clone()),
+            choices,
+        });
+    }
+    Ok(proposed)
+}
+
+fn proposed_package_id(artifact: &PackageCandidateEvidence, path: &Path) -> Result<String> {
+    let proposed = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name != ".")
+        .map(str::to_owned)
+        .or_else(|| artifact.native_identity.clone())
+        .ok_or_else(|| Error::Validation(format!(
+            "artifact {} has neither a directory name nor native identity for its package candidate",
+            artifact.evidence.path.display()
+        )))?;
+    Ok(proposed
+        .rsplit('/')
+        .next()
+        .unwrap_or(&proposed)
+        .trim_start_matches('@')
+        .to_owned())
 }
 
 /// Publisher targets a capability can offer, ordered by publisher then target.
@@ -601,6 +722,9 @@ fn publication_candidate(
         id,
         kind: CandidateKind::PublicationIntent,
         release_unit: release_unit.to_owned(),
+        package: None,
+        path: None,
+        detector: None,
         capability: capability.to_owned(),
         evidence,
         choices: vec![
@@ -682,6 +806,9 @@ fn packager_candidates(
             id,
             kind: CandidateKind::Packager,
             release_unit: release_unit.clone(),
+            package: None,
+            path: None,
+            detector: None,
             capability: capability.as_str().to_owned(),
             evidence,
             choices: vec![
@@ -738,6 +865,29 @@ fn apply_candidate(
         return Ok(());
     };
     if choice.id == DECLINE_CHOICE {
+        if candidate.kind == CandidateKind::Package {
+            let detector = candidate
+                .detector
+                .as_ref()
+                .expect("package candidate detector");
+            let evidence = candidate
+                .evidence
+                .first()
+                .expect("package candidate evidence");
+            config.discovery.excluded_paths.push(ExcludedPathReceipt {
+                detector: detector.clone(),
+                path: evidence.path.clone(),
+                evidence_digest: evidence.digest.clone(),
+            });
+            edits.push((
+                vec!["discovery".to_owned(), "excluded-paths".to_owned()],
+                serde_yaml::to_value(&config.discovery.excluded_paths)?,
+            ));
+            operations.push(format!(
+                "record the declined artifact {} in {CONFIG_PATH}",
+                evidence.path.display()
+            ));
+        }
         return Ok(());
     }
     let release_unit = config
@@ -750,6 +900,55 @@ fn apply_candidate(
             ))
         })?;
     match candidate.kind {
+        CandidateKind::Package => {
+            let package_id = candidate
+                .package
+                .as_ref()
+                .expect("package candidate identifier");
+            let path = candidate.path.clone().expect("package candidate path");
+            let (Some(publisher), Some(target)) = (choice.publisher, choice.target.as_deref())
+            else {
+                return Err(Error::Validation(format!(
+                    "executor candidate {} accepts a package without a publisher target",
+                    candidate.id
+                )));
+            };
+            let mut package = PackageConfig::new(path);
+            enable_package_publisher(&mut package, publisher, target)?;
+            release_unit
+                .packages
+                .insert(package_id.clone(), package.clone());
+            edits.push((
+                vec![
+                    "release-units".to_owned(),
+                    candidate.release_unit.clone(),
+                    "packages".to_owned(),
+                    package_id.clone(),
+                ],
+                serde_yaml::to_value(&package)?,
+            ));
+            let detector = candidate
+                .detector
+                .as_ref()
+                .expect("package candidate detector");
+            let evidence = candidate
+                .evidence
+                .first()
+                .expect("package candidate evidence");
+            config.discovery.managed_paths.push(ManagedPathReceipt {
+                detector: detector.clone(),
+                path: evidence.path.clone(),
+                release_unit: candidate.release_unit.clone(),
+                package: package_id.clone(),
+            });
+            edits.push((
+                vec!["discovery".to_owned(), "managed-paths".to_owned()],
+                serde_yaml::to_value(&config.discovery.managed_paths)?,
+            ));
+            operations.push(format!(
+                "configure package {package_id} for {publisher} {target}"
+            ));
+        }
         CandidateKind::PublicationIntent => {
             let (Some(publisher), Some(target)) = (choice.publisher, choice.target.as_deref())
             else {
@@ -856,6 +1055,14 @@ fn enable_publisher(
         .values_mut()
         .next()
         .expect("one package was checked");
+    enable_package_publisher(package, publisher, target)
+}
+
+fn enable_package_publisher(
+    package: &mut PackageConfig,
+    publisher: PublisherKind,
+    target: &str,
+) -> Result<()> {
     match (publisher, target) {
         (PublisherKind::Npm, "github") => {
             let npm = package.npm.get_or_insert_with(NpmPublisher::default);
@@ -1029,6 +1236,28 @@ release-units:
             if candidate.id == id || candidate.id == packager_id {
                 candidate.resolution = Some(choice.to_owned());
                 matched = true;
+            } else if candidate.kind == CandidateKind::Package
+                && candidate.capability == capability
+                && scope.contains('/')
+            {
+                let (publisher, target) = scope.split_once('/').expect("publisher/target scope");
+                candidate.resolution = Some(if choice == ACCEPT_CHOICE {
+                    candidate
+                        .choices
+                        .iter()
+                        .find(|candidate_choice| {
+                            candidate_choice
+                                .publisher
+                                .is_some_and(|value| value.as_str() == publisher)
+                                && candidate_choice.target.as_deref() == Some(target)
+                        })
+                        .expect("package candidate offers publisher target")
+                        .id
+                        .clone()
+                } else {
+                    choice.to_owned()
+                });
+                matched = true;
             }
         }
         assert!(matched, "plan offers a {capability} {scope} candidate");
@@ -1057,6 +1286,11 @@ release-units:
         assert_eq!(result.plan.candidates.len(), 1);
         assert_eq!(result.plan.candidates[0].resolution, None);
         assert_eq!(result.plan.candidates[0].capability, "node-package");
+        assert_eq!(result.plan.candidates[0].kind, CandidateKind::Package);
+        assert_eq!(
+            result.plan.candidates[0].package.as_deref(),
+            Some("example-component")
+        );
         assert!(result
             .operations
             .iter()
@@ -1071,6 +1305,143 @@ release-units:
             None,
             "an unresolved plan never configures the executor"
         );
+    }
+
+    #[test]
+    fn proposes_every_publishable_package_in_a_release_unit() {
+        let workspace = Workspace::new("init-package-census");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    path: component\n",
+                    "    path: .\n    projections:\n      - { adapter: toml, file: Cargo.toml, pointer: /workspace/package/version, mode: committed }\n      - { adapter: npm, file: npm/package.json, mode: committed }\n",
+                ),
+            )
+            .write(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/core\", \"crates/cli\"]\n[workspace.package]\nversion = \"1.0.0\"\n",
+            )
+            .write(
+                "npm/package.json",
+                r#"{"name":"example-launcher","version":"1.0.0"}"#,
+            )
+            .write(
+                "crates/core/Cargo.toml",
+                "[package]\nname = \"example-core\"\nversion = \"1.0.0\"\n",
+            )
+            .write(
+                "crates/cli/Cargo.toml",
+                "[package]\nname = \"example-cli\"\nversion = \"1.0.0\"\n",
+            )
+            .write(
+                "fixtures/example/Cargo.toml",
+                "[package]\nname = \"example-fixture\"\nversion = \"1.0.0\"\n",
+            );
+
+        let result = run(&workspace);
+        let proposals = result
+            .plan
+            .candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.package.as_deref().expect("package identifier"),
+                    candidate.path.as_deref().expect("package path"),
+                    candidate.capability.as_str(),
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            proposals,
+            BTreeSet::from([
+                ("cli", Path::new("crates/cli"), "rust-crate"),
+                ("core", Path::new("crates/core"), "rust-crate"),
+                ("npm", Path::new("npm"), "node-package"),
+            ])
+        );
+    }
+
+    #[test]
+    fn reports_colliding_proposed_package_identifiers() {
+        let workspace = Workspace::new("init-package-collision");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write(
+                "first/shared/package.json",
+                r#"{"name":"example-package","version":"1.0.0"}"#,
+            )
+            .write(
+                "second/shared/Cargo.toml",
+                "[package]\nname = \"example-crate\"\nversion = \"1.0.0\"\n",
+            );
+
+        let error = initialize_executor(workspace.root()).expect_err("collision is reported");
+        let message = error.to_string();
+        assert!(message.contains("identifier shared collides"), "{message}");
+        assert!(message.contains("first/shared/package.json"), "{message}");
+        assert!(message.contains("second/shared/Cargo.toml"), "{message}");
+    }
+
+    #[test]
+    fn declined_package_stays_declined_in_a_fresh_clone() {
+        let workspace = Workspace::new("init-decline-clone");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let git = |arguments: &[&str], directory: &Path| {
+            let status = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(directory)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {arguments:?} succeeds");
+        };
+        git(&["init", "-q"], workspace.root());
+        git(&["config", "user.name", "Example User"], workspace.root());
+        git(
+            &["config", "user.email", "user@example.test"],
+            workspace.root(),
+        );
+        git(
+            &["add", ".intentional/config.yml", "component/package.json"],
+            workspace.root(),
+        );
+        git(&["commit", "-qm", "fixture"], workspace.root());
+
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            DECLINE_CHOICE,
+        );
+        assert_eq!(run(&workspace).state, ExecutorInitState::Ready);
+        git(&["add", ".intentional/config.yml"], workspace.root());
+        git(&["commit", "-qm", "record decline"], workspace.root());
+
+        let clone_parent = tempfile::tempdir().expect("clone parent");
+        let clone = clone_parent.path().join("clone");
+        git(
+            &[
+                "clone",
+                "-q",
+                workspace.root().to_str().expect("root UTF-8"),
+                clone.to_str().expect("clone UTF-8"),
+            ],
+            clone_parent.path(),
+        );
+        assert!(
+            !clone.join(EXECUTOR_INIT_PLAN_PATH).exists(),
+            "the untracked plan does not survive the clone"
+        );
+        let cloned = initialize_executor(&clone).expect("executor init runs in clone");
+        assert_eq!(cloned.state, ExecutorInitState::Ready);
+        assert!(cloned.plan.candidates.is_empty());
     }
 
     #[test]
@@ -1089,10 +1460,12 @@ release-units:
         );
 
         let result = run(&workspace);
+        assert_eq!(result.state, ExecutorInitState::Ready);
+        let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::NeedsInput);
         assert_eq!(
             result.plan.candidates.len(),
-            2,
+            1,
             "the additional npm target is offered once its primary is accepted"
         );
         resolve(
@@ -1154,6 +1527,14 @@ release-units:
         resolve(
             workspace.root(),
             "go-application",
+            "goreleaser",
+            ACCEPT_CHOICE,
+        );
+        run(&workspace);
+        run(&workspace);
+        resolve(
+            workspace.root(),
+            "go-application",
             "apt/primary",
             DECLINE_CHOICE,
         );
@@ -1163,13 +1544,6 @@ release-units:
             "aur/primary",
             DECLINE_CHOICE,
         );
-        resolve(
-            workspace.root(),
-            "go-application",
-            "goreleaser",
-            ACCEPT_CHOICE,
-        );
-
         let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::Ready);
         assert!(
@@ -1180,7 +1554,11 @@ release-units:
             "a publisher needing a tap repository is configured directly"
         );
         let baseline = workspace.root().join("component/.goreleaser.yaml");
-        assert!(baseline.is_file(), "the packager baseline is created");
+        assert!(
+            baseline.is_file(),
+            "the packager baseline is created: {:?}",
+            result.plan.candidates
+        );
         assert!(std::fs::read_to_string(&baseline)
             .expect("baseline readable")
             .contains("project_name: component"));
@@ -1238,12 +1616,14 @@ release-units:
             r#"{"name":"example-component","version":"1.0.0"}"#,
         );
         run(&workspace);
+        run(&workspace);
         resolve(
             workspace.root(),
             "node-package",
             "npm/primary",
             ACCEPT_CHOICE,
         );
+        run(&workspace);
         run(&workspace);
         resolve(
             workspace.root(),
@@ -1254,13 +1634,6 @@ release-units:
 
         let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::Ready);
-        assert!(
-            result
-                .operations
-                .iter()
-                .any(|operation| operation.contains("configure the npm primary publisher")),
-            "the command reports what it configured"
-        );
         assert!(
             result
                 .plan
@@ -1359,7 +1732,7 @@ release-units:
     }
 
     #[test]
-    fn withholds_decisions_it_cannot_apply_on_its_own() {
+    fn proposes_each_artifact_even_when_release_unit_level_targets_were_ambiguous() {
         let workspace = Workspace::new("init-withheld");
         workspace
             .write(".intentional/config.yml", CONFIG)
@@ -1369,14 +1742,17 @@ release-units:
                 r#"{"id":"example","version":"1.0.0"}"#,
             );
         let result = run(&workspace);
-        assert_eq!(
-            result.state,
-            ExecutorInitState::Ready,
-            "no candidate is offered when every target is ambiguous or needs explicit data"
-        );
+        assert_eq!(result.state, ExecutorInitState::NeedsInput);
+        assert_eq!(result.plan.candidates.len(), 2);
         assert!(
-            result.plan.candidates.is_empty(),
-            "two capabilities publishing one OCI target are resolved in configuration, not guessed"
+            result.plan.candidates.iter().all(|candidate| {
+                candidate.kind == CandidateKind::Package
+                    && candidate.choices.iter().any(|choice| {
+                        choice.publisher == Some(PublisherKind::Oci)
+                            && choice.target.as_deref() == Some("ghcr")
+                    })
+            }),
+            "each artifact carries its own unambiguous GHCR publisher choice"
         );
     }
 
@@ -1442,6 +1818,12 @@ release-units:
             assert!(
                 document["candidates"][0].get(key).is_some(),
                 "candidate carries {key}"
+            );
+        }
+        for key in ["package", "path", "detector"] {
+            assert!(
+                document["candidates"][0].get(key).is_some(),
+                "package candidate carries {key}"
             );
         }
         assert!(document["candidates"][0]["resolution"].is_null());

@@ -223,11 +223,15 @@ intentional executor init
 ```
 
 The first run writes `.intentional/executor-init-plan.yml` and exits with code
-`2`. Set each candidate `resolution` to `accept` or `decline`, then rerun the
-command until it reports the `ready` state and updates
-`.intentional/config.yml`. Accepting a publication offers its dependent targets
-on the next run, so the plan converges through explicit decisions rather than
-inference.
+`2`. It proposes every publishable package inside each release unit, including
+workspace manifests, image definitions, and Go commands. Set each candidate
+`resolution` to one declared publisher choice or `decline`, then rerun the
+command until it reports the `ready` state and updates `.intentional/config.yml`.
+An acceptance writes the package and its publisher opt-in. A decline writes an
+evidence-pinned discovery receipt. Both decisions therefore survive a fresh
+clone even though the plan does not. Accepting a package can offer its dependent
+targets on the next run, so the plan converges through explicit decisions rather
+than inference.
 
 Add `--dry-run` to print the plan the command would write, and every file it
 would touch, without changing the workspace.

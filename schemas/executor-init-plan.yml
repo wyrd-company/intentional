@@ -91,8 +91,17 @@ $defs:
         type: string
         pattern: "^candidate:[0-9a-f]{64}$"
       kind:
-        enum: [ publication-intent, packager ]
+        enum: [ package, publication-intent, packager ]
       release-unit:
+        type: string
+        minLength: 1
+      package:
+        type: string
+        minLength: 1
+      path:
+        type: string
+        minLength: 1
+      detector:
         type: string
         minLength: 1
       capability:
@@ -115,6 +124,23 @@ $defs:
         type: [ string, "null" ]
         pattern: "^[a-z0-9][a-z0-9._-]*$"
 allOf:
+  - if:
+      properties:
+        candidates:
+          contains:
+            properties:
+              kind: { const: package }
+            required: [ kind ]
+    then:
+      properties:
+        candidates:
+          items:
+            if:
+              properties:
+                kind: { const: package }
+              required: [ kind ]
+            then:
+              required: [ package, path, detector ]
   - if:
       properties:
         state: { const: ready }

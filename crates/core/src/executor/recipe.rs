@@ -12,7 +12,7 @@ use crate::evidence::assemble::CleanClientMode;
 use crate::init::{
     detector_candidates, publication_detector_for_path, DiscoveryCandidate, SourceEvidence,
 };
-use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
+use crate::model::{Adapter, AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -253,6 +253,21 @@ pub struct CapabilityEvidence {
     pub capability: Capability,
     /// Native artifact proving the capability.
     pub evidence: SourceEvidence,
+}
+
+/// One publishable native artifact available to become a configured package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageCandidateEvidence {
+    /// Detector that owns the artifact identity.
+    pub detector: String,
+    /// Derived publication capability.
+    pub capability: Capability,
+    /// Exact artifact evidence used to pin an accept or decline receipt.
+    pub evidence: SourceEvidence,
+    /// Package directory relative to the workspace root.
+    pub directory: PathBuf,
+    /// Manifest-native identity, when the detector extracts one.
+    pub native_identity: Option<String>,
 }
 
 /// One configured publication resolved to exactly one maintained recipe.
@@ -798,6 +813,143 @@ pub fn derive_capabilities(
         )?);
     }
     Ok(derived)
+}
+
+/// Enumerate every live publishable artifact contained by one release unit.
+pub fn derive_package_candidates(
+    root: &Path,
+    config: &Config,
+    release_unit_id: &str,
+) -> Result<Vec<PackageCandidateEvidence>> {
+    let release_unit = config.release_units.get(release_unit_id).ok_or_else(|| {
+        Error::Validation(format!("release unit {release_unit_id} is not configured"))
+    })?;
+    let managed = config
+        .discovery
+        .managed_paths
+        .iter()
+        .map(|receipt| (&receipt.detector, &receipt.path))
+        .collect::<BTreeSet<_>>();
+    live_detector_candidates(root, config)?
+        .into_iter()
+        .filter(|candidate| {
+            let directory = discovery_candidate_directory(&candidate.detector, &candidate.path);
+            path_contains(&release_unit.path, &directory)
+                && !managed.contains(&(&candidate.detector, &candidate.path))
+        })
+        .filter_map(|candidate| {
+            let capability = detector_capability(&candidate.detector)?;
+            Some(
+                candidate_belongs_to_release_unit(root, release_unit, &candidate, capability)
+                    .and_then(|belongs| {
+                        candidate_is_publishable(root, &candidate, capability)
+                            .map(|publishable| belongs && publishable)
+                    })
+                    .map(|publishable| {
+                        publishable.then(|| PackageCandidateEvidence {
+                            detector: candidate.detector.clone(),
+                            capability,
+                            evidence: candidate
+                                .evidence
+                                .iter()
+                                .find(|evidence| evidence.path == candidate.path)
+                                .expect("discovery candidate validates exact-path evidence")
+                                .clone(),
+                            directory: discovery_candidate_directory(
+                                &candidate.detector,
+                                &candidate.path,
+                            ),
+                            native_identity: candidate.native_identity,
+                        })
+                    }),
+            )
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|items| items.into_iter().flatten().collect())
+}
+
+fn candidate_belongs_to_release_unit(
+    root: &Path,
+    release_unit: &ReleaseUnitConfig,
+    candidate: &DiscoveryCandidate,
+    capability: Capability,
+) -> Result<bool> {
+    let adapter = match capability {
+        Capability::NodePackage => Adapter::Npm,
+        Capability::RustCrate => Adapter::Cargo,
+        Capability::GoApplication => Adapter::Go,
+        Capability::RunnableImage | Capability::DevContainerFeature => return Ok(true),
+    };
+    let projections = release_unit
+        .projections
+        .iter()
+        .filter(|projection| {
+            projection.adapter == adapter
+                || match capability {
+                    Capability::NodePackage => projection.file.ends_with("package.json"),
+                    Capability::RustCrate => projection.file.ends_with("Cargo.toml"),
+                    Capability::GoApplication => projection.file.ends_with("go.mod"),
+                    Capability::RunnableImage | Capability::DevContainerFeature => false,
+                }
+        })
+        .map(|projection| {
+            if release_unit.path == Path::new(".") {
+                projection.file.clone()
+            } else {
+                release_unit.path.join(&projection.file)
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    if projections.is_empty() {
+        return Ok(true);
+    }
+    if projections.contains(&candidate.path) {
+        return Ok(true);
+    }
+    match capability {
+        Capability::RustCrate => projections.iter().try_fold(false, |matched, projection| {
+            if matched {
+                return Ok(true);
+            }
+            let path = root.join(projection);
+            let Some(text) = probed_file_text(&path)? else {
+                return Ok(false);
+            };
+            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
+                Error::Validation(format!(
+                    "{} is not valid TOML: {error}",
+                    projection.display()
+                ))
+            })?;
+            let Some(members) = document
+                .get("workspace")
+                .and_then(|workspace| workspace.get("members"))
+                .and_then(toml_edit::Item::as_array)
+            else {
+                return Ok(false);
+            };
+            let workspace = projection.parent().unwrap_or(Path::new("."));
+            let member = candidate
+                .path
+                .parent()
+                .and_then(|directory| directory.strip_prefix(workspace).ok())
+                .unwrap_or_else(|| candidate.path.parent().unwrap_or(Path::new(".")));
+            let matched = members
+                .iter()
+                .filter_map(toml_edit::Value::as_str)
+                .any(|pattern| {
+                    glob::Pattern::new(pattern).is_ok_and(|pattern| pattern.matches_path(member))
+                });
+            Ok(matched)
+        }),
+        Capability::GoApplication => Ok(candidate
+            .evidence
+            .iter()
+            .any(|evidence| projections.contains(&evidence.path))),
+        Capability::NodePackage | Capability::RunnableImage | Capability::DevContainerFeature => {
+            Ok(false)
+        }
+    }
 }
 
 fn derive_package_capabilities(

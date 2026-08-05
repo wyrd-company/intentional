@@ -6,11 +6,17 @@ description: >-
   `.intentional/executor-init-plan.yml` written and resumed by
   `intentional executor init`. It binds executor discovery to the
   exact source state, carries the proposed GitHub configuration, and presents
-  finite publication-intent and packager choices derived from configured
-  release units and native project evidence. Each candidate records its
-  evidence and one selected choice or an unresolved null value. Applying a
-  ready plan through the same command updates Intentional configuration and any explicitly proposed
-  native packager files; workflow integration remains a separate executor diff.
+  finite package, publication-intent, and packager choices derived from configured
+  release units and native project evidence. A package candidate names its proposed
+  package identifier, release-unit-relative path, detector, capability, and exact
+  evidence. Each candidate records one selected choice or an unresolved null value.
+  Applying a ready plan through the same command updates Intentional
+  configuration and any explicitly proposed native packager files; workflow
+  integration remains a separate executor diff.
+  Accepted package candidates write a package, publisher opt-in, and managed-path
+  receipt to tracked configuration. Declined package candidates write an
+  evidence-pinned excluded-path receipt there. The plan holds resolutions only
+  while they are in flight and is not their durable record.
   Planned operations also report repository settings that Intentional does not
   mutate, including the requirement that the repository GitHub App be a ruleset
   bypass actor for the protected default branch and managed release tags.
