@@ -2022,6 +2022,7 @@ mod tests {
     use crate::executor::fixture::Workspace;
     use crate::executor::recipe::Capability;
     use crate::publication::observation::ObservationState;
+    use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet};
 
     fn test_tool_path(base: &str) -> String {
@@ -4728,6 +4729,8 @@ release-units:
         for agreement in [
             "linux_digest=\"$(sha256sum",
             "macos_digest=\"$(sha256sum",
+            "mv \"${INTENTIONAL_SUBJECT}/linux.tar.gz\"",
+            "mv \"${INTENTIONAL_SUBJECT}/macos.tar.gz\"",
             "homebrew/Formula/${binary}.rb",
             "${linux_digest}",
             "${macos_digest}",
@@ -4757,6 +4760,47 @@ release-units:
             download_pattern,
             "intentional_archive-component_cargo_archive-*"
         );
+
+        let aggregate_root = workspace.root().join("aggregate-execution");
+        let subject_root = aggregate_root.join("bytes");
+        std::fs::create_dir_all(&subject_root).expect("aggregate subject directory");
+        let linux_bytes = b"sealed linux archive";
+        let macos_bytes = b"sealed macOS archive";
+        std::fs::write(subject_root.join("linux.tar.gz"), linux_bytes).expect("Linux archive");
+        std::fs::write(subject_root.join("macos.tar.gz"), macos_bytes).expect("macOS archive");
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(aggregate_body)
+            .env("INTENTIONAL_SUBJECT", &subject_root)
+            .env("INTENTIONAL_SUBJECT_IDENTITY", "sample-tool")
+            .env("INTENTIONAL_TAG_PREFIX", "release-")
+            .env("INTENTIONAL_TAG_SUFFIX", "")
+            .env("GITHUB_REF_NAME", "release-1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .output()
+            .expect("aggregate build runs");
+        assert!(
+            output.status.success(),
+            "aggregate build failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let formula = std::fs::read_to_string(subject_root.join("homebrew/Formula/sample-tool.rb"))
+            .expect("generated formula");
+        let sha256 = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        for line in [
+            "class SampleTool < Formula".to_owned(),
+            "version \"1.2.3\"".to_owned(),
+            "release-1.2.3/sample-tool-1.2.3-linux-x86_64.tar.gz".to_owned(),
+            format!("sha256 \"{}\"", sha256(linux_bytes)),
+            "release-1.2.3/sample-tool-1.2.3-macos-arm64.tar.gz".to_owned(),
+            format!("sha256 \"{}\"", sha256(macos_bytes)),
+            "bin.install \"sample-tool\"".to_owned(),
+        ] {
+            assert!(
+                formula.contains(&line),
+                "formula carries {line}:\n{formula}"
+            );
+        }
         let publisher = job_steps(
             &jobs,
             "intentional_publish_component_command_homebrew_primary",
