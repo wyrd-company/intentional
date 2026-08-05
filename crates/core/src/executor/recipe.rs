@@ -328,16 +328,14 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
                     Err(error) => return Err(error),
                 };
             for (publisher, target, configured) in configured_targets(package) {
-                match select_one(
+                let context = SelectionContext {
                     root,
                     id,
                     release_unit,
                     package,
-                    &capabilities,
-                    publisher,
-                    target,
-                    &configured,
-                ) {
+                    capabilities: &capabilities,
+                };
+                match select_one(&context, publisher, target, &configured) {
                     Ok(publication) => selection.selected.push(publication),
                     Err(Error::Validation(message)) => selection.diagnostics.push(message),
                     Err(error) => return Err(error),
@@ -500,16 +498,27 @@ struct Configured {
     destination_required: bool,
 }
 
+struct SelectionContext<'a> {
+    root: &'a Path,
+    id: &'a str,
+    release_unit: &'a ReleaseUnitConfig,
+    package: &'a PackageConfig,
+    capabilities: &'a BTreeSet<Capability>,
+}
+
 fn select_one(
-    root: &Path,
-    id: &str,
-    release_unit: &ReleaseUnitConfig,
-    package: &PackageConfig,
-    capabilities: &BTreeSet<Capability>,
+    context: &SelectionContext<'_>,
     publisher: PublisherKind,
     target: String,
     configured: &Configured,
 ) -> Result<SelectedPublication> {
+    let SelectionContext {
+        root,
+        id,
+        release_unit,
+        package,
+        capabilities,
+    } = context;
     let matches = recipes_for(capabilities, publisher)
         .into_iter()
         .filter(|recipe| recipe.target == target)
@@ -567,7 +576,7 @@ fn select_one(
     };
     let retrieval = retrieval_mode(&recipe, destination.as_deref());
     Ok(SelectedPublication {
-        release_unit: id.to_owned(),
+        release_unit: (*id).to_owned(),
         publisher,
         target,
         destination,
