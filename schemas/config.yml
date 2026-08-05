@@ -84,6 +84,12 @@ $defs:
               envvar:
                 type: string
                 pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+      declined-publications:
+        type: array
+        uniqueItems: true
+        items:
+          type: string
+          pattern: "^[^/]+/[^/]+/(npm|cargo|homebrew|rpm|apt|aur|oci)/[^/]+$"
   github-workflow:
     type: object
     additionalProperties: false

@@ -170,6 +170,7 @@ github:
 | `path` | Yes | Exact workspace-relative workflow file used as the command default. |
 | `gates` | No | Repository-owned job ids the managed transition depends on. |
 | `prefix` | No | Reserved job, step, and environment variable namespaces. |
+| `declined-publications` | No | Publication targets explicitly declined during executor initialization. |
 
 A scalar `prefix` normalizes to lower snake case for jobs and steps and to
 upper snake case for environment variables. A mapping with `job` and `envvar`
@@ -189,7 +190,9 @@ maintained non-Go route exists.
 `intentional executor init` creates or resumes
 `.intentional/executor-init-plan.yml`. Set each candidate `resolution` to
 `accept` or `decline` and rerun the command; it exits with code `2` while any
-candidate is unresolved. Initialization also reports the repository settings
+candidate is unresolved. Accepted publishers and declined publication targets
+are written to configuration, so a fresh clone does not reopen the same choice.
+Initialization also reports the repository settings
 Intentional never mutates, including the requirement that the repository GitHub
 App be a ruleset bypass actor for the default branch and every managed release
 tag namespace. `intentional executor check` validates configuration, recipe

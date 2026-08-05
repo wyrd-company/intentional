@@ -93,3 +93,5 @@ github:
       path: .github/workflows/release.yml
     publish:
       path: .github/workflows/publish.yml
+  declined-publications:
+    - intentional/launcher/npm/github

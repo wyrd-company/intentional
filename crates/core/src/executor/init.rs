@@ -471,6 +471,7 @@ fn default_github() -> GithubConfig {
             },
         },
         prefix: None,
+        declined_publications: BTreeSet::new(),
     }
 }
 
@@ -498,7 +499,12 @@ fn derive_candidates(
         for evidence in &derived {
             let package = &release_unit.packages[&evidence.package];
             for (publisher, target) in offered_targets(evidence.capability, &capabilities) {
-                if configured(package, publisher, &target)
+                let identity = format!("{}/{}/{publisher}/{target}", id, evidence.package);
+                if config
+                    .github
+                    .as_ref()
+                    .is_some_and(|github| github.declined_publications.contains(&identity))
+                    || configured(package, publisher, &target)
                     || !prerequisite_met(
                         package,
                         &candidates,
@@ -946,6 +952,43 @@ fn apply_candidate(
             operations.push(format!(
                 "record the declined artifact {} in {CONFIG_PATH}",
                 evidence.path.display()
+            ));
+        } else if candidate.kind == CandidateKind::PublicationIntent {
+            let accepted = candidate
+                .choices
+                .iter()
+                .find(|choice| choice.id == ACCEPT_CHOICE)
+                .expect("publication candidate has an accept choice");
+            let publisher = accepted
+                .publisher
+                .expect("publication accept choice has a publisher");
+            let target = accepted
+                .target
+                .as_deref()
+                .expect("publication accept choice has a target");
+            let package = candidate
+                .package
+                .as_deref()
+                .expect("publication candidate has a package");
+            let identity = format!("{}/{package}/{publisher}/{target}", candidate.release_unit);
+            config
+                .github
+                .as_mut()
+                .expect("publication candidates require github configuration")
+                .declined_publications
+                .insert(identity.clone());
+            edits.push((
+                vec!["github".to_owned(), "declined-publications".to_owned()],
+                serde_yaml::to_value(
+                    &config
+                        .github
+                        .as_ref()
+                        .expect("github configuration")
+                        .declined_publications,
+                )?,
+            ));
+            operations.push(format!(
+                "record the declined publication {identity} in {CONFIG_PATH}"
             ));
         }
         return Ok(());
@@ -1531,22 +1574,22 @@ release-units:
             .expect("npm publisher")
             .additional_targets
             .is_none());
+        assert_eq!(
+            github.declined_publications,
+            BTreeSet::from(["component/example-component/npm/github".to_owned()])
+        );
 
+        std::fs::remove_file(workspace.root().join(EXECUTOR_INIT_PLAN_PATH))
+            .expect("remove transient plan");
         let repeated = run(&workspace);
         assert_eq!(
             repeated.state,
             ExecutorInitState::Ready,
             "a converged workspace stays ready without new questions"
         );
-        assert_eq!(
-            repeated
-                .plan
-                .candidates
-                .iter()
-                .map(|candidate| candidate.resolution.clone())
-                .collect::<Vec<_>>(),
-            vec![Some(DECLINE_CHOICE.to_owned())],
-            "the durable plan keeps the declined additional target resolved"
+        assert!(
+            repeated.plan.candidates.is_empty(),
+            "tracked configuration keeps the declined additional target resolved"
         );
     }
 
@@ -1686,7 +1729,9 @@ release-units:
         );
 
         // The applying run drops the now-configured candidate from the plan, so
-        // the run after it is the first that can be a true no-op.
+        // the next run refreshes the source fingerprint without it. The run
+        // after that is the first that can be a true no-op.
+        run(&workspace);
         run(&workspace);
         let repeated = run(&workspace);
         assert!(

@@ -140,6 +140,9 @@ pub struct GithubConfig {
     /// Reserved job, step, and environment variable namespaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<ExecutorPrefix>,
+    /// Optional publication targets explicitly declined during executor initialization.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub declined_publications: BTreeSet<String>,
 }
 
 impl GithubConfig {
