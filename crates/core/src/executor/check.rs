@@ -409,7 +409,7 @@ aur:
 
     #[test]
     fn reads_goreleaser_configuration_from_a_nested_package() {
-        let workspace = go_workspace(
+        let workspace = workspace(
             "check-goreleaser-nested-package",
             "    homebrew: { repository: example-org/homebrew-tap }\n",
         );
