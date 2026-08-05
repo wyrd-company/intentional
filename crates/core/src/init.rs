@@ -3052,7 +3052,7 @@ pub(crate) fn publication_detector_for_path(path: &Path) -> Option<&'static str>
     match adapter_for(path) {
         Some(Adapter::Npm) => return Some("npm-package"),
         Some(Adapter::Cargo) => return Some("cargo-package"),
-        Some(Adapter::Go) => return Some("go-command"),
+        Some(Adapter::Go) => return Some("go-module"),
         Some(_) | None => {}
     }
     if devcontainer_detector_for(path) == Some("devcontainer-feature") {

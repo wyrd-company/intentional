@@ -897,12 +897,10 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
 /// comparison to what assembly reads is also what keeps a refusal from firing
 /// on repository state assembly never opens.
 ///
-/// The paths come from `publication_probe_paths`, beside the probes that open
-/// them, rather than from a list restated here that a later probe would leave
-/// short. Go discovery is the one read that opens files by pattern rather than
-/// by name, so its `*.go` sources are added from both sides — the release
-/// commit and the disk — and a source file present on only one of them is a
-/// difference like any other.
+/// Disk paths come from `publication_probe_paths`, beside the probes that open
+/// them. Release-only manifests are enumerated here and classified by the same
+/// predicates as discovery. Go source reads add every `*.go` path from both
+/// sides, so a source present on only one side is a difference like any other.
 fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &mut Vec<String>) {
     let mut paths = match publication_probe_paths(root, config) {
         Ok(paths) => paths,

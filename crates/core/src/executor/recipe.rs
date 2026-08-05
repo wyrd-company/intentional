@@ -729,7 +729,7 @@ pub(crate) fn publication_manifest_capability(path: &Path) -> Option<Capability>
         .find(|capability| match capability {
             Capability::NodePackage => detector == "npm-package",
             Capability::RustCrate => detector == "cargo-package",
-            Capability::GoApplication => detector == "go-command",
+            Capability::GoApplication => detector == "go-module",
             Capability::RunnableImage => detector == "docker-image",
             Capability::DevContainerFeature => detector == "devcontainer-feature",
         })
