@@ -714,11 +714,12 @@ proposed-design:
     The seam has a stated contract in both directions, and it is expressed in
     the delivery Action's own inputs. Inward, the recipe supplies the
     established package's path on the runner, its format, the package name,
-    version and architecture the release sealed, the sealed digest, and the
-    index coordinates the publication configured. These are facts about this
-    release rather than settings: the path is where the job placed the asset it
-    pulled from the draft Release, the identity is what establishment read out
-    of the package, and the digest is the one the release sealed. They occupy a
+    version the release sealed, the architecture the package declares, the
+    sealed digest, and the index coordinates the publication configured. These
+    are facts about this release rather than settings: the path is where the
+    job placed the asset it pulled from the draft Release, the identity is what
+    establishment read out of the package, and the digest is the one the
+    release sealed. They occupy a
     reserved input namespace the delivery Action declares, spelled as the
     configured job prefix in kebab case — the derivation the protected release
     environment name already uses — so a repository that renamed Intentional's
