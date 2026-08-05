@@ -200,6 +200,10 @@ fn resolve_discovery_candidates(plan: &mut InitPlan) {
             });
         candidate.resolution = Some(match release_unit {
             Some(release_unit) => CandidateResolution::Projection {
+                package: candidate
+                    .native_identity
+                    .clone()
+                    .expect("candidate package identity"),
                 release_unit,
                 target_candidate: None,
             },
@@ -243,6 +247,10 @@ fn changesets_resolution_materializes_a_devcontainer_projection() {
     for candidate in &mut plan.discovery_candidates {
         candidate.resolution = Some(CandidateResolution::Projection {
             release_unit: "sample-library".to_owned(),
+            package: candidate
+                .native_identity
+                .clone()
+                .expect("candidate package identity"),
             target_candidate: None,
         });
     }
@@ -342,6 +350,10 @@ fn repository_complete_discovery_resolves_duplicate_native_identities_before_tak
             | "fixtures/dart-copy/pubspec.yaml" => CandidateResolution::Excluded,
             _ => CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: candidate
+                    .native_identity
+                    .clone()
+                    .expect("candidate package identity"),
                 target_candidate: None,
             },
         });
@@ -426,6 +438,10 @@ fn structurally_unused_private_npm_identity_is_an_explicit_removal_choice() {
     for candidate in &mut plan.discovery_candidates {
         candidate.resolution = Some(CandidateResolution::Projection {
             release_unit: "sample-feature".to_owned(),
+            package: candidate
+                .native_identity
+                .clone()
+                .expect("candidate package identity"),
             target_candidate: None,
         });
     }
@@ -537,6 +553,10 @@ fn genuine_npm_projection_and_conflicting_proxy_evidence_do_not_recommend_remova
         };
         candidate.resolution = Some(CandidateResolution::Projection {
             release_unit: release_unit.to_owned(),
+            package: candidate
+                .native_identity
+                .clone()
+                .expect("candidate package identity"),
             target_candidate: None,
         });
     }
@@ -1199,6 +1219,7 @@ fn explicit_candidate_resolution_supplies_cross_projection_identity() {
         .expect("beta candidate");
     candidate.resolution = Some(CandidateResolution::Projection {
         release_unit: "alpha".to_owned(),
+        package: "beta".to_owned(),
         target_candidate: None,
     });
     fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolution");
@@ -1252,6 +1273,7 @@ fn ignored_projected_identity_blocks_source_parity_without_dropping_target() {
         .expect("beta candidate");
     candidate.resolution = Some(CandidateResolution::Projection {
         release_unit: "alpha".to_owned(),
+        package: "beta".to_owned(),
         target_candidate: None,
     });
     fs::write(&plan_path, plan.to_yaml().expect("resolved plan")).expect("write resolution");
@@ -1563,12 +1585,20 @@ fn design_system_topology_rehearsal_resolves_and_removes_only_the_authorized_pro
             | "packages/runtime/pub/the_wyrding_way_runtime/pubspec.yaml" => {
                 CandidateResolution::Projection {
                     release_unit: "@the-wyrding-way/runtime".to_owned(),
+                    package: candidate
+                        .native_identity
+                        .clone()
+                        .expect("candidate package identity"),
                     target_candidate: None,
                 }
             }
             "src/flutter/package.json" | "src/flutter/devcontainer-feature.json" => {
                 CandidateResolution::Projection {
                     release_unit: "flutter".to_owned(),
+                    package: candidate
+                        .native_identity
+                        .clone()
+                        .expect("candidate package identity"),
                     target_candidate: None,
                 }
             }

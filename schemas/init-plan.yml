@@ -196,17 +196,21 @@ $defs:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit ]
+        required: [ kind, release-unit, package ]
         properties:
           kind: { const: independent }
           release-unit:
             $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+          package:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit ]
+        required: [ kind, release-unit, package ]
         properties:
           kind: { const: projection }
           release-unit:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+          package:
             $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
           target-candidate:
             type: string

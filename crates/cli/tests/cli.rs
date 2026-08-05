@@ -127,6 +127,10 @@ fn initialize_independent(repo: &TestRepo) {
                 .native_identity
                 .clone()
                 .expect("fixture candidate identity"),
+            package: candidate
+                .native_identity
+                .clone()
+                .expect("fixture package identity"),
         });
     }
     fs::write(&path, plan.to_yaml().expect("resolved initialization plan"))
@@ -423,6 +427,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             } else {
                 CandidateResolution::Independent {
                     release_unit: identity.to_owned(),
+                    package: identity.to_owned(),
                 }
             }
         });
@@ -456,9 +461,11 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
             "excluded" => CandidateResolution::Excluded,
             "independent" => CandidateResolution::Independent {
                 release_unit: "sample-example".to_owned(),
+                package: "sample-example".to_owned(),
             },
             "projection" => CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-example".to_owned(),
                 target_candidate: None,
             },
             _ => unreachable!(),
@@ -661,6 +668,7 @@ fn non_semver_devcontainer_candidate_can_be_a_tag_only_independent_unit() {
 
     resolve_plan(&repo, |_| CandidateResolution::Independent {
         release_unit: "sample-feature".to_owned(),
+        package: "sample-feature".to_owned(),
     });
     repo.cli().arg("init").assert().success();
     let config = intentional_core::Config::load(&repo.root).expect("tag-only config");
@@ -694,10 +702,12 @@ fn successful_candidate_projection_init_has_no_debug_stderr() {
         candidate.resolution = Some(if candidate.detector == "npm-package" {
             CandidateResolution::Independent {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-library".to_owned(),
             }
         } else {
             CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-companion".to_owned(),
                 target_candidate: Some(creator.clone()),
             }
         });
@@ -723,6 +733,7 @@ fn devcontainer_candidates_support_every_resolution_flow() {
     independent.cli().arg("init").assert().code(2);
     resolve_plan(&independent, |_| CandidateResolution::Independent {
         release_unit: "sample-independent".to_owned(),
+        package: "sample-independent".to_owned(),
     });
     independent.cli().arg("init").assert().success();
     let config = intentional_core::Config::load(&independent.root).expect("independent config");
@@ -755,10 +766,12 @@ fn devcontainer_candidates_support_every_resolution_flow() {
         candidate.resolution = Some(if candidate.detector == "npm-package" {
             CandidateResolution::Independent {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-library".to_owned(),
             }
         } else {
             CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-feature".to_owned(),
                 target_candidate: Some(creator.clone()),
             }
         });
@@ -777,12 +790,13 @@ fn devcontainer_candidates_support_every_resolution_flow() {
     );
     configured.write(
         ".intentional/config.yml",
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n      package: sample-library\nrelease-units:\n  sample-library:\n    path: .\n    packages:\n      sample-library: { path: . }\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n",
     );
     configured.commit("add configured projection fixture");
     configured.cli().arg("init").assert().code(2);
     resolve_plan(&configured, |_| CandidateResolution::Projection {
         release_unit: "sample-library".to_owned(),
+        package: "sample-template".to_owned(),
         target_candidate: None,
     });
     configured.cli().arg("init").assert().success();
@@ -810,6 +824,7 @@ fn devcontainer_candidates_support_every_resolution_flow() {
         } else {
             CandidateResolution::Independent {
                 release_unit: identity.to_owned(),
+                package: identity.to_owned(),
             }
         }
     });
@@ -1036,6 +1051,142 @@ fn terraform_plugin_go_modules_present_as_providers() {
 }
 
 #[test]
+fn go_commands_are_package_candidates_with_clone_durable_receipts() {
+    let repo = TestRepo::new();
+    repo.write("go.mod", "module example.invalid/sample-tool\n\ngo 1.22\n");
+    repo.write("cmd/alpha/main.go", "package main\n\nfunc main() {}\n");
+    repo.write(
+        "cmd/beta/main.go",
+        "//go:build !ignored\n\npackage main // import \"example.invalid/sample-tool/cmd/beta\"\n\nfunc main() {}\n",
+    );
+    repo.write("tools/gamma/main.go", "package main\n\nfunc main() {}\n");
+    repo.write("cmd/ignored/main.go", "package main\n\nfunc main() {}\n");
+    repo.write("cmd/.cache/main.go", "package main\n\nfunc main() {}\n");
+    repo.write(
+        ".goreleaser.yaml",
+        "version: 2\nbuilds:\n  - main: ./tools/gamma\n",
+    );
+    repo.write(".gitignore", "cmd/ignored/\n");
+    repo.commit("add Go command fixtures");
+
+    repo.cli().arg("init").assert().code(2);
+    let plan_path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&plan_path).expect("Go initialization plan"))
+            .expect("valid Go initialization plan");
+    assert_eq!(
+        plan.discovery_candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.detector.as_str(),
+                    candidate.path.to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeSet<_>>(),
+        [
+            ("go-command", "cmd/alpha".to_owned()),
+            ("go-command", "cmd/beta".to_owned()),
+            ("go-command", "tools/gamma".to_owned()),
+            ("go-module", "go.mod".to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let module = plan
+        .discovery_candidates
+        .iter()
+        .find(|candidate| candidate.detector == "go-module")
+        .expect("module candidate")
+        .id
+        .clone();
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(match candidate.path.to_string_lossy().as_ref() {
+            "go.mod" => CandidateResolution::Independent {
+                release_unit: "sample-tool".to_owned(),
+                package: "module".to_owned(),
+            },
+            "cmd/alpha" => CandidateResolution::Projection {
+                release_unit: "sample-tool".to_owned(),
+                package: "alpha".to_owned(),
+                target_candidate: Some(module.clone()),
+            },
+            "cmd/beta" => CandidateResolution::Excluded,
+            "tools/gamma" => CandidateResolution::Excluded,
+            path => panic!("unexpected Go candidate {path}"),
+        });
+    }
+    fs::write(&plan_path, plan.to_yaml().expect("resolved Go plan"))
+        .expect("write resolved Go plan");
+    repo.cli().arg("init").assert().success();
+
+    let config = intentional_core::Config::load(&repo.root).expect("Go config");
+    assert_eq!(
+        config.release_units["sample-tool"]
+            .packages
+            .iter()
+            .map(|(id, package)| (id.as_str(), package.path.as_path()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("alpha", Path::new("cmd/alpha")),
+            ("module", Path::new("."))
+        ]
+    );
+    let alpha = config
+        .discovery
+        .managed_paths
+        .iter()
+        .find(|receipt| receipt.path == Path::new("cmd/alpha"))
+        .expect("alpha managed receipt");
+    assert_eq!(alpha.package, "alpha");
+    assert_eq!(
+        config
+            .discovery
+            .excluded_paths
+            .iter()
+            .map(|receipt| receipt.path.as_path())
+            .collect::<std::collections::BTreeSet<_>>(),
+        [Path::new("cmd/beta"), Path::new("tools/gamma")]
+            .into_iter()
+            .collect()
+    );
+
+    repo.commit("record Go discovery decisions");
+    let clone_root = repo.outside("fresh-clone");
+    git(
+        repo._temp.path(),
+        &[
+            "clone",
+            "-q",
+            repo.root.to_str().expect("repository path"),
+            clone_root.to_str().expect("clone path"),
+        ],
+    );
+    assert!(!clone_root.join(".intentional/init-plan.yml").exists());
+    assert!(initialize(&clone_root, false)
+        .expect("fresh clone discovery")
+        .operations
+        .is_empty());
+
+    fs::write(
+        clone_root.join("cmd/beta/main.go"),
+        "package main\n\nfunc main() { println(\"changed\") }\n",
+    )
+    .expect("change excluded command");
+    assert_eq!(
+        initialize(&clone_root, false)
+            .expect("changed command discovery")
+            .plan
+            .expect("changed command plan")
+            .discovery_candidates
+            .iter()
+            .map(|candidate| candidate.path.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["cmd/beta".to_owned()]
+    );
+}
+
+#[test]
 fn tag_only_candidates_support_every_resolution_flow() {
     let repo = TestRepo::new();
     repo.write("package.json", &npm_manifest("1.0.0"));
@@ -1059,15 +1210,24 @@ fn tag_only_candidates_support_every_resolution_flow() {
         candidate.resolution = Some(match candidate.native_identity.as_deref() {
             _ if candidate.detector == "npm-package" => CandidateResolution::Independent {
                 release_unit: "sample-library".to_owned(),
+                package: "sample-library".to_owned(),
             },
             Some("publish" | "runtime" | "network") => CandidateResolution::Independent {
                 release_unit: candidate
                     .native_identity
                     .clone()
                     .expect("path-derived identity"),
+                package: candidate
+                    .native_identity
+                    .clone()
+                    .expect("path-derived package identity"),
             },
             Some("verify" | "toolchain") => CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: candidate
+                    .native_identity
+                    .clone()
+                    .expect("path-derived package identity"),
                 target_candidate: Some(creator.clone()),
             },
             _ => CandidateResolution::Excluded,
@@ -1178,6 +1338,7 @@ fn terraform_module_receipts_key_on_the_directory_not_its_contents() {
         } else {
             CandidateResolution::Independent {
                 release_unit: identity.to_owned(),
+                package: identity.to_owned(),
             }
         }
     });
@@ -1271,6 +1432,7 @@ fn a_root_terraform_module_is_one_workspace_root_candidate() {
     let mut plan = plan;
     plan.discovery_candidates[0].resolution = Some(CandidateResolution::Independent {
         release_unit: "root-network".to_owned(),
+        package: "root-network".to_owned(),
     });
     fs::create_dir_all(plan_path.parent().expect("plan directory")).expect("plan directory");
     fs::write(&plan_path, plan.to_yaml().expect("resolved root plan")).expect("write root plan");
@@ -1358,6 +1520,7 @@ fn tag_only_release_units_require_explicit_baseline_versions() {
     repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |identity| CandidateResolution::Independent {
         release_unit: identity.to_owned(),
+        package: identity.to_owned(),
     });
     repo.cli().arg("init").assert().success();
     repo.commit("adopt Intentional");
@@ -1392,6 +1555,7 @@ fn repeatable_init_consumes_a_stale_plan_after_the_candidate_closes() {
         } else {
             CandidateResolution::Independent {
                 release_unit: identity.to_owned(),
+                package: identity.to_owned(),
             }
         }
     });
@@ -1430,7 +1594,7 @@ fn candidate_resolution_preserves_configured_cross_ecosystem_dependencies() {
     );
     repo.write(
         ".intentional/config.yml",
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n    - detector: cargo-package\n      path: components/rust/Cargo.toml\n      release-unit: sample-rust\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-library@{version}'\n    depends-on: [ sample-rust ]\n  sample-rust:\n    path: components/rust\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-rust@{version}'\n",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n      package: sample-library\n    - detector: cargo-package\n      path: components/rust/Cargo.toml\n      release-unit: sample-rust\n      package: sample-rust\nrelease-units:\n  sample-library:\n    path: .\n    packages:\n      sample-library: { path: . }\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-library@{version}'\n    depends-on: [ sample-rust ]\n  sample-rust:\n    path: components/rust\n    packages:\n      sample-rust: { path: . }\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-rust@{version}'\n",
     );
     repo.commit("add configured dependency fixture");
 
@@ -1461,6 +1625,7 @@ fn candidate_resolution_removes_stale_manifest_owned_npm_dependencies() {
     repo.cli().arg("init").assert().code(2);
     resolve_plan(&repo, |identity| CandidateResolution::Independent {
         release_unit: identity.to_owned(),
+        package: identity.to_owned(),
     });
     repo.cli().arg("init").assert().success();
     let initial = intentional_core::Config::load(&repo.root).expect("initial config");

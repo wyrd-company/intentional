@@ -324,9 +324,12 @@ in their own files and take their version authority from a canonical Git tag:
 | Terraform module | `terraform-module` | a directory holding `.tf` files, keyed on the directory |
 | Terraform provider | `terraform-provider` | `go.mod` with a direct `require` on a Terraform plugin module |
 | Docker/OCI image | `docker-image` | `Dockerfile`, `Dockerfile.*`, or `*.Dockerfile` |
+| Go command | `go-command` | directory containing files that declare `package main` |
 
 Each candidate contains source evidence, extracted identity and version when
 available, and only the projection or tag suggestions supported by that
 evidence. Set its `resolution` to `independent`, `projection`, or `excluded`,
-then rerun `init`. Managed and excluded receipts let later runs distinguish
-unchanged evidence from a manifest that needs a new decision.
+then rerun `init`. Accepted resolutions name both `release-unit` and `package`.
+Managed receipts retain that package ownership. Excluded receipts retain the
+exact evidence digest, so an unchanged declined command stays declined in a
+fresh clone and a changed command returns for a new decision.

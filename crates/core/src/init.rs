@@ -7,8 +7,8 @@
 
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
-    Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
+    Config, ExcludedPathReceipt, ManagedPathReceipt, PackageConfig, Projection, ReleaseUnitConfig,
+    TagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -157,11 +157,15 @@ pub enum CandidateResolution {
     Independent {
         /// Stable id for the new release unit.
         release_unit: String,
+        /// Stable id for the package that owns the accepted path.
+        package: String,
     },
     /// Add this candidate as a projection of a release unit.
     Projection {
         /// Final configured or planned release-unit id.
         release_unit: String,
+        /// Stable id for the package that owns the accepted path.
+        package: String,
         /// Planned candidate to follow; omitted when the release unit is already configured.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_candidate: Option<String>,
@@ -607,10 +611,21 @@ impl InitPlan {
             .map(|id| (id.as_str(), "configured release unit"))
             .collect::<BTreeMap<_, _>>();
         let mut edges = BTreeMap::<&str, &str>::new();
+        let mut packages = BTreeMap::<(&str, &str), (&str, PathBuf)>::new();
         for candidate in &self.discovery_candidates {
             match &candidate.resolution {
-                Some(CandidateResolution::Independent { release_unit }) => {
+                Some(CandidateResolution::Independent {
+                    release_unit,
+                    package,
+                }) => {
                     validate_resolution_release_unit(release_unit)?;
+                    validate_resolution_package(package)?;
+                    validate_candidate_package_claim(
+                        &mut packages,
+                        candidate,
+                        release_unit,
+                        package,
+                    )?;
                     if let Some(previous) = creators.insert(release_unit, candidate.id.as_str()) {
                         return Err(Error::Validation(format!(
                             "duplicate creator for release unit {release_unit}: {previous} and {}",
@@ -620,9 +635,17 @@ impl InitPlan {
                 }
                 Some(CandidateResolution::Projection {
                     release_unit,
+                    package,
                     target_candidate,
                 }) => {
                     validate_resolution_release_unit(release_unit)?;
+                    validate_resolution_package(package)?;
+                    validate_candidate_package_claim(
+                        &mut packages,
+                        candidate,
+                        release_unit,
+                        package,
+                    )?;
                     if let Some(target) = target_candidate {
                         if !candidates.contains_key(target.as_str()) {
                             return Err(Error::Validation(format!(
@@ -651,6 +674,7 @@ impl InitPlan {
             let Some(CandidateResolution::Projection {
                 release_unit,
                 target_candidate: Some(target),
+                ..
             }) = &candidate.resolution
             else {
                 continue;
@@ -722,6 +746,34 @@ fn validate_resolution_release_unit(id: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_resolution_package(id: &str) -> Result<()> {
+    validate_resolution_release_unit(id)
+        .map_err(|_| Error::Validation(format!("invalid candidate resolution package id {id:?}")))
+}
+
+fn validate_candidate_package_claim<'a>(
+    packages: &mut BTreeMap<(&'a str, &'a str), (&'a str, PathBuf)>,
+    candidate: &'a DiscoveryCandidate,
+    release_unit: &'a str,
+    package: &'a str,
+) -> Result<()> {
+    let path = candidate_directory(candidate);
+    if let Some((previous, previous_path)) = packages.insert(
+        (release_unit, package),
+        (candidate.id.as_str(), path.clone()),
+    ) {
+        if previous_path != path {
+            return Err(Error::Validation(format!(
+                "release unit {release_unit} package {package} is claimed by discovery candidates {previous} at {} and {} at {}",
+                previous_path.display(),
+                candidate.id,
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_candidate_graph_acyclic(edges: &BTreeMap<&str, &str>) -> Result<()> {
     fn visit<'a>(
         id: &'a str,
@@ -763,6 +815,7 @@ fn validate_projection_target(
     match &target.resolution {
         Some(CandidateResolution::Independent {
             release_unit: target_release_unit,
+            package: _,
         }) => {
             if target_release_unit != release_unit {
                 return Err(Error::Validation(format!(
@@ -774,6 +827,7 @@ fn validate_projection_target(
         }
         Some(CandidateResolution::Projection {
             release_unit: _,
+            package: _,
             target_candidate: _,
         }) => Err(Error::Validation(format!(
             "discovery candidate {} projects onto target {} that is not an independent creator",
@@ -1143,7 +1197,10 @@ fn apply_candidate_resolutions(
     });
 
     for candidate in candidates {
-        let CandidateResolution::Independent { release_unit } = candidate
+        let CandidateResolution::Independent {
+            release_unit,
+            package: _,
+        } = candidate
             .resolution
             .as_ref()
             .expect("all candidate resolutions checked")
@@ -1183,14 +1240,23 @@ fn apply_candidate_resolutions(
             .as_ref()
             .expect("all candidate resolutions checked")
         {
-            CandidateResolution::Independent { release_unit } => {
+            CandidateResolution::Independent {
+                release_unit,
+                package,
+            } => {
+                add_candidate_package(&mut config, candidate, release_unit, package)?;
                 config.discovery.managed_paths.push(ManagedPathReceipt {
                     detector: candidate.detector.clone(),
                     path: candidate.path.clone(),
                     release_unit: release_unit.clone(),
+                    package: package.clone(),
                 });
             }
-            CandidateResolution::Projection { release_unit, .. } => {
+            CandidateResolution::Projection {
+                release_unit,
+                package,
+                ..
+            } => {
                 let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
                     Error::Validation(format!(
                         "discovery candidate {} projects onto absent release unit {release_unit}",
@@ -1205,10 +1271,12 @@ fn apply_candidate_resolutions(
                         unit.projections.push(projection);
                     }
                 }
+                add_candidate_package(&mut config, candidate, release_unit, package)?;
                 config.discovery.managed_paths.push(ManagedPathReceipt {
                     detector: candidate.detector.clone(),
                     path: candidate.path.clone(),
                     release_unit: release_unit.clone(),
+                    package: package.clone(),
                 });
             }
             CandidateResolution::Excluded => {
@@ -1277,6 +1345,51 @@ fn apply_candidate_resolutions(
     Ok(config)
 }
 
+fn add_candidate_package(
+    config: &mut Config,
+    candidate: &DiscoveryCandidate,
+    release_unit: &str,
+    package: &str,
+) -> Result<()> {
+    let unit = config.release_units.get_mut(release_unit).ok_or_else(|| {
+        Error::Validation(format!(
+            "discovery candidate {} resolves to absent release unit {release_unit}",
+            candidate.id
+        ))
+    })?;
+    let candidate_path = candidate_directory(candidate);
+    let package_path = if unit.path == Path::new(".") {
+        candidate_path.as_path()
+    } else {
+        candidate_path.strip_prefix(&unit.path).map_err(|_| {
+            Error::Validation(format!(
+                "discovery candidate {} at {} is outside release unit {release_unit} at {}",
+                candidate.id,
+                candidate.path.display(),
+                unit.path.display()
+            ))
+        })?
+    };
+    let package_path = if package_path.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        package_path.to_owned()
+    };
+    if let Some(existing) = unit.packages.get(package) {
+        if existing.path != package_path {
+            return Err(Error::Validation(format!(
+                "release unit {release_unit} package {package} resolves both {} and {}",
+                existing.path.display(),
+                package_path.display()
+            )));
+        }
+    } else {
+        unit.packages
+            .insert(package.to_owned(), PackageConfig::new(package_path));
+    }
+    Ok(())
+}
+
 fn candidate_projection(candidate: &DiscoveryCandidate, unit_path: &Path) -> Result<Projection> {
     let suggestion = candidate.projection.as_ref().ok_or_else(|| {
         Error::Validation(format!(
@@ -1317,7 +1430,11 @@ fn apply_changesets_candidate_resolutions(
     for candidate in candidates {
         match &candidate.resolution {
             None => {}
-            Some(CandidateResolution::Projection { release_unit, .. }) => {
+            Some(CandidateResolution::Projection {
+                release_unit,
+                package,
+                ..
+            }) => {
                 let projection_owner =
                     candidate_projection_owner(&discovery.config, candidate).map(str::to_owned);
                 let Some(target) = discovery.config.release_units.get(release_unit) else {
@@ -1383,6 +1500,7 @@ fn apply_changesets_candidate_resolutions(
                         }
                     }
                 }
+                add_candidate_package(&mut discovery.config, candidate, release_unit, package)?;
                 discovery
                     .config
                     .discovery
@@ -1391,6 +1509,7 @@ fn apply_changesets_candidate_resolutions(
                         detector: candidate.detector.clone(),
                         path: candidate.path.clone(),
                         release_unit: release_unit.clone(),
+                        package: package.clone(),
                     });
             }
             Some(CandidateResolution::Excluded) => {
@@ -1427,7 +1546,7 @@ fn apply_changesets_candidate_resolutions(
                         evidence_digest: digest,
                     });
             }
-            Some(CandidateResolution::Independent { release_unit }) => {
+            Some(CandidateResolution::Independent { release_unit, .. }) => {
                 return Err(Error::Validation(format!(
                     "Changesets already establishes release unit {release_unit}; candidate {} must project onto it or be excluded",
                     candidate.id
@@ -1509,7 +1628,7 @@ fn recompute_resolved_versions(
         };
         let release_unit = match candidate.resolution.as_ref() {
             Some(CandidateResolution::Projection { release_unit, .. })
-            | Some(CandidateResolution::Independent { release_unit }) => release_unit,
+            | Some(CandidateResolution::Independent { release_unit, .. }) => release_unit,
             Some(CandidateResolution::Excluded) => continue,
             None => {
                 unresolved.insert(native_identity.clone());
@@ -2169,6 +2288,24 @@ fn discover(root: &Path) -> Result<Discovery> {
         discovery
             .evidence
             .insert(path.strip_prefix(root).unwrap_or(&path).to_owned());
+        if adapter == Adapter::Go {
+            let module_directory = path.parent().unwrap_or(root);
+            let mut commands =
+                crate::executor::recipe::go_main_package_directories(module_directory)?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>();
+            remove_git_ignored(root, &mut commands)?;
+            for command in commands {
+                if hard_excluded(root, &command) {
+                    continue;
+                }
+                let command = go_command_candidate(root, &command, &relative_manifest)?;
+                for item in &command.evidence {
+                    discovery.evidence.insert(item.path.clone());
+                }
+                discovery.candidates.push(command);
+            }
+        }
     }
     for (directory, sources) in terraform_sources {
         let candidate = terraform_module_candidate(root, &directory, &sources)?;
@@ -2744,9 +2881,62 @@ fn directory_digest(members: &[SourceEvidence]) -> String {
     format!("sha256:{:x}", identity.finalize())
 }
 
+fn go_command_candidate(
+    root: &Path,
+    directory: &Path,
+    module_manifest: &Path,
+) -> Result<DiscoveryCandidate> {
+    let relative = workspace_relative(root, directory)?;
+    let mut source_paths = Vec::new();
+    for entry in std::fs::read_dir(directory).map_err(|error| Error::io(directory, error))? {
+        let path = entry.map_err(|error| Error::io(directory, error))?.path();
+        if path.extension().is_some_and(|extension| extension == "go") {
+            source_paths.push(path);
+        }
+    }
+    source_paths.sort();
+    let members = source_paths
+        .iter()
+        .map(|path| evidence(root, &workspace_relative(root, path)?, Vec::new()))
+        .collect::<Result<Vec<_>>>()?;
+    let directory_evidence = SourceEvidence {
+        path: relative.clone(),
+        digest: directory_digest(&members),
+        lines: Vec::new(),
+    };
+    let native_identity = relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(usable_identity);
+    let diagnostics = match native_identity {
+        Some(_) => Vec::new(),
+        None => vec![identity_not_path_derivable(
+            "go-command",
+            &relative,
+            &directory_evidence,
+        )],
+    };
+    let mut evidence_items = vec![directory_evidence];
+    evidence_items.extend(members);
+    evidence_items.push(evidence(root, module_manifest, Vec::new())?);
+    evidence_items.sort();
+    Ok(DiscoveryCandidate {
+        id: DiscoveryCandidate::stable_id("go-command", &relative)?,
+        detector: "go-command".to_owned(),
+        path: relative,
+        evidence: evidence_items,
+        native_identity,
+        raw_version: None,
+        projection: None,
+        tag: None,
+        diagnostics,
+        resolution: None,
+    })
+}
+
 /// Report whether a detector identifies a directory rather than a single file.
 fn directory_scoped_detector(detector: &str) -> bool {
-    detector == TagOnlyArtifact::TerraformSource.detector()
+    detector == TagOnlyArtifact::TerraformSource.detector() || detector == "go-command"
 }
 
 /// Resolve the workspace-relative directory a candidate contributes to its release unit.
@@ -4764,29 +4954,33 @@ mod tests {
 
     #[test]
     fn candidate_resolution_uses_only_documented_kebab_case_fields() {
-        let independent: CandidateResolution =
-            serde_yaml::from_str("kind: independent\nrelease-unit: sample-library\n")
-                .expect("documented independent resolution");
+        let independent: CandidateResolution = serde_yaml::from_str(
+            "kind: independent\nrelease-unit: sample-library\npackage: library\n",
+        )
+        .expect("documented independent resolution");
         assert_eq!(
             independent,
             CandidateResolution::Independent {
                 release_unit: "sample-library".to_owned(),
+                package: "library".to_owned(),
             }
         );
 
         let projection: CandidateResolution = serde_yaml::from_str(
-            "kind: projection\nrelease-unit: sample-library\ntarget-candidate: candidate:1234\n",
+            "kind: projection\nrelease-unit: sample-library\npackage: library\ntarget-candidate: candidate:1234\n",
         )
         .expect("documented projection resolution");
         assert_eq!(
             projection,
             CandidateResolution::Projection {
                 release_unit: "sample-library".to_owned(),
+                package: "library".to_owned(),
                 target_candidate: Some("candidate:1234".to_owned()),
             }
         );
         let rendered = serde_yaml::to_string(&projection).expect("canonical resolution YAML");
         assert!(rendered.contains("release-unit: sample-library"));
+        assert!(rendered.contains("package: library"));
         assert!(rendered.contains("target-candidate: candidate:1234"));
         assert!(!rendered.contains("release_unit"));
         assert!(!rendered.contains("target_candidate"));
@@ -4797,6 +4991,13 @@ mod tests {
         ] {
             serde_yaml::from_str::<CandidateResolution>(undocumented)
                 .expect_err("undocumented snake-case field");
+        }
+        for missing_package in [
+            "kind: independent\nrelease-unit: sample-library\n",
+            "kind: projection\nrelease-unit: sample-library\n",
+        ] {
+            serde_yaml::from_str::<CandidateResolution>(missing_package)
+                .expect_err("accepted resolution without package ownership");
         }
     }
 
@@ -4929,6 +5130,7 @@ release-units:
             "examples/first.json",
             Some(CandidateResolution::Independent {
                 release_unit: "sample-unit".to_owned(),
+                package: "sample-package".to_owned(),
             }),
         );
         let second = candidate("examples/second.json", Some(CandidateResolution::Excluded));
@@ -5005,6 +5207,7 @@ release-units:
                 "examples/sample.json",
                 Some(CandidateResolution::Projection {
                     release_unit: "configured".to_owned(),
+                    package: "sample-package".to_owned(),
                     target_candidate: None,
                 }),
             );
@@ -5037,6 +5240,7 @@ release-units:
             "examples/first.json",
             Some(CandidateResolution::Projection {
                 release_unit: "configured".to_owned(),
+                package: "first".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5045,6 +5249,7 @@ release-units:
             "examples/second.json",
             Some(CandidateResolution::Projection {
                 release_unit: "configured".to_owned(),
+                package: "second".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5086,6 +5291,7 @@ release-units:
             "examples/shared.json",
             Some(CandidateResolution::Projection {
                 release_unit: "alpha".to_owned(),
+                package: "shared".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5194,6 +5400,16 @@ release-units:
             kinds,
             BTreeSet::from(["excluded", "independent", "projection"])
         );
+        for variant in variants
+            .iter()
+            .filter(|variant| variant["properties"]["kind"]["const"].as_str() != Some("excluded"))
+        {
+            assert!(variant["required"]
+                .as_sequence()
+                .expect("accepted resolution required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("package")));
+        }
         assert_eq!(
             schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
                 ["pattern"]
@@ -5210,6 +5426,7 @@ release-units:
             "examples/configured.json",
             Some(CandidateResolution::Projection {
                 release_unit: "configured".to_owned(),
+                package: "configured".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5217,12 +5434,14 @@ release-units:
             "examples/independent.json",
             Some(CandidateResolution::Independent {
                 release_unit: "planned".to_owned(),
+                package: "independent".to_owned(),
             }),
         );
         let projection = candidate(
             "examples/projection.json",
             Some(CandidateResolution::Projection {
                 release_unit: "planned".to_owned(),
+                package: "projection".to_owned(),
                 target_candidate: Some(independent.id.clone()),
             }),
         );
@@ -5238,6 +5457,7 @@ release-units:
             "configured/metadata.json",
             Some(CandidateResolution::Projection {
                 release_unit: "configured".to_owned(),
+                package: "metadata".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5291,12 +5511,14 @@ release-units:
             "examples/first.json",
             Some(CandidateResolution::Independent {
                 release_unit: "duplicate".to_owned(),
+                package: "first".to_owned(),
             }),
         );
         let second = candidate(
             "examples/second.json",
             Some(CandidateResolution::Independent {
                 release_unit: "duplicate".to_owned(),
+                package: "second".to_owned(),
             }),
         );
         assert!(candidate_plan(vec![first, second])
@@ -5309,6 +5531,7 @@ release-units:
             "examples/absent.json",
             Some(CandidateResolution::Projection {
                 release_unit: "missing".to_owned(),
+                package: "absent".to_owned(),
                 target_candidate: None,
             }),
         );
@@ -5320,15 +5543,45 @@ release-units:
     }
 
     #[test]
+    fn rejects_one_package_identity_claiming_distinct_candidate_paths() {
+        let first = candidate(
+            "examples/first.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                package: "shared".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        let second = candidate(
+            "other/second.json",
+            Some(CandidateResolution::Projection {
+                release_unit: "configured".to_owned(),
+                package: "shared".to_owned(),
+                target_candidate: None,
+            }),
+        );
+        let error = candidate_plan(vec![first, second])
+            .validate()
+            .expect_err("one package cannot claim distinct paths");
+        assert!(error
+            .to_string()
+            .contains("package shared is claimed by discovery candidates"));
+        assert!(error.to_string().contains("examples"));
+        assert!(error.to_string().contains("other"));
+    }
+
+    #[test]
     fn rejects_projection_cycles_and_release_unit_mismatches() {
         let mut first = candidate("examples/first.json", None);
         let mut second = candidate("examples/second.json", None);
         first.resolution = Some(CandidateResolution::Projection {
             release_unit: "planned".to_owned(),
+            package: "first".to_owned(),
             target_candidate: Some(second.id.clone()),
         });
         second.resolution = Some(CandidateResolution::Projection {
             release_unit: "planned".to_owned(),
+            package: "second".to_owned(),
             target_candidate: Some(first.id.clone()),
         });
         assert!(candidate_plan(vec![first, second])
@@ -5341,12 +5594,14 @@ release-units:
             "examples/independent.json",
             Some(CandidateResolution::Independent {
                 release_unit: "planned".to_owned(),
+                package: "independent".to_owned(),
             }),
         );
         let mismatched = candidate(
             "examples/mismatched.json",
             Some(CandidateResolution::Projection {
                 release_unit: "other".to_owned(),
+                package: "mismatched".to_owned(),
                 target_candidate: Some(independent.id.clone()),
             }),
         );
@@ -5360,12 +5615,14 @@ release-units:
             "examples/independent.json",
             Some(CandidateResolution::Independent {
                 release_unit: "planned".to_owned(),
+                package: "independent".to_owned(),
             }),
         );
         let intermediate = candidate(
             "examples/intermediate.json",
             Some(CandidateResolution::Projection {
                 release_unit: "planned".to_owned(),
+                package: "intermediate".to_owned(),
                 target_candidate: Some(independent.id.clone()),
             }),
         );
@@ -5373,6 +5630,7 @@ release-units:
             "examples/chained.json",
             Some(CandidateResolution::Projection {
                 release_unit: "planned".to_owned(),
+                package: "chained".to_owned(),
                 target_candidate: Some(intermediate.id.clone()),
             }),
         );

@@ -13,6 +13,9 @@ description: >-
 
   The plan is bound to the discovered source state by a SHA-256 fingerprint.
   Candidate evidence uses exact workspace-relative paths and content digests.
+  Accepted resolutions name both the release unit that versions the artifact
+  and the package that owns its packaging boundary. Go discovery emits a module
+  candidate plus one directory-scoped candidate for every detected command.
   A plan in `needs-input` state carries unresolved choices; a plan in `ready`
   state contains the resolutions required for deterministic application.
   Intentional revalidates the source fingerprint, evidence, resolutions, and
@@ -21,5 +24,6 @@ validation-criteria: >-
   A plan conforms when it validates against `init-plan.json-schema.yml`, parses
   as Intentional's initialization-plan model, and passes source and resolution
   validation. Core and CLI tests cover YAML and JSON serialization, discovery
-  candidate variants, diagnostics, invalidated evidence, stale source
-  fingerprints, ready-state application, and Changesets authority transfer.
+  candidate variants, package-owned managed receipts, clone-durable declined
+  command receipts, invalidated evidence, stale source fingerprints,
+  ready-state application, and Changesets authority transfer.

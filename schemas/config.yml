@@ -119,13 +119,16 @@ $defs:
         items:
           type: object
           additionalProperties: false
-          required: [ detector, path, release-unit ]
+          required: [ detector, path, release-unit, package ]
           properties:
             detector:
               $ref: "#/$defs/detector-id"
             path:
               $ref: "#/$defs/exact-path"
             release-unit:
+              type: string
+              minLength: 1
+            package:
               type: string
               minLength: 1
       excluded-paths:

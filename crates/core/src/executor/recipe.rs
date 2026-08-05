@@ -942,12 +942,20 @@ const COMMAND_SEARCH_DEPTH: usize = 3;
 /// capability was withheld has to be reportable: a `go.mod` with no discoverable
 /// command is a diagnosable configuration, not an absent Go module.
 fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
-    for root in command_search_roots(directory)? {
-        if declares_main_package(&root)? {
-            return Ok(Some(root));
-        }
-    }
-    Ok(None)
+    Ok(go_main_package_directories(directory)?.into_iter().next())
+}
+
+/// Every discoverable main-package directory in one Go module.
+pub(crate) fn go_main_package_directories(directory: &Path) -> Result<Vec<PathBuf>> {
+    command_search_roots(directory)?
+        .into_iter()
+        .filter(|root| root.starts_with(directory))
+        .filter_map(|root| match declares_main_package(&root) {
+            Ok(true) => Some(Ok(root)),
+            Ok(false) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
 }
 
 /// Every directory the main package could be discovered in, in priority order.

@@ -93,7 +93,7 @@ impl DiscoveryConfig {
     }
 }
 
-/// Receipt connecting one detector/path identity to a configured release unit.
+/// Receipt connecting one detector/path identity to a configured package.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ManagedPathReceipt {
@@ -103,6 +103,8 @@ pub struct ManagedPathReceipt {
     pub path: PathBuf,
     /// Configured release unit that owns the candidate projection.
     pub release_unit: String,
+    /// Configured package that owns the accepted path.
+    pub package: String,
 }
 
 /// Receipt excluding one detector/path identity while its evidence is unchanged.
@@ -915,6 +917,18 @@ impl Config {
                     receipt.release_unit
                 )));
             }
+            validate_id(&receipt.package, "managed discovery package")?;
+            if !self.release_units[&receipt.release_unit]
+                .packages
+                .contains_key(&receipt.package)
+            {
+                return Err(Error::Validation(format!(
+                    "managed discovery path {} references unknown package {} in release unit {}",
+                    receipt.path.display(),
+                    receipt.package,
+                    receipt.release_unit
+                )));
+            }
             if !identities.insert((&receipt.detector, &receipt.path)) {
                 return Err(Error::Validation(format!(
                     "duplicate discovery receipt for detector {} at {}",
@@ -1447,7 +1461,11 @@ release-units:
     fn validates_managed_and_exact_excluded_discovery_receipts() {
         let receipts = VALID.replace(
             "release-units:\n",
-            "discovery:\n  managed-paths:\n    - detector: npm-package\n      path: packages/library/package.json\n      release-unit: library\n  excluded-paths:\n    - detector: npm-package\n      path: examples/package.json\n      evidence-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\nrelease-units:\n",
+            "discovery:\n  managed-paths:\n    - detector: npm-package\n      path: packages/library/package.json\n      release-unit: library\n      package: library\n  excluded-paths:\n    - detector: npm-package\n      path: examples/package.json\n      evidence-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\nrelease-units:\n",
+        );
+        let receipts = receipts.replace(
+            "    projections:\n",
+            "    packages:\n      library: { path: . }\n    projections:\n",
         );
         let config = Config::from_yaml(&receipts).expect("discovery receipts accepted");
         assert_eq!(config.discovery.managed_paths.len(), 1);
@@ -1458,6 +1476,12 @@ release-units:
             .expect_err("unknown managed target rejected")
             .to_string()
             .contains("unknown release unit missing"));
+
+        let unknown_package = receipts.replace("package: library", "package: missing");
+        assert!(Config::from_yaml(&unknown_package)
+            .expect_err("unknown managed package rejected")
+            .to_string()
+            .contains("unknown package missing in release unit library"));
 
         let glob = receipts.replace("examples/package.json", "examples/*.json");
         assert!(Config::from_yaml(&glob)
@@ -1517,7 +1541,12 @@ release-units:
                 .as_sequence()
                 .expect("managed receipt required fields")
                 .len(),
-            3
+            4
+        );
+        assert_eq!(
+            discovery["properties"]["managed-paths"]["items"]["properties"]["package"]["minLength"]
+                .as_u64(),
+            Some(1)
         );
         assert_eq!(
             discovery["properties"]["excluded-paths"]["items"]["properties"]["evidence-digest"]
