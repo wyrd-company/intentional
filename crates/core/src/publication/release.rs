@@ -1200,7 +1200,7 @@ pub(crate) mod tests {
     const DELIVERABLE: &[u8] = b"component deliverable bytes";
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1214,8 +1214,11 @@ workspace-tags:
 release-units:
   component:
     path: component
-    homebrew:
-      repository: example-owner/homebrew-example
+    packages:
+      package:
+        path: .
+        homebrew:
+          repository: example-owner/homebrew-example
     tags:
       primary:
         role: primary
@@ -1225,7 +1228,7 @@ release-units:
 
     /// A workspace whose after-publication tag template carries a glob character.
     const GLOB_TAG_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1239,8 +1242,11 @@ workspace-tags:
 release-units:
   component:
     path: component
-    homebrew:
-      repository: example-owner/homebrew-component
+    packages:
+      package:
+        path: .
+        homebrew:
+          repository: example-owner/homebrew-component
     tags:
       primary:
         role: primary
@@ -1250,7 +1256,7 @@ release-units:
 
     /// A workspace whose two release units each seal their own intent.
     const TWO_UNIT_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1261,8 +1267,11 @@ workspace-tags:
 release-units:
   component:
     path: component
-    homebrew:
-      repository: example-owner/homebrew-component
+    packages:
+      package:
+        path: .
+        homebrew:
+          repository: example-owner/homebrew-component
     tags:
       primary:
         role: primary
@@ -1270,8 +1279,11 @@ release-units:
         require-phase: before-publication
   library:
     path: library
-    homebrew:
-      repository: example-owner/homebrew-library
+    packages:
+      package:
+        path: .
+        homebrew:
+          repository: example-owner/homebrew-library
     tags:
       primary:
         role: primary

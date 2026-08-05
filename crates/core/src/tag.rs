@@ -5,7 +5,7 @@
 
 //! Annotated release records and baseline establishment.
 
-use crate::config::Config;
+use crate::config::{supports_interpretation_contract, Config};
 use crate::error::{Error, Result};
 use crate::evidence::assemble::{IntendedDestination, PublisherEvidence};
 use crate::evidence::phase::{self, PhaseBindings, PHASE_EVIDENCE_FIELD};
@@ -611,7 +611,10 @@ fn existing_head_release_digest(
             continue;
         };
         let relevant = record.target == head
-            && record.fields.get("contract") == Some(&config.contract)
+            && record
+                .fields
+                .get("contract")
+                .is_some_and(|contract| supports_interpretation_contract(contract))
             && record.fields.get("baseline").map(String::as_str) == Some("false")
             && record
                 .fields
@@ -671,10 +674,10 @@ fn supplied_release_plan(
     let plan: ReleasePlan = serde_json::from_str(&text)
         .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
     plan.verify_digest()?;
-    if plan.contract != config.contract {
+    if !supports_interpretation_contract(&plan.contract) {
         return Err(Error::Validation(format!(
-            "release plan contract {} does not match workspace {}",
-            plan.contract, config.contract
+            "release plan names unsupported interpretation contract {}",
+            plan.contract
         )));
     }
     verify_plan_generator(&plan.generator)?;
@@ -744,7 +747,7 @@ fn collect_existing_digest(
     name: &str,
     expected_id: &str,
     expected_version: &str,
-    expected_contract: &str,
+    _expected_contract: &str,
     expected_target: gix::ObjectId,
     expected_baseline: bool,
     digest: &mut Option<String>,
@@ -756,7 +759,6 @@ fn collect_existing_digest(
     for (field, expected) in [
         ("tag-id", expected_id),
         ("version", expected_version),
-        ("contract", expected_contract),
         ("baseline", expected_baseline.as_str()),
     ] {
         if record.fields.get(field).map(String::as_str) != Some(expected) {
@@ -764,6 +766,15 @@ fn collect_existing_digest(
                 "release tag {name} has unexpected {field}"
             )));
         }
+    }
+    if !record
+        .fields
+        .get("contract")
+        .is_some_and(|contract| supports_interpretation_contract(contract))
+    {
+        return Err(Error::Validation(format!(
+            "release tag {name} has unexpected contract"
+        )));
     }
     if record.target != expected_target {
         return Err(Error::Validation(format!(
@@ -1040,13 +1051,21 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
                 Config::release_unit_tag_id(release_unit_id, primary_id),
             ),
             ("version", version.to_string()),
-            ("contract", config.contract.clone()),
         ] {
             if primary_record.fields.get(field) != Some(&expected) {
                 issues.push(format!(
                     "release unit {release_unit_id} primary tag {primary_name} has unexpected {field}"
                 ));
             }
+        }
+        if !primary_record
+            .fields
+            .get("contract")
+            .is_some_and(|contract| supports_interpretation_contract(contract))
+        {
+            issues.push(format!(
+                "release unit {release_unit_id} primary tag {primary_name} has unexpected contract"
+            ));
         }
         for (tag_id, tag) in &release_unit.tags {
             let name = render_tag(&tag.template, release_unit_id, &version.to_string());
@@ -1412,7 +1431,7 @@ mod tests {
         "sha256:5555555555555555555555555555555555555555555555555555555555555555";
 
     const PHASE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1422,7 +1441,10 @@ workspace-tags:
 release-units:
   component:
     path: component
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     tags:
       primary: { role: primary, template: '{id}@{version}' }
       staged:
@@ -1708,7 +1730,7 @@ phase-tags: []
                 ".intentional/config.yml",
                 &PHASE_CONFIG.replace(
                     "release-units:\n",
-                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
                 ),
             )
             .write(
@@ -1792,7 +1814,7 @@ phase-tags: []
                 ".intentional/config.yml",
                 &PHASE_CONFIG.replace(
                     "release-units:\n",
-                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
                 ),
             )
             .write(

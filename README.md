@@ -95,7 +95,7 @@ applied.
 
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility

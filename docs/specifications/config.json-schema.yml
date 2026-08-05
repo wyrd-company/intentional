@@ -15,7 +15,7 @@ properties:
     type: string
     format: uri
   contract:
-    const: contract-1
+    const: contract-2
   settings:
     type: object
     additionalProperties: false
@@ -163,11 +163,23 @@ $defs:
         uniqueItems: true
         items:
           type: string
+      packages:
+        type: object
+        additionalProperties:
+          $ref: "#/$defs/package"
       tags:
         type: object
         minProperties: 1
         additionalProperties:
           $ref: "#/$defs/release-unit-tag"
+  package:
+    type: object
+    additionalProperties: false
+    required: [ path ]
+    properties:
+      path:
+        type: string
+        minLength: 1
       npm:
         $ref: "#/$defs/npm-publisher"
       cargo:

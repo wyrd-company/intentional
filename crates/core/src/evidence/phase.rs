@@ -826,7 +826,7 @@ mod tests {
         let workspace = Workspace::new(label);
         workspace.write(
             ".intentional/config.yml",
-            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  component:\n    path: component\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nrelease-units:\n  component:\n    path: component\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         );
         let config = Config::load(workspace.root()).expect("configuration");
         (workspace, config)

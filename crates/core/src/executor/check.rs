@@ -251,7 +251,7 @@ mod tests {
     use crate::executor::fixture::Workspace;
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
@@ -272,12 +272,18 @@ release-units:
 
     fn workspace(label: &str, publisher: &str) -> Workspace {
         let workspace = Workspace::new(label);
+        let package = publisher
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect::<String>();
         workspace
             .write(
                 ".intentional/config.yml",
                 &CONFIG.replace(
                     "    path: component\n",
-                    &format!("    path: component\n{publisher}"),
+                    &format!(
+                        "    path: component\n    packages:\n      package:\n        path: .\n{package}"
+                    ),
                 ),
             )
             .write(".github/workflows/release.yml", RELEASE_WORKFLOW)

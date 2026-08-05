@@ -14,7 +14,7 @@
 //! parent so the tag, tree, plan digest, projections, changelogs, and consumed
 //! intents are proven to agree rather than assumed to.
 
-use crate::config::{Config, UnphasedTag};
+use crate::config::{supports_interpretation_contract, Config, UnphasedTag};
 use crate::error::{Error, Result};
 use crate::plan::ReleasePlan;
 use crate::release::build::build_candidate;
@@ -282,7 +282,7 @@ fn read_annotated_tag(root: &Path, name: &str, object: &str) -> Result<Annotated
 }
 
 /// Prove the record is a complete, non-baseline release record for this workspace.
-fn verify_record(tag: &AnnotatedTag, config: &Config, configured: &UnphasedTag) -> Result<()> {
+fn verify_record(tag: &AnnotatedTag, _config: &Config, configured: &UnphasedTag) -> Result<()> {
     for field in REQUIRED_FIELDS {
         if !tag.fields.contains_key(field) {
             return Err(Error::Validation(format!(
@@ -291,11 +291,14 @@ fn verify_record(tag: &AnnotatedTag, config: &Config, configured: &UnphasedTag) 
             )));
         }
     }
-    for (field, expected) in [
-        ("contract", config.contract.as_str()),
-        ("tag-id", configured.id.as_str()),
-        ("baseline", "false"),
-    ] {
+    let contract = tag.fields["contract"].as_str();
+    if !supports_interpretation_contract(contract) {
+        return Err(Error::Validation(format!(
+            "the global release tag {} records unsupported interpretation contract {contract}",
+            tag.name
+        )));
+    }
+    for (field, expected) in [("tag-id", configured.id.as_str()), ("baseline", "false")] {
         let found = tag.fields[field].as_str();
         if found != expected {
             return Err(Error::Validation(format!(
@@ -478,7 +481,7 @@ pub(crate) mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
-    const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
+    const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nworkspace-tags:\n  release:\n    template: '{version}'\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
 
     const RECORD_TAG_ID: &str = "workspace/release";
 
@@ -665,7 +668,7 @@ pub(crate) mod tests {
         /// A well-formed release record body carrying an arbitrary tagger line.
         fn record_as(&self, target: &str, name: &str, digest: &str, tagger: &str) -> String {
             format!(
-                "object {target}\ntype commit\ntag {name}\n{tagger}\n\nintentional release record\n\ncontract: contract-1\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {RECORD_TAG_ID}\nversion: 1.1.0\nbaseline: false\n",
+                "object {target}\ntype commit\ntag {name}\n{tagger}\n\nintentional release record\n\ncontract: contract-2\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {RECORD_TAG_ID}\nversion: 1.1.0\nbaseline: false\n",
                 crate::VERSION
             )
         }
@@ -906,7 +909,29 @@ pub(crate) mod tests {
     /// deleted guard is warranted, so the claim is held by an assertion rather
     /// than left to the prose.
     #[test]
-    fn rejects_a_record_written_under_another_interpretation_contract() {
+    fn accepts_a_record_written_under_a_supported_prior_interpretation_contract() {
+        let workspace = ReleasedWorkspace::new();
+        let config = Config::load(&workspace.root).expect("configuration");
+        let configured = global_release_tag(&config).expect("global tag");
+        let mut fields = REQUIRED_FIELDS
+            .into_iter()
+            .map(|field| (field.to_owned(), "present".to_owned()))
+            .collect::<BTreeMap<_, _>>();
+        fields.insert("contract".to_owned(), "contract-1".to_owned());
+        fields.insert("tag-id".to_owned(), configured.id.clone());
+        fields.insert("baseline".to_owned(), "false".to_owned());
+        let tag = AnnotatedTag {
+            name: workspace.tag_name.clone(),
+            object: "object".to_owned(),
+            target: workspace.release.clone(),
+            fields,
+        };
+        verify_record(&tag, &config, &configured)
+            .expect("a supported historical record is interpreted under its own contract");
+    }
+
+    #[test]
+    fn rejects_a_record_written_under_an_unsupported_interpretation_contract() {
         let workspace = ReleasedWorkspace::new();
         let object = workspace.mktag(
             &workspace
@@ -915,16 +940,15 @@ pub(crate) mod tests {
                     &workspace.tag_name,
                     &workspace.plan_digest,
                 )
-                .replace("contract: contract-1", "contract: contract-2"),
+                .replace("contract: contract-2", "contract: contract-3"),
         );
         workspace.unpublish();
         workspace.publish(&workspace.tag_name.clone(), &object);
-        let error = workspace
-            .verify()
-            .expect_err("the record was written under another interpretation contract");
+        let error = workspace.verify().expect_err("unknown contract rejected");
         assert!(
-            error.to_string().contains("records contract contract-2")
-                && error.to_string().contains("requires contract-1"),
+            error
+                .to_string()
+                .contains("unsupported interpretation contract contract-3"),
             "{error}"
         );
     }
@@ -1055,7 +1079,7 @@ pub(crate) mod tests {
 
     #[test]
     fn rejects_configuration_with_no_unphased_tags_anywhere() {
-        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\n    require-phase: after-publication\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
+        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nworkspace-tags:\n  release:\n    template: '{version}'\n    require-phase: after-publication\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'widget@{version}'\n        require-phase: after-publication\n";
         let message = verify_config_error(CONFIG);
         assert!(message.contains("declares none"), "{message}");
         assert!(!message.contains("release-unit"), "{message}");
@@ -1063,7 +1087,7 @@ pub(crate) mod tests {
 
     #[test]
     fn rejects_configuration_with_unphased_release_unit_tags_but_no_workspace_tag() {
-        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  intentional:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n";
+        const CONFIG: &str = "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nrelease-units:\n  intentional:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n";
         let message = verify_config_error(CONFIG);
         assert!(
             message.contains("no workspace tag omits require-phase"),

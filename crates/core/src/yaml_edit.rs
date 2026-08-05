@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn inserts_a_missing_nested_path_without_touching_neighbors() {
-        let source = "contract: contract-1\nrelease-units:\n  component:\n    # keep this\n    path: component\n";
+        let source = "contract: contract-2\nrelease-units:\n  component:\n    # keep this\n    path: component\n";
         let mut document = Document::parse(source).expect("parses");
         document
             .set(
@@ -662,7 +662,7 @@ mod tests {
             .expect("inserts");
         assert_eq!(
             document.text(),
-            "contract: contract-1\nrelease-units:\n  component:\n    # keep this\n    path: component\ngithub:\n  workflows:\n    release:\n      path: .github/workflows/release.yml\n"
+            "contract: contract-2\nrelease-units:\n  component:\n    # keep this\n    path: component\ngithub:\n  workflows:\n    release:\n      path: .github/workflows/release.yml\n"
         );
     }
 

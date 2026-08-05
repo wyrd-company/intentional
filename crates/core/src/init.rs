@@ -4741,7 +4741,7 @@ mod tests {
 
     fn candidate_plan(candidates: Vec<DiscoveryCandidate>) -> InitPlan {
         let config = Config::from_yaml(
-            "contract: contract-1\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "contract: contract-2\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         )
         .expect("candidate test config");
         InitPlan {
@@ -4871,7 +4871,7 @@ mod tests {
             r#"{"name":"sample-duplicate","version":"1.0.0","dependencies":{"sample-base":"^1.0.0"}}"#,
         );
         let mut config = Config::from_yaml(
-            r#"contract: contract-1
+            r#"contract: contract-2
 release-units:
   sample-base:
     path: base
@@ -5064,7 +5064,7 @@ release-units:
     #[test]
     fn changesets_projection_rejects_an_unrelated_existing_owner() {
         let config = Config::from_yaml(
-            r#"contract: contract-1
+            r#"contract: contract-2
 release-units:
   alpha:
     path: examples

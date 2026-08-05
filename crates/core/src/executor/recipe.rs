@@ -11,7 +11,7 @@ use crate::evidence::assemble::CleanClientMode;
 use crate::init::{evidence, SourceEvidence};
 use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -310,6 +310,11 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
         if !selects_publications(release_unit) {
             continue;
         }
+        if let Err(Error::Validation(message)) = validate_package_artifacts(root, id, release_unit)
+        {
+            selection.diagnostics.push(message);
+            continue;
+        }
         let capabilities = match derive_capabilities(root, release_unit) {
             Ok(derived) => capability_set(&derived),
             Err(Error::Validation(message)) => {
@@ -337,6 +342,49 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
     Ok(selection)
 }
 
+/// Resolve each declared package to one native artifact and reject shared ownership.
+fn validate_package_artifacts(
+    root: &Path,
+    id: &str,
+    release_unit: &ReleaseUnitConfig,
+) -> Result<()> {
+    let mut owners = BTreeMap::<PathBuf, String>::new();
+    for (package_id, package) in &release_unit.packages {
+        let mut boundary = release_unit.clone();
+        boundary.path = if package.path == Path::new(".") {
+            release_unit.path.clone()
+        } else {
+            release_unit.path.join(&package.path)
+        };
+        boundary.packages.clear();
+        let derived = derive_capabilities(root, &boundary)?;
+        let configured = package.publishers().into_iter().collect::<BTreeSet<_>>();
+        let candidates = derived
+            .iter()
+            .filter(|evidence| {
+                configured.is_empty()
+                    || configured.iter().any(|publisher| {
+                        recipes_for(&BTreeSet::from([evidence.capability]), *publisher)
+                            .into_iter()
+                            .next()
+                            .is_some()
+                    })
+            })
+            .collect::<Vec<_>>();
+        let artifact = match candidates.as_slice() {
+            [evidence] => &evidence.evidence.path,
+            _ => continue,
+        };
+        if let Some(first) = owners.insert(artifact.clone(), package_id.clone()) {
+            return Err(Error::Validation(format!(
+                "release unit {id} packages {first} and {package_id} resolve to the same native artifact {}",
+                artifact.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Resolve every configured publication, failing on the first unresolved target.
 pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedPublication>> {
     let selection = resolve_publications(root, config)?;
@@ -351,7 +399,7 @@ fn configured_targets(
     release_unit: &ReleaseUnitConfig,
 ) -> Vec<(PublisherKind, String, Configured)> {
     let mut targets = Vec::new();
-    if let Some(npm) = &release_unit.npm {
+    if let Some(npm) = release_unit.npm() {
         targets.push((
             PublisherKind::Npm,
             PRIMARY_TARGET.to_owned(),
@@ -372,14 +420,14 @@ fn configured_targets(
             ));
         }
     }
-    if release_unit.cargo.is_some() {
+    if release_unit.cargo().is_some() {
         targets.push((
             PublisherKind::Cargo,
             PRIMARY_TARGET.to_owned(),
             Configured::default(),
         ));
     }
-    if let Some(homebrew) = &release_unit.homebrew {
+    if let Some(homebrew) = release_unit.homebrew() {
         targets.push((
             PublisherKind::Homebrew,
             PRIMARY_TARGET.to_owned(),
@@ -390,15 +438,15 @@ fn configured_targets(
         ));
     }
     for (publisher, present) in [
-        (PublisherKind::Rpm, release_unit.rpm.is_some()),
-        (PublisherKind::Apt, release_unit.apt.is_some()),
-        (PublisherKind::Aur, release_unit.aur.is_some()),
+        (PublisherKind::Rpm, release_unit.rpm().is_some()),
+        (PublisherKind::Apt, release_unit.apt().is_some()),
+        (PublisherKind::Aur, release_unit.aur().is_some()),
     ] {
         if present {
             targets.push((publisher, PRIMARY_TARGET.to_owned(), Configured::default()));
         }
     }
-    if let Some(oci) = &release_unit.oci {
+    if let Some(oci) = release_unit.oci() {
         if let Some(dockerhub) = &oci.dockerhub {
             targets.push((
                 PublisherKind::Oci,
@@ -996,7 +1044,7 @@ mod tests {
     use crate::executor::fixture::Workspace;
 
     const GITHUB: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1009,9 +1057,15 @@ release-units:
 "#;
 
     fn config(publisher: &str) -> Config {
+        let package = publisher
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect::<String>();
         let text = GITHUB.replace(
             "    path: component\n",
-            &format!("    path: component\n{publisher}"),
+            &format!(
+                "    path: component\n    packages:\n      package:\n        path: .\n{package}"
+            ),
         );
         Config::from_yaml(&text).expect("fixture config")
     }
@@ -1050,6 +1104,47 @@ release-units:
         );
     }
 
+    #[test]
+    fn rejects_two_packages_that_resolve_to_one_native_artifact() {
+        let workspace = Workspace::new("duplicate-native-artifact");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n",
+        );
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      first:\n        path: .\n        cargo: {}\n      second:\n        path: .\n        cargo: {}\n",
+        );
+        let config = Config::from_yaml(&text).expect("package declarations");
+        let error = select_publications(workspace.root(), &config)
+            .expect_err("one artifact cannot be owned twice");
+        let message = error.to_string();
+        assert!(message.contains("packages first and second"), "{message}");
+        assert!(message.contains("component/Cargo.toml"), "{message}");
+    }
+
+    #[test]
+    fn permits_coincident_package_paths_for_distinct_native_artifacts() {
+        let workspace = Workspace::new("coincident-package-paths");
+        workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n",
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"sample-package","version":"1.0.0"}"#,
+            );
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: {}\n      node:\n        path: .\n        npm: {}\n",
+        );
+        let config = Config::from_yaml(&text).expect("package declarations");
+        let selected = select_publications(workspace.root(), &config)
+            .expect("distinct artifacts may share a package path");
+        assert_eq!(selected.len(), 2);
+    }
+
     /// The reader names every path the selection opens, for every unit.
     ///
     /// `publication_probe_paths` exists so evidence assembly can prove what the
@@ -1079,7 +1174,7 @@ release-units:
     #[test]
     fn names_every_path_the_selection_opens() {
         const UNITS: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1087,13 +1182,19 @@ github:
 release-units:
   published:
     path: published
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     tags:
       primary: { role: primary, template: '{id}@{version}' }
   suspended:
     path: suspended
     disposition: suspended
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     tags:
       primary: { role: primary, template: '{id}@{version}' }
   unpublished:
@@ -1331,7 +1432,12 @@ release-units:
             "component/package.json",
             r#"{"name":"example-component","version":"1.0.0"}"#,
         );
-        let suspended = config("    disposition: suspended\n    npm: {}\n");
+        let mut suspended = config("    npm: {}\n");
+        suspended
+            .release_units
+            .get_mut("component")
+            .unwrap()
+            .disposition = ReleaseUnitDisposition::Suspended;
         assert!(
             select_publications(workspace.root(), &suspended)
                 .expect("suspended selection runs")

@@ -1695,7 +1695,7 @@ fn baseline_requires_agreeing_projection_evidence_and_explicit_tag_only_versions
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1788,7 +1788,7 @@ fn baseline_retry_rejects_conflicting_existing_records_without_creating_tags() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1819,7 +1819,7 @@ release-units:
             "-a",
             "witness@1.0.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
+            "intentional release record\n\ncontract: contract-2\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
         ],
     );
     let tags_before = git(
@@ -1857,7 +1857,7 @@ fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1980,7 +1980,7 @@ release-units:
             "-a",
             "witness@1.1.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
+            "intentional release record\n\ncontract: contract-2\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
         ],
     );
     repository
@@ -2002,7 +2002,7 @@ fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: packages/package-a
@@ -2057,6 +2057,25 @@ release-units:
         git(&repository.root, &["cat-file", "-t", "package-a@1.1.0"]),
         "tag"
     );
+    let sealed = git(
+        &repository.root,
+        &[
+            "for-each-ref",
+            "--format=%(contents)",
+            "refs/tags/package-a@1.1.0",
+        ],
+    );
+    let sealed = sealed.replace("contract: contract-2", "contract: contract-1");
+    let sealed_digest = sealed
+        .lines()
+        .find_map(|line| line.strip_prefix("plan-digest: "))
+        .expect("sealed plan digest")
+        .to_owned();
+    git(&repository.root, &["tag", "-d", "package-a@1.1.0"]);
+    git(
+        &repository.root,
+        &["tag", "-a", "package-a@1.1.0", "-m", &sealed, "HEAD"],
+    );
     repository
         .cli()
         .args(["tag", "--phase", "after-publication"])
@@ -2065,6 +2084,19 @@ release-units:
     assert_eq!(
         git(&repository.root, &["cat-file", "-t", "package-b@1.1.0"]),
         "tag"
+    );
+    let resumed = git(
+        &repository.root,
+        &[
+            "for-each-ref",
+            "--format=%(contents)",
+            "refs/tags/package-b@1.1.0",
+        ],
+    );
+    assert!(resumed.contains("version: 1.1.0"), "{resumed}");
+    assert!(
+        resumed.contains(&format!("plan-digest: {sealed_digest}")),
+        "{resumed}"
     );
     repository.cli().arg("check").assert().success();
 }

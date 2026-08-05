@@ -689,8 +689,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let bootstrap = names::secret(
         context
             .unit
-            .npm
-            .as_ref()
+            .npm()
             .and_then(|npm| npm.token_secret.as_deref())
             .map(|value| SuppliedName {
                 origin: &origin,
@@ -1065,8 +1064,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
     let bootstrap = names::secret(
         context
             .unit
-            .cargo
-            .as_ref()
+            .cargo()
             .and_then(|cargo| cargo.token_secret.as_deref())
             .map(|value| SuppliedName {
                 origin: &origin,
@@ -1529,7 +1527,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
 /// expression evaluates.
 fn oci_destination_environment(context: &RecipeContext<'_>) -> Result<String, String> {
     let publication = context.publication;
-    let oci = context.unit.oci.as_ref();
+    let oci = context.unit.oci();
     let (registry, destination, user, token) = match publication.target.as_str() {
         "dockerhub" => {
             let target = oci.and_then(|oci| oci.dockerhub.as_ref());

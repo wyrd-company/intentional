@@ -513,7 +513,7 @@ pub(crate) mod tests {
     const GLOBAL_TAG: &str = "component@1.0.0";
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -524,8 +524,11 @@ workspace-tags:
 release-units:
   component:
     path: component
-    homebrew:
-      repository: example-owner/homebrew-example
+    packages:
+      package:
+        path: .
+        homebrew:
+          repository: example-owner/homebrew-example
     tags:
       primary:
         role: primary

@@ -113,7 +113,7 @@ pub mod fixture {
     /// authority transition, tag verification, one subject build, both phase
     /// tags, one publisher, evidence assembly, and closure.
     pub const MANAGED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 workspace-tags:
   release:
     template: '{version}'
@@ -124,7 +124,10 @@ github:
 release-units:
   component:
     path: component
-    cargo: {}
+    packages:
+      package:
+        path: .
+        cargo: {}
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
       staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
@@ -183,7 +186,7 @@ release-units:
     fn recipe_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
         let mut config = String::from(
-            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkspace-tags:\n  release:\n    template: '{version}'\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nworkspace-tags:\n  release:\n    template: '{version}'\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n",
         );
         let derived = derived_recipes();
         for capability in Capability::ALL {
@@ -259,7 +262,11 @@ release-units:
                 }
             }
         }
-        configured
+        let configured = configured
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect::<String>();
+        format!("    packages:\n      package:\n        path: .\n{configured}")
     }
 
     /// Native evidence from which one canonical capability is derived.

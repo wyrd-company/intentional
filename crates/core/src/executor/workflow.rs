@@ -1883,7 +1883,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 workspace-tags:
   release:
     template: '{version}'
@@ -1894,7 +1894,10 @@ github:
 release-units:
   component:
     path: component
-    cargo: {}
+    packages:
+      package:
+        path: .
+        cargo: {}
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
       staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
@@ -2680,7 +2683,7 @@ jobs:
 
     /// A workspace whose one release unit distributes one subject to two OCI destinations.
     const TWO_DESTINATION_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 workspace-tags:
   release:
     template: '{version}'
@@ -2691,9 +2694,12 @@ github:
 release-units:
   component:
     path: component
-    oci:
-      dockerhub: { repository: example-owner/example-image }
-      ghcr: {}
+    packages:
+      package:
+        path: .
+        oci:
+          dockerhub: { repository: example-owner/example-image }
+          ghcr: {}
     tags:
       staged:
         role: primary
@@ -2713,7 +2719,7 @@ release-units:
     /// not settled, and the derivation refuses them rather than deriving a
     /// publisher job that publishes nothing.
     const GO_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 workspace-tags:
   release:
     template: '{version}'
@@ -2724,8 +2730,11 @@ github:
 release-units:
   component:
     path: component
-    homebrew: { repository: example-org/homebrew-tap }
-    aur: {}
+    packages:
+      package:
+        path: .
+        homebrew: { repository: example-org/homebrew-tap }
+        aur: {}
     tags:
       staged:
         role: primary
@@ -2752,7 +2761,7 @@ release-units:
                 ".intentional/config.yml",
                 &GO_CONFIG.replace(
                     "release-units:\n  component:\n",
-                    "release-units:\n  library:\n    path: library\n    npm: {}\n    tags:\n      staged:\n        role: primary\n        template: 'library/staged@{version}'\n        require-phase: before-publication\n  component:\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      staged:\n        role: primary\n        template: 'library/staged@{version}'\n        require-phase: before-publication\n  component:\n",
                 ),
             )
             .write(
@@ -4346,8 +4355,8 @@ exit 0
             workspace.write(
                 ".intentional/config.yml",
                 &GO_CONFIG.replace(
-                    "    aur: {}\n",
-                    &format!("    aur: {{}}\n    {publisher}: {{}}\n"),
+                    "        aur: {}\n",
+                    &format!("        aur: {{}}\n        {publisher}: {{}}\n"),
                 ),
             );
             let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
@@ -5805,7 +5814,10 @@ exit 0
         let workspace = workspace("workflow-zero-publications");
         workspace.write(
             ".intentional/config.yml",
-            &CONFIG.replace("    cargo: {}\n", ""),
+            &CONFIG.replace(
+                "    packages:\n      package:\n        path: .\n        cargo: {}\n",
+                "",
+            ),
         );
         converge(workspace.root(), WorkflowRole::Publish);
         let document: Value =
@@ -5944,7 +5956,7 @@ exit 0
                 ".intentional/config.yml",
                 &CONFIG.replace(
                     "release-units:\n  component:\n",
-                    "release-units:\n  component.one:\n    path: one\n    cargo: {}\n    tags:\n      primary: { role: primary, template: 'one@{version}', require-phase: after-publication }\n  component_one:\n",
+                    "release-units:\n  component.one:\n    path: one\n    packages:\n      package:\n        path: .\n        cargo: {}\n    tags:\n      primary: { role: primary, template: 'one@{version}', require-phase: after-publication }\n  component_one:\n",
                 ),
             )
             .write(
@@ -6679,7 +6691,7 @@ aur:
 
     /// Configuration whose every author-typed value is distinctive.
     const SENTINEL_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 workspace-tags:
   release:
     template: 'tzbrmk{version}dnwlpq'
@@ -6691,14 +6703,17 @@ github:
 release-units:
   jdmcvx:
     path: bgqnwt
-    oci:
-      dockerhub:
-        repository: zrpvhm/phqvrb
-        username-var: KLXVBRQ
-        token-secret: WZDNGPT
-      ghcr:
-        repository: mwbqjt/nkwzdt
-        omit: [ signature ]
+    packages:
+      package:
+        path: .
+        oci:
+          dockerhub:
+            repository: zrpvhm/phqvrb
+            username-var: KLXVBRQ
+            token-secret: WZDNGPT
+          ghcr:
+            repository: mwbqjt/nkwzdt
+            omit: [ signature ]
     tags:
       staged:
         role: primary
@@ -6706,8 +6721,11 @@ release-units:
         require-phase: before-publication
   rtwzlf:
     path: kdshpm
-    oci:
-      ghcr: {}
+    packages:
+      package:
+        path: .
+        oci:
+          ghcr: {}
     tags:
       staged:
         role: primary
@@ -6715,8 +6733,11 @@ release-units:
         require-phase: before-publication
   wpdklc:
     path: xnrjgb
-    homebrew: { repository: zlfrhd/cbnwvk }
-    aur: {}
+    packages:
+      package:
+        path: .
+        homebrew: { repository: zlfrhd/cbnwvk }
+        aur: {}
     tags:
       staged:
         role: primary
@@ -6724,11 +6745,14 @@ release-units:
         require-phase: before-publication
   qhwzru:
     path: vkjmtd
-    npm:
-      token-secret: KQVBZTLM
-      additional-targets: { github: {} }
-    cargo:
-      token-secret: HGWRXPFD
+    packages:
+      package:
+        path: .
+        npm:
+          token-secret: KQVBZTLM
+          additional-targets: { github: {} }
+        cargo:
+          token-secret: HGWRXPFD
     tags:
       staged:
         role: primary
@@ -11149,7 +11173,7 @@ done
                     .expect("configuration")
                     .replace(
                         "dockerhub: { repository: example-owner/example-image }",
-                        "dockerhub:\n        repository: example-owner/example-image\n        username-var: EXAMPLE_ACCOUNT_VAR\n        token-secret: EXAMPLE_TOKEN_SECRET",
+                        "dockerhub:\n            repository: example-owner/example-image\n            username-var: EXAMPLE_ACCOUNT_VAR\n            token-secret: EXAMPLE_TOKEN_SECRET",
                     );
             overridden.write(".intentional/config.yml", &configuration);
             converge(overridden.root(), WorkflowRole::Publish);

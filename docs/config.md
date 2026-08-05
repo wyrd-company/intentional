@@ -23,7 +23,7 @@ produces explicit candidates before it writes canonical configuration.
 
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility
@@ -190,29 +190,36 @@ contract.
 
 ## Publication intent
 
-Each release unit opts into managed publication through publisher properties
-placed directly on that release unit. A publisher property is invalid without
-the top-level `github` property, and native package metadata never creates
-publication intent on its own:
+Each release unit may declare named packages. Each package has a
+release-unit-relative path and opts into managed publication through its own
+publisher properties. Publisher properties are invalid directly on a release
+unit and invalid without the top-level `github` property. Native package
+metadata never creates publication intent on its own:
 
 ```yaml
 release-units:
   sample-library:
     path: packages/library
-    npm:
-      additional-targets:
-        github: {}
+    packages:
+      library:
+        path: .
+        npm:
+          additional-targets:
+            github: {}
     tags:
       primary:
         role: primary
         template: "{id}@{version}"
   sample-image:
     path: packages/image
-    oci:
-      ghcr: {}
-      dockerhub:
-        repository: example-org/sample-image
-        omit: [ signature ]
+    packages:
+      image:
+        path: .
+        oci:
+          ghcr: {}
+          dockerhub:
+            repository: example-org/sample-image
+            omit: [ signature ]
     tags:
       primary:
         role: primary

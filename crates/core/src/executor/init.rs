@@ -7,8 +7,8 @@
 
 use crate::config::{
     Config, GithubConfig, GithubWorkflow, GithubWorkflows, NpmAdditionalTargets, NpmGithubTarget,
-    NpmPublisher, OciPublisher, ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW,
-    DEFAULT_RELEASE_WORKFLOW,
+    NpmPublisher, OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH,
+    DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
 use crate::executor::recipe::{
@@ -564,24 +564,19 @@ fn prerequisite_met(
 fn configured(release_unit: &ReleaseUnitConfig, publisher: PublisherKind, target: &str) -> bool {
     match (publisher, target) {
         (PublisherKind::Npm, "github") => release_unit
-            .npm
-            .as_ref()
+            .npm()
             .and_then(|npm| npm.additional_targets.as_ref())
             .is_some_and(|targets| targets.github.is_some()),
-        (PublisherKind::Npm, _) => release_unit.npm.is_some(),
-        (PublisherKind::Cargo, _) => release_unit.cargo.is_some(),
-        (PublisherKind::Homebrew, _) => release_unit.homebrew.is_some(),
-        (PublisherKind::Rpm, _) => release_unit.rpm.is_some(),
-        (PublisherKind::Apt, _) => release_unit.apt.is_some(),
-        (PublisherKind::Aur, _) => release_unit.aur.is_some(),
+        (PublisherKind::Npm, _) => release_unit.npm().is_some(),
+        (PublisherKind::Cargo, _) => release_unit.cargo().is_some(),
+        (PublisherKind::Homebrew, _) => release_unit.homebrew().is_some(),
+        (PublisherKind::Rpm, _) => release_unit.rpm().is_some(),
+        (PublisherKind::Apt, _) => release_unit.apt().is_some(),
+        (PublisherKind::Aur, _) => release_unit.aur().is_some(),
         (PublisherKind::Oci, "dockerhub") => release_unit
-            .oci
-            .as_ref()
+            .oci()
             .is_some_and(|oci| oci.dockerhub.is_some()),
-        (PublisherKind::Oci, _) => release_unit
-            .oci
-            .as_ref()
-            .is_some_and(|oci| oci.ghcr.is_some()),
+        (PublisherKind::Oci, _) => release_unit.oci().is_some_and(|oci| oci.ghcr.is_some()),
     }
 }
 
@@ -763,11 +758,32 @@ fn apply_candidate(
                     candidate.id
                 )));
             };
+            let package_was_missing = release_unit.packages.is_empty();
             enable_publisher(release_unit, publisher, target)?;
+            let package_id = release_unit
+                .packages
+                .keys()
+                .next()
+                .expect("publisher enablement creates one package")
+                .clone();
+            if package_was_missing {
+                edits.push((
+                    vec![
+                        "release-units".to_owned(),
+                        candidate.release_unit.clone(),
+                        "packages".to_owned(),
+                        package_id.clone(),
+                        "path".to_owned(),
+                    ],
+                    Value::String(".".to_owned()),
+                ));
+            }
             edits.push((
                 vec![
                     "release-units".to_owned(),
                     candidate.release_unit.clone(),
+                    "packages".to_owned(),
+                    package_id,
                     publisher.as_str().to_owned(),
                 ],
                 publisher_value(release_unit, publisher)?,
@@ -809,13 +825,13 @@ fn apply_candidate(
 /// Serialized value of one release unit's configured publisher property.
 fn publisher_value(release_unit: &ReleaseUnitConfig, publisher: PublisherKind) -> Result<Value> {
     Ok(match publisher {
-        PublisherKind::Npm => serde_yaml::to_value(&release_unit.npm)?,
-        PublisherKind::Cargo => serde_yaml::to_value(&release_unit.cargo)?,
-        PublisherKind::Homebrew => serde_yaml::to_value(&release_unit.homebrew)?,
-        PublisherKind::Rpm => serde_yaml::to_value(&release_unit.rpm)?,
-        PublisherKind::Apt => serde_yaml::to_value(&release_unit.apt)?,
-        PublisherKind::Aur => serde_yaml::to_value(&release_unit.aur)?,
-        PublisherKind::Oci => serde_yaml::to_value(&release_unit.oci)?,
+        PublisherKind::Npm => serde_yaml::to_value(release_unit.npm())?,
+        PublisherKind::Cargo => serde_yaml::to_value(release_unit.cargo())?,
+        PublisherKind::Homebrew => serde_yaml::to_value(release_unit.homebrew())?,
+        PublisherKind::Rpm => serde_yaml::to_value(release_unit.rpm())?,
+        PublisherKind::Apt => serde_yaml::to_value(release_unit.apt())?,
+        PublisherKind::Aur => serde_yaml::to_value(release_unit.aur())?,
+        PublisherKind::Oci => serde_yaml::to_value(release_unit.oci())?,
     })
 }
 
@@ -824,34 +840,50 @@ fn enable_publisher(
     publisher: PublisherKind,
     target: &str,
 ) -> Result<()> {
+    if release_unit.packages.is_empty() {
+        release_unit
+            .packages
+            .insert("package".to_owned(), PackageConfig::new(PathBuf::from(".")));
+    }
+    if release_unit.packages.len() != 1 {
+        return Err(Error::Validation(
+            "executor initialization requires exactly one declared package before enabling a publisher"
+                .to_owned(),
+        ));
+    }
+    let package = release_unit
+        .packages
+        .values_mut()
+        .next()
+        .expect("one package was checked");
     match (publisher, target) {
         (PublisherKind::Npm, "github") => {
-            let npm = release_unit.npm.get_or_insert_with(NpmPublisher::default);
+            let npm = package.npm.get_or_insert_with(NpmPublisher::default);
             npm.additional_targets
                 .get_or_insert_with(NpmAdditionalTargets::default)
                 .github
                 .get_or_insert_with(NpmGithubTarget::default);
         }
         (PublisherKind::Npm, _) => {
-            release_unit.npm.get_or_insert_with(NpmPublisher::default);
+            package.npm.get_or_insert_with(NpmPublisher::default);
         }
         (PublisherKind::Cargo, _) => {
-            release_unit.cargo.get_or_insert_with(Default::default);
+            package.cargo.get_or_insert_with(Default::default);
         }
         (PublisherKind::Rpm, _) => {
-            release_unit.rpm.get_or_insert_with(Default::default);
+            package.rpm.get_or_insert_with(Default::default);
         }
         (PublisherKind::Apt, _) => {
-            release_unit.apt.get_or_insert_with(Default::default);
+            package.apt.get_or_insert_with(Default::default);
         }
         (PublisherKind::Aur, _) => {
-            release_unit.aur.get_or_insert_with(Default::default);
+            package.aur.get_or_insert_with(Default::default);
         }
         (PublisherKind::Oci, "dockerhub") => {
             return Err(explicit_configuration_error(publisher, target))
         }
         (PublisherKind::Oci, _) => {
-            release_unit
+            package
                 .oci
                 .get_or_insert_with(OciPublisher::default)
                 .ghcr
@@ -972,7 +1004,7 @@ mod tests {
     use crate::executor::fixture::Workspace;
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 release-units:
   component:
     path: component
@@ -1079,10 +1111,9 @@ release-units:
             PathBuf::from(DEFAULT_RELEASE_WORKFLOW)
         );
         let component = &config.release_units["component"];
-        assert!(component.npm.is_some());
+        assert!(component.npm().is_some());
         assert!(component
-            .npm
-            .as_ref()
+            .npm()
             .expect("npm publisher")
             .additional_targets
             .is_none());
@@ -1156,7 +1187,7 @@ release-units:
         assert!(Config::load(workspace.root())
             .expect("config loads")
             .release_units["component"]
-            .rpm
+            .rpm()
             .is_some());
     }
 

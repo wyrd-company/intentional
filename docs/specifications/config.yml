@@ -4,10 +4,11 @@ format: json-schema
 description: >-
   Intentional workspace configuration is a closed YAML document stored at
   `.intentional/config.yml`. The adjacent JSON Schema asset defines the
-  `contract-1` interpretation contract, global versioning settings, fixed and
+  `contract-2` interpretation contract, global versioning settings, fixed and
   linked release-unit groups, workspace tags, discovery dispositions, release
-  units, version projections, dependency edges, annotated-tag declarations,
-  GitHub workflow integration, and explicit publisher opt-ins.
+  units, package boundaries, version projections, dependency edges,
+  annotated-tag declarations, GitHub workflow integration, and explicit
+  package publisher opt-ins.
   The schema retains the published runtime identifier
   `https://intentional.foo/schemas/config.yml`.
 
@@ -19,8 +20,9 @@ description: >-
   deserialization for graph references, tag templates and ordering, projection
   requirements, path ownership, and release-unit relationships that JSON Schema
   cannot express in isolation. Publisher properties are valid only when the
-  top-level `github` property exists. Recipe selection also validates each
-  configured publisher against derived release-unit capabilities, native
+  top-level `github` property exists. Publisher properties belong to a named
+  package, never directly to a release unit. Recipe selection also validates
+  each configured publisher against derived package capabilities, native
   packager configuration, and compatible primary destinations.
 
   npm and Cargo use trusted publishing where available and their conventional

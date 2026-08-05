@@ -1556,7 +1556,7 @@ mod tests {
     /// release tag the executor protocol requires, and the release this fixture
     /// performs is the one assembly proves its checkout against.
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1567,7 +1567,10 @@ workspace-tags:
 release-units:
   component:
     path: component
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     projections:
       - adapter: json
         file: package.json
@@ -1583,7 +1586,7 @@ release-units:
     /// assembles under this configuration and not under that one differs by
     /// publication and by nothing else.
     const UNPUBLISHED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -2184,7 +2187,7 @@ intended-destinations:
     /// Configuration that declares a before-publication tag as well as the global one.
     /// Two publishing release units, one of which this release does not bump.
     const UNRELEASED_UNIT_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -2195,7 +2198,10 @@ workspace-tags:
 release-units:
   component:
     path: component
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     projections:
       - adapter: json
         file: package.json
@@ -2205,7 +2211,10 @@ release-units:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
   spare:
     path: spare
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     projections:
       - adapter: json
         file: package.json

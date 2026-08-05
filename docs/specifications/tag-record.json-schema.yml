@@ -15,7 +15,7 @@ additionalProperties: false
 required: [ contract, generator, plan-digest, tag-id, version, baseline ]
 properties:
   contract:
-    const: contract-1
+    enum: [ contract-1, contract-2 ]
   generator:
     type: string
     pattern: "^intentional [0-9]+\\.[0-9]+\\.[0-9]+"

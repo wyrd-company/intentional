@@ -189,7 +189,7 @@ mod tests {
     fn config() -> Config {
         Config::from_yaml(
             r#"
-contract: contract-1
+contract: contract-2
 release-units:
   library:
     path: .

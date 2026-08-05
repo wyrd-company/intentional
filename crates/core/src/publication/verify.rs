@@ -829,7 +829,7 @@ mod tests {
     }
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -843,12 +843,18 @@ release-units:
 
     /// A workspace whose sole release unit declares one publisher block.
     fn workspace(label: &str, publisher: &str, files: &[(&str, &str)]) -> Workspace {
+        let package = publisher
+            .lines()
+            .map(|line| format!("    {line}\n"))
+            .collect::<String>();
         let workspace = Workspace::new(label);
         workspace.write(
             ".intentional/config.yml",
             &CONFIG.replace(
                 "    path: component\n",
-                &format!("    path: component\n{publisher}"),
+                &format!(
+                    "    path: component\n    packages:\n      package:\n        path: .\n{package}"
+                ),
             ),
         );
         for (path, contents) in files {
@@ -1557,7 +1563,7 @@ destination-aliases:
 
     /// A workspace whose sole release unit projects its version and publishes it.
     const RELEASED_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 github:
   workflows:
     release: { path: .github/workflows/release.yml }
@@ -1568,7 +1574,10 @@ workspace-tags:
 release-units:
   component:
     path: component
-    npm: {}
+    packages:
+      package:
+        path: .
+        npm: {}
     projections:
       - adapter: json
         file: package.json

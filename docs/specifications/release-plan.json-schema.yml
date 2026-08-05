@@ -13,7 +13,7 @@ properties:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
   contract:
-    const: contract-1
+    enum: [ contract-1, contract-2 ]
   generator:
     type: object
     additionalProperties: false

@@ -486,7 +486,7 @@ mod tests {
     fn dependency_bumps_propagate_only_in_shared_ecosystems() {
         let config = Config::from_yaml(
             r#"
-contract: contract-1
+contract: contract-2
 release-units:
   library:
     path: library
@@ -520,7 +520,7 @@ release-units:
     fn group_config(group: &str, mapping: &str, suspended: bool) -> Config {
         Config::from_yaml(&format!(
             r#"
-contract: contract-1
+contract: contract-2
 settings:
   pre-1-0-bump-mapping: {mapping}
   internal-dependency-bump: patch

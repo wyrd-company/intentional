@@ -63,7 +63,7 @@ impl ReleaseFixture {
         };
         fixture.write(
             ".intentional/config.yml",
-            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nrelease-units:\n  widget:\n    path: .\n    projections:\n      - adapter: json\n        file: package.json\n        pointer: /version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{version}'\n",
         );
         fixture.write("package.json", "{\n  \"version\": \"1.0.0\"\n}\n");
         fixture.write(".intentional/intents/.keep", "");

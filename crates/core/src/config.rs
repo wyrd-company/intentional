@@ -21,7 +21,12 @@ pub const CONFIG_PATH: &str = ".intentional/config.yml";
 pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
 
 /// Current interpretation contract written by initialization.
-pub const CURRENT_CONTRACT: &str = "contract-1";
+pub const CURRENT_CONTRACT: &str = "contract-2";
+
+/// Whether this binary can interpret a historical release document contract.
+pub fn supports_interpretation_contract(contract: &str) -> bool {
+    matches!(contract, "contract-1" | "contract-2")
+}
 
 /// Complete workspace configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -376,6 +381,17 @@ pub struct ReleaseUnitConfig {
     /// Authored internal dependency edges.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
+    /// Named packaging boundaries inside this versioning boundary.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub packages: BTreeMap<String, PackageConfig>,
+}
+
+/// One package that publishes its release unit's version.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct PackageConfig {
+    /// Package directory relative to its release unit.
+    pub path: PathBuf,
     /// Explicit npm publication intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub npm: Option<NpmPublisher>,
@@ -399,19 +415,11 @@ pub struct ReleaseUnitConfig {
     pub oci: Option<OciPublisher>,
 }
 
-impl ReleaseUnitConfig {
-    /// Managed release unit without dependency edges or publication intent.
-    pub fn managed(
-        path: PathBuf,
-        projections: Vec<Projection>,
-        tags: BTreeMap<String, TagConfig>,
-    ) -> Self {
+impl PackageConfig {
+    /// Empty package declaration at a release-unit-relative path.
+    pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            disposition: ReleaseUnitDisposition::Managed,
-            projections,
-            tags,
-            depends_on: Vec::new(),
             npm: None,
             cargo: None,
             homebrew: None,
@@ -422,7 +430,7 @@ impl ReleaseUnitConfig {
         }
     }
 
-    /// Publishers this release unit explicitly opts into, in stable order.
+    /// Publishers this package explicitly opts into, in stable order.
     pub fn publishers(&self) -> Vec<PublisherKind> {
         [
             (PublisherKind::Npm, self.npm.is_some()),
@@ -436,6 +444,73 @@ impl ReleaseUnitConfig {
         .into_iter()
         .filter_map(|(publisher, configured)| configured.then_some(publisher))
         .collect()
+    }
+}
+
+impl ReleaseUnitConfig {
+    fn package_with<T>(&self, select: impl Fn(&PackageConfig) -> Option<&T>) -> Option<&T> {
+        self.packages.values().find_map(select)
+    }
+
+    /// First configured npm publisher in stable package order.
+    pub fn npm(&self) -> Option<&NpmPublisher> {
+        self.package_with(|package| package.npm.as_ref())
+    }
+
+    /// First configured Cargo publisher in stable package order.
+    pub fn cargo(&self) -> Option<&CargoPublisher> {
+        self.package_with(|package| package.cargo.as_ref())
+    }
+
+    /// First configured Homebrew publisher in stable package order.
+    pub fn homebrew(&self) -> Option<&HomebrewPublisher> {
+        self.package_with(|package| package.homebrew.as_ref())
+    }
+
+    /// First configured RPM publisher in stable package order.
+    pub fn rpm(&self) -> Option<&SystemPackagePublisher> {
+        self.package_with(|package| package.rpm.as_ref())
+    }
+
+    /// First configured APT publisher in stable package order.
+    pub fn apt(&self) -> Option<&SystemPackagePublisher> {
+        self.package_with(|package| package.apt.as_ref())
+    }
+
+    /// First configured AUR publisher in stable package order.
+    pub fn aur(&self) -> Option<&SystemPackagePublisher> {
+        self.package_with(|package| package.aur.as_ref())
+    }
+
+    /// First configured OCI publisher in stable package order.
+    pub fn oci(&self) -> Option<&OciPublisher> {
+        self.package_with(|package| package.oci.as_ref())
+    }
+
+    /// Managed release unit without dependency edges or publication intent.
+    pub fn managed(
+        path: PathBuf,
+        projections: Vec<Projection>,
+        tags: BTreeMap<String, TagConfig>,
+    ) -> Self {
+        Self {
+            path,
+            disposition: ReleaseUnitDisposition::Managed,
+            projections,
+            tags,
+            depends_on: Vec::new(),
+            packages: BTreeMap::new(),
+        }
+    }
+
+    /// Publishers this release unit explicitly opts into, in stable order.
+    pub fn publishers(&self) -> Vec<PublisherKind> {
+        self.packages
+            .values()
+            .flat_map(PackageConfig::publishers)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 }
 
@@ -597,6 +672,24 @@ impl Config {
 
     /// Parse and validate configuration YAML.
     pub fn from_yaml(text: &str) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct ContractHeader {
+            contract: String,
+        }
+
+        let header: ContractHeader = serde_yaml::from_str(text)?;
+        if header.contract == "contract-1" {
+            return Err(Error::Validation(
+                "unsupported interpretation contract \"contract-1\"; migrate to contract-2 by adding release-units.<unit>.packages and moving each publisher mapping beneath the package it publishes"
+                    .to_owned(),
+            ));
+        }
+        if header.contract != CURRENT_CONTRACT {
+            return Err(Error::Validation(format!(
+                "unsupported interpretation contract {:?}; expected {CURRENT_CONTRACT}",
+                header.contract
+            )));
+        }
         let config: Self = serde_yaml::from_str(text)?;
         config.validate()?;
         Ok(config)
@@ -726,6 +819,13 @@ impl Config {
         for (id, release_unit) in &self.release_units {
             validate_id(id, "release unit")?;
             validate_relative_path(&release_unit.path, &format!("release unit {id} path"))?;
+            for (package_id, package) in &release_unit.packages {
+                validate_id(package_id, "package")?;
+                validate_relative_path(
+                    &package.path,
+                    &format!("release unit {id} package {package_id} path"),
+                )?;
+            }
             let primary_count = release_unit
                 .tags
                 .values()
@@ -876,16 +976,18 @@ impl Config {
 
     fn validate_publishers(&self) -> Result<()> {
         for (id, release_unit) in &self.release_units {
-            let publishers = release_unit.publishers();
-            if self.github.is_none() {
-                if let Some(publisher) = publishers.first() {
-                    return Err(Error::Validation(format!(
-                        "release unit {id} configures the {publisher} publisher; a configured publisher requires GitHub executor configuration"
-                    )));
+            for (package_id, package) in &release_unit.packages {
+                let publishers = package.publishers();
+                if self.github.is_none() {
+                    if let Some(publisher) = publishers.first() {
+                        return Err(Error::Validation(format!(
+                            "release unit {id} package {package_id} configures the {publisher} publisher; a configured publisher requires GitHub executor configuration"
+                        )));
+                    }
+                    continue;
                 }
-                continue;
+                validate_package_publishers(id, package_id, package)?;
             }
-            validate_release_unit_publishers(id, release_unit)?;
         }
         Ok(())
     }
@@ -1042,9 +1144,10 @@ fn validate_dependencies(
     Ok(())
 }
 
-fn validate_release_unit_publishers(id: &str, release_unit: &ReleaseUnitConfig) -> Result<()> {
-    let scope = |publisher: PublisherKind| format!("release unit {id} {publisher}");
-    if let Some(npm) = &release_unit.npm {
+fn validate_package_publishers(id: &str, package_id: &str, package: &PackageConfig) -> Result<()> {
+    let scope =
+        |publisher: PublisherKind| format!("release unit {id} package {package_id} {publisher}");
+    if let Some(npm) = &package.npm {
         validate_optional_identifier(
             npm.token_secret.as_deref(),
             &format!("{} token-secret", scope(PublisherKind::Npm)),
@@ -1058,19 +1161,19 @@ fn validate_release_unit_publishers(id: &str, release_unit: &ReleaseUnitConfig) 
             }
         }
     }
-    if let Some(cargo) = &release_unit.cargo {
+    if let Some(cargo) = &package.cargo {
         validate_optional_identifier(
             cargo.token_secret.as_deref(),
             &format!("{} token-secret", scope(PublisherKind::Cargo)),
         )?;
     }
-    if let Some(homebrew) = &release_unit.homebrew {
+    if let Some(homebrew) = &package.homebrew {
         validate_repository(
             &homebrew.repository,
             &format!("{} repository", scope(PublisherKind::Homebrew)),
         )?;
     }
-    if let Some(oci) = &release_unit.oci {
+    if let Some(oci) = &package.oci {
         if oci.dockerhub.is_none() && oci.ghcr.is_none() {
             return Err(Error::Validation(format!(
                 "{} must name at least one of dockerhub or ghcr",
@@ -1303,7 +1406,7 @@ mod tests {
 
     const VALID: &str = r#"
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: component
@@ -1509,7 +1612,7 @@ release-units:
     fn requires_github_executor_for_configured_publishers() {
         let without = VALID.replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    npm: {}\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: {}\n",
         );
         assert!(Config::from_yaml(&without)
             .expect_err("publisher without executor rejected")
@@ -1518,7 +1621,7 @@ release-units:
 
         let with = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    npm: {}\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: {}\n",
         );
         let config = Config::from_yaml(&with).expect("publisher with executor accepted");
         assert_eq!(
@@ -1528,14 +1631,46 @@ release-units:
     }
 
     #[test]
+    fn rejects_contract_one_before_typed_publisher_parsing() {
+        let legacy = VALID
+            .replace("contract: contract-2", "contract: contract-1")
+            .replace(
+                "    path: packages/library\n",
+                "    path: packages/library\n    npm: {}\n",
+            );
+        let error = Config::from_yaml(&legacy).expect_err("contract-1 is migrated forward");
+        let message = error.to_string();
+        assert!(message.contains("migrate to contract-2"), "{message}");
+        assert!(
+            message.contains("release-units.<unit>.packages")
+                && message.contains("moving each publisher mapping beneath the package"),
+            "{message}"
+        );
+        assert!(!message.contains("unknown field"), "{message}");
+    }
+
+    #[test]
+    fn rejects_publisher_properties_on_a_release_unit() {
+        let direct = with_github("").replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    npm: {}\n",
+        );
+        let error = Config::from_yaml(&direct).expect_err("release-unit publisher rejected");
+        assert!(error.to_string().contains("unknown field `npm`"), "{error}");
+    }
+
+    #[test]
     fn round_trips_direct_publisher_properties() {
         let text = with_github("").replace(
             "    path: packages/application\n",
             r#"    path: packages/application
-    homebrew: { repository: example-org/homebrew-tap }
-    oci:
-      ghcr: { omit: [ signature ] }
-      dockerhub: { repository: example-org/example-image, username-var: EXAMPLE_USER }
+    packages:
+      application:
+        path: .
+        homebrew: { repository: example-org/homebrew-tap }
+        oci:
+          ghcr: { omit: [ signature ] }
+          dockerhub: { repository: example-org/example-image, username-var: EXAMPLE_USER }
 "#,
         );
         let config = Config::from_yaml(&text).expect("publisher properties accepted");
@@ -1544,7 +1679,7 @@ release-units:
             application.publishers(),
             vec![PublisherKind::Homebrew, PublisherKind::Oci]
         );
-        let oci = application.oci.as_ref().expect("oci publisher");
+        let oci = application.oci().expect("oci publisher");
         assert_eq!(
             oci.ghcr.as_ref().expect("ghcr target").omit,
             vec![AttachedComponent::Signature]
@@ -1558,7 +1693,7 @@ release-units:
     fn rejects_publisher_shapes_that_carry_no_destination() {
         let empty_oci = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    oci: {}\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        oci: {}\n",
         );
         assert!(Config::from_yaml(&empty_oci)
             .expect_err("empty oci rejected")
@@ -1567,7 +1702,7 @@ release-units:
 
         let empty_additional = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    npm: { additional-targets: {} }\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: { additional-targets: {} }\n",
         );
         assert!(Config::from_yaml(&empty_additional)
             .expect_err("empty additional targets rejected")
@@ -1579,7 +1714,7 @@ release-units:
     fn rejects_secret_names_that_are_not_identifiers() {
         let invalid = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    cargo: { token-secret: 'not a name' }\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        cargo: { token-secret: 'not a name' }\n",
         );
         assert!(Config::from_yaml(&invalid)
             .expect_err("non-identifier secret name rejected")
@@ -1687,10 +1822,10 @@ release-units:
         let github = &schema["$defs"]["github"];
         assert_eq!(github["additionalProperties"].as_bool(), Some(false));
         assert_eq!(github["required"].as_sequence().expect("required").len(), 1);
-        let release_unit = &schema["$defs"]["release-unit"]["properties"];
+        let package = &schema["$defs"]["package"]["properties"];
         for publisher in ["npm", "cargo", "homebrew", "rpm", "apt", "aur", "oci"] {
             assert!(
-                release_unit[publisher].is_mapping(),
+                package[publisher].is_mapping(),
                 "schema declares the {publisher} publisher"
             );
         }
