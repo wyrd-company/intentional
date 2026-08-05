@@ -676,6 +676,25 @@ pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<
     if publishing_units.is_empty() {
         return Ok(paths);
     }
+    for release_unit in &publishing_units {
+        let roots = std::iter::once(release_unit.path.clone()).chain(
+            release_unit
+                .packages
+                .values()
+                .map(|package| package_path(release_unit, package)),
+        );
+        for package_root in roots {
+            for manifest in [
+                "package.json",
+                "Cargo.toml",
+                "go.mod",
+                "Dockerfile",
+                "devcontainer-feature.json",
+            ] {
+                paths.insert(package_root.join(manifest));
+            }
+        }
+    }
     for candidate in detector_candidates(root)? {
         let candidate_path = discovery_candidate_directory(&candidate.detector, &candidate.path);
         if !publishing_units
@@ -1291,6 +1310,50 @@ release-units:
         );
     }
 
+    #[test]
+    fn managed_receipts_disambiguate_coincident_package_paths() {
+        let workspace = Workspace::new("receipted-coincident-packages");
+        workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n",
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"sample-package","version":"1.0.0"}"#,
+            );
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: {}\n      node:\n        path: .\n        npm: {}\n",
+        );
+        let mut config = Config::from_yaml(&text).expect("package declarations");
+        config.discovery.managed_paths.extend([
+            crate::config::ManagedPathReceipt {
+                detector: "cargo-package".to_owned(),
+                path: PathBuf::from("component/Cargo.toml"),
+                release_unit: "component".to_owned(),
+                package: "rust".to_owned(),
+            },
+            crate::config::ManagedPathReceipt {
+                detector: "npm-package".to_owned(),
+                path: PathBuf::from("component/package.json"),
+                release_unit: "component".to_owned(),
+                package: "node".to_owned(),
+            },
+        ]);
+
+        let selected = select_publications(workspace.root(), &config)
+            .expect("each receipt assigns one native artifact");
+        assert_eq!(selected.len(), 2);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|publication| publication.capability)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([Capability::NodePackage, Capability::RustCrate])
+        );
+    }
+
     /// Detector evidence is named only beneath publishing release units.
     ///
     /// Go's pattern-based source walk is proved end to end by evidence assembly
@@ -1316,6 +1379,15 @@ release-units:
         assert_eq!(
             named,
             BTreeSet::from([
+                PathBuf::from("component/Cargo.toml"),
+                PathBuf::from("component/Dockerfile"),
+                PathBuf::from("component/devcontainer-feature.json"),
+                PathBuf::from("component/package.json"),
+                PathBuf::from("component/cmd/tool/Cargo.toml"),
+                PathBuf::from("component/cmd/tool/Dockerfile"),
+                PathBuf::from("component/cmd/tool/devcontainer-feature.json"),
+                PathBuf::from("component/cmd/tool/go.mod"),
+                PathBuf::from("component/cmd/tool/package.json"),
                 PathBuf::from("component/cmd/tool/main.go"),
                 PathBuf::from("component/go.mod"),
                 PathBuf::from("component/internal/helper.go"),

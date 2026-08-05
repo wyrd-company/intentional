@@ -996,11 +996,13 @@ fn go_module_present(root: &Path, release: &str, unit: &Path) -> bool {
         })
 }
 
-/// Every Go source beneath one publishing release unit, from both sides.
+/// Every Go source the release commit carries beneath one publishing unit.
+///
+/// `publication_probe_paths` owns the disk half of this union. Keeping the
+/// release-tree walk here is what names a source after the checkout removes
+/// the directory that once contained it.
 fn go_sources(root: &Path, release: &str, unit: &Path) -> BTreeSet<PathBuf> {
-    let mut sources = tree_paths(root, release, unit, |path| path.ends_with(".go"));
-    collect_go_sources(&root.join(unit), unit, &mut sources);
-    sources
+    tree_paths(root, release, unit, |path| path.ends_with(".go"))
 }
 
 fn tree_paths(
@@ -1046,25 +1048,6 @@ fn disk_contains(directory: PathBuf, accepts: impl Fn(&Path) -> bool + Copy) -> 
         }
         accepts(&path) || path.is_dir() && disk_contains(path, accepts)
     })
-}
-
-fn collect_go_sources(directory: &Path, relative: &Path, sources: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name == ".git" {
-            continue;
-        }
-        let child = relative.join(&name);
-        let path = entry.path();
-        if path.is_dir() {
-            collect_go_sources(&path, &child, sources);
-        } else if child.extension().is_some_and(|extension| extension == "go") {
-            sources.insert(child);
-        }
-    }
 }
 
 /// Prove the configured publications describe the release the plan sealed.
@@ -2730,6 +2713,46 @@ subjects: []
         );
     }
 
+    #[test]
+    fn refuses_detector_manifests_published_by_the_release_and_missing_from_disk() {
+        for (manifest, contents) in [
+            ("component/Dockerfile", "FROM scratch\n"),
+            ("component/go.mod", "module example.test/component\n"),
+        ] {
+            let workspace = ReleasedWorkspace::with(
+                CONFIG,
+                &[
+                    (
+                        "component/package.json",
+                        "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                    ),
+                    (manifest, contents),
+                ],
+                "component",
+            );
+            let input = workspace.scratch().join("artifacts");
+            std::fs::create_dir_all(&input).expect("artifacts");
+            stage_intending(&workspace, &input, "  []\n");
+            let output = workspace.scratch().join("release-evidence");
+            std::fs::remove_file(workspace.root.join(manifest))
+                .expect("remove manifest published by the release");
+
+            let error = assemble(&request(&workspace, &input, &output))
+                .expect_err("a published detector manifest absent from disk is refused");
+            let message = error.to_string();
+            assert!(
+                message.contains(
+                    "the assembling checkout does not carry the files the release published"
+                ),
+                "{message}"
+            );
+            assert!(
+                message.contains(manifest),
+                "the diagnostic names {manifest}: {message}"
+            );
+        }
+    }
+
     /// An ignore rule cannot hide a difference on a path assembly reads.
     ///
     /// This is the input that closed the previous repair. Asking git whether
@@ -2835,6 +2858,40 @@ subjects: []
         assert!(
             error.to_string().contains("component/cmd/tool/main.go"),
             "the diagnostic names the missing source: {error}"
+        );
+    }
+
+    #[test]
+    fn release_tree_module_keeps_source_proof_open_after_the_module_and_command_are_removed() {
+        let workspace = ReleasedWorkspace::with(
+            CONFIG,
+            &[
+                (
+                    "component/package.json",
+                    "{\n  \"name\": \"example-component\",\n  \"version\": \"1.0.0\"\n}\n",
+                ),
+                ("component/go.mod", "module example.test/component\n"),
+                (
+                    "component/cmd/tool/main.go",
+                    "package main\n\nfunc main() {}\n",
+                ),
+            ],
+            "component",
+        );
+        let input = workspace.scratch().join("artifacts");
+        std::fs::create_dir_all(&input).expect("artifacts");
+        stage_intending(&workspace, &input, "  []\n");
+        let output = workspace.scratch().join("release-evidence");
+        std::fs::remove_file(workspace.root.join("component/go.mod"))
+            .expect("remove published module manifest");
+        std::fs::remove_dir_all(workspace.root.join("component/cmd"))
+            .expect("remove published command directory");
+
+        let error = assemble(&request(&workspace, &input, &output))
+            .expect_err("the release-tree module keeps its source roster active");
+        assert!(
+            error.to_string().contains("component/cmd/tool/main.go"),
+            "the diagnostic names the source only the release tree can enumerate: {error}"
         );
     }
 
