@@ -1245,8 +1245,9 @@ fn subject_identity(
             else {
                 return fallback;
             };
+            let manifest = directory.join("package.json");
             names::npm_package(&names::SuppliedName {
-                origin: &format!("{} package.json name", directory.display()),
+                origin: &format!("{} name", manifest.display()),
                 value: &name,
             })
         }
@@ -1264,8 +1265,9 @@ fn subject_identity(
             else {
                 return fallback;
             };
+            let manifest = directory.join("Cargo.toml");
             names::cargo_crate(&names::SuppliedName {
-                origin: &format!("{} Cargo.toml package name", directory.display()),
+                origin: &format!("{} package name", manifest.display()),
                 value: &name,
             })
         }
@@ -4620,6 +4622,84 @@ release-units:
             )
             .expect("release-unit identity derives"),
             "release-project"
+        );
+    }
+
+    #[test]
+    fn names_every_package_owned_source_in_subject_identity_diagnostics() {
+        let workspace = two_package_feature_workspace("workflow-subject-diagnostic-census");
+        workspace
+            .write(
+                "component/first/package.json",
+                r#"{"name":"invalid name","version":"1.2.3"}"#,
+            )
+            .write(
+                "component/first/Cargo.toml",
+                "[package]\nname = \"invalid.name\"\nversion = \"1.2.3\"\n",
+            )
+            .write(
+                "component/first/Dockerfile",
+                "FROM scratch\nLABEL org.opencontainers.image.title=\"invalid name\"\n",
+            );
+        let publication = |packager, capability| SelectedPublication {
+            release_unit: "component".to_owned(),
+            package: "first".to_owned(),
+            publisher: crate::model::PublisherKind::Oci,
+            target: "ghcr".to_owned(),
+            destination: None,
+            capability,
+            packager,
+            components: Vec::new(),
+            retrieval: CleanClientMode::Public,
+        };
+        let owner = Path::new("component/first");
+
+        for (packager, capability, expected, rejected_root) in [
+            (
+                Packager::Npm,
+                Capability::NodePackage,
+                "component/first/package.json",
+                "component/package.json",
+            ),
+            (
+                Packager::Cargo,
+                Capability::RustCrate,
+                "component/first/Cargo.toml",
+                "component/Cargo.toml",
+            ),
+            (
+                Packager::Buildx,
+                Capability::RunnableImage,
+                "component/first/Dockerfile",
+                "component/Dockerfile",
+            ),
+        ] {
+            let error =
+                subject_identity(workspace.root(), owner, &publication(packager, capability))
+                    .expect_err("the invalid package-owned identity is refused");
+            assert!(
+                error.contains(expected),
+                "the refusal names {expected}: {error}"
+            );
+            assert!(
+                !error.contains(rejected_root),
+                "the refusal does not invent {rejected_root}: {error}"
+            );
+        }
+
+        let error = subject_identity(
+            workspace.root(),
+            Path::new("component/second"),
+            &publication(Packager::Buildx, Capability::RunnableImage),
+        )
+        .expect_err("a package with no Dockerfile cannot supply an image identity");
+        assert!(
+            error.contains("component/second/Dockerfile"),
+            "the missing-image refusal names the configured package path: {error}"
+        );
+        assert!(
+            !error.contains("component/Dockerfile"),
+            "the missing-image refusal does not invent a root manifest: {error}"
         );
     }
 
