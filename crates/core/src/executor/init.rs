@@ -1881,6 +1881,51 @@ release-units:
     }
 
     #[test]
+    fn reads_publisher_state_from_the_candidate_package() {
+        let workspace = Workspace::new("init-package-publisher-state");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+release-units:
+  component:
+    path: component
+    packages:
+      alpha:
+        path: alpha
+        npm: { additional-targets: { github: {} } }
+      beta: { path: beta, npm: {} }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+"#,
+            )
+            .write(
+                "component/alpha/package.json",
+                r#"{"name":"example-alpha","version":"1.0.0"}"#,
+            )
+            .write(
+                "component/beta/package.json",
+                r#"{"name":"example-beta","version":"1.0.0"}"#,
+            );
+
+        let candidates = initialize_executor(workspace.root())
+            .expect("executor init runs")
+            .plan
+            .candidates;
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].package.as_deref(), Some("beta"));
+        assert!(candidates[0].choices.iter().any(|choice| {
+            choice.publisher == Some(PublisherKind::Npm)
+                && choice.target.as_deref() == Some("github")
+        }));
+    }
+
+    #[test]
     fn creates_one_packager_baseline_in_each_package_directory() {
         let workspace = Workspace::new("init-package-packagers");
         workspace
