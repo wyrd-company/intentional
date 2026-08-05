@@ -1058,6 +1058,14 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
     repo.write("apps/delta/main.go", "package main\n\nfunc main() {}\n");
     repo.write("cmd/a/b/c/d/main.go", "package main\n\nfunc main() {}\n");
     repo.write(
+        "nested/go.mod",
+        "module example.invalid/nested-tool\n\ngo 1.22\n",
+    );
+    repo.write(
+        "nested/apps/epsilon/main.go",
+        "package main\n\nfunc main() {}\n",
+    );
+    repo.write(
         "cmd/beta/main.go",
         "//go:build !ignored\n\npackage main // import \"example.invalid/sample-tool/cmd/beta\"\n\nfunc main() {}\n",
     );
@@ -1092,8 +1100,10 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
             ("go-command", "cmd/a/b/c/d".to_owned()),
             ("go-command", "cmd/alpha".to_owned()),
             ("go-command", "cmd/beta".to_owned()),
+            ("go-command", "nested/apps/epsilon".to_owned()),
             ("go-command", "tools/gamma".to_owned()),
             ("go-module", "go.mod".to_owned()),
+            ("go-module", "nested/go.mod".to_owned()),
         ]
         .into_iter()
         .collect(),
@@ -1117,6 +1127,7 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
                 target_candidate: Some(module.clone()),
             },
             "apps/delta" | "cmd/a/b/c/d" => CandidateResolution::Excluded,
+            "nested/go.mod" | "nested/apps/epsilon" => CandidateResolution::Excluded,
             "cmd/beta" => CandidateResolution::Excluded,
             "tools/gamma" => CandidateResolution::Excluded,
             path => panic!("unexpected Go candidate {path}"),
@@ -1156,6 +1167,8 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
             Path::new("apps/delta"),
             Path::new("cmd/a/b/c/d"),
             Path::new("cmd/beta"),
+            Path::new("nested/apps/epsilon"),
+            Path::new("nested/go.mod"),
             Path::new("tools/gamma"),
         ]
         .into_iter()
