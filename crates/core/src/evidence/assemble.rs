@@ -15,7 +15,8 @@ use crate::evidence::contribution::{
 use crate::evidence::identity::{fragment_disagreements, phase_disagreements, proved_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
 use crate::executor::recipe::{
-    publication_probe_paths, resolve_publications, selects_publications, SelectedPublication,
+    publication_manifest_capability, publication_probe_paths, resolve_publications,
+    selects_publications, SelectedPublication,
 };
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use crate::release::git::GitCommand;
@@ -918,6 +919,9 @@ fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &
         .values()
         .filter(|release_unit| selects_publications(release_unit))
     {
+        paths.extend(tree_paths(root, release, &release_unit.path, |path| {
+            publication_manifest_capability(Path::new(path)).is_some()
+        }));
         if go_module_present(root, release, &release_unit.path) {
             paths.extend(go_sources(root, release, &release_unit.path));
         }
@@ -2717,6 +2721,7 @@ subjects: []
     fn refuses_detector_manifests_published_by_the_release_and_missing_from_disk() {
         for (manifest, contents) in [
             ("component/Dockerfile", "FROM scratch\n"),
+            ("component/Dockerfile.alpine", "FROM scratch\n"),
             ("component/go.mod", "module example.test/component\n"),
         ] {
             let workspace = ReleasedWorkspace::with(

@@ -8,7 +8,9 @@
 use crate::config::{discovery_candidate_directory, Config, PackageConfig, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::evidence::assemble::CleanClientMode;
-use crate::init::{detector_candidates, DiscoveryCandidate, SourceEvidence};
+use crate::init::{
+    detector_candidates, publication_detector_for_path, DiscoveryCandidate, SourceEvidence,
+};
 use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -664,8 +666,9 @@ pub fn capability_set(evidence: &[CapabilityEvidence]) -> BTreeSet<Capability> {
 /// Every path the publication selection opens, relative to the workspace root.
 ///
 /// A consumer that must prove what the selection read needs the paths before
-/// the selection runs, and needs them from detector evidence rather than from
-/// a filename roster of its own.
+/// the selection runs. Existing paths come from detector evidence. Paths only
+/// the release commit carries are classified through the same detector
+/// predicates by evidence assembly.
 pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<PathBuf>> {
     let mut paths = BTreeSet::new();
     let publishing_units = config
@@ -675,25 +678,6 @@ pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<
         .collect::<Vec<_>>();
     if publishing_units.is_empty() {
         return Ok(paths);
-    }
-    for release_unit in &publishing_units {
-        let roots = std::iter::once(release_unit.path.clone()).chain(
-            release_unit
-                .packages
-                .values()
-                .map(|package| package_path(release_unit, package)),
-        );
-        for package_root in roots {
-            for manifest in [
-                "package.json",
-                "Cargo.toml",
-                "go.mod",
-                "Dockerfile",
-                "devcontainer-feature.json",
-            ] {
-                paths.insert(package_root.join(manifest));
-            }
-        }
     }
     for candidate in detector_candidates(root)? {
         let candidate_path = discovery_candidate_directory(&candidate.detector, &candidate.path);
@@ -731,6 +715,24 @@ pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<
         }
     }
     Ok(paths)
+}
+
+/// Capability whose detector recognizes one publication manifest path.
+///
+/// The detector owns filename and variant semantics. The exhaustive capability
+/// match binds each detector identity to the catalog key it can derive, so a
+/// new capability cannot compile without joining this mapping.
+pub(crate) fn publication_manifest_capability(path: &Path) -> Option<Capability> {
+    let detector = publication_detector_for_path(path)?;
+    Capability::ALL
+        .into_iter()
+        .find(|capability| match capability {
+            Capability::NodePackage => detector == "npm-package",
+            Capability::RustCrate => detector == "cargo-package",
+            Capability::GoApplication => detector == "go-command",
+            Capability::RunnableImage => detector == "docker-image",
+            Capability::DevContainerFeature => detector == "devcontainer-feature",
+        })
 }
 
 fn collect_go_source_paths(directory: &Path, relative: &Path, paths: &mut BTreeSet<PathBuf>) {
@@ -1369,6 +1371,7 @@ release-units:
                 "package main\n\nfunc main() {}\n",
             )
             .write("component/internal/helper.go", "package internal\n")
+            .write("component/Dockerfile.alpine", "FROM scratch\n")
             .write("component/.goreleaser.yaml", "version: 2\n")
             .write("unrelated/package.json", r#"{"name":"example-package"}"#);
         let config = config_at(
@@ -1379,20 +1382,30 @@ release-units:
         assert_eq!(
             named,
             BTreeSet::from([
-                PathBuf::from("component/Cargo.toml"),
-                PathBuf::from("component/Dockerfile"),
-                PathBuf::from("component/devcontainer-feature.json"),
-                PathBuf::from("component/package.json"),
-                PathBuf::from("component/cmd/tool/Cargo.toml"),
-                PathBuf::from("component/cmd/tool/Dockerfile"),
-                PathBuf::from("component/cmd/tool/devcontainer-feature.json"),
-                PathBuf::from("component/cmd/tool/go.mod"),
-                PathBuf::from("component/cmd/tool/package.json"),
+                PathBuf::from("component/Dockerfile.alpine"),
                 PathBuf::from("component/cmd/tool/main.go"),
                 PathBuf::from("component/go.mod"),
                 PathBuf::from("component/internal/helper.go"),
             ]),
             "the reader is derived from every detector evidence member the selection scan opens"
+        );
+    }
+
+    #[test]
+    fn dockerfile_variant_is_detector_named_and_selects_a_real_publication() {
+        let workspace = Workspace::new("dockerfile-variant-path");
+        workspace.write("component/Dockerfile.alpine", "FROM scratch\n");
+        let config = config("    oci:\n      ghcr: {}\n");
+
+        let selected = select_publications(workspace.root(), &config)
+            .expect("the detector variant selects its catalog route");
+        assert_eq!(selected[0].capability, Capability::RunnableImage);
+        assert_eq!(selected[0].packager, Packager::Buildx);
+        assert!(
+            publication_probe_paths(workspace.root(), &config)
+                .expect("probe paths")
+                .contains(Path::new("component/Dockerfile.alpine")),
+            "the reader names the same variant the detector selected"
         );
     }
 

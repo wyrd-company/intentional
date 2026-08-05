@@ -3046,6 +3046,24 @@ fn is_discoverable_manifest(path: &Path) -> bool {
         || tag_only_artifact_for(path).is_some()
 }
 
+/// Publication detector that recognizes one manifest path, using the same
+/// predicates repository discovery applies.
+pub(crate) fn publication_detector_for_path(path: &Path) -> Option<&'static str> {
+    match adapter_for(path) {
+        Some(Adapter::Npm) => return Some("npm-package"),
+        Some(Adapter::Cargo) => return Some("cargo-package"),
+        Some(Adapter::Go) => return Some("go-command"),
+        Some(_) | None => {}
+    }
+    if devcontainer_detector_for(path) == Some("devcontainer-feature") {
+        return Some("devcontainer-feature");
+    }
+    match tag_only_artifact_for(path) {
+        Some(TagOnlyArtifact::DockerImage) => Some("docker-image"),
+        Some(TagOnlyArtifact::GithubAction | TagOnlyArtifact::TerraformSource) | None => None,
+    }
+}
+
 fn devcontainer_candidate(root: &Path, path: &Path) -> Result<Option<DiscoveryCandidate>> {
     let Some(detector) = devcontainer_detector_for(path) else {
         return Ok(None);
