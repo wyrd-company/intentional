@@ -4640,6 +4640,10 @@ release-units:
             .write(
                 "component/first/Dockerfile",
                 "FROM scratch\nLABEL org.opencontainers.image.title=\"invalid name\"\n",
+            )
+            .write(
+                "component/first/devcontainer-feature.json",
+                r#"{"id":"invalid name","version":"1.2.3"}"#,
             );
         let publication = |packager, capability| SelectedPublication {
             release_unit: "component".to_owned(),
@@ -4672,6 +4676,12 @@ release-units:
                 Capability::RunnableImage,
                 "component/first/Dockerfile",
                 "component/Dockerfile",
+            ),
+            (
+                Packager::DevContainerCli,
+                Capability::DevContainerFeature,
+                "component/first/devcontainer-feature.json",
+                "component/devcontainer-feature.json",
             ),
         ] {
             let error =
