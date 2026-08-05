@@ -905,12 +905,6 @@ fn candidate_belongs_to_release_unit(
     if projections.contains(&candidate.path) {
         return Ok(true);
     }
-    let directory = discovery_candidate_directory(&candidate.detector, &candidate.path);
-    if matches!(capability, Capability::NodePackage | Capability::RustCrate)
-        && directory == release_unit.path
-    {
-        return Ok(true);
-    }
     let release_root = root.join(&release_unit.path);
     let workspace_manifests = crate::init::workspace_manifest_paths(&release_root)?
         .into_iter()

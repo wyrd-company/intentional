@@ -2046,6 +2046,31 @@ release-units:
                 ("beta", Some("example-beta")),
             ])
         );
+
+        let images = Workspace::new("init-image-release-unit-bound");
+        images
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "  component:\n    path: component\n",
+                    "  alpha:\n    path: alpha\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n  beta:\n    path: beta\n",
+                ),
+            )
+            .write("alpha/Dockerfile", "FROM scratch\n")
+            .write("beta/Dockerfile", "FROM scratch\n");
+        assert_eq!(
+            run(&images)
+                .plan
+                .candidates
+                .iter()
+                .map(|candidate| (candidate.release_unit.as_str(), candidate.path.as_deref()))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("alpha", Some(Path::new("."))),
+                ("beta", Some(Path::new("."))),
+            ]),
+            "image definitions remain inside their owning release unit"
+        );
     }
 
     #[test]
