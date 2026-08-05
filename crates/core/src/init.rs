@@ -5531,6 +5531,57 @@ release-units:
     }
 
     #[test]
+    fn rejects_invalid_candidate_resolution_package_ids() {
+        let invalid = candidate(
+            "examples/invalid.json",
+            Some(CandidateResolution::Independent {
+                release_unit: "planned".to_owned(),
+                package: "bad id!".to_owned(),
+            }),
+        );
+        assert_eq!(
+            candidate_plan(vec![invalid])
+                .validate()
+                .expect_err("invalid package id rejected")
+                .to_string(),
+            "validation failed: invalid candidate resolution package id \"bad id!\""
+        );
+    }
+
+    #[test]
+    fn rejects_candidate_packages_outside_the_release_unit() {
+        let mut config = candidate_plan(Vec::new()).inferred_config;
+        let outside = candidate("examples/outside.json", None);
+        let error = add_candidate_package(&mut config, &outside, "configured", "outside")
+            .expect_err("outside package rejected before configuration validation");
+        assert!(error.to_string().contains("discovery candidate candidate:"));
+        assert!(error
+            .to_string()
+            .contains("at examples/outside.json is outside release unit configured at configured"));
+    }
+
+    #[test]
+    fn rejects_candidate_packages_that_move_an_existing_package() {
+        let mut config = candidate_plan(Vec::new()).inferred_config;
+        config
+            .release_units
+            .get_mut("configured")
+            .expect("configured release unit")
+            .packages
+            .insert(
+                "shared".to_owned(),
+                PackageConfig::new(PathBuf::from("original")),
+            );
+        let moved = candidate("configured/moved.json", None);
+        assert_eq!(
+            add_candidate_package(&mut config, &moved, "configured", "shared")
+                .expect_err("existing package cannot move")
+                .to_string(),
+            "validation failed: release unit configured package shared resolves both original and ."
+        );
+    }
+
+    #[test]
     fn rejects_one_package_identity_claiming_distinct_candidate_paths() {
         let first = candidate(
             "examples/first.json",
