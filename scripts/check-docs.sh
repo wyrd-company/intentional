@@ -8,6 +8,11 @@ set -euo pipefail
 
 rumdl check docs/*.md
 ryl check docs/docs.yml .github/workflows/publish-docs.yml Taskfile.yml
+# ryl lints the contents of a block scalar as YAML rather than as opaque text,
+# so a fenced ```yaml example inside a `|-` section reports one indentation
+# error per nested line. No document linted below can carry a fenced YAML
+# example. State configuration shapes in prose here, and put runnable YAML in
+# docs/*.md, which is linted as Markdown by the command at the end of this file.
 ryl check \
   docs/features/*.yml \
   docs/specifications/*.yml \

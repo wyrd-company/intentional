@@ -122,6 +122,13 @@ proposed-design:
     refuse configuration until the declarations name unambiguous packaging
     boundaries.
 
+    The packages of one release unit are also constrained as a set, because a
+    per-declaration rule cannot see a duplicate. Two declarations resolving to
+    one native artifact are refused, naming both packages and the artifact they
+    share. Without that rule two packages differing only in name publish the
+    same bytes twice under distinct identities, which collides nowhere and so
+    would be reported by nothing.
+
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
     native package files. Its Intentional property contains only the explicit
@@ -229,20 +236,33 @@ proposed-design:
     publication and consumer-retrieval job identifiers each carry the package
     segment between the release unit and the publisher.
 
-    Job naming is the consumer that fails loudest and earliest. Job identifiers
-    are derived rather than authored, and a workflow document cannot hold two
-    jobs of one name, so two packages publishing to one publisher and target
-    collapse into a single job that silently publishes one artifact. The package
-    segment is therefore load-bearing in the derived document, not only in
-    evidence.
+    Job naming is the consumer that fails loudest and earliest, and what it does
+    on a collision is refuse. Job identifiers are derived rather than authored,
+    and a workflow document cannot hold two jobs of one name, so derivation
+    collects every managed publication and consumer-retrieval identifier and
+    reports a job-identifier collision naming the second publication to claim
+    one. The comparison is blocked and no workflow is produced. A repository
+    whose publications cannot be told apart therefore gets no derived workflow
+    at all, rather than a workflow that quietly publishes one artifact where two
+    were configured.
 
-    This is a format with no recorded instances. No release has cut evidence
-    under any publication identity, so the change carries no compatibility
-    burden, needs no dual-read period, and migrates nothing. The identity is
-    stated once and every producer and consumer is written to it. The
-    configuration contract is the opposite case and is handled as its own
-    migration, because configurations written against the shipped contract do
-    exist.
+    That refusal is the guarantee, and it remains required under the four-segment
+    identity rather than being replaced by it. Derived identifiers are escaped
+    from the identity, and the escape is not injective: it folds every character
+    a job identifier may not carry into one, while configured identifiers admit
+    several such characters. Adding the package segment adds another boundary
+    across which distinct identities can fold together, so it removes the
+    collision this design exists to fix without making derived identifiers
+    unique. Uniqueness is held by the refusal, and only by the refusal. A design
+    that read the extra segment as sufficient would invite an implementation to
+    drop the check that is actually protecting it.
+
+    The publication identity is a format with no recorded instances. No release
+    has cut evidence under any publication identity, so the change carries no
+    compatibility burden, needs no dual-read period, and migrates nothing. The
+    identity is stated once and every producer and consumer is written to it.
+    That argument is specific to this identity and does not extend to the
+    interpretation contract, which is sealed into records that already exist.
 
   recipe-catalog: >-
     Intentional maintains publication recipes indexed by package capability,
@@ -286,6 +306,15 @@ proposed-design:
     fixed filenames at the release-unit root. npm workspaces, Cargo workspaces,
     image definitions, and command packages therefore retain their distinct
     packaging boundaries inside one version boundary.
+
+    Locating an artifact is not the same as being allowed to publish it, and the
+    change of mechanism keeps both. A manifest that declines publication derives
+    no publishable capability: an npm manifest marked private or naming no
+    package, and a Cargo manifest whose own publish setting withholds it, each
+    derive nothing regardless of what the detector evidence found there. A
+    package declared on such an artifact reports that its manifest declines
+    publication, rather than resolving. Reading richer evidence must not turn a
+    manifest's own refusal into a publication.
 
     Go command discovery returns every main package admitted by native
     configuration and the bounded detector walk. Recipe selection joins those
