@@ -2425,6 +2425,51 @@ release-units:
 }
 
 #[test]
+fn executor_init_uses_native_workspace_membership_from_the_default_relative_root() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+release-units:
+  component:
+    path: .
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+"#,
+    );
+    repo.write(
+        "package.json",
+        r#"{"name":"example-root","private":true,"workspaces":["packages/*"]}"#,
+    );
+    repo.write(
+        "packages/beta/package.json",
+        r#"{"name":"example-beta","version":"1.0.0"}"#,
+    );
+    repo.write("Cargo.toml", "[workspace]\nmembers = [\"crates/alpha\"]\n");
+    repo.write(
+        "crates/alpha/Cargo.toml",
+        "[package]\nname = \"example-alpha\"\nversion = \"1.0.0\"\n",
+    );
+    repo.write(
+        "crates/alpha/tests/fixture/Cargo.toml",
+        "[package]\nname = \"example-fixture\"\nversion = \"1.0.0\"\n",
+    );
+
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
+    command
+        .current_dir(&repo.root)
+        .args(["executor", "init", "--dry-run"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("package: alpha"))
+        .stdout(predicate::str::contains("package: beta"))
+        .stdout(predicate::str::contains("package: fixture").not());
+}
+
+#[test]
 fn executor_check_reports_locally_observable_nonconformance() {
     let repo = executor_repository();
     let workflow = "name: sample\non: { workflow_dispatch: {} }\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n";

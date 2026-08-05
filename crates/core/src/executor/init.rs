@@ -622,8 +622,9 @@ fn proposed_package_id(artifact: &PackageCandidateEvidence, path: &Path) -> Resu
 
 /// Publisher targets a capability can offer, ordered by publisher then target.
 ///
-/// A target that needs repository data no evidence supplies, or that more than
-/// one derived capability could publish, is configured directly instead.
+/// Initialization offers only decisions it can apply on its own. A target that
+/// needs repository data no evidence supplies, or that more than one derived
+/// capability could publish, is configured directly instead.
 fn offered_targets(
     capability: Capability,
     capabilities: &BTreeSet<Capability>,
@@ -1926,6 +1927,42 @@ github:
     }
 
     #[test]
+    fn one_packages_primary_does_not_unlock_its_siblings_additional_target() {
+        let accepted = ExecutorCandidate {
+            id: "candidate:accepted".to_owned(),
+            kind: CandidateKind::Package,
+            release_unit: "component".to_owned(),
+            package: Some("alpha".to_owned()),
+            path: Some(PathBuf::from("alpha")),
+            detector: Some("npm-package".to_owned()),
+            capability: "node-package".to_owned(),
+            evidence: vec![SourceEvidence {
+                path: PathBuf::from("component/alpha/package.json"),
+                digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned(),
+                lines: Vec::new(),
+            }],
+            choices: vec![Choice {
+                id: ACCEPT_CHOICE.to_owned(),
+                label: "Configure alpha".to_owned(),
+                publisher: Some(PublisherKind::Npm),
+                target: Some(PRIMARY_TARGET.to_owned()),
+                packager: None,
+            }],
+            recommended: None,
+            resolution: Some(ACCEPT_CHOICE.to_owned()),
+        };
+        assert!(!prerequisite_met(
+            &PackageConfig::new(PathBuf::from("beta")),
+            &[accepted],
+            PublisherKind::Npm,
+            "github",
+            "component",
+            "beta",
+        ));
+    }
+
+    #[test]
     fn creates_one_packager_baseline_in_each_package_directory() {
         let workspace = Workspace::new("init-package-packagers");
         workspace
@@ -1980,6 +2017,37 @@ github:
             .join("component/beta/.goreleaser.yaml")
             .is_file());
         assert!(!workspace.root().join(".goreleaser.yaml").is_file());
+    }
+
+    #[test]
+    fn an_existing_package_baseline_suppresses_only_that_package() {
+        let workspace = Workspace::new("init-package-packager-state");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &format!(
+                    "{}github:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\n",
+                    CONFIG.replace(
+                        "    path: component\n",
+                        "    path: component\n    packages:\n      alpha: { path: alpha, rpm: {} }\n      beta: { path: beta, rpm: {} }\n",
+                    )
+                ),
+            )
+            .write("component/alpha/go.mod", "module example.test/alpha\n")
+            .write("component/alpha/main.go", "package main\n\nfunc main() {}\n")
+            .write("component/alpha/.goreleaser.yaml", "project_name: alpha\n")
+            .write("component/beta/go.mod", "module example.test/beta\n")
+            .write("component/beta/main.go", "package main\n\nfunc main() {}\n");
+
+        let packagers = initialize_executor(workspace.root())
+            .expect("executor init runs")
+            .plan
+            .candidates
+            .into_iter()
+            .filter(|candidate| candidate.kind == CandidateKind::Packager)
+            .map(|candidate| candidate.package.expect("packager package"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(packagers, BTreeSet::from(["beta".to_owned()]));
     }
 
     #[test]
@@ -2263,6 +2331,31 @@ github:
         assert!(error
             .to_string()
             .contains("names unknown release unit absent"));
+    }
+
+    #[test]
+    fn rejects_package_acceptance_without_a_publisher_target() {
+        let workspace = Workspace::new("init-package-choice-validation");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let mut candidate = run(&workspace).plan.candidates[0].clone();
+        candidate.choices[0].publisher = None;
+        candidate.resolution = Some(candidate.choices[0].id.clone());
+        let mut config = Config::load(workspace.root()).expect("config loads");
+        let error = apply_candidate(
+            workspace.root(),
+            &mut config,
+            &candidate,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .expect_err("publisher-less package acceptance is rejected");
+        assert!(error
+            .to_string()
+            .contains("accepts a package without a publisher target"));
     }
 
     #[test]

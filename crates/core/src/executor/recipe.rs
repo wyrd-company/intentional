@@ -905,11 +905,28 @@ fn candidate_belongs_to_release_unit(
     if projections.contains(&candidate.path) {
         return Ok(true);
     }
-    let release_root = root.join(&release_unit.path);
+    let absolute_root = if root.is_absolute() {
+        root.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| Error::io(root, error))?
+            .join(root)
+    };
+    let release_root = absolute_root.join(&release_unit.path);
     let workspace_manifests = crate::init::workspace_manifest_paths(&release_root)?
         .into_iter()
-        .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_owned))
-        .collect::<BTreeSet<_>>();
+        .map(|path| {
+            path.strip_prefix(&absolute_root)
+                .map(Path::to_owned)
+                .map_err(|_| {
+                    Error::Validation(format!(
+                        "workspace manifest {} is outside release workspace {}",
+                        path.display(),
+                        absolute_root.display()
+                    ))
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
     match capability {
         Capability::RustCrate | Capability::NodePackage => {
             Ok(workspace_manifests.contains(&candidate.path))
