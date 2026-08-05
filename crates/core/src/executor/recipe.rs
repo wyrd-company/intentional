@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 /// Canonical target identity of an adapter's implicit primary destination.
 pub const PRIMARY_TARGET: &str = "primary";
@@ -606,7 +606,7 @@ fn withheld_capability_reason(
         return Ok(None);
     }
     Ok(Some(format!(
-        "release unit {} is a Go module but declares no discoverable main package, so it derives no {} capability; the maintained recipes build a command, and the packager finds every directory in the module that declares package main",
+        "release unit {} is a Go module but declares no discoverable main package, so it derives no {} capability; the maintained recipes build a command, and the packager searches module directories included by Go's ./... package pattern for package main",
         release_unit.path.display(),
         Capability::GoApplication
     )))
@@ -929,9 +929,10 @@ fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
 /// Every discoverable main-package directory in one Go module.
 pub(crate) fn go_main_package_directories(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut roots = Vec::new();
-    for entry in WalkDir::new(directory).into_iter().filter_entry(|entry| {
-        entry.depth() == 0 || !entry.file_type().is_dir() || !entry.path().join("go.mod").is_file()
-    }) {
+    for entry in WalkDir::new(directory)
+        .into_iter()
+        .filter_entry(go_package_walk_entry)
+    {
         let entry = entry.map_err(|error| {
             Error::Validation(format!(
                 "cannot inspect Go module {}: {error}",
@@ -943,6 +944,22 @@ pub(crate) fn go_main_package_directories(directory: &Path) -> Result<Vec<PathBu
         }
     }
     Ok(roots)
+}
+
+/// Whether Go's recursive package pattern includes a tree entry in this module.
+///
+/// Go excludes vendored and test-data trees plus directories whose names begin
+/// with `.` or `_`. A nested `go.mod` starts another module, so its packages are
+/// discovered when that manifest is processed instead of being attributed to
+/// its parent module.
+fn go_package_walk_entry(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    let name = entry.file_name().to_string_lossy();
+    !matches!(name.as_ref(), "vendor" | "testdata")
+        && !name.starts_with(['.', '_'])
+        && !entry.path().join("go.mod").is_file()
 }
 
 /// Whether the Go files directly inside one directory declare `package main`.
@@ -1658,6 +1675,35 @@ release-units:
         assert!(
             !capability_set(&derived).contains(&Capability::GoApplication),
             "a child module command does not make the parent module publishable"
+        );
+    }
+
+    #[test]
+    fn withholds_the_capability_from_commands_go_excludes_from_recursive_packages() {
+        let workspace = Workspace::new("go-excluded-packages");
+        workspace
+            .write("component/go.mod", "module example.test/component\n")
+            .write(
+                "component/vendor/example.test/other/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write(
+                "component/testdata/sample/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write(
+                "component/_fixtures/sample/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write(
+                "component/.fixtures/sample/main.go",
+                "package main\n\nfunc main() {}\n",
+            );
+        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
+            .expect("capabilities derive");
+        assert!(
+            !capability_set(&derived).contains(&Capability::GoApplication),
+            "commands outside Go's recursive package set do not make the module publishable"
         );
     }
 

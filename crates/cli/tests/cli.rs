@@ -1074,6 +1074,14 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
     repo.write("cmd/ignored/main.go", "package main\n\nfunc main() {}\n");
     repo.write("cmd/.cache/main.go", "package main\n\nfunc main() {}\n");
     repo.write(
+        "vendor/example.invalid/other/main.go",
+        "package main\n\nfunc main() {}\n",
+    );
+    repo.write(
+        "testdata/sample/main.go",
+        "package main\n\nfunc main() {}\n",
+    );
+    repo.write(
         ".goreleaser.yaml",
         "version: 2\nbuilds:\n  - main: ./tools/gamma\n",
     );

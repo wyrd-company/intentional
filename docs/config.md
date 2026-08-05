@@ -329,7 +329,11 @@ in their own files and take their version authority from a canonical Git tag:
 
 | Package | Detector | Evidence |
 | --- | --- | --- |
-| Go command | `go-command` | directory containing files that declare `package main` |
+| Go command | `go-command` | searchable Go package directory containing files that declare `package main` |
+
+Search follows Go's recursive `./...` package set. It excludes `vendor`,
+`testdata`, directories beginning with `.` or `_`, and packages owned by nested
+Go modules.
 
 Each candidate contains source evidence, extracted identity and version when
 available, and only the projection or tag suggestions supported by that
