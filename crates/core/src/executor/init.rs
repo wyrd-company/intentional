@@ -2281,6 +2281,7 @@ github:
             message.contains("declared and shared/package.json"),
             "configured package paths are normalized against a root-valued release unit: {message}"
         );
+        assert!(!message.contains("./declared"), "{message}");
     }
 
     #[test]
