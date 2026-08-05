@@ -143,9 +143,11 @@ Intentional uses one workspace-root release unit for its shared Cargo and npm
 version. Its unphased `{version}` workspace tag is the global release tag each
 plan seals, and that tag triggers publication. `intentional@{version}` records
 the release unit before publication. The
-unit contains three publication packages: `core` at `crates/core` and `cli` at
-`crates/cli` publish with Cargo, and `launcher` at `npm` publishes with npm.
-Homebrew remains undeclared until a maintained non-Go route exists.
+unit contains three publication packages: `core` at `crates/core` publishes
+with Cargo, `cli` at `crates/cli` publishes with Cargo and Homebrew, and
+`launcher` at `npm` publishes with npm. The Homebrew route builds Linux x86-64
+and macOS Arm64 archives once, seals them with the generated formula, and
+promotes that formula to the configured tap without rebuilding either archive.
 
 When init reconciles an existing configuration, current non-development npm
 manifest dependencies own edges between npm release units. Removing such a

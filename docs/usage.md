@@ -255,6 +255,15 @@ reports missing workflows, gate jobs, and managed workflow drift. It uses the
 same comparison engine as the diff below, so what the check reports is exactly
 what a diff would change.
 
+To publish a Rust command through Homebrew, declare `homebrew.repository` on
+the package that owns its Cargo manifest. The package must expose exactly one
+`[[bin]].name`, or a package binary at `src/main.rs`. Intentional derives that
+binary as the formula identity. It builds Linux x86-64 and macOS Arm64 archives
+in separate jobs, seals both archives with the generated formula, uploads the
+archives to the draft GitHub Release, and promotes the sealed formula into the
+configured tap. The tap repository must install the release GitHub App so the
+publisher job can mint a token scoped to that repository alone.
+
 ## Reconcile the managed workflow slices
 
 Intentional owns complete authority-bearing slices of your release and publish

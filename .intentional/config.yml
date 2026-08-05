@@ -78,6 +78,8 @@ release-units:
       cli:
         path: crates/cli
         cargo: {}
+        homebrew:
+          repository: wyrd-company/homebrew-tools
       core:
         path: crates/core
         cargo: {}

@@ -181,11 +181,11 @@ environment. A gate may not use the reserved job namespace.
 
 Intentional's own configuration keeps its two workspace-versioned crates and
 npm launcher in one release unit. The unit has three packages and three
-publications: `core` at `crates/core` and `cli` at `crates/cli` declare `cargo`,
-and `launcher` at `npm` declares `npm`. The unphased workspace tag is
-`{version}`. The release-unit tag is `intentional@{version}` with
-`require-phase: before-publication`. Homebrew is not configured until a
-maintained non-Go route exists.
+publications: `core` at `crates/core` declares `cargo`, `cli` at `crates/cli`
+declares `cargo` and `homebrew`, and `launcher` at `npm` declares `npm`. The
+Homebrew destination is `wyrd-company/homebrew-tools`. The unphased workspace
+tag is `{version}`. The release-unit tag is `intentional@{version}` with
+`require-phase: before-publication`.
 
 `intentional executor init` creates or resumes
 `.intentional/executor-init-plan.yml`. Set each candidate `resolution` to
@@ -277,6 +277,14 @@ deliverables to the draft is not derived yet, so configuring either publisher is
 reported by `intentional executor diff` and `intentional executor check` rather
 than deriving a publisher job that would publish nothing. Homebrew and AUR
 publish descriptors into their own repositories and are derived today.
+
+A Rust package with one binary may publish a Homebrew formula alongside its
+Cargo publication. The binary identity comes from exactly one `[[bin]].name`,
+or from the package name when `src/main.rs` supplies the package binary. The
+maintained build creates Linux x86-64 and macOS Arm64 archives and generates the
+formula inside the same sealed subject. The publisher copies that formula to
+the configured tap and never invokes Cargo. A library or multi-binary package
+must not declare Homebrew because it does not determine one formula identity.
 
 A Go release unit publishes through GoReleaser, and its native
 `.goreleaser.yaml` is where the rest of the contract lives. `intentional
