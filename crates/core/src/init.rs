@@ -5534,18 +5534,18 @@ release-units:
     fn rejects_one_package_identity_claiming_distinct_candidate_paths() {
         let first = candidate(
             "examples/first.json",
-            Some(CandidateResolution::Projection {
-                release_unit: "configured".to_owned(),
+            Some(CandidateResolution::Independent {
+                release_unit: "planned".to_owned(),
                 package: "shared".to_owned(),
-                target_candidate: None,
             }),
         );
+        let creator = first.id.clone();
         let second = candidate(
             "other/second.json",
             Some(CandidateResolution::Projection {
-                release_unit: "configured".to_owned(),
+                release_unit: "planned".to_owned(),
                 package: "shared".to_owned(),
-                target_candidate: None,
+                target_candidate: Some(creator),
             }),
         );
         let error = candidate_plan(vec![first, second])
