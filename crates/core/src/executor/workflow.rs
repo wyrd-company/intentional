@@ -4790,10 +4790,14 @@ release-units:
         for line in [
             "class SampleTool < Formula".to_owned(),
             "version \"1.2.3\"".to_owned(),
-            "release-1.2.3/sample-tool-1.2.3-linux-x86_64.tar.gz".to_owned(),
-            format!("sha256 \"{}\"", sha256(linux_bytes)),
-            "release-1.2.3/sample-tool-1.2.3-macos-arm64.tar.gz".to_owned(),
-            format!("sha256 \"{}\"", sha256(macos_bytes)),
+            format!(
+                "on_linux do\n    url \"https://github.com/sample-owner/sample-repository/releases/download/release-1.2.3/sample-tool-1.2.3-linux-x86_64.tar.gz\"\n    sha256 \"{}\"",
+                sha256(linux_bytes)
+            ),
+            format!(
+                "on_macos do\n    url \"https://github.com/sample-owner/sample-repository/releases/download/release-1.2.3/sample-tool-1.2.3-macos-arm64.tar.gz\"\n    sha256 \"{}\"",
+                sha256(macos_bytes)
+            ),
             "bin.install \"sample-tool\"".to_owned(),
         ] {
             assert!(
