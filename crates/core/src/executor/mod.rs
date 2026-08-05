@@ -280,10 +280,12 @@ release-units:
                 );
             }
             Capability::RustCrate => {
-                workspace.write(
-                    &format!("{root}/Cargo.toml"),
-                    "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n",
-                );
+                workspace
+                    .write(
+                        &format!("{root}/Cargo.toml"),
+                        "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+                    )
+                    .write(&format!("{root}/src/main.rs"), "fn main() {}\n");
             }
             Capability::GoApplication => {
                 workspace

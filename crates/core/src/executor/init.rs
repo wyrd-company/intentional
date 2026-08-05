@@ -1194,7 +1194,11 @@ fn baseline(packager: Packager, release_unit: &str) -> Result<String> {
         Packager::GoReleaser => Ok(format!(
             "version: 2\nproject_name: {release_unit}\nbuilds:\n  - main: .\n    binary: {release_unit}\n    env:\n      - CGO_ENABLED=0\n    goos: [ linux, darwin, windows ]\n    goarch: [ amd64, arm64 ]\n"
         )),
-        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => {
+        Packager::Npm
+        | Packager::Cargo
+        | Packager::CargoArchive
+        | Packager::Buildx
+        | Packager::DevContainerCli => {
             Err(Error::Validation(format!(
                 "Intentional authors no baseline {packager} configuration for {release_unit}"
             )))

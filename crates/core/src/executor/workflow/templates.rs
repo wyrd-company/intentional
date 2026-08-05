@@ -111,6 +111,9 @@ pub(super) const fn toolchain_steps(packager: Packager) -> &'static str {
         Packager::GoReleaser => {
             "  - name: Install the GoReleaser packager\n    uses: @GORELEASER_INSTALL@\n    with:\n      install-only: true\n      version: @GORELEASER_VERSION@\n"
         }
+        Packager::CargoArchive => {
+            "  - name: Download the sealed native archives\n    uses: @DOWNLOAD@\n    with:\n      pattern: @JOB@archive-@SLUG@-*\n      path: ${{ runner.temp }}/@JOB@subject/@SLUG@/bytes\n      merge-multiple: true\n"
+        }
         // A stock runner's default Buildx builder uses the docker driver, which
         // can neither emit an OCI layout nor build more than the runner's own
         // platform. Both are requirements of the subject this job seals, so the
@@ -135,6 +138,37 @@ pub(super) fn build_command(packager: Packager) -> String {
         Packager::Cargo => {
             "      cargo package --locked --target-dir \"${RUNNER_TEMP}/@JOB@cargo\"\n      cp \"${RUNNER_TEMP}\"/@JOB@cargo/package/*.crate \"${@ENVVAR@SUBJECT}/\"".to_owned()
         }
+        Packager::CargoArchive => format!(
+            r#"{RELEASE_VERSION_COMMAND}      binary="${{@ENVVAR@SUBJECT_IDENTITY}}"
+      linux_archive="${{binary}}-${{version}}-linux-x86_64.tar.gz"
+      macos_archive="${{binary}}-${{version}}-macos-arm64.tar.gz"
+      mv "${{@ENVVAR@SUBJECT}}/linux.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/macos.tar.gz" "${{@ENVVAR@SUBJECT}}/${{macos_archive}}"
+      test -f "${{@ENVVAR@SUBJECT}}/${{linux_archive}}"
+      test -f "${{@ENVVAR@SUBJECT}}/${{macos_archive}}"
+      linux_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_archive}}" | cut -d' ' -f1)"
+      macos_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_archive}}" | cut -d' ' -f1)"
+      formula_class="$(printf '%s' "${{binary}}" | awk -F '[-_]' '{{ for (i=1; i<=NF; i++) printf toupper(substr($i,1,1)) substr($i,2) }}')"
+      formula="${{@ENVVAR@SUBJECT}}/homebrew/Formula/${{binary}}.rb"
+      install -d "$(dirname "${{formula}}")"
+      printf '%s\n' \
+        "class ${{formula_class}} < Formula" \
+        "  desc \"Native executable published by ${{GITHUB_REPOSITORY}}\"" \
+        "  homepage \"https://github.com/${{GITHUB_REPOSITORY}}\"" \
+        "  version \"${{version}}\"" \
+        "  on_linux do" \
+        "    url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_archive}}\"" \
+        "    sha256 \"${{linux_digest}}\"" \
+        "  end" \
+        "  on_macos do" \
+        "    url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{macos_archive}}\"" \
+        "    sha256 \"${{macos_digest}}\"" \
+        "  end" \
+        "  def install" \
+        "    bin.install \"${{binary}}\"" \
+        "  end" \
+        "end" > "${{formula}}""#
+        ),
         Packager::GoReleaser => {
             "      goreleaser release --clean --skip=publish,announce\n      cp -R dist/. \"${@ENVVAR@SUBJECT}/\"".to_owned()
         }
@@ -177,6 +211,55 @@ pub(super) const DEV_CONTAINER_CLI: &str = "@devcontainers/cli@0.88.0";
 pub(super) const RELEASE_VERSION_COMMAND: &str = r#"      version="${GITHUB_REF_NAME}"
       version="${version#"${@ENVVAR@TAG_PREFIX}"}"
       version="${version%"${@ENVVAR@TAG_SUFFIX}"}"
+"#;
+
+/// Build one platform archive that the aggregate Cargo archive subject seals.
+pub(super) const PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: @RUNNER@
+permissions:
+  contents: read
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: Build the @PLATFORM@ native executable
+    working-directory: @WORKING_DIRECTORY@
+    env:
+      @ENVVAR@SUBJECT_IDENTITY: @SUBJECT_IDENTITY@
+      @ENVVAR@ARCHIVE: @ARCHIVE@
+    run: |
+      set -euo pipefail
+      cargo build --release --locked --bin "${@ENVVAR@SUBJECT_IDENTITY}"
+      python3 - "target/release/${@ENVVAR@SUBJECT_IDENTITY}" \
+        "${RUNNER_TEMP}/${@ENVVAR@ARCHIVE}" "${@ENVVAR@SUBJECT_IDENTITY}" <<'PY'
+      import gzip
+      import io
+      import pathlib
+      import sys
+      import tarfile
+      source, output, name = map(pathlib.Path, sys.argv[1:])
+      info = tarfile.TarInfo(str(name))
+      data = source.read_bytes()
+      info.size = len(data)
+      info.mode = 0o755
+      info.mtime = 0
+      with output.open("wb") as raw:
+          with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
+              with tarfile.open(fileobj=compressed, mode="w") as archive:
+                  archive.addfile(info, io.BytesIO(data))
+      PY
+  - name: Upload the @PLATFORM@ native archive
+    uses: @UPLOAD@
+    with:
+      name: @JOB@archive-@SLUG@-@PLATFORM@
+      path: ${{ runner.temp }}/@ARCHIVE@
+      retention-days: 1
 "#;
 
 pub(super) fn render_list(values: &[String]) -> String {

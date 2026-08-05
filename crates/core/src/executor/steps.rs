@@ -111,7 +111,7 @@ fn inherited_environment() -> String {
 ///
 /// A GitHub-hosted deliverable is a file the build produced whose consumer
 /// resolves it from the release's own GitHub Release rather than from a
-/// registry. Only GoReleaser produces any today: an npm tarball, a `.crate`, an
+/// registry. GoReleaser and the Cargo archive route produce them: an npm tarball, a `.crate`, an
 /// OCI layout and a Dev Container Feature all reach a registry, so a build job
 /// for those packagers hands the upload job nothing.
 ///
@@ -130,6 +130,7 @@ pub(super) const fn github_hosted_deliverables(packager: Packager) -> Option<&'s
         Packager::GoReleaser => {
             Some("! -name artifacts.json ! -name metadata.json ! -name config.yaml")
         }
+        Packager::CargoArchive => Some(""),
         Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => None,
     }
 }
@@ -289,11 +290,23 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
         Packager::Cargo => cargo_steps(context)
             .map(RecipeSteps::together)
             .map_err(underivable),
+        Packager::CargoArchive => cargo_archive_homebrew_steps(context),
         Packager::GoReleaser => goreleaser_steps(context).map(RecipeSteps::together),
         Packager::Buildx | Packager::DevContainerCli => {
             oci_steps(context).map(RecipeSteps::together)
         }
     }
+}
+
+/// Promote the formula generated beside the archive the Cargo build sealed.
+///
+/// The publisher receives the build artifact and copies its formula into the
+/// configured tap. It never invokes Cargo, so the archive referenced by the
+/// formula is the archive inventoried on the draft Release rather than a second
+/// build whose digest could not agree with the seal.
+fn cargo_archive_homebrew_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
+    debug_assert_eq!(context.publication.publisher, PublisherKind::Homebrew);
+    goreleaser_steps(context).map(RecipeSteps::together)
 }
 
 impl RecipeSteps {

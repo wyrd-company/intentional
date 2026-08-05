@@ -873,7 +873,14 @@ fn publish_contract(
     for subject in &subjects {
         let id = format!("{}build_{}", namespaces.job, subject.slug);
         build_jobs.push(id.clone());
-        jobs.push((id, build_job(namespaces, &verify, subject, &global_tag)));
+        let mut needs = vec![verify.clone()];
+        if subject.packager == Packager::CargoArchive {
+            for platform in cargo_archive_platforms(subject, namespaces, &verify) {
+                needs.push(platform.0.clone());
+                jobs.push(platform);
+            }
+        }
+        jobs.push((id, build_job(namespaces, &needs, subject, &global_tag)));
     }
 
     // A phase with no configured tag seals nothing, so its job is derived only
@@ -1173,14 +1180,24 @@ fn distinct_subjects(
             packager: publication.packager,
             identity: subject_identity(root, &working_directory, publication).map_err(
                 |message| {
-                    WorkflowDiagnostic::at(
-                        "subject-identity-invalid",
-                        message,
-                        &format!(
-                            "release-units.{}.packages.{}",
-                            publication.release_unit, publication.package
-                        ),
-                    )
+                    let (code, path) = if publication.packager == Packager::CargoArchive {
+                        (
+                            "homebrew-formula-underived",
+                            format!(
+                                "release-units.{}.packages.{}.homebrew",
+                                publication.release_unit, publication.package
+                            ),
+                        )
+                    } else {
+                        (
+                            "subject-identity-invalid",
+                            format!(
+                                "release-units.{}.packages.{}",
+                                publication.release_unit, publication.package
+                            ),
+                        )
+                    };
+                    WorkflowDiagnostic::at(code, message, &path)
                 },
             )?,
             working_directory: working_directory.display().to_string(),
@@ -1271,6 +1288,46 @@ fn subject_identity(
                 value: &name,
             })
         }
+        Packager::CargoArchive => {
+            let manifest = directory.join("Cargo.toml");
+            let document = std::fs::read_to_string(absolute_directory.join("Cargo.toml"))
+                .ok()
+                .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
+            let Some(document) = document else {
+                return Err(format!(
+                    "publication {} cannot derive a Homebrew formula identity from {}",
+                    publication.identity(),
+                    manifest.display()
+                ));
+            };
+            let explicit = document
+                .get("bin")
+                .and_then(|bins| bins.as_array_of_tables())
+                .into_iter()
+                .flat_map(|bins| bins.iter())
+                .filter_map(|bin| bin.get("name").and_then(|name| name.as_str()))
+                .collect::<Vec<_>>();
+            let package_name = document
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(|name| name.as_str());
+            let name = match explicit.as_slice() {
+                [name] => Some(*name),
+                [] if absolute_directory.join("src/main.rs").is_file() => package_name,
+                _ => None,
+            };
+            let Some(name) = name else {
+                return Err(format!(
+                    "publication {} cannot derive one Homebrew formula identity from {}; declare exactly one [[bin]].name or one package binary",
+                    publication.identity(),
+                    manifest.display()
+                ));
+            };
+            names::cargo_crate(&names::SuppliedName {
+                origin: &format!("{} binary name", manifest.display()),
+                value: name,
+            })
+        }
         // GoReleaser names the Homebrew formula, the system packages, and the
         // Arch package from one project name, so that name is what every
         // destination of a Go release unit resolves and it is read from the
@@ -1347,7 +1404,11 @@ fn subject_directory(
         // GoReleaser owns the whole version boundary: one project name and one
         // distribution configuration drive every command package in the unit.
         Packager::GoReleaser => unit.path.clone(),
-        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => {
+        Packager::Npm
+        | Packager::Cargo
+        | Packager::CargoArchive
+        | Packager::Buildx
+        | Packager::DevContainerCli => {
             crate::config::join_relative_paths(&unit.path, &package.path)
         }
     }
@@ -1472,7 +1533,7 @@ fn identifier(value: &str) -> String {
 /// cannot record a subject it did not produce or a release it is not part of.
 fn build_job(
     namespaces: &PrefixNamespaces,
-    verify: &str,
+    needs: &[String],
     subject: &DistinctSubject,
     global_tag: &str,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
@@ -1480,7 +1541,7 @@ fn build_job(
         PUBLISH_BUILD_JOB,
         namespaces,
         &[
-            ("@NEEDS@", &render_list(&[verify.to_owned()])),
+            ("@NEEDS@", &render_list(needs)),
             ("@SLUG@", &subject.slug),
             (
                 "@BUILD_NAME@",
@@ -1509,6 +1570,35 @@ fn build_job(
             ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
         ],
     )
+}
+
+/// Platform builds whose archives become one sealed Homebrew subject.
+fn cargo_archive_platforms(
+    subject: &DistinctSubject,
+    namespaces: &PrefixNamespaces,
+    verify: &str,
+) -> Vec<(String, std::result::Result<Value, WorkflowDiagnostic>)> {
+    [("linux", "ubuntu-latest"), ("macos", "macos-14")]
+        .into_iter()
+        .map(|(platform, runner)| {
+            let id = format!("{}build_{}_{}", namespaces.job, subject.slug, platform);
+            let archive = format!("{platform}.tar.gz");
+            let rendered = job(
+                templates::PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB,
+                namespaces,
+                &[
+                    ("@NEEDS@", &render_list(&[verify.to_owned()])),
+                    ("@RUNNER@", runner),
+                    ("@PLATFORM@", platform),
+                    ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
+                    ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
+                    ("@ARCHIVE@", &archive),
+                    ("@SLUG@", &subject.slug),
+                ],
+            );
+            (id, rendered)
+        })
+        .collect()
 }
 
 /// One draft-dependent publication and the subject whose assets it consumes.
@@ -1855,7 +1945,7 @@ fn publication_jobs(
 /// the subject name and the release tag's literal affixes are repository text
 /// that must reach the body as data rather than as source.
 fn build_environment(subject: &DistinctSubject, global_tag: &str) -> String {
-    if subject.packager != Packager::Buildx {
+    if !matches!(subject.packager, Packager::Buildx | Packager::CargoArchive) {
         return String::new();
     }
     let (prefix, suffix) = global_tag
@@ -4563,6 +4653,121 @@ release-units:
         }
     }
 
+    /// A real Cargo package shape that selects both its registry subject and
+    /// its native Homebrew archive subject from the open catalog.
+    fn rust_homebrew_workspace(label: &str, manifest: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release: { template: '{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    packages:
+      command:
+        path: .
+        cargo: {}
+        homebrew: { repository: sample-owner/sample-tap }
+    tags:
+      staged: { role: primary, template: '{id}@{version}', require-phase: before-publication }
+"#,
+            )
+            .write("component/Cargo.toml", manifest)
+            .write(
+                ".github/workflows/release.yml",
+                "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+            )
+            .write(
+                ".github/workflows/publish.yml",
+                "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+            );
+        workspace
+    }
+
+    #[test]
+    fn rust_homebrew_builds_platform_archives_once_and_promotes_the_sealed_formula() {
+        let workspace = rust_homebrew_workspace(
+            "rust-homebrew-route",
+            "[package]\nname = \"sample-cli\"\nversion = \"1.2.3\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+        );
+        workspace.write("component/src/main.rs", "fn main() {}\n");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        for id in [
+            "intentional_build_component_cargo_archive_linux",
+            "intentional_build_component_cargo_archive_macos",
+            "intentional_build_component_cargo_archive",
+            "intentional_publish_component_command_homebrew_primary",
+        ] {
+            assert!(
+                jobs.contains_key(id),
+                "the Rust Homebrew route derives {id}"
+            );
+        }
+        let platform = job_steps(&jobs, "intentional_build_component_cargo_archive_linux");
+        assert!(platform.iter().any(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|body| body.contains("cargo build --release --locked --bin"))
+        }));
+        let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
+        assert!(aggregate.iter().any(|step| {
+            step["run"].as_str().is_some_and(|body| {
+                body.contains("linux_digest")
+                    && body.contains("macos_digest")
+                    && body.contains("homebrew/Formula/${binary}.rb")
+            })
+        }));
+        let publisher = job_steps(
+            &jobs,
+            "intentional_publish_component_command_homebrew_primary",
+        );
+        assert!(publisher.iter().any(|step| {
+            step["run"]
+                .as_str()
+                .is_some_and(|body| body.contains("${INTENTIONAL_SUBJECT}/homebrew"))
+        }));
+        assert!(publisher.iter().all(|step| {
+            step["run"]
+                .as_str()
+                .is_none_or(|body| !body.contains("cargo build"))
+        }));
+    }
+
+    #[test]
+    fn rust_homebrew_refusal_names_the_package_and_undetermined_formula() {
+        let workspace = rust_homebrew_workspace(
+            "rust-homebrew-formula-refusal",
+            "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\n",
+        );
+        let config = Config::load(workspace.root()).expect("configuration loads");
+        let github = config.github.as_ref().expect("GitHub configuration");
+        let diagnostics = derive_contract(workspace.root(), &config, github, WorkflowRole::Publish)
+            .expect_err("a library determines no Homebrew formula");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "homebrew-formula-underived")
+            .expect("named formula refusal");
+        assert_eq!(
+            diagnostic.path.as_deref(),
+            Some("release-units.component.packages.command.homebrew")
+        );
+        assert!(diagnostic
+            .message
+            .contains("component/command/homebrew/primary"));
+        assert!(diagnostic.message.contains("component/Cargo.toml"));
+        assert!(diagnostic.message.contains("exactly one [[bin]].name"));
+    }
+
     #[test]
     fn resolves_each_native_identity_from_its_declared_owner() {
         let workspace = two_package_feature_workspace("workflow-subject-owner-census");
@@ -7001,7 +7206,7 @@ release-units:
             )
             // The Go release unit is what puts a GoReleaser build body, a
             // Homebrew promote body and an AUR promote body in front of the
-            // sweep. Without it the gate reads three of the five packagers and
+            // sweep. Without it the gate reads four of the six packagers and
             // reports clean over the two it never derived.
             .write("xnrjgb/go.mod", "module vhzmlk.example/svqtwm\n")
             .write(
@@ -7013,6 +7218,7 @@ release-units:
                 "vkjmtd/Cargo.toml",
                 "[package]\nname = \"hbzqvn\"\nversion = \"1.0.0\"\npublish = [\"mtdlgw\"]\n",
             )
+            .write("vkjmtd/src/main.rs", "fn main() {}\n")
             .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
             .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
         workspace
@@ -7113,6 +7319,7 @@ release-units:
         path: .
         cargo:
           token-secret: HGWRXPFD
+        homebrew: { repository: zlfrhd/cbnwvk }
     tags:
       staged:
         role: primary
@@ -7151,7 +7358,7 @@ release-units:
     /// derivation's repository-read sites rather than a fixture's values, or it
     /// reintroduces the pattern this avoids.
     ///
-    /// **The roster covers all five packagers.** The sentinel configuration
+    /// **The roster covers all six packagers.** The sentinel configuration
     /// derives npm, Cargo, both OCI destinations and a GoReleaser publication,
     /// so the sweep reads Homebrew and AUR promote bodies as well. That the
     /// last two were absent was not a stated limit doing its job: three Go
@@ -7491,6 +7698,9 @@ release-units:
                 "assemble_evidence",
                 "build_jdmcvx_buildx",
                 "build_qhwzru_cargo",
+                "build_qhwzru_cargo_archive",
+                "build_qhwzru_cargo_archive_linux",
+                "build_qhwzru_cargo_archive_macos",
                 "build_qhwzru_npm",
                 "build_rtwzlf_devcontainer_cli",
                 "build_wpdklc_goreleaser",
@@ -7498,6 +7708,7 @@ release-units:
                 "publish_jdmcvx_package_oci_dockerhub",
                 "publish_jdmcvx_package_oci_ghcr",
                 "publish_qhwzru_rust_cargo_primary",
+                "publish_qhwzru_rust_homebrew_primary",
                 "publish_qhwzru_node_npm_github",
                 "publish_qhwzru_node_npm_primary",
                 "publish_rtwzlf_package_oci_ghcr",
@@ -8811,7 +9022,7 @@ release-units:
             // A sweep whose bodies all come from one packager cannot witness a
             // rule about every packager, and the job enumeration above would
             // still agree, because those jobs exist whether or not they carry
-            // shell. Three of the five packagers is what this gate read until
+            // shell. Three of the six packagers is what this gate read until
             // the fixture derived a GoReleaser publication, and it reported
             // clean the whole time.
             //

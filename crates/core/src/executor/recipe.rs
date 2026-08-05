@@ -74,6 +74,8 @@ pub enum Packager {
     Npm,
     /// Cargo command-line client.
     Cargo,
+    /// Cargo-built native archive consumed by a Homebrew formula.
+    CargoArchive,
     /// GoReleaser.
     GoReleaser,
     /// Docker Buildx.
@@ -88,6 +90,7 @@ impl Packager {
         match self {
             Self::Npm => "npm",
             Self::Cargo => "cargo",
+            Self::CargoArchive => "cargo-archive",
             Self::GoReleaser => "goreleaser",
             Self::Buildx => "buildx",
             Self::DevContainerCli => "devcontainer-cli",
@@ -98,7 +101,7 @@ impl Packager {
     pub const fn configuration_paths(self) -> &'static [&'static str] {
         match self {
             Self::Npm => &["package.json"],
-            Self::Cargo => &["Cargo.toml"],
+            Self::Cargo | Self::CargoArchive => &["Cargo.toml"],
             Self::GoReleaser => &[".goreleaser.yaml", ".goreleaser.yml"],
             Self::Buildx => &["Dockerfile"],
             Self::DevContainerCli => &["devcontainer-feature.json"],
@@ -173,6 +176,14 @@ const CATALOG: &[Recipe] = &[
         target: PRIMARY_TARGET,
         components: &[],
         retrieval: CleanClientMode::Public,
+    },
+    Recipe {
+        capability: Capability::RustCrate,
+        packager: Packager::CargoArchive,
+        publisher: PublisherKind::Homebrew,
+        target: PRIMARY_TARGET,
+        components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
         capability: Capability::GoApplication,
@@ -1780,20 +1791,16 @@ release-units:
     }
 
     #[test]
-    fn reports_unsupported_and_ambiguous_combinations() {
-        let workspace = Workspace::new("unsupported");
+    fn selects_rust_homebrew_and_reports_ambiguous_combinations() {
+        let workspace = Workspace::new("rust-homebrew-selection");
         workspace.write("component/Cargo.toml", "[package]\nname = \"component\"\n");
-        let error = select_publications(
+        let selected = select_publications(
             workspace.root(),
             &config("    homebrew: { repository: example-org/homebrew-tap }\n"),
         )
-        .expect_err("unsupported combination rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("derived capabilities are rust-crate"),
-            "{error}"
-        );
+        .expect("Rust package selects the maintained Homebrew route");
+        assert_eq!(selected[0].capability, Capability::RustCrate);
+        assert_eq!(selected[0].packager, Packager::CargoArchive);
 
         let workspace = Workspace::new("ambiguous");
         workspace
