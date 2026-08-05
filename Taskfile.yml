@@ -39,6 +39,13 @@ tasks:
     desc: Run all continuous-integration checks locally
     deps: [ docs:check, fmt-check, lint, npm:test, release:check, self-check, test ]
 
+  hosted:check:
+    desc: Require every completed check on a GitHub pull request to pass
+    requires:
+      vars: [ PR ]
+    cmds:
+      - gh pr checks {{ .PR }}
+
   npm:test:
     desc: Test the public npm launcher and its exact package contents
     cmds:

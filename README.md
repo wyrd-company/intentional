@@ -589,3 +589,14 @@ task lint
 task test
 task ci
 ```
+
+`task ci` is local preflight. It does not reproduce GitHub runner images,
+architecture matrices, or pull-request state. Before starting work from an
+integration branch, and after each change lands there, query its pull request:
+
+```console
+task hosted:check PR=<pull-request-number>
+```
+
+Every repository check must pass at the integration head. A red check is
+work to diagnose or assign before the next change treats that head as its base.
