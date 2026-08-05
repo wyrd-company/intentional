@@ -229,9 +229,10 @@ workspace manifests, image definitions, and Go commands. Set each candidate
 command until it reports the `ready` state and updates `.intentional/config.yml`.
 An acceptance writes the package and its publisher opt-in. A decline writes an
 evidence-pinned discovery receipt. Both decisions therefore survive a fresh
-clone even though the plan does not. Accepting a package can offer its dependent
-targets on the next run, so the plan converges through explicit decisions rather
-than inference.
+clone even though the plan does not. A later manifest change invalidates a
+decline receipt and reopens the package decision against the new evidence.
+Accepting a package can offer its dependent targets on the next run, so the plan
+converges through explicit decisions rather than inference.
 
 Add `--dry-run` to print the plan the command would write, and every file it
 would touch, without changing the workspace.

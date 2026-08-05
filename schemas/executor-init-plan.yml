@@ -82,6 +82,7 @@ $defs:
       - id
       - kind
       - release-unit
+      - package
       - capability
       - evidence
       - choices

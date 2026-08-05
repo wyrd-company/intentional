@@ -155,11 +155,12 @@ impl ExecutorCandidate {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.kind == CandidateKind::Package
-            && (self.package.is_none() || self.path.is_none() || self.detector.is_none())
+        if self.package.is_none()
+            || (self.kind == CandidateKind::Package
+                && (self.path.is_none() || self.detector.is_none()))
         {
             return Err(Error::Validation(format!(
-                "executor package candidate {} must name its package, path, and detector",
+                "executor candidate {} must name its package; package candidates must also name their path and detector",
                 self.id
             )));
         }
@@ -495,14 +496,23 @@ fn derive_candidates(
         let derived = derive_capabilities(root, config, id)?;
         let capabilities = capability_set(&derived);
         for evidence in &derived {
+            let package = &release_unit.packages[&evidence.package];
             for (publisher, target) in offered_targets(evidence.capability, &capabilities) {
-                if configured(release_unit, publisher, &target)
-                    || !prerequisite_met(release_unit, &candidates, publisher, &target, id)
+                if configured(package, publisher, &target)
+                    || !prerequisite_met(
+                        package,
+                        &candidates,
+                        publisher,
+                        &target,
+                        id,
+                        &evidence.package,
+                    )
                 {
                     continue;
                 }
                 candidates.push(publication_candidate(
                     id,
+                    &evidence.package,
                     evidence,
                     publisher,
                     &target,
@@ -612,9 +622,8 @@ fn proposed_package_id(artifact: &PackageCandidateEvidence, path: &Path) -> Resu
 
 /// Publisher targets a capability can offer, ordered by publisher then target.
 ///
-/// Initialization offers only decisions it can apply on its own. A target that
-/// needs repository data no evidence supplies, or that more than one derived
-/// capability could publish, is configured directly instead of guessed here.
+/// A target that needs repository data no evidence supplies, or that more than
+/// one derived capability could publish, is configured directly instead.
 fn offered_targets(
     capability: Capability,
     capabilities: &BTreeSet<Capability>,
@@ -661,20 +670,22 @@ fn required_configuration(publisher: PublisherKind, target: &str) -> Option<&'st
 
 /// npm's additional GitHub target is offered only after its primary is accepted.
 fn prerequisite_met(
-    release_unit_config: &ReleaseUnitConfig,
+    package_config: &PackageConfig,
     candidates: &[ExecutorCandidate],
     publisher: PublisherKind,
     target: &str,
     release_unit: &str,
+    package: &str,
 ) -> bool {
     if publisher != PublisherKind::Npm || target != "github" {
         return true;
     }
-    if configured(release_unit_config, PublisherKind::Npm, PRIMARY_TARGET) {
+    if configured(package_config, PublisherKind::Npm, PRIMARY_TARGET) {
         return true;
     }
     candidates.iter().any(|candidate| {
         candidate.release_unit == release_unit
+            && candidate.package.as_deref() == Some(package)
             && candidate.resolution.as_deref() == Some(ACCEPT_CHOICE)
             && candidate
                 .selected()
@@ -682,34 +693,37 @@ fn prerequisite_met(
     })
 }
 
-fn configured(release_unit: &ReleaseUnitConfig, publisher: PublisherKind, target: &str) -> bool {
+fn configured(package: &PackageConfig, publisher: PublisherKind, target: &str) -> bool {
     match (publisher, target) {
-        (PublisherKind::Npm, "github") => release_unit
-            .npm()
+        (PublisherKind::Npm, "github") => package
+            .npm
+            .as_ref()
             .and_then(|npm| npm.additional_targets.as_ref())
             .is_some_and(|targets| targets.github.is_some()),
-        (PublisherKind::Npm, _) => release_unit.npm().is_some(),
-        (PublisherKind::Cargo, _) => release_unit.cargo().is_some(),
-        (PublisherKind::Homebrew, _) => release_unit.homebrew().is_some(),
-        (PublisherKind::Rpm, _) => release_unit.rpm().is_some(),
-        (PublisherKind::Apt, _) => release_unit.apt().is_some(),
-        (PublisherKind::Aur, _) => release_unit.aur().is_some(),
-        (PublisherKind::Oci, "dockerhub") => release_unit
-            .oci()
+        (PublisherKind::Npm, _) => package.npm.is_some(),
+        (PublisherKind::Cargo, _) => package.cargo.is_some(),
+        (PublisherKind::Homebrew, _) => package.homebrew.is_some(),
+        (PublisherKind::Rpm, _) => package.rpm.is_some(),
+        (PublisherKind::Apt, _) => package.apt.is_some(),
+        (PublisherKind::Aur, _) => package.aur.is_some(),
+        (PublisherKind::Oci, "dockerhub") => package
+            .oci
+            .as_ref()
             .is_some_and(|oci| oci.dockerhub.is_some()),
-        (PublisherKind::Oci, _) => release_unit.oci().is_some_and(|oci| oci.ghcr.is_some()),
+        (PublisherKind::Oci, _) => package.oci.as_ref().is_some_and(|oci| oci.ghcr.is_some()),
     }
 }
 
 fn publication_candidate(
     release_unit: &str,
+    package: &str,
     evidence: &CapabilityEvidence,
     publisher: PublisherKind,
     target: &str,
     resolutions: &Resolutions,
 ) -> ExecutorCandidate {
     let capability = evidence.capability.as_str();
-    let scope = format!("{publisher}/{target}");
+    let scope = format!("{package}/{publisher}/{target}");
     let id = ExecutorCandidate::stable_id(
         CandidateKind::PublicationIntent,
         release_unit,
@@ -722,7 +736,7 @@ fn publication_candidate(
         id,
         kind: CandidateKind::PublicationIntent,
         release_unit: release_unit.to_owned(),
-        package: None,
+        package: Some(package.to_owned()),
         path: None,
         detector: None,
         capability: capability.to_owned(),
@@ -731,7 +745,7 @@ fn publication_candidate(
             Choice {
                 id: ACCEPT_CHOICE.to_owned(),
                 label: format!(
-                    "Publish {release_unit} to {publisher} {target} using its maintained recipe"
+                    "Publish {release_unit}/{package} to {publisher} {target} using its maintained recipe"
                 ),
                 publisher: Some(publisher),
                 target: Some(target.to_owned()),
@@ -739,7 +753,7 @@ fn publication_candidate(
             },
             Choice {
                 id: DECLINE_CHOICE.to_owned(),
-                label: format!("Do not publish {release_unit} to {publisher} {target}"),
+                label: format!("Do not publish {release_unit}/{package} to {publisher} {target}"),
                 publisher: None,
                 target: None,
                 packager: None,
@@ -757,9 +771,15 @@ fn packager_candidates(
 ) -> Result<Vec<ExecutorCandidate>> {
     let mut required = BTreeMap::new();
     for publication in select_publications(root, config)? {
+        let package =
+            &config.release_units[&publication.release_unit].packages[&publication.package];
         required.insert(
-            (publication.release_unit.clone(), publication.packager),
-            publication.capability,
+            (
+                publication.release_unit.clone(),
+                publication.package.clone(),
+                publication.packager,
+            ),
+            (publication.capability, package.path.clone(), Vec::new()),
         );
     }
     for candidate in candidates {
@@ -773,25 +793,52 @@ fn packager_candidates(
         for recipe in recipes_for(&capabilities, publisher) {
             if recipe.target == target {
                 required.insert(
-                    (candidate.release_unit.clone(), recipe.packager),
-                    recipe.capability,
+                    (
+                        candidate.release_unit.clone(),
+                        candidate
+                            .package
+                            .clone()
+                            .expect("validated candidate package"),
+                        recipe.packager,
+                    ),
+                    (
+                        recipe.capability,
+                        candidate
+                            .path
+                            .clone()
+                            .or_else(|| {
+                                config.release_units[&candidate.release_unit]
+                                    .packages
+                                    .get(candidate.package.as_deref()?)
+                                    .map(|package| package.path.clone())
+                            })
+                            .expect("candidate package path is configured or proposed"),
+                        candidate.evidence.clone(),
+                    ),
                 );
             }
         }
     }
 
     let mut derived = Vec::new();
-    for ((release_unit, packager), capability) in required {
+    for ((release_unit, package_id, packager), (capability, package_path, candidate_evidence)) in
+        required
+    {
+        let release_unit_config = &config.release_units[&release_unit];
         if !packager.baseline_is_authorable()
-            || packager_configured(root, &config.release_units[&release_unit], packager)
+            || packager_configured(root, release_unit_config, &package_path, packager)
         {
             continue;
         }
-        let evidence = derive_capabilities(root, config, &release_unit)?
-            .into_iter()
-            .filter(|item| item.capability == capability)
-            .map(|item| item.evidence)
-            .collect::<Vec<_>>();
+        let evidence = if candidate_evidence.is_empty() {
+            derive_capabilities(root, config, &release_unit)?
+                .into_iter()
+                .filter(|item| item.package == package_id && item.capability == capability)
+                .map(|item| item.evidence)
+                .collect::<Vec<_>>()
+        } else {
+            candidate_evidence
+        };
         if evidence.is_empty() {
             continue;
         }
@@ -799,14 +846,14 @@ fn packager_candidates(
             CandidateKind::Packager,
             &release_unit,
             capability.as_str(),
-            packager.as_str(),
+            &format!("{package_id}/{packager}"),
         );
         derived.push(ExecutorCandidate {
             resolution: carried_resolution(&id, resolutions),
             id,
             kind: CandidateKind::Packager,
             release_unit: release_unit.clone(),
-            package: None,
+            package: Some(package_id.clone()),
             path: None,
             detector: None,
             capability: capability.as_str().to_owned(),
@@ -815,7 +862,7 @@ fn packager_candidates(
                 Choice {
                     id: ACCEPT_CHOICE.to_owned(),
                     label: format!(
-                        "Create the baseline {packager} configuration for {release_unit}"
+                        "Create the baseline {packager} configuration for {release_unit}/{package_id}"
                     ),
                     publisher: None,
                     target: None,
@@ -824,7 +871,7 @@ fn packager_candidates(
                 Choice {
                     id: DECLINE_CHOICE.to_owned(),
                     label: format!(
-                        "Author the {packager} configuration for {release_unit} outside Intentional"
+                        "Author the {packager} configuration for {release_unit}/{package_id} outside Intentional"
                     ),
                     publisher: None,
                     target: None,
@@ -837,11 +884,18 @@ fn packager_candidates(
     Ok(derived)
 }
 
-fn packager_configured(root: &Path, release_unit: &ReleaseUnitConfig, packager: Packager) -> bool {
-    packager
-        .configuration_paths()
-        .iter()
-        .any(|relative| root.join(&release_unit.path).join(relative).is_file())
+fn packager_configured(
+    root: &Path,
+    release_unit: &ReleaseUnitConfig,
+    package_path: &Path,
+    packager: Packager,
+) -> bool {
+    packager.configuration_paths().iter().any(|relative| {
+        root.join(&release_unit.path)
+            .join(package_path)
+            .join(relative)
+            .is_file()
+    })
 }
 
 fn parse_capability(value: &str) -> Result<Capability> {
@@ -957,39 +1011,30 @@ fn apply_candidate(
                     candidate.id
                 )));
             };
-            let package_was_missing = release_unit.packages.is_empty();
-            enable_publisher(release_unit, publisher, target)?;
-            let package_id = release_unit
-                .packages
-                .keys()
-                .next()
-                .expect("publisher enablement creates one package")
-                .clone();
-            if package_was_missing {
-                edits.push((
-                    vec![
-                        "release-units".to_owned(),
-                        candidate.release_unit.clone(),
-                        "packages".to_owned(),
-                        package_id.clone(),
-                        "path".to_owned(),
-                    ],
-                    Value::String(".".to_owned()),
-                ));
-            }
+            let package_id = candidate
+                .package
+                .as_ref()
+                .expect("validated publication candidate package");
+            let package = release_unit.packages.get_mut(package_id).ok_or_else(|| {
+                Error::Validation(format!(
+                    "executor candidate {} names unknown package {package_id} in release unit {}",
+                    candidate.id, candidate.release_unit
+                ))
+            })?;
+            enable_package_publisher(package, publisher, target)?;
             edits.push((
                 vec![
                     "release-units".to_owned(),
                     candidate.release_unit.clone(),
                     "packages".to_owned(),
-                    package_id,
+                    package_id.clone(),
                     publisher.as_str().to_owned(),
                 ],
-                publisher_value(release_unit, publisher)?,
+                publisher_value(package, publisher)?,
             ));
             operations.push(format!(
-                "configure the {publisher} {target} publisher for release unit {}",
-                candidate.release_unit
+                "configure the {publisher} {target} publisher for package {}/{}",
+                candidate.release_unit, package_id
             ));
         }
         CandidateKind::Packager => {
@@ -999,7 +1044,17 @@ fn apply_candidate(
                     candidate.id
                 )));
             };
-            let relative = release_unit.path.join(
+            let package_id = candidate
+                .package
+                .as_ref()
+                .expect("validated packager candidate package");
+            let package = release_unit.packages.get(package_id).ok_or_else(|| {
+                Error::Validation(format!(
+                    "executor candidate {} names unknown package {package_id} in release unit {}",
+                    candidate.id, candidate.release_unit
+                ))
+            })?;
+            let relative = release_unit.path.join(&package.path).join(
                 packager
                     .configuration_paths()
                     .first()
@@ -1008,10 +1063,7 @@ fn apply_candidate(
             if root.join(&relative).is_file() {
                 return Ok(());
             }
-            writes.push((
-                relative.clone(),
-                baseline(packager, &candidate.release_unit)?,
-            ));
+            writes.push((relative.clone(), baseline(packager, package_id)?));
             operations.push(format!(
                 "create the baseline {packager} configuration {}",
                 relative.display()
@@ -1022,40 +1074,16 @@ fn apply_candidate(
 }
 
 /// Serialized value of one release unit's configured publisher property.
-fn publisher_value(release_unit: &ReleaseUnitConfig, publisher: PublisherKind) -> Result<Value> {
+fn publisher_value(package: &PackageConfig, publisher: PublisherKind) -> Result<Value> {
     Ok(match publisher {
-        PublisherKind::Npm => serde_yaml::to_value(release_unit.npm())?,
-        PublisherKind::Cargo => serde_yaml::to_value(release_unit.cargo())?,
-        PublisherKind::Homebrew => serde_yaml::to_value(release_unit.homebrew())?,
-        PublisherKind::Rpm => serde_yaml::to_value(release_unit.rpm())?,
-        PublisherKind::Apt => serde_yaml::to_value(release_unit.apt())?,
-        PublisherKind::Aur => serde_yaml::to_value(release_unit.aur())?,
-        PublisherKind::Oci => serde_yaml::to_value(release_unit.oci())?,
+        PublisherKind::Npm => serde_yaml::to_value(&package.npm)?,
+        PublisherKind::Cargo => serde_yaml::to_value(&package.cargo)?,
+        PublisherKind::Homebrew => serde_yaml::to_value(&package.homebrew)?,
+        PublisherKind::Rpm => serde_yaml::to_value(&package.rpm)?,
+        PublisherKind::Apt => serde_yaml::to_value(&package.apt)?,
+        PublisherKind::Aur => serde_yaml::to_value(&package.aur)?,
+        PublisherKind::Oci => serde_yaml::to_value(&package.oci)?,
     })
-}
-
-fn enable_publisher(
-    release_unit: &mut ReleaseUnitConfig,
-    publisher: PublisherKind,
-    target: &str,
-) -> Result<()> {
-    if release_unit.packages.is_empty() {
-        release_unit
-            .packages
-            .insert("package".to_owned(), PackageConfig::new(PathBuf::from(".")));
-    }
-    if release_unit.packages.len() != 1 {
-        return Err(Error::Validation(
-            "executor initialization requires exactly one declared package before enabling a publisher"
-                .to_owned(),
-        ));
-    }
-    let package = release_unit
-        .packages
-        .values_mut()
-        .next()
-        .expect("one package was checked");
-    enable_package_publisher(package, publisher, target)
 }
 
 fn enable_package_publisher(
@@ -1223,24 +1251,26 @@ release-units:
         let path = root.join(EXECUTOR_INIT_PLAN_PATH);
         let text = std::fs::read_to_string(&path).expect("plan exists");
         let mut plan: ExecutorInitPlan = serde_yaml::from_str(&text).expect("plan parses");
-        let id = ExecutorCandidate::stable_id(
-            CandidateKind::PublicationIntent,
-            "component",
-            capability,
-            scope,
-        );
-        let packager_id =
-            ExecutorCandidate::stable_id(CandidateKind::Packager, "component", capability, scope);
+        let (scope_kind, scope_target) = scope.split_once('/').unwrap_or((scope, ""));
         let mut matched = false;
         for candidate in &mut plan.candidates {
-            if candidate.id == id || candidate.id == packager_id {
+            let matches_choice = candidate.capability == capability
+                && candidate.choices.iter().any(|candidate_choice| {
+                    candidate_choice
+                        .publisher
+                        .is_some_and(|value| value.as_str() == scope_kind)
+                        && candidate_choice.target.as_deref() == Some(scope_target)
+                        || candidate_choice
+                            .packager
+                            .is_some_and(|value| value.as_str() == scope)
+                });
+            if candidate.kind != CandidateKind::Package && matches_choice {
                 candidate.resolution = Some(choice.to_owned());
                 matched = true;
             } else if candidate.kind == CandidateKind::Package
                 && candidate.capability == capability
                 && scope.contains('/')
             {
-                let (publisher, target) = scope.split_once('/').expect("publisher/target scope");
                 candidate.resolution = Some(if choice == ACCEPT_CHOICE {
                     candidate
                         .choices
@@ -1248,8 +1278,8 @@ release-units:
                         .find(|candidate_choice| {
                             candidate_choice
                                 .publisher
-                                .is_some_and(|value| value.as_str() == publisher)
-                                && candidate_choice.target.as_deref() == Some(target)
+                                .is_some_and(|value| value.as_str() == scope_kind)
+                                && candidate_choice.target.as_deref() == Some(scope_target)
                         })
                         .expect("package candidate offers publisher target")
                         .id
@@ -1369,6 +1399,10 @@ release-units:
             .write(
                 ".intentional/config.yml",
                 &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write(
+                "package.json",
+                r#"{"name":"example-root","private":true,"workspaces":["first/shared","second/shared"]}"#,
             )
             .write(
                 "first/shared/package.json",
@@ -1754,6 +1788,398 @@ release-units:
             }),
             "each artifact carries its own unambiguous GHCR publisher choice"
         );
+    }
+
+    #[test]
+    fn scopes_publication_candidates_to_each_package_in_an_npm_workspace() {
+        let workspace = Workspace::new("init-npm-workspace");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write(
+                "package.json",
+                r#"{"name":"example-root","private":true,"workspaces":["packages/*"]}"#,
+            )
+            .write(
+                "packages/alpha/package.json",
+                r#"{"name":"example-alpha","version":"1.0.0"}"#,
+            )
+            .write(
+                "packages/beta/package.json",
+                r#"{"name":"example-beta","version":"1.0.0"}"#,
+            );
+
+        let proposed = run(&workspace);
+        assert_eq!(
+            proposed
+                .plan
+                .candidates
+                .iter()
+                .map(|candidate| candidate.package.as_deref().expect("package"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["alpha", "beta"]),
+            "native npm workspace membership admits every member and excludes the private root"
+        );
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/primary",
+            ACCEPT_CHOICE,
+        );
+        run(&workspace);
+
+        let publication = run(&workspace);
+        let additional = publication
+            .plan
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.kind == CandidateKind::PublicationIntent)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            additional.len(),
+            2,
+            "each package keeps its own publisher state"
+        );
+        assert_eq!(
+            additional
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2,
+            "package identity separates otherwise identical publication decisions"
+        );
+        assert_eq!(
+            additional
+                .iter()
+                .map(|candidate| candidate.package.as_deref().expect("package"))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["alpha", "beta"])
+        );
+        resolve(
+            workspace.root(),
+            "node-package",
+            "npm/github",
+            ACCEPT_CHOICE,
+        );
+        run(&workspace);
+        let converged = run(&workspace);
+        assert_eq!(converged.state, ExecutorInitState::Ready);
+        assert!(converged.plan.candidates.is_empty());
+        assert!(Config::load(workspace.root())
+            .expect("config loads")
+            .release_units["component"]
+            .packages
+            .values()
+            .all(|package| package
+                .npm
+                .as_ref()
+                .and_then(|npm| npm.additional_targets.as_ref())
+                .is_some_and(|targets| targets.github.is_some())));
+    }
+
+    #[test]
+    fn creates_one_packager_baseline_in_each_package_directory() {
+        let workspace = Workspace::new("init-package-packagers");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &format!(
+                    "{}github:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\n",
+                    CONFIG.replace(
+                        "    path: component\n",
+                        "    path: component\n    packages:\n      alpha: { path: alpha, rpm: {} }\n      beta: { path: beta, rpm: {} }\n",
+                    )
+                ),
+            )
+            .write("component/alpha/go.mod", "module example.test/alpha\n")
+            .write("component/alpha/main.go", "package main\n\nfunc main() {}\n")
+            .write("component/beta/go.mod", "module example.test/beta\n")
+            .write("component/beta/main.go", "package main\n\nfunc main() {}\n");
+
+        let mut plan = initialize_executor(workspace.root())
+            .expect("executor init runs")
+            .plan;
+        let packagers = plan
+            .candidates
+            .iter_mut()
+            .filter_map(|candidate| {
+                if candidate.kind == CandidateKind::Packager {
+                    candidate.resolution = Some(ACCEPT_CHOICE.to_owned());
+                    candidate.package.clone()
+                } else {
+                    candidate.resolution = Some(DECLINE_CHOICE.to_owned());
+                    None
+                }
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            packagers,
+            BTreeSet::from(["alpha".to_owned(), "beta".to_owned()])
+        );
+        plan.state = ExecutorInitState::Ready;
+        workspace.write(
+            EXECUTOR_INIT_PLAN_PATH,
+            &serde_yaml::to_string(&plan).expect("plan serializes"),
+        );
+        let result = initialize_executor(workspace.root()).expect("resolved plan runs");
+        result.apply(workspace.root(), false).expect("plan applies");
+        assert!(workspace
+            .root()
+            .join("component/alpha/.goreleaser.yaml")
+            .is_file());
+        assert!(workspace
+            .root()
+            .join("component/beta/.goreleaser.yaml")
+            .is_file());
+        assert!(!workspace.root().join(".goreleaser.yaml").is_file());
+    }
+
+    #[test]
+    fn bounds_candidates_by_native_membership_without_a_matching_projection() {
+        let workspace = Workspace::new("init-native-bound");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    path: component\n",
+                    "    path: .\n    projections:\n      - { adapter: npm, file: npm/package.json, mode: committed }\n",
+                ),
+            )
+            .write(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"crates/alpha\", \"crates/beta\"]\n",
+            )
+            .write("crates/alpha/Cargo.toml", "[package]\nname='example-alpha'\nversion='1.0.0'\n")
+            .write("crates/beta/Cargo.toml", "[package]\nname='example-beta'\nversion='1.0.0'\n")
+            .write("crates/alpha/tests/fixture/Cargo.toml", "[package]\nname='example-fixture'\nversion='1.0.0'\n")
+            .write("npm/package.json", r#"{"name":"example-npm","version":"1.0.0"}"#);
+
+        let result = run(&workspace);
+        let paths = result
+            .plan
+            .candidates
+            .iter()
+            .map(|candidate| candidate.evidence[0].path.as_path())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            paths,
+            BTreeSet::from([
+                Path::new("crates/alpha/Cargo.toml"),
+                Path::new("crates/beta/Cargo.toml"),
+                Path::new("npm/package.json"),
+            ])
+        );
+    }
+
+    #[test]
+    fn bounds_go_commands_to_the_projected_module() {
+        let workspace = Workspace::new("init-go-bound");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    path: component\n",
+                    "    path: .\n    projections:\n      - { adapter: go, file: apps/alpha/go.mod, mode: committed }\n",
+                ),
+            )
+            .write("apps/alpha/go.mod", "module example.test/alpha\n")
+            .write("apps/alpha/main.go", "package main\n\nfunc main() {}\n")
+            .write("apps/beta/go.mod", "module example.test/beta\n")
+            .write("apps/beta/main.go", "package main\n\nfunc main() {}\n");
+
+        let result = run(&workspace);
+        assert_eq!(result.plan.candidates.len(), 1);
+        assert_eq!(
+            result.plan.candidates[0].path.as_deref(),
+            Some(Path::new("apps/alpha"))
+        );
+    }
+
+    #[test]
+    fn excludes_private_and_unpublishable_manifests() {
+        let workspace = Workspace::new("init-publishable-bound");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write(
+                "package.json",
+                r#"{"name":"example-private","private":true}"#,
+            )
+            .write(
+                "Cargo.toml",
+                "[package]\nname='example-private-crate'\nversion='1.0.0'\npublish=false\n",
+            );
+        assert!(run(&workspace).plan.candidates.is_empty());
+    }
+
+    #[test]
+    fn contains_candidates_within_their_release_unit() {
+        let workspace = Workspace::new("init-release-unit-bound");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "  component:\n    path: component\n",
+                    "  alpha:\n    path: alpha\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n  beta:\n    path: beta\n",
+                ),
+            )
+            .write("alpha/package.json", r#"{"name":"example-alpha","version":"1.0.0"}"#)
+            .write("beta/package.json", r#"{"name":"example-beta","version":"1.0.0"}"#);
+        let result = run(&workspace);
+        assert_eq!(
+            result
+                .plan
+                .candidates
+                .iter()
+                .map(|candidate| (
+                    candidate.release_unit.as_str(),
+                    candidate.package.as_deref()
+                ))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("alpha", Some("example-alpha")),
+                ("beta", Some("example-beta")),
+            ])
+        );
+    }
+
+    #[test]
+    fn rejects_a_proposed_identifier_already_declared_by_hand() {
+        let workspace = Workspace::new("init-declared-collision");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace(
+                    "    path: component\n",
+                    "    path: .\n    packages:\n      shared: { path: declared }\n",
+                ),
+            )
+            .write(
+                "package.json",
+                r#"{"name":"example-root","private":true,"workspaces":["shared"]}"#,
+            )
+            .write(
+                "declared/package.json",
+                r#"{"name":"example-declared","private":true}"#,
+            )
+            .write(
+                "shared/package.json",
+                r#"{"name":"example-proposed","version":"1.0.0"}"#,
+            );
+        let error = initialize_executor(workspace.root()).expect_err("collision is reported");
+        assert!(error.to_string().contains("identifier shared collides"));
+    }
+
+    #[test]
+    fn validates_every_package_candidate_identity_field() {
+        let workspace = Workspace::new("init-candidate-validation");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let candidate = run(&workspace).plan.candidates[0].clone();
+        for missing in ["package", "path", "detector"] {
+            let mut invalid = candidate.clone();
+            match missing {
+                "package" => invalid.package = None,
+                "path" => invalid.path = None,
+                "detector" => invalid.detector = None,
+                _ => unreachable!(),
+            }
+            assert!(
+                invalid
+                    .validate()
+                    .expect_err("missing identity is rejected")
+                    .to_string()
+                    .contains("must name its package"),
+                "missing {missing} reaches the package-field validation"
+            );
+        }
+    }
+
+    #[test]
+    fn normalizes_scoped_npm_identity_and_withholds_unready_choices() {
+        let workspace = Workspace::new("init-choice-shape");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                &CONFIG.replace("    path: component\n", "    path: .\n"),
+            )
+            .write(
+                "package.json",
+                r#"{"name":"@example/thing","version":"1.0.0"}"#,
+            );
+        let candidate = &run(&workspace).plan.candidates[0];
+        assert_eq!(candidate.package.as_deref(), Some("thing"));
+        assert!(
+            candidate
+                .choices
+                .iter()
+                .all(|choice| choice.target.as_deref() != Some("github")),
+            "npm GitHub remains unavailable until primary publication is accepted"
+        );
+    }
+
+    #[test]
+    fn recommends_only_a_single_supported_publisher_choice() {
+        let workspace = Workspace::new("init-recommendation");
+        workspace
+            .write(".intentional/config.yml", CONFIG)
+            .write("component/go.mod", "module example.test/component\n")
+            .write("component/main.go", "package main\n\nfunc main() {}\n");
+        let candidate = &run(&workspace).plan.candidates[0];
+        assert!(candidate.choices.len() > 2);
+        assert_eq!(candidate.recommended, None);
+    }
+
+    #[test]
+    fn separates_candidate_kind_identity_domains() {
+        let package = ExecutorCandidate::stable_id(
+            CandidateKind::Package,
+            "component",
+            "node-package",
+            "component/package.json",
+        );
+        let publication = ExecutorCandidate::stable_id(
+            CandidateKind::PublicationIntent,
+            "component",
+            "node-package",
+            "component/package.json",
+        );
+        assert_ne!(
+            package, publication,
+            "candidate kinds never carry each other's resolution"
+        );
+    }
+
+    #[test]
+    fn rejects_acceptance_for_an_unknown_release_unit() {
+        let workspace = Workspace::new("init-unknown-unit");
+        workspace.write(".intentional/config.yml", CONFIG).write(
+            "component/package.json",
+            r#"{"name":"example-component","version":"1.0.0"}"#,
+        );
+        let mut candidate = run(&workspace).plan.candidates[0].clone();
+        candidate.release_unit = "absent".to_owned();
+        candidate.resolution = candidate.recommended.clone();
+        let mut config = Config::load(workspace.root()).expect("config loads");
+        let error = apply_candidate(
+            workspace.root(),
+            &mut config,
+            &candidate,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .expect_err("unknown release unit is rejected");
+        assert!(error
+            .to_string()
+            .contains("names unknown release unit absent"));
     }
 
     #[test]

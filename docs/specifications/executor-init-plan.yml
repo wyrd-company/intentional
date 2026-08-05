@@ -7,9 +7,10 @@ description: >-
   `intentional executor init`. It binds executor discovery to the
   exact source state, carries the proposed GitHub configuration, and presents
   finite package, publication-intent, and packager choices derived from configured
-  release units and native project evidence. A package candidate names its proposed
-  package identifier, release-unit-relative path, detector, capability, and exact
-  evidence. Each candidate records one selected choice or an unresolved null value.
+  release units and native project evidence. Every candidate names the package it
+  decides. A package candidate also names its proposed release-unit-relative path,
+  detector, capability, and exact evidence. Each candidate records one selected
+  choice or an unresolved null value.
   Applying a ready plan through the same command updates Intentional
   configuration and any explicitly proposed native packager files; workflow
   integration remains a separate executor diff.

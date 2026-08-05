@@ -249,6 +249,8 @@ pub fn recipes_for(capabilities: &BTreeSet<Capability>, publisher: PublisherKind
 /// One release unit's derived capability and the exact evidence supporting it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityEvidence {
+    /// Configured package whose artifact supplied the evidence.
+    pub package: String,
     /// Derived capability.
     pub capability: Capability,
     /// Native artifact proving the capability.
@@ -900,55 +902,33 @@ fn candidate_belongs_to_release_unit(
             }
         })
         .collect::<BTreeSet<_>>();
-    if projections.is_empty() {
-        return Ok(true);
-    }
     if projections.contains(&candidate.path) {
         return Ok(true);
     }
+    let directory = discovery_candidate_directory(&candidate.detector, &candidate.path);
+    if matches!(capability, Capability::NodePackage | Capability::RustCrate)
+        && directory == release_unit.path
+    {
+        return Ok(true);
+    }
+    let release_root = root.join(&release_unit.path);
+    let workspace_manifests = crate::init::workspace_manifest_paths(&release_root)?
+        .into_iter()
+        .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_owned))
+        .collect::<BTreeSet<_>>();
     match capability {
-        Capability::RustCrate => projections.iter().try_fold(false, |matched, projection| {
-            if matched {
-                return Ok(true);
-            }
-            let path = root.join(projection);
-            let Some(text) = probed_file_text(&path)? else {
-                return Ok(false);
-            };
-            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
-                Error::Validation(format!(
-                    "{} is not valid TOML: {error}",
-                    projection.display()
-                ))
-            })?;
-            let Some(members) = document
-                .get("workspace")
-                .and_then(|workspace| workspace.get("members"))
-                .and_then(toml_edit::Item::as_array)
-            else {
-                return Ok(false);
-            };
-            let workspace = projection.parent().unwrap_or(Path::new("."));
-            let member = candidate
-                .path
-                .parent()
-                .and_then(|directory| directory.strip_prefix(workspace).ok())
-                .unwrap_or_else(|| candidate.path.parent().unwrap_or(Path::new(".")));
-            let matched = members
-                .iter()
-                .filter_map(toml_edit::Value::as_str)
-                .any(|pattern| {
-                    glob::Pattern::new(pattern).is_ok_and(|pattern| pattern.matches_path(member))
-                });
-            Ok(matched)
-        }),
-        Capability::GoApplication => Ok(candidate
-            .evidence
-            .iter()
-            .any(|evidence| projections.contains(&evidence.path))),
-        Capability::NodePackage | Capability::RunnableImage | Capability::DevContainerFeature => {
-            Ok(false)
+        Capability::RustCrate | Capability::NodePackage => {
+            Ok(workspace_manifests.contains(&candidate.path))
         }
+        Capability::GoApplication => Ok(candidate.evidence.iter().any(|evidence| {
+            evidence
+                .path
+                .file_name()
+                .is_some_and(|name| name == "go.mod")
+                && (projections.contains(&evidence.path)
+                    || evidence.path.parent() == Some(release_unit.path.as_path()))
+        })),
+        Capability::RunnableImage | Capability::DevContainerFeature => Ok(false),
     }
 }
 
@@ -966,6 +946,7 @@ fn derive_package_capabilities(
             Some(
                 candidate_is_publishable(root, &candidate, capability).map(|publishable| {
                     publishable.then(|| CapabilityEvidence {
+                        package: package_id.to_owned(),
                         capability,
                         evidence: candidate
                             .evidence

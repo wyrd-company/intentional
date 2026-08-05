@@ -2434,7 +2434,7 @@ fn materialize_discovery_inventory(
     Ok(())
 }
 
-fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
+pub(crate) fn workspace_manifest_paths(root: &Path) -> Result<BTreeSet<PathBuf>> {
     let mut directories = BTreeSet::new();
     let mut found_workspace = false;
     let pnpm = root.join("pnpm-workspace.yaml");
