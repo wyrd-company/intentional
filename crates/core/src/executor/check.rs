@@ -513,7 +513,7 @@ aur:
     }
 
     #[test]
-    fn reports_every_unresolved_target_in_one_run() {
+    fn reports_an_unresolved_package_before_its_targets() {
         let workspace = workspace(
             "check-multiple",
             "    cargo: {}\n    oci:\n      ghcr: {}\n",
@@ -523,11 +523,10 @@ aur:
             result
                 .findings
                 .iter()
-                .filter(|finding| finding
-                    .contains("no maintained publication recipe matches the configured target"))
+                .filter(|finding| finding.contains("matches no publishable detector candidate"))
                 .count(),
-            2,
-            "both unresolved targets are reported: {:?}",
+            1,
+            "the package refusal precedes target selection: {:?}",
             result.findings
         );
     }
@@ -545,7 +544,7 @@ aur:
         assert!(!result.conforms());
         let findings = result.findings.join("\n");
         assert!(
-            findings.contains("no maintained publication recipe matches"),
+            findings.contains("matches no publishable detector candidate"),
             "{findings}"
         );
         assert!(

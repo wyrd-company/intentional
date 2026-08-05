@@ -5,10 +5,10 @@
 
 //! Release-unit capability derivation and maintained publication recipe selection.
 
-use crate::config::{Config, ReleaseUnitConfig};
+use crate::config::{discovery_candidate_directory, Config, PackageConfig, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::evidence::assemble::CleanClientMode;
-use crate::init::{evidence, SourceEvidence};
+use crate::init::{detector_candidates, DiscoveryCandidate, SourceEvidence};
 use crate::model::{AttachedComponent, PublisherKind, ReleaseUnitDisposition};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -311,32 +311,37 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
         if !selects_publications(release_unit) {
             continue;
         }
-        if let Err(Error::Validation(message)) = validate_package_artifacts(root, id, release_unit)
+        if let Err(Error::Validation(message)) =
+            validate_package_artifacts(root, config, id, release_unit)
         {
             selection.diagnostics.push(message);
             continue;
         }
-        let capabilities = match derive_capabilities(root, release_unit) {
-            Ok(derived) => capability_set(&derived),
-            Err(Error::Validation(message)) => {
-                selection.diagnostics.push(message);
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        for (publisher, target, configured) in configured_targets(release_unit) {
-            match select_one(
-                root,
-                id,
-                release_unit,
-                &capabilities,
-                publisher,
-                target,
-                &configured,
-            ) {
-                Ok(publication) => selection.selected.push(publication),
-                Err(Error::Validation(message)) => selection.diagnostics.push(message),
-                Err(error) => return Err(error),
+        for (package_id, package) in &release_unit.packages {
+            let capabilities =
+                match derive_package_capabilities(root, config, id, package_id, package) {
+                    Ok(derived) => capability_set(&derived),
+                    Err(Error::Validation(message)) => {
+                        selection.diagnostics.push(message);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
+            for (publisher, target, configured) in configured_targets(package) {
+                match select_one(
+                    root,
+                    id,
+                    release_unit,
+                    package,
+                    &capabilities,
+                    publisher,
+                    target,
+                    &configured,
+                ) {
+                    Ok(publication) => selection.selected.push(publication),
+                    Err(Error::Validation(message)) => selection.diagnostics.push(message),
+                    Err(error) => return Err(error),
+                }
             }
         }
     }
@@ -346,35 +351,51 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
 /// Reject shared ownership among packages that resolve unambiguously.
 fn validate_package_artifacts(
     root: &Path,
+    config: &Config,
     id: &str,
     release_unit: &ReleaseUnitConfig,
 ) -> Result<()> {
     let mut owners = BTreeMap::<PathBuf, String>::new();
     for (package_id, package) in &release_unit.packages {
-        let mut boundary = release_unit.clone();
-        boundary.path = if package.path == Path::new(".") {
-            release_unit.path.clone()
-        } else {
-            release_unit.path.join(&package.path)
-        };
-        boundary.packages.clear();
-        let derived = derive_capabilities(root, &boundary)?;
-        let configured = package.publishers().into_iter().collect::<BTreeSet<_>>();
-        let candidates = derived
-            .iter()
-            .filter(|evidence| {
-                configured.is_empty()
-                    || configured.iter().any(|publisher| {
-                        recipes_for(&BTreeSet::from([evidence.capability]), *publisher)
-                            .into_iter()
-                            .next()
-                            .is_some()
-                    })
-            })
-            .collect::<Vec<_>>();
+        let candidates = derive_package_capabilities(root, config, id, package_id, package)?;
         let artifact = match candidates.as_slice() {
             [evidence] => &evidence.evidence.path,
-            _ => continue,
+            [] => {
+                let detected = matching_detector_candidates(root, config, id, package_id, package)?;
+                let mut publishable = false;
+                for candidate in &detected {
+                    let capability = detector_capability(&candidate.detector)
+                        .expect("matching candidates have package capabilities");
+                    publishable |= candidate_is_publishable(root, candidate, capability)?;
+                }
+                let reason = if detected.is_empty()
+                    && root.join(package_path(release_unit, package)).join("go.mod").is_file()
+                {
+                    "the package is a Go module but declares no discoverable main package".to_owned()
+                } else if detected.is_empty() || publishable {
+                    format!("evidence considered: {}", considered_candidate_paths(root, config, release_unit)?)
+                } else {
+                    format!(
+                        "the matching manifest declines publication: {}",
+                        detected.iter().map(|candidate| candidate.path.display().to_string()).collect::<Vec<_>>().join(", ")
+                    )
+                };
+                return Err(Error::Validation(format!(
+                    "release unit {id} package {package_id} at {} matches no publishable detector candidate; {reason}",
+                    package_path(release_unit, package).display(),
+                )))
+            }
+            many => {
+                return Err(Error::Validation(format!(
+                    "release unit {id} package {package_id} at {} matches {} publishable detector candidates: {}",
+                    package_path(release_unit, package).display(),
+                    many.len(),
+                    many.iter()
+                        .map(|evidence| format!("{} ({})", evidence.evidence.path.display(), evidence.capability))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )))
+            }
         };
         if let Some(first) = owners.insert(artifact.clone(), package_id.clone()) {
             return Err(Error::Validation(format!(
@@ -396,11 +417,9 @@ pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedP
 }
 
 /// Configured target identities and their target-scoped settings, in stable order.
-fn configured_targets(
-    release_unit: &ReleaseUnitConfig,
-) -> Vec<(PublisherKind, String, Configured)> {
+fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Configured)> {
     let mut targets = Vec::new();
-    if let Some(npm) = release_unit.npm() {
+    if let Some(npm) = &package.npm {
         targets.push((
             PublisherKind::Npm,
             PRIMARY_TARGET.to_owned(),
@@ -421,14 +440,14 @@ fn configured_targets(
             ));
         }
     }
-    if release_unit.cargo().is_some() {
+    if package.cargo.is_some() {
         targets.push((
             PublisherKind::Cargo,
             PRIMARY_TARGET.to_owned(),
             Configured::default(),
         ));
     }
-    if let Some(homebrew) = release_unit.homebrew() {
+    if let Some(homebrew) = &package.homebrew {
         targets.push((
             PublisherKind::Homebrew,
             PRIMARY_TARGET.to_owned(),
@@ -439,15 +458,15 @@ fn configured_targets(
         ));
     }
     for (publisher, present) in [
-        (PublisherKind::Rpm, release_unit.rpm().is_some()),
-        (PublisherKind::Apt, release_unit.apt().is_some()),
-        (PublisherKind::Aur, release_unit.aur().is_some()),
+        (PublisherKind::Rpm, package.rpm.is_some()),
+        (PublisherKind::Apt, package.apt.is_some()),
+        (PublisherKind::Aur, package.aur.is_some()),
     ] {
         if present {
             targets.push((publisher, PRIMARY_TARGET.to_owned(), Configured::default()));
         }
     }
-    if let Some(oci) = release_unit.oci() {
+    if let Some(oci) = &package.oci {
         if let Some(dockerhub) = &oci.dockerhub {
             targets.push((
                 PublisherKind::Oci,
@@ -485,6 +504,7 @@ fn select_one(
     root: &Path,
     id: &str,
     release_unit: &ReleaseUnitConfig,
+    package: &PackageConfig,
     capabilities: &BTreeSet<Capability>,
     publisher: PublisherKind,
     target: String,
@@ -531,7 +551,7 @@ fn select_one(
     }
     let destination = match (&configured.destination, publisher) {
         (Some(destination), _) => Some(destination.clone()),
-        (None, PublisherKind::Cargo) => Some(cargo_registry(root, release_unit)?),
+        (None, PublisherKind::Cargo) => Some(cargo_registry(root, release_unit, package)?),
         // The Arch User Repository resolves a package by name, and GoReleaser's
         // own configuration is where that name lives: explicitly under `aur`,
         // and otherwise as the binary package of the declared project.
@@ -602,7 +622,7 @@ fn withheld_capability_reason(
     if !directory.join("go.mod").is_file() {
         return Ok(None);
     }
-    if main_package_directory(&directory)?.is_some() {
+    if !go_main_package_directories(&directory)?.is_empty() {
         return Ok(None);
     }
     Ok(Some(format!(
@@ -628,115 +648,220 @@ pub fn capability_set(evidence: &[CapabilityEvidence]) -> BTreeSet<Capability> {
     evidence.iter().map(|item| item.capability).collect()
 }
 
-/// The file inside a release unit one capability probe opens by name.
-///
-/// Named here rather than beside each probe, because a consumer that must know
-/// which paths the derivation reads — evidence assembly proves each of them
-/// against the release commit before trusting what it derived — would
-/// otherwise restate the names, and a probe added later would leave that
-/// restatement silently short. Matched exhaustively, so a capability added
-/// later cannot compile without naming the file its probe opens.
-pub const fn probe_file(capability: Capability) -> &'static str {
-    match capability {
-        Capability::NodePackage => "package.json",
-        Capability::RustCrate => "Cargo.toml",
-        Capability::GoApplication => "go.mod",
-        Capability::RunnableImage => "Dockerfile",
-        Capability::DevContainerFeature => "devcontainer-feature.json",
-    }
-}
-
 /// Every path the publication selection opens, relative to the workspace root.
 ///
 /// A consumer that must prove what the selection read needs the paths before
-/// the selection runs, and needs them from here rather than from a list of its
-/// own. The Go discovery walks for `*.go` files rather than opening one by
-/// name, so a caller widens this set with those; every other read is a fixed
-/// name under a release unit.
-pub fn publication_probe_paths(config: &Config) -> BTreeSet<PathBuf> {
+/// the selection runs, and needs them from detector evidence rather than from
+/// a filename roster of its own.
+pub fn publication_probe_paths(root: &Path, config: &Config) -> Result<BTreeSet<PathBuf>> {
     let mut paths = BTreeSet::new();
-    for release_unit in config.release_units.values() {
-        if !selects_publications(release_unit) {
-            continue;
-        }
-        for capability in Capability::ALL {
-            paths.insert(release_unit.path.join(probe_file(capability)));
-        }
-        for name in Packager::GoReleaser.configuration_paths() {
-            paths.insert(release_unit.path.join(name));
+    let publishing_units = config
+        .release_units
+        .values()
+        .filter(|release_unit| selects_publications(release_unit))
+        .collect::<Vec<_>>();
+    if publishing_units.is_empty() {
+        return Ok(paths);
+    }
+    for candidate in detector_candidates(root)? {
+        paths.extend(
+            candidate
+                .evidence
+                .into_iter()
+                .map(|evidence| evidence.path)
+                .filter(|path| root.join(path).is_file()),
+        );
+    }
+    for release_unit in publishing_units {
+        if release_unit.aur().is_some() {
+            for name in Packager::GoReleaser.configuration_paths() {
+                let path = release_unit.path.join(name);
+                paths.insert(path.clone());
+                if root.join(path).is_file() {
+                    break;
+                }
+            }
         }
     }
-    paths
+    Ok(paths)
 }
 
 /// Derive every publishable capability of one release unit from its native evidence.
 pub fn derive_capabilities(
     root: &Path,
-    release_unit: &ReleaseUnitConfig,
+    config: &Config,
+    release_unit_id: &str,
 ) -> Result<Vec<CapabilityEvidence>> {
+    let release_unit = &config.release_units[release_unit_id];
     let mut derived = Vec::new();
-    let unit = &release_unit.path;
-    if node_package_is_publishable(root, &unit.join(probe_file(Capability::NodePackage)))? {
-        derived.push(capability_evidence(
-            root,
-            Capability::NodePackage,
-            unit.join(probe_file(Capability::NodePackage)),
-        )?);
+    if release_unit.packages.is_empty() {
+        let package = PackageConfig::new(PathBuf::from("."));
+        return derive_package_capabilities(root, config, release_unit_id, "", &package);
     }
-    if cargo_manifest(root, &unit.join(probe_file(Capability::RustCrate)))?
-        .is_some_and(|manifest| manifest.publishable())
-    {
-        derived.push(capability_evidence(
+    for (package_id, package) in &release_unit.packages {
+        derived.extend(derive_package_capabilities(
             root,
-            Capability::RustCrate,
-            unit.join(probe_file(Capability::RustCrate)),
-        )?);
-    }
-    if root
-        .join(unit)
-        .join(probe_file(Capability::GoApplication))
-        .is_file()
-        && main_package_directory(&root.join(unit))?.is_some()
-    {
-        derived.push(capability_evidence(
-            root,
-            Capability::GoApplication,
-            unit.join(probe_file(Capability::GoApplication)),
-        )?);
-    }
-    if root
-        .join(unit)
-        .join(probe_file(Capability::RunnableImage))
-        .is_file()
-    {
-        derived.push(capability_evidence(
-            root,
-            Capability::RunnableImage,
-            unit.join(probe_file(Capability::RunnableImage)),
-        )?);
-    }
-    if root
-        .join(unit)
-        .join(probe_file(Capability::DevContainerFeature))
-        .is_file()
-    {
-        derived.push(capability_evidence(
-            root,
-            Capability::DevContainerFeature,
-            unit.join(probe_file(Capability::DevContainerFeature)),
+            config,
+            release_unit_id,
+            package_id,
+            package,
         )?);
     }
     Ok(derived)
 }
 
-fn capability_evidence(
+fn derive_package_capabilities(
     root: &Path,
+    config: &Config,
+    release_unit_id: &str,
+    _package_id: &str,
+    package: &PackageConfig,
+) -> Result<Vec<CapabilityEvidence>> {
+    let configured = package.publishers().into_iter().collect::<BTreeSet<_>>();
+    matching_detector_candidates(root, config, release_unit_id, _package_id, package)?
+        .into_iter()
+        .filter_map(|candidate| {
+            let capability = detector_capability(&candidate.detector)?;
+            if !configured.is_empty()
+                && !configured.iter().any(|publisher| {
+                    !recipes_for(&BTreeSet::from([capability]), *publisher).is_empty()
+                })
+            {
+                return None;
+            }
+            Some(
+                candidate_is_publishable(root, &candidate, capability).map(|publishable| {
+                    publishable.then(|| CapabilityEvidence {
+                        capability,
+                        evidence: candidate
+                            .evidence
+                            .iter()
+                            .find(|evidence| evidence.path == candidate.path)
+                            .expect("discovery candidate validates exact-path evidence")
+                            .clone(),
+                    })
+                }),
+            )
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|items| items.into_iter().flatten().collect())
+}
+
+fn matching_detector_candidates(
+    root: &Path,
+    config: &Config,
+    release_unit_id: &str,
+    package_id: &str,
+    package: &PackageConfig,
+) -> Result<Vec<DiscoveryCandidate>> {
+    let release_unit = &config.release_units[release_unit_id];
+    let path = package_path(release_unit, package);
+    let receipts = config
+        .discovery
+        .managed_paths
+        .iter()
+        .filter(|receipt| receipt.release_unit == release_unit_id && receipt.package == package_id)
+        .map(|receipt| (&receipt.detector, &receipt.path))
+        .collect::<BTreeSet<_>>();
+    Ok(live_detector_candidates(root, config)?
+        .into_iter()
+        .filter(|candidate| {
+            if receipts.is_empty() {
+                let candidate_path =
+                    discovery_candidate_directory(&candidate.detector, &candidate.path);
+                candidate_path == path || candidate_path.starts_with(&path)
+            } else {
+                receipts.contains(&(&candidate.detector, &candidate.path))
+            }
+        })
+        .filter(|candidate| {
+            if candidate.detector != "go-command" {
+                return true;
+            }
+            let module = release_unit.path.join("go.mod");
+            candidate
+                .evidence
+                .iter()
+                .any(|evidence| evidence.path == module)
+        })
+        .filter(|candidate| detector_capability(&candidate.detector).is_some())
+        .collect())
+}
+
+fn package_path(release_unit: &ReleaseUnitConfig, package: &PackageConfig) -> PathBuf {
+    if package.path == Path::new(".") {
+        release_unit.path.clone()
+    } else {
+        release_unit.path.join(&package.path)
+    }
+}
+
+fn detector_capability(detector: &str) -> Option<Capability> {
+    match detector {
+        "npm-package" => Some(Capability::NodePackage),
+        "cargo-package" => Some(Capability::RustCrate),
+        "go-command" => Some(Capability::GoApplication),
+        "docker-image" => Some(Capability::RunnableImage),
+        "devcontainer-feature" => Some(Capability::DevContainerFeature),
+        _ => None,
+    }
+}
+
+fn candidate_is_publishable(
+    root: &Path,
+    candidate: &DiscoveryCandidate,
     capability: Capability,
-    relative: PathBuf,
-) -> Result<CapabilityEvidence> {
-    Ok(CapabilityEvidence {
-        capability,
-        evidence: evidence(root, &relative, Vec::new())?,
+) -> Result<bool> {
+    match capability {
+        Capability::NodePackage => node_package_is_publishable(root, &candidate.path),
+        Capability::RustCrate => {
+            Ok(cargo_manifest(root, &candidate.path)?
+                .is_some_and(|manifest| manifest.publishable()))
+        }
+        Capability::GoApplication | Capability::RunnableImage | Capability::DevContainerFeature => {
+            Ok(true)
+        }
+    }
+}
+
+fn live_detector_candidates(root: &Path, config: &Config) -> Result<Vec<DiscoveryCandidate>> {
+    let excluded = config
+        .discovery
+        .excluded_paths
+        .iter()
+        .map(|receipt| ((&receipt.detector, &receipt.path), &receipt.evidence_digest))
+        .collect::<BTreeMap<_, _>>();
+    Ok(detector_candidates(root)?
+        .into_iter()
+        .filter(|candidate| {
+            let Some(expected) = excluded.get(&(&candidate.detector, &candidate.path)) else {
+                return true;
+            };
+            candidate
+                .evidence
+                .iter()
+                .find(|evidence| evidence.path == candidate.path)
+                .is_none_or(|evidence| &evidence.digest != *expected)
+        })
+        .collect())
+}
+
+fn considered_candidate_paths(
+    root: &Path,
+    config: &Config,
+    release_unit: &ReleaseUnitConfig,
+) -> Result<String> {
+    let paths = live_detector_candidates(root, config)?
+        .into_iter()
+        .filter(|candidate| detector_capability(&candidate.detector).is_some())
+        .map(|candidate| candidate.path)
+        .filter(|path| release_unit.path == Path::new(".") || path.starts_with(&release_unit.path))
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    Ok(if paths.is_empty() {
+        "none".to_owned()
+    } else {
+        paths.join(", ")
     })
 }
 
@@ -900,8 +1025,12 @@ fn aur_package(
         .map_err(Error::Validation)
 }
 
-fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<String> {
-    let relative = release_unit.path.join("Cargo.toml");
+fn cargo_registry(
+    root: &Path,
+    release_unit: &ReleaseUnitConfig,
+    package: &PackageConfig,
+) -> Result<String> {
+    let relative = package_path(release_unit, package).join("Cargo.toml");
     let Some(manifest) = cargo_manifest(root, &relative)? else {
         return Ok(CRATES_IO.to_owned());
     };
@@ -915,15 +1044,6 @@ fn cargo_registry(root: &Path, release_unit: &ReleaseUnitConfig) -> Result<Strin
             many.join(", ")
         ))),
     }
-}
-
-/// Where one release unit's Go command package lives, when it can be found.
-///
-/// Discovery returns the directory rather than a boolean because the reason a
-/// capability was withheld has to be reportable: a `go.mod` with no discoverable
-/// command is a diagnosable configuration, not an absent Go module.
-fn main_package_directory(directory: &Path) -> Result<Option<PathBuf>> {
-    Ok(go_main_package_directories(directory)?.into_iter().next())
 }
 
 /// Every discoverable main-package directory in one Go module.
@@ -1018,6 +1138,10 @@ release-units:
 "#;
 
     fn config(publisher: &str) -> Config {
+        config_at(".", publisher)
+    }
+
+    fn config_at(path: &str, publisher: &str) -> Config {
         let package = publisher
             .lines()
             .map(|line| format!("    {line}\n"))
@@ -1025,10 +1149,14 @@ release-units:
         let text = GITHUB.replace(
             "    path: component\n",
             &format!(
-                "    path: component\n    packages:\n      package:\n        path: .\n{package}"
+                "    path: component\n    packages:\n      package:\n        path: {path}\n{package}"
             ),
         );
         Config::from_yaml(&text).expect("fixture config")
+    }
+
+    fn derive_component(root: &Path, config: &Config) -> Result<Vec<CapabilityEvidence>> {
+        derive_capabilities(root, config, "component")
     }
 
     #[test]
@@ -1043,8 +1171,7 @@ release-units:
             .write("component/go.mod", "module example.test/component\n")
             .write("component/main.go", "package main\n\nfunc main() {}\n");
         let config = config("");
-        let derived = derive_capabilities(workspace.root(), &config.release_units["component"])
-            .expect("capabilities derive");
+        let derived = derive_component(workspace.root(), &config).expect("capabilities derive");
         assert_eq!(
             capability_set(&derived),
             BTreeSet::from([
@@ -1134,121 +1261,37 @@ release-units:
     /// makes this assertion unable to fail.
     #[test]
     fn names_every_path_the_selection_opens() {
-        const UNITS: &str = r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-2
-github:
-  workflows:
-    release: { path: .github/workflows/release.yml }
-    publish: { path: .github/workflows/publish.yml }
-release-units:
-  published:
-    path: published
-    packages:
-      package:
-        path: .
-        npm: {}
-    tags:
-      primary: { role: primary, template: '{id}@{version}' }
-  suspended:
-    path: suspended
-    disposition: suspended
-    packages:
-      package:
-        path: .
-        npm: {}
-    tags:
-      primary: { role: primary, template: '{id}@{version}' }
-  unpublished:
-    path: unpublished
-    tags:
-      primary: { role: primary, template: '{id}@{version}' }
-"#;
-        let config = Config::from_yaml(UNITS).expect("fixture config");
-        let stocked = Workspace::new("probe-paths-stocked");
-        let bare = Workspace::new("probe-paths-bare");
-        for unit in ["published", "suspended", "unpublished"] {
-            for capability in Capability::ALL {
-                stocked.write(
-                    &format!("{unit}/{}", probe_file(capability)),
-                    match capability {
-                        Capability::NodePackage => {
-                            "{\"name\":\"example-component\",\"version\":\"1.0.0\"}"
-                        }
-                        // A probe file the derivation cannot parse is the only
-                        // read whose result survives being discarded. The
-                        // target-less unit derives capabilities and throws
-                        // them away, so well-formed content there moves no
-                        // outcome and a selection widened onto it reads files
-                        // nothing compares, invisibly. An unparseable one
-                        // becomes a diagnostic, which is how the read makes
-                        // itself observable. The suspended unit needs no such
-                        // help: it configures a target, so widening onto it
-                        // moves the outcome on its own.
-                        Capability::RustCrate if unit == "unpublished" => {
-                            "this is not valid toml ["
-                        }
-                        Capability::RustCrate => {
-                            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\n"
-                        }
-                        Capability::GoApplication => "module example.test/component\n",
-                        Capability::RunnableImage => "FROM scratch\n",
-                        Capability::DevContainerFeature => "{\"id\":\"example\"}\n",
-                    },
-                );
-            }
-            for name in Packager::GoReleaser.configuration_paths() {
-                stocked.write(&format!("{unit}/{name}"), "builds:\n  - main: ./cmd/tool\n");
-            }
-        }
-        for path in publication_probe_paths(&config) {
-            let path = stocked.root().join(path);
-            if path.is_file() {
-                std::fs::remove_file(&path).expect("remove a named path");
-            }
-        }
-
-        let stripped = resolve_publications(stocked.root(), &config).expect("resolves");
-        let empty = resolve_publications(bare.root(), &config).expect("resolves");
-        assert_eq!(
-            (identities(&stripped.selected), stripped.diagnostics),
-            (identities(&empty.selected), empty.diagnostics),
-            "the selection opens a probe file the reader does not name"
+        let workspace = Workspace::new("detector-evidence-paths");
+        workspace
+            .write("component/go.mod", "module example.test/component\n")
+            .write(
+                "component/cmd/tool/main.go",
+                "package main\n\nfunc main() {}\n",
+            )
+            .write("component/.goreleaser.yaml", "version: 2\n")
+            .write("unrelated/package.json", r#"{"name":"example-package"}"#);
+        let config = config_at(
+            "cmd/tool",
+            "    homebrew: { repository: example-org/homebrew-tap }\n",
         );
-
-        // The other direction costs nothing to hold and is not harmless: a
-        // path named but never opened is a path evidence assembly refuses a
-        // release over without ever having read it.
-        let probes = publication_probe_paths(&config);
-        let named: BTreeSet<&Path> = probes.iter().filter_map(|path| path.parent()).collect();
-        let opened: BTreeSet<&Path> = config
-            .release_units
-            .values()
-            .filter(|release_unit| selects_publications(release_unit))
-            .map(|release_unit| release_unit.path.as_path())
-            .collect();
+        let named = publication_probe_paths(workspace.root(), &config).expect("probe paths");
         assert_eq!(
-            named, opened,
-            "the reader names a release unit the selection never opens"
+            named,
+            BTreeSet::from([
+                PathBuf::from("component/cmd/tool/main.go"),
+                PathBuf::from("component/go.mod"),
+                PathBuf::from("unrelated/package.json"),
+            ]),
+            "the reader is derived from every detector evidence member the selection scan opens"
         );
     }
 
-    /// Publication identities, in the order the selection produced them.
-    fn identities(selected: &[SelectedPublication]) -> Vec<String> {
-        selected.iter().map(SelectedPublication::identity).collect()
-    }
-
-    /// Every capability the derivation can produce is one this module lists.
+    /// Every capability the maintained catalog indexes is reached by derivation.
     ///
-    /// Evidence assembly proves each path this selection opens against the
-    /// release commit, and it asks for those paths here rather than restating
-    /// them. `probe_file` matches exhaustively, so a capability added later
-    /// cannot compile without naming its file — but `ALL` could still be left
-    /// short, and a capability missing from it is a read assembly would never
-    /// prove. A workspace carrying every probe file derives one capability per
-    /// entry, which is what binds the list to the derivation rather than to a
-    /// count written beside it.
+    /// The expected set is extracted from the catalog itself. A route added
+    /// later therefore enters this assertion without a second maintained list.
     #[test]
-    fn derives_one_capability_for_every_probe_it_enumerates() {
+    fn derives_every_capability_indexed_by_the_catalog() {
         let workspace = Workspace::new("every-capability");
         workspace
             .write(
@@ -1266,18 +1309,15 @@ release-units:
                 "component/devcontainer-feature.json",
                 "{\"id\":\"example\"}\n",
             );
-        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
-            .expect("capabilities derive");
+        let derived = derive_component(workspace.root(), &config("")).expect("capabilities derive");
+        let indexed = catalog()
+            .iter()
+            .map(|recipe| recipe.capability)
+            .collect::<BTreeSet<_>>();
         assert_eq!(
             capability_set(&derived),
-            BTreeSet::from(Capability::ALL),
-            "the derivation produces exactly the capabilities the probe list enumerates"
-        );
-        let probes: BTreeSet<&str> = Capability::ALL.into_iter().map(probe_file).collect();
-        assert_eq!(
-            probes.len(),
-            Capability::ALL.len(),
-            "each capability probes a file of its own"
+            indexed,
+            "detector evidence reaches every capability indexed by the catalog"
         );
     }
 
@@ -1290,8 +1330,7 @@ release-units:
                 r#"{"name":"example-component","private":true}"#,
             )
             .write("component/Cargo.toml", "[workspace]\nmembers = []\n");
-        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
-            .expect("capabilities derive");
+        let derived = derive_component(workspace.root(), &config("")).expect("capabilities derive");
         assert!(capability_set(&derived).is_empty());
     }
 
@@ -1304,8 +1343,7 @@ release-units:
                 &format!("[package]\nname = \"component\"\n{restriction}\n"),
             );
             let derived =
-                derive_capabilities(workspace.root(), &config("").release_units["component"])
-                    .expect("capabilities derive");
+                derive_component(workspace.root(), &config("")).expect("capabilities derive");
             assert!(
                 capability_set(&derived).is_empty(),
                 "{restriction} withholds the rust-crate capability"
@@ -1315,7 +1353,7 @@ release-units:
             assert!(
                 error
                     .to_string()
-                    .contains("no maintained publication recipe matches the configured target"),
+                    .contains("matching manifest declines publication"),
                 "{error}"
             );
         }
@@ -1333,19 +1371,19 @@ release-units:
     fn reports_manifests_that_cannot_be_parsed() {
         let workspace = Workspace::new("malformed");
         workspace.write("component/package.json", "{ not json");
-        let error = derive_capabilities(workspace.root(), &config("").release_units["component"])
+        let error = derive_component(workspace.root(), &config(""))
             .expect_err("malformed manifest reported");
         assert!(
-            error.to_string().contains("package.json is not valid JSON"),
+            error.to_string().contains("invalid") && error.to_string().contains("package.json"),
             "{error}"
         );
 
         let workspace = Workspace::new("malformed-toml");
         workspace.write("component/Cargo.toml", "[package\nname =");
-        let error = derive_capabilities(workspace.root(), &config("").release_units["component"])
+        let error = derive_component(workspace.root(), &config(""))
             .expect_err("malformed manifest reported");
         assert!(
-            error.to_string().contains("Cargo.toml is not valid TOML"),
+            error.to_string().contains("invalid") && error.to_string().contains("Cargo.toml"),
             "{error}"
         );
     }
@@ -1355,15 +1393,16 @@ release-units:
         let workspace = Workspace::new("selection");
         workspace
             .write(
-                "component/package.json",
+                "component/node/package.json",
                 r#"{"name":"example-component","version":"1.0.0"}"#,
             )
-            .write("component/Dockerfile", "FROM scratch\n");
-        let selected = select_publications(
-            workspace.root(),
-            &config("    npm: { additional-targets: { github: {} } }\n    oci:\n      ghcr: { omit: [ signature ] }\n"),
-        )
-        .expect("publications select");
+            .write("component/image/Dockerfile", "FROM scratch\n");
+        let text = GITHUB.replace(
+            "    path: component\n",
+            "    path: component\n    packages:\n      node:\n        path: node\n        npm: { additional-targets: { github: {} } }\n      image:\n        path: image\n        oci:\n          ghcr: { omit: [ signature ] }\n",
+        );
+        let config = Config::from_yaml(&text).expect("package declarations");
+        let selected = select_publications(workspace.root(), &config).expect("publications select");
         let identities = selected
             .iter()
             .map(SelectedPublication::identity)
@@ -1371,19 +1410,19 @@ release-units:
         assert_eq!(
             identities,
             vec![
+                "component/oci/ghcr".to_owned(),
                 "component/npm/primary".to_owned(),
                 "component/npm/github".to_owned(),
-                "component/oci/ghcr".to_owned(),
             ]
         );
-        assert_eq!(selected[0].destination.as_deref(), Some("npmjs"));
-        assert_eq!(selected[0].packager, Packager::Npm);
-        assert_eq!(selected[1].destination, None);
-        assert_eq!(selected[2].capability, Capability::RunnableImage);
+        assert_eq!(selected[0].capability, Capability::RunnableImage);
         assert_eq!(
-            selected[2].components,
+            selected[0].components,
             vec![AttachedComponent::Sbom, AttachedComponent::Provenance]
         );
+        assert_eq!(selected[1].destination.as_deref(), Some("npmjs"));
+        assert_eq!(selected[1].packager, Packager::Npm);
+        assert_eq!(selected[2].destination, None);
     }
 
     #[test]
@@ -1427,7 +1466,7 @@ release-units:
         assert!(
             error
                 .to_string()
-                .contains("no maintained publication recipe matches the configured target"),
+                .contains("matches no publishable detector candidate"),
             "{error}"
         );
 
@@ -1441,9 +1480,52 @@ release-units:
         let error = select_publications(workspace.root(), &config("    oci:\n      ghcr: {}\n"))
             .expect_err("ambiguous combination rejected");
         assert!(
-            error.to_string().contains("matches 2 maintained recipes"),
+            error
+                .to_string()
+                .contains("matches 2 publishable detector candidates")
+                && error.to_string().contains("component/Dockerfile")
+                && error
+                    .to_string()
+                    .contains("component/devcontainer-feature.json"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn ambiguous_refusal_enumerates_only_live_candidates() {
+        let workspace = Workspace::new("excluded-ambiguous-candidate");
+        workspace
+            .write("component/Dockerfile", "FROM scratch\n")
+            .write(
+                "component/devcontainer-feature.json",
+                r#"{"id":"example","version":"1.0.0"}"#,
+            );
+        let mut config = config("    oci:\n      ghcr: {}\n");
+        let excluded = detector_candidates(workspace.root())
+            .expect("detector candidates")
+            .into_iter()
+            .find(|candidate| candidate.detector == "devcontainer-feature")
+            .expect("feature candidate");
+        let evidence_digest = excluded
+            .evidence
+            .iter()
+            .find(|evidence| evidence.path == excluded.path)
+            .expect("exact-path evidence")
+            .digest
+            .clone();
+        config
+            .discovery
+            .excluded_paths
+            .push(crate::config::ExcludedPathReceipt {
+                detector: excluded.detector,
+                path: excluded.path,
+                evidence_digest,
+            });
+
+        let selected = select_publications(workspace.root(), &config)
+            .expect("one live image candidate resolves");
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].capability, Capability::RunnableImage);
     }
 
     #[test]
@@ -1613,9 +1695,25 @@ release-units:
             for (relative, contents) in files {
                 workspace.write(relative, contents);
             }
+            let command = files
+                .iter()
+                .find(|(relative, _)| relative.ends_with(".go"))
+                .expect("layout carries a Go source")
+                .0;
+            let package_path = Path::new(command)
+                .parent()
+                .expect("source has parent")
+                .strip_prefix("component")
+                .expect("source belongs to component")
+                .to_string_lossy();
+            let package_path = if package_path.is_empty() {
+                "."
+            } else {
+                &package_path
+            };
+            let layout_config = config_at(package_path, "");
             let derived =
-                derive_capabilities(workspace.root(), &config("").release_units["component"])
-                    .expect("capabilities derive");
+                derive_component(workspace.root(), &layout_config).expect("capabilities derive");
             assert!(
                 capability_set(&derived).contains(&Capability::GoApplication),
                 "{layout} derives the go-application capability"
@@ -1623,7 +1721,10 @@ release-units:
 
             let selected = select_publications(
                 workspace.root(),
-                &config("    homebrew: { repository: example-org/homebrew-tap }\n"),
+                &config_at(
+                    package_path,
+                    "    homebrew: { repository: example-org/homebrew-tap }\n",
+                ),
             )
             .unwrap_or_else(|error| panic!("{layout} selects a recipe: {error}"));
             assert_eq!(selected[0].packager, Packager::GoReleaser);
@@ -1670,8 +1771,7 @@ release-units:
                 "component/nested/main.go",
                 "package main\n\nfunc main() {}\n",
             );
-        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
-            .expect("capabilities derive");
+        let derived = derive_component(workspace.root(), &config("")).expect("capabilities derive");
         assert!(
             !capability_set(&derived).contains(&Capability::GoApplication),
             "a child module command does not make the parent module publishable"
@@ -1699,8 +1799,7 @@ release-units:
                 "component/.fixtures/sample/main.go",
                 "package main\n\nfunc main() {}\n",
             );
-        let derived = derive_capabilities(workspace.root(), &config("").release_units["component"])
-            .expect("capabilities derive");
+        let derived = derive_component(workspace.root(), &config("")).expect("capabilities derive");
         assert!(
             !capability_set(&derived).contains(&Capability::GoApplication),
             "commands outside Go's recursive package set do not make the module publishable"
@@ -1719,7 +1818,7 @@ release-units:
         let error = select_publications(workspace.root(), &config("    npm: {}\n"))
             .expect_err("an unsupported combination is refused");
         assert!(
-            error.to_string().contains("derived capabilities are"),
+            error.to_string().contains("evidence considered: component"),
             "{error}"
         );
         assert!(

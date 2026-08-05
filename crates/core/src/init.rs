@@ -2323,6 +2323,14 @@ fn discover(root: &Path) -> Result<Discovery> {
     Ok(discovery)
 }
 
+/// Lossless detector candidates produced by initialization for the current tree.
+///
+/// Executor capability derivation consumes this evidence rather than maintaining
+/// a second filename-based detector with different package-boundary semantics.
+pub(crate) fn detector_candidates(root: &Path) -> Result<Vec<DiscoveryCandidate>> {
+    Ok(discover(root)?.candidates)
+}
+
 fn materialize_discovery_inventory(
     discovery: &mut Discovery,
     observations: Vec<ManifestObservation>,
@@ -2617,7 +2625,7 @@ fn hard_excluded(root: &Path, path: &Path) -> bool {
 }
 
 fn remove_git_ignored(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<()> {
-    if paths.is_empty() {
+    if paths.is_empty() || !root.join(".git").exists() {
         return Ok(());
     }
     let relative_paths = paths

@@ -466,7 +466,7 @@ fn derive_candidates(
         if release_unit.disposition != ReleaseUnitDisposition::Managed {
             continue;
         }
-        let derived = derive_capabilities(root, release_unit)?;
+        let derived = derive_capabilities(root, config, id)?;
         let capabilities = capability_set(&derived);
         for evidence in &derived {
             for (publisher, target) in offered_targets(evidence.capability, &capabilities) {
@@ -663,7 +663,7 @@ fn packager_candidates(
         {
             continue;
         }
-        let evidence = derive_capabilities(root, &config.release_units[&release_unit])?
+        let evidence = derive_capabilities(root, config, &release_unit)?
             .into_iter()
             .filter(|item| item.capability == capability)
             .map(|item| item.evidence)

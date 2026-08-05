@@ -6746,11 +6746,13 @@ release-units:
   qhwzru:
     path: vkjmtd
     packages:
-      package:
+      node:
         path: .
         npm:
           token-secret: KQVBZTLM
           additional-targets: { github: {} }
+      rust:
+        path: .
         cargo:
           token-secret: HGWRXPFD
     tags:

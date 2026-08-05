@@ -14,9 +14,7 @@ use crate::evidence::contribution::{
 };
 use crate::evidence::identity::{fragment_disagreements, phase_disagreements, proved_release};
 use crate::evidence::{copy_and_digest, digest_file, is_digest, is_git_object, write_bundle};
-use crate::executor::recipe::{
-    probe_file, publication_probe_paths, resolve_publications, Capability, SelectedPublication,
-};
+use crate::executor::recipe::{publication_probe_paths, resolve_publications, SelectedPublication};
 use crate::model::{AttachedComponent, PublisherKind, TagPhase};
 use crate::release::git::GitCommand;
 use serde::{Deserialize, Serialize};
@@ -903,16 +901,16 @@ fn phase_findings(phase: &PhaseTagEvidence, label: &str) -> Vec<String> {
 /// commit and the disk — and a source file present on only one of them is a
 /// difference like any other.
 fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &mut Vec<String>) {
-    let mut paths = publication_probe_paths(config);
-    paths.insert(PathBuf::from(CONFIG_PATH));
-    for release_unit in config.release_units.values() {
-        let module = release_unit
-            .path
-            .join(probe_file(Capability::GoApplication));
-        if paths.contains(&module) && matches!(read_present(root, release, &module), Ok(true)) {
-            paths.extend(go_sources(root, release, &release_unit.path));
+    let mut paths = match publication_probe_paths(root, config) {
+        Ok(paths) => paths,
+        Err(error) => {
+            findings.push(format!(
+                "the assembling checkout cannot enumerate publication evidence: {error}"
+            ));
+            BTreeSet::new()
         }
-    }
+    };
+    paths.insert(PathBuf::from(CONFIG_PATH));
 
     let mut differing = Vec::new();
     for path in &paths {
@@ -930,16 +928,6 @@ fn require_proved_reads(root: &Path, release: &str, config: &Config, findings: &
             differing.join(", ")
         ));
     }
-}
-
-/// Whether a Go module is there to make the discovery walk for sources.
-///
-/// The walk only happens for a release unit that has one, so a stray `.go`
-/// file in a repository that publishes no Go module is not a read and is not
-/// compared. Presence is asked of both sides, because a module on either one
-/// puts the walk in reach.
-fn read_present(root: &Path, release: &str, path: &Path) -> Result<bool> {
-    Ok(blob_at(root, release, path)?.is_some() || root.join(path).is_file())
 }
 
 /// Whether one path assembly reads differs from the release commit.
@@ -987,60 +975,6 @@ fn disk_blob(root: &Path, path: &Path) -> Result<Option<String>> {
         return Err(Error::Git(output.diagnostic()));
     }
     Ok(Some(output.line()?))
-}
-
-/// Every Go source under one release unit, as the commit and the disk have it.
-///
-/// Go discovery walks directories for `*.go` files and reads the ones it finds,
-/// so the paths it opens cannot be named in advance. Taking the union of both
-/// sides makes a source the release never published a difference, which is what
-/// a directory appearing on disk alone would otherwise achieve quietly.
-fn go_sources(root: &Path, release: &str, unit: &Path) -> BTreeSet<PathBuf> {
-    let mut sources = BTreeSet::new();
-    let listing = GitCommand::new(root)
-        .args([
-            "ls-tree",
-            "-r",
-            "--name-only",
-            "-z",
-            release,
-            "--",
-            &unit.display().to_string(),
-        ])
-        .output();
-    if let Ok(listing) = listing {
-        if listing.succeeded() {
-            if let Ok(text) = listing.text() {
-                sources.extend(
-                    text.split('\0')
-                        .filter(|name| name.ends_with(".go"))
-                        .map(PathBuf::from),
-                );
-            }
-        }
-    }
-    collect_go_sources(&root.join(unit), unit, &mut sources);
-    sources
-}
-
-/// Add every Go source on disk beneath one directory.
-fn collect_go_sources(directory: &Path, relative: &Path, sources: &mut BTreeSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        if name == ".git" {
-            continue;
-        }
-        let child = relative.join(&name);
-        let path = entry.path();
-        if path.is_dir() {
-            collect_go_sources(&path, &child, sources);
-        } else if child.extension().is_some_and(|extension| extension == "go") {
-            sources.insert(child);
-        }
-    }
 }
 
 /// Prove the configured publications describe the release the plan sealed.
