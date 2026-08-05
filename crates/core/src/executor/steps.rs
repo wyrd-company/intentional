@@ -57,7 +57,7 @@ pub(super) struct RecipeContext<'a> {
     pub subject_identity: &'a str,
     /// Build job whose outputs carry the sealed subject version and digest.
     pub build_job: &'a str,
-    /// Release-unit-relative directory the packager runs in.
+    /// Workspace-relative directory that owns the packager invocation.
     pub working_directory: &'a str,
     /// Observation path the recipe writes and the portable command reads.
     ///

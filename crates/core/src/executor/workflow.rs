@@ -1102,11 +1102,13 @@ fn publish_contract(
 struct DistinctSubject {
     /// Release unit whose sources the subject is built from.
     release_unit: String,
+    /// Configured package whose native artifact the subject represents.
+    package: String,
     /// Packager that produces the subject's format.
     packager: Packager,
     /// Identity every configured destination resolves the subject by.
     identity: String,
-    /// Release-unit-relative working directory the build runs in.
+    /// Workspace-relative directory that owns the packager invocation.
     working_directory: String,
     /// Job and artifact name fragment.
     slug: String,
@@ -1115,7 +1117,9 @@ struct DistinctSubject {
 impl DistinctSubject {
     /// Whether one publication distributes this subject.
     fn covers(&self, publication: &SelectedPublication) -> bool {
-        self.release_unit == publication.release_unit && self.packager == publication.packager
+        self.release_unit == publication.release_unit
+            && self.package == publication.package
+            && self.packager == publication.packager
     }
 }
 
@@ -1142,22 +1146,45 @@ fn distinct_subjects(
             continue;
         }
         let unit = &config.release_units[&publication.release_unit];
-        subjects.push(DistinctSubject {
-            release_unit: publication.release_unit.clone(),
-            packager: publication.packager,
-            identity: subject_identity(root, unit, publication).map_err(|message| {
-                WorkflowDiagnostic::at(
-                    "subject-identity-invalid",
-                    message,
-                    &format!("release-units.{}", publication.release_unit),
-                )
-            })?,
-            working_directory: unit.path.display().to_string(),
-            slug: format!(
+        let package = &unit.packages[&publication.package];
+        let working_directory = subject_directory(unit, package, publication.packager);
+        let package_disambiguates = publications.iter().any(|candidate| {
+            candidate.release_unit == publication.release_unit
+                && candidate.packager == publication.packager
+                && candidate.package != publication.package
+        });
+        let slug = if package_disambiguates {
+            format!(
+                "{}_{}_{}",
+                identifier(&publication.release_unit),
+                identifier(&publication.package),
+                identifier(publication.packager.as_str())
+            )
+        } else {
+            format!(
                 "{}_{}",
                 identifier(&publication.release_unit),
                 identifier(publication.packager.as_str())
-            ),
+            )
+        };
+        subjects.push(DistinctSubject {
+            release_unit: publication.release_unit.clone(),
+            package: publication.package.clone(),
+            packager: publication.packager,
+            identity: subject_identity(root, &working_directory, publication).map_err(
+                |message| {
+                    WorkflowDiagnostic::at(
+                        "subject-identity-invalid",
+                        message,
+                        &format!(
+                            "release-units.{}.packages.{}",
+                            publication.release_unit, publication.package
+                        ),
+                    )
+                },
+            )?,
+            working_directory: working_directory.display().to_string(),
+            slug,
         });
     }
     Ok(subjects)
@@ -1189,10 +1216,10 @@ fn distinct_subjects(
 /// diagnostic names the manifest an author has to edit.
 fn subject_identity(
     root: &Path,
-    unit: &crate::config::ReleaseUnitConfig,
+    directory: &Path,
     publication: &SelectedPublication,
 ) -> std::result::Result<String, String> {
-    let directory = root.join(&unit.path);
+    let absolute_directory = root.join(directory);
     // The release-unit identifier is repository content whether or not it
     // stands in as the subject identity: it reaches an Action input, the
     // observation's YAML, and the publication identity verification resolves.
@@ -1206,7 +1233,7 @@ fn subject_identity(
     let fallback = Ok(fallback);
     match publication.packager {
         Packager::Npm => {
-            let Some(name) = std::fs::read_to_string(directory.join("package.json"))
+            let Some(name) = std::fs::read_to_string(absolute_directory.join("package.json"))
                 .ok()
                 .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
                 .and_then(|manifest| {
@@ -1219,12 +1246,12 @@ fn subject_identity(
                 return fallback;
             };
             names::npm_package(&names::SuppliedName {
-                origin: &format!("{} package.json name", unit.path.display()),
+                origin: &format!("{} package.json name", directory.display()),
                 value: &name,
             })
         }
         Packager::Cargo => {
-            let Some(name) = std::fs::read_to_string(directory.join("Cargo.toml"))
+            let Some(name) = std::fs::read_to_string(absolute_directory.join("Cargo.toml"))
                 .ok()
                 .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok())
                 .and_then(|manifest| {
@@ -1238,7 +1265,7 @@ fn subject_identity(
                 return fallback;
             };
             names::cargo_crate(&names::SuppliedName {
-                origin: &format!("{} Cargo.toml package name", unit.path.display()),
+                origin: &format!("{} Cargo.toml package name", directory.display()),
                 value: &name,
             })
         }
@@ -1246,7 +1273,7 @@ fn subject_identity(
         // Arch package from one project name, so that name is what every
         // destination of a Go release unit resolves and it is read from the
         // packager's own configuration.
-        Packager::GoReleaser => crate::executor::goreleaser::subject_identity(&directory)
+        Packager::GoReleaser => crate::executor::goreleaser::subject_identity(&absolute_directory)
             .ok()
             .flatten()
             .map_or(fallback, Ok),
@@ -1262,36 +1289,37 @@ fn subject_identity(
         // refuse, and every OCI destination has to resolve this name, so a
         // stand-in would publish under an identity no consumer asked for.
         Packager::Buildx => {
-            let Some(name) = std::fs::read_to_string(directory.join("Dockerfile"))
+            let Some(name) = std::fs::read_to_string(absolute_directory.join("Dockerfile"))
                 .ok()
                 .and_then(|text| dockerfile_image_title(&text))
             else {
                 return Err(format!(
                     "release unit {} builds an OCI image whose name the derivation cannot read; declare it as a literal {OCI_TITLE_LABEL} label in {}",
                     publication.release_unit,
-                    unit.path.join("Dockerfile").display()
+                    directory.join("Dockerfile").display()
                 ));
             };
             names::oci_subject(&names::SuppliedName {
                 origin: &format!(
                     "{} {OCI_TITLE_LABEL} label",
-                    unit.path.join("Dockerfile").display()
+                    directory.join("Dockerfile").display()
                 ),
                 value: &name,
             })
         }
         Packager::DevContainerCli => {
-            let manifest = unit.path.join("devcontainer-feature.json");
-            let Some(name) = std::fs::read_to_string(directory.join("devcontainer-feature.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                .and_then(|manifest| {
-                    manifest
-                        .get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                })
-                .filter(|id| !id.is_empty())
+            let manifest = directory.join("devcontainer-feature.json");
+            let Some(name) =
+                std::fs::read_to_string(absolute_directory.join("devcontainer-feature.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|manifest| {
+                        manifest
+                            .get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .filter(|id| !id.is_empty())
             else {
                 return Err(format!(
                     "release unit {} publishes a Dev Container Feature whose id the derivation cannot read from {}",
@@ -1303,6 +1331,22 @@ fn subject_identity(
                 origin: &format!("{} id", manifest.display()),
                 value: &name,
             })
+        }
+    }
+}
+
+/// Directory owning the native evidence and packager invocation for one subject.
+fn subject_directory(
+    unit: &crate::config::ReleaseUnitConfig,
+    package: &crate::config::PackageConfig,
+    packager: Packager,
+) -> PathBuf {
+    match packager {
+        // GoReleaser owns the whole version boundary: one project name and one
+        // distribution configuration drive every command package in the unit.
+        Packager::GoReleaser => unit.path.clone(),
+        Packager::Npm | Packager::Cargo | Packager::Buildx | Packager::DevContainerCli => {
+            crate::config::join_relative_paths(&unit.path, &package.path)
         }
     }
 }
@@ -1690,7 +1734,7 @@ fn publication_jobs(
         unit,
         subject_identity: &subject.identity,
         build_job: &format!("{}build_{}", namespaces.job, subject.slug),
-        working_directory: &unit.path.display().to_string(),
+        working_directory: &subject.working_directory,
         observation: &observation,
         root,
         work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
@@ -1883,6 +1927,7 @@ mod tests {
     use super::*;
     use crate::evidence::assemble::CleanClientMode;
     use crate::executor::fixture::Workspace;
+    use crate::executor::recipe::Capability;
     use crate::publication::observation::ObservationState;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -4419,6 +4464,176 @@ exit 0
                 &format!(r#"{{"id":"{FEATURE_ID}","version":"1.2.3"}}"#),
             );
         workspace
+    }
+
+    /// One version boundary containing two independently packaged Features.
+    fn two_package_feature_workspace(label: &str) -> Workspace {
+        let workspace = workspace_without_package(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release:
+    template: '{version}'
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml, gates: [ candidate_check ] }
+    publish: { path: .github/workflows/publish.yml, gates: [ artifact_check ] }
+release-units:
+  component:
+    path: component
+    packages:
+      first:
+        path: first
+        oci:
+          ghcr: {}
+      second:
+        path: second
+        oci:
+          ghcr: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
+"#,
+            )
+            .write(
+                "component/first/devcontainer-feature.json",
+                r#"{"id":"first-feature","version":"1.2.3"}"#,
+            )
+            .write(
+                "component/second/devcontainer-feature.json",
+                r#"{"id":"second-feature","version":"1.2.3"}"#,
+            );
+        workspace
+    }
+
+    #[test]
+    fn derives_each_package_feature_as_its_own_subject() {
+        let workspace = two_package_feature_workspace("workflow-package-subjects");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        assert_eq!(
+            job_ids(&jobs, "intentional_publish_component_"),
+            vec![
+                "intentional_publish_component_first_oci_ghcr".to_owned(),
+                "intentional_publish_component_second_oci_ghcr".to_owned(),
+            ],
+            "both package publications derive distinct jobs"
+        );
+
+        for (package, identity) in [("first", "first-feature"), ("second", "second-feature")] {
+            let job = format!("intentional_publish_component_{package}_oci_ghcr");
+            let identities = job_steps(&jobs, &job)
+                .iter()
+                .filter_map(|step| step["env"]["INTENTIONAL_SUBJECT_IDENTITY"].as_str())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                identities,
+                vec![identity.to_owned()],
+                "publication {package} carries its own package manifest identity"
+            );
+        }
+    }
+
+    #[test]
+    fn resolves_each_native_identity_from_its_declared_owner() {
+        let workspace = two_package_feature_workspace("workflow-subject-owner-census");
+        workspace
+            .write(
+                "component/first/package.json",
+                r#"{"name":"package-node","version":"1.2.3"}"#,
+            )
+            .write(
+                "component/first/Cargo.toml",
+                "[package]\nname = \"package-crate\"\nversion = \"1.2.3\"\n",
+            )
+            .write(
+                "component/first/Dockerfile",
+                "FROM scratch\nLABEL org.opencontainers.image.title=\"package-image\"\n",
+            )
+            .write(
+                "component/.goreleaser.yaml",
+                "version: 2\nproject_name: release-project\n",
+            )
+            .write(
+                "component/first/.goreleaser.yaml",
+                "version: 2\nproject_name: package-project\n",
+            );
+        let config = Config::load(workspace.root()).expect("configuration loads");
+        let unit = &config.release_units["component"];
+        let package = &unit.packages["first"];
+        let publication = |packager, capability| SelectedPublication {
+            release_unit: "component".to_owned(),
+            package: "first".to_owned(),
+            publisher: crate::model::PublisherKind::Oci,
+            target: "ghcr".to_owned(),
+            destination: None,
+            capability,
+            packager,
+            components: Vec::new(),
+            retrieval: CleanClientMode::Public,
+        };
+
+        for (packager, capability, expected) in [
+            (Packager::Npm, Capability::NodePackage, "package-node"),
+            (Packager::Cargo, Capability::RustCrate, "package-crate"),
+            (Packager::Buildx, Capability::RunnableImage, "package-image"),
+            (
+                Packager::DevContainerCli,
+                Capability::DevContainerFeature,
+                "first-feature",
+            ),
+        ] {
+            let owner = subject_directory(unit, package, packager);
+            assert_eq!(owner, Path::new("component/first"));
+            assert_eq!(
+                subject_identity(workspace.root(), &owner, &publication(packager, capability))
+                    .expect("package identity derives"),
+                expected
+            );
+        }
+
+        let owner = subject_directory(unit, package, Packager::GoReleaser);
+        assert_eq!(owner, Path::new("component"));
+        assert_eq!(
+            subject_identity(
+                workspace.root(),
+                &owner,
+                &publication(Packager::GoReleaser, Capability::GoApplication)
+            )
+            .expect("release-unit identity derives"),
+            "release-project"
+        );
+    }
+
+    #[test]
+    fn names_the_package_manifest_that_cannot_supply_a_feature_identity() {
+        let workspace = two_package_feature_workspace("workflow-package-subject-diagnostic");
+        workspace.write(
+            "component/second/devcontainer-feature.json",
+            r#"{"version":"1.2.3"}"#,
+        );
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("runs");
+        let diagnostic = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "subject-identity-invalid")
+            .expect("the missing package identity blocks derivation");
+        assert!(
+            diagnostic
+                .message
+                .contains("component/second/devcontainer-feature.json"),
+            "the diagnostic names the configured package path: {diagnostic:?}"
+        );
+        assert!(
+            !diagnostic
+                .message
+                .contains("from component/devcontainer-feature.json"),
+            "the diagnostic does not invent a release-unit-root manifest: {diagnostic:?}"
+        );
     }
 
     fn two_destination_workspace(label: &str) -> Workspace {
