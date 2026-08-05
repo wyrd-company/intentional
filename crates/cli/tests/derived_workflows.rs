@@ -137,39 +137,43 @@ fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
 }
 
 #[test]
-fn minimum_rust_job_installs_the_actionlint_version_its_tests_require() {
+fn every_ci_job_running_workspace_tests_installs_the_actionlint_version_the_tests_require() {
     let workflow =
         std::fs::read_to_string("../../.github/workflows/ci.yml").expect("CI workflow is readable");
     let document: Value = serde_yaml::from_str(&workflow).expect("CI workflow parses");
-    let steps = document["jobs"]["minimum-rust"]["steps"]
-        .as_sequence()
-        .expect("minimum-rust job declares steps");
     let installation = format!(
         "go install github.com/rhysd/actionlint/cmd/actionlint@{HOSTED_ACTIONLINT_VERSION}"
     );
-    let install_position = steps
-        .iter()
-        .position(|step| {
-            step["run"].as_str().is_some_and(|run| {
-                run.lines().any(|line| line == installation)
-                    && run
-                        .lines()
-                        .any(|line| line == "echo \"$(go env GOPATH)/bin\" >> \"$GITHUB_PATH\"")
+    for job in ["minimum-rust", "test"] {
+        let steps = document["jobs"][job]["steps"]
+            .as_sequence()
+            .unwrap_or_else(|| panic!("{job} job declares steps"));
+        let install_position = steps
+            .iter()
+            .position(|step| {
+                step["run"].as_str().is_some_and(|run| {
+                    run.lines().any(|line| line == installation)
+                        && run
+                            .lines()
+                            .any(|line| line == "echo \"$(go env GOPATH)/bin\" >> \"$GITHUB_PATH\"")
+                })
             })
-        })
-        .expect("minimum-rust installs the pinned actionlint required by the test suite");
-    let test_position = steps
-        .iter()
-        .position(|step| {
-            step["run"]
-                .as_str()
-                .is_some_and(|run| run.contains("cargo test --workspace --locked"))
-        })
-        .expect("minimum-rust runs the locked workspace tests");
-    assert!(
-        install_position < test_position,
-        "actionlint is available before the tests require it"
-    );
+            .unwrap_or_else(|| {
+                panic!("{job} installs the pinned actionlint required by the test suite")
+            });
+        let test_position = steps
+            .iter()
+            .position(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|run| run.contains("cargo test --workspace"))
+            })
+            .unwrap_or_else(|| panic!("{job} runs the workspace tests"));
+        assert!(
+            install_position < test_position,
+            "actionlint is available before {job} tests require it"
+        );
+    }
 }
 
 #[test]
