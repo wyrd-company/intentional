@@ -1059,6 +1059,7 @@ fn go_commands_are_package_candidates_with_clone_durable_receipts() {
         "cmd/beta/main.go",
         "//go:build !ignored\n\npackage main // import \"example.invalid/sample-tool/cmd/beta\"\n\nfunc main() {}\n",
     );
+    repo.write("cmd/beta/helper.go", "package main\n\nconst sample = 1\n");
     repo.write("tools/gamma/main.go", "package main\n\nfunc main() {}\n");
     repo.write("cmd/ignored/main.go", "package main\n\nfunc main() {}\n");
     repo.write("cmd/.cache/main.go", "package main\n\nfunc main() {}\n");
