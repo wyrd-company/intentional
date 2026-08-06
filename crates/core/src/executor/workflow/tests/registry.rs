@@ -102,16 +102,50 @@
     // it is asserted for the observation too.
     #[test]
     fn binds_every_observation_a_publisher_verifies_to_the_step_that_writes_it() {
-        for (workspace, targets) in [
-            (workspace("workflow-observation-cargo"), &["primary"][..]),
-            (
-                npm_workspace("workflow-observation-npm"),
-                &["primary", "github"][..],
-            ),
-        ] {
+        for publisher in PublisherKind::ALL {
+            let workspace = match publisher {
+                PublisherKind::Npm => npm_workspace("workflow-observation-npm"),
+                PublisherKind::Cargo => workspace("workflow-observation-cargo"),
+                PublisherKind::Homebrew => go_workspace("workflow-observation-homebrew"),
+                PublisherKind::Rpm => system_package_workspace("workflow-observation-rpm"),
+                PublisherKind::Apt => system_package_workspace("workflow-observation-apt"),
+                PublisherKind::Aur => go_workspace("workflow-observation-aur"),
+                PublisherKind::Oci => two_destination_workspace("workflow-observation-oci"),
+            };
             converge(workspace.root(), WorkflowRole::Publish);
-            for target in targets {
-                let steps = publisher_steps(workspace.root(), target);
+            let document: Value = serde_yaml::from_str(&workflow(
+                workspace.root(),
+                WorkflowRole::Publish,
+            ))
+            .expect("workflow parses");
+            let publications = document["jobs"]
+                .as_mapping()
+                .expect("jobs")
+                .iter()
+                .filter_map(|(job, body)| {
+                    Some((
+                        job.as_str()?.to_owned(),
+                        body["steps"].as_sequence()?.clone(),
+                    ))
+                })
+                .filter_map(|(job, steps)| {
+                    steps
+                        .iter()
+                        .any(|step| {
+                            intentional_action(step).is_some_and(|(name, _)| {
+                                name == "verify-publication"
+                                    && step["with"]["publisher"].as_str()
+                                        == Some(publisher.as_str())
+                            })
+                        })
+                        .then_some((job, steps))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !publications.is_empty(),
+                "the exhaustive fixture emits a {publisher} publisher"
+            );
+            for (job, steps) in publications {
                 let verified = steps
                     .iter()
                     .find_map(|step| {
@@ -128,16 +162,20 @@
                     .iter()
                     .filter(|step| {
                         step_environment(step)
-                            .get("INTENTIONAL_OBSERVATION")
-                            .is_some_and(|path| path == &verified)
-                            && step.get("run").and_then(Value::as_str).is_some_and(|body| {
-                                body.contains("> \"${INTENTIONAL_OBSERVATION}\"")
+                            .iter()
+                            .find(|(name, path)| {
+                                name.ends_with("_OBSERVATION") && *path == &verified
+                            })
+                            .is_some_and(|(name, _)| {
+                                step.get("run").and_then(Value::as_str).is_some_and(|body| {
+                                    body.contains(&format!("> \"${{{name}}}\""))
+                                })
                             })
                     })
                     .count();
                 assert_eq!(
                     writers, 1,
-                    "exactly one step of the {target} publisher writes the observation {verified} that its verification reads"
+                    "exactly one step of {job} writes the observation {verified} that its verification reads"
                 );
             }
         }

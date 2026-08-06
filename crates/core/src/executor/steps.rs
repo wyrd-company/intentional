@@ -389,10 +389,23 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, Ste
         }
         publisher => unreachable!("{publisher} is refused above"),
     };
+    let (kind, readback) = match context.publication.publisher {
+        PublisherKind::Homebrew => ("homebrew-formula", HOMEBREW_READBACK_COMMAND),
+        PublisherKind::Aur => ("aur-package", AUR_READBACK_COMMAND),
+        publisher => unreachable!("{publisher} is refused above"),
+    };
+    let packager_version = match context.publication.packager {
+        Packager::GoReleaser => "@GORELEASER_VERSION@",
+        Packager::CargoArchive => "@VERSION@",
+        packager => unreachable!("{packager} does not produce repository descriptors"),
+    };
     Ok(format!(
-        "{credential}  - name: {}\n    env:\n      @ENVVAR@SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n      @ENVVAR@SUBJECT_IDENTITY: {}\n      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{command}\n",
+        "{credential}  - name: {}\n    env:\n{}{}      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{observe}{digest_subject}{command}\n      @ENVVAR@RETRIEVED_DIGEST=$(@ENVVAR@digest_subject \"${{@ENVVAR@SUBJECT}}\")\n      test \"${{@ENVVAR@RETRIEVED_DIGEST}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n{readback}      @ENVVAR@PACKAGER_VERSION={packager_version}\n      @ENVVAR@RETRIEVAL_VERSION=$(git --version | head -n1)\n      @ENVVAR@observe_present\n",
         scalar(&format!("Publish {identity}")),
-        scalar(context.subject_identity),
+        subject_environment(context),
+        observation_environment(context, kind, context.publication.packager.as_str(), "git"),
+        observe = OBSERVE,
+        digest_subject = DIGEST_SUBJECT,
     ))
 }
 
@@ -728,21 +741,35 @@ const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
       gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
       index="${@ENVVAR@WORK}/InRelease"
-      if ! curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/InRelease" --output "${index}"; then
-        @ENVVAR@observe_state pending
-        exit 75
-      fi
-      gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}"
       relative="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}/Packages"
-      expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
-      test -n "${expected}"
       packages="${@ENVVAR@WORK}/Packages"
-      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" --output "${packages}"
-      test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}"
-      indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
-        $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
-      ' "${packages}")
-      test "${indexed}" = yes
+      @ENVVAR@ELAPSED=0
+      while : ; do
+        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/InRelease" --output "${index}"; then
+          gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}"
+          expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
+          test -n "${expected}"
+          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" --output "${packages}"
+          test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}"
+          indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
+            $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
+          ' "${packages}")
+          if [ "${indexed}" = yes ]; then break; fi
+        fi
+        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
+          @ENVVAR@observe_state pending
+          exit 0
+        fi
+        @ENVVAR@WAIT=${@ENVVAR@INTERVAL}
+        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))
+        if [ "${@ENVVAR@WAIT}" -gt "${@ENVVAR@REMAINING}" ]; then @ENVVAR@WAIT=${@ENVVAR@REMAINING}; fi
+        sleep "${@ENVVAR@WAIT}"
+        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))
+        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
+        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
+          @ENVVAR@INTERVAL=${@ENVVAR@MAXIMUM_INTERVAL}
+        fi
+      done
       printf 'deb [signed-by=%s] %s %s %s\n' "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@DESTINATION}" "${@ENVVAR@APT_SUITE}" "${@ENVVAR@APT_COMPONENT}" > "${@ENVVAR@WORK}/etc/apt/sources.list"
       apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" -o APT::Get::List-Cleanup=0 update
       (cd "${@ENVVAR@WORK}" && apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" download "${package_name}=${package_version}")
@@ -762,13 +789,14 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
       gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
       index="${@ENVVAR@WORK}/repomd.xml"
-      if ! curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
-        @ENVVAR@observe_state pending
-        exit 75
-      fi
-      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"
-      gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
-      read -r expected relative < <(python3 - "${index}" <<'PY'
+      primary="${@ENVVAR@WORK}/primary"
+      entries="${@ENVVAR@WORK}/primary.entries"
+      @ENVVAR@ELAPSED=0
+      while : ; do
+        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
+          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"
+          gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
+          read -r expected relative < <(python3 - "${index}" <<'PY'
       import sys, xml.etree.ElementTree as ET
       root = ET.parse(sys.argv[1]).getroot()
       data = next(node for node in root if node.tag.endswith('data') and node.attrib.get('type') == 'primary')
@@ -776,12 +804,10 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       location = next(node.attrib['href'] for node in data if node.tag.endswith('location'))
       print(checksum, location)
       PY
-      )
-      primary="${@ENVVAR@WORK}/primary"
-      curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" --output "${primary}"
-      test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}"
-      entries="${@ENVVAR@WORK}/primary.entries"
-      python3 - "${primary}" > "${entries}" <<'PY'
+          )
+          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" --output "${primary}"
+          test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}"
+          python3 - "${primary}" > "${entries}" <<'PY'
       import bz2, gzip, lzma, pathlib, sys, xml.etree.ElementTree as ET
       path = pathlib.Path(sys.argv[1])
       raw = path.read_bytes()
@@ -801,8 +827,28 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
           if name is not None and version is not None and architecture is not None and checksum is not None:
               print(name.text, version.attrib.get('ver'), architecture.text, checksum.text, sep='\t')
       PY
-      indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
-      test "${indexed}" = yes
+          indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
+          if [ "${indexed}" = yes ]; then break; fi
+          named=$(awk -F '\t' -v name="${package_name}" '$1 == name { print "yes"; exit }' "${entries}")
+          if [ "${named}" = yes ]; then
+            echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
+            exit 1
+          fi
+        fi
+        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
+          @ENVVAR@observe_state pending
+          exit 0
+        fi
+        @ENVVAR@WAIT=${@ENVVAR@INTERVAL}
+        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))
+        if [ "${@ENVVAR@WAIT}" -gt "${@ENVVAR@REMAINING}" ]; then @ENVVAR@WAIT=${@ENVVAR@REMAINING}; fi
+        sleep "${@ENVVAR@WAIT}"
+        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))
+        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
+        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
+          @ENVVAR@INTERVAL=${@ENVVAR@MAXIMUM_INTERVAL}
+        fi
+      done
       printf '[intentional]\nname=Intentional scratch\nbaseurl=%s/%s\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "${@ENVVAR@DESTINATION%/}" "${@ENVVAR@RPM_CHANNEL}" "${@ENVVAR@WORK}/key" > "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo"
       dnf --config /dev/null --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
       retrieved=$(find "${@ENVVAR@WORK}/retrieved" -type f -name '*.rpm' -print -quit)
@@ -850,8 +896,8 @@ const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
 /// keeps a cask or any other generated Ruby file from being promoted as one.
 ///
 /// A rerun that finds the tap already carrying this release commits nothing and
-/// still succeeds, because the destination readback that follows is what decides
-/// whether the publication is present rather than whether this step wrote.
+/// still succeeds. The fresh clone that follows decides whether the publication
+/// is present rather than whether this step wrote.
 const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/homebrew"
       test -d "${generated}"
       formulas=()
@@ -875,6 +921,22 @@ const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/ho
           commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
         git -C "${RUNNER_TEMP}/@JOB@tap" push --quiet origin HEAD
       fi"#;
+
+/// Fresh clone and byte-for-byte readback of every promoted formula.
+const HOMEBREW_READBACK_COMMAND: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+      git clone --quiet --depth 1 \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
+        "${@ENVVAR@WORK}"
+      for formula in "${formulas[@]}"; do
+        relative=${formula#"${generated}/"}
+        if ! cmp --silent "${formula}" "${@ENVVAR@WORK}/${relative}"; then
+          @ENVVAR@observe_state conflict \
+            "${@ENVVAR@DESTINATION} does not carry the promoted formula ${relative}"
+          exit 0
+        fi
+      done
+      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}")
+"#;
 
 /// Promote the generated Arch package sources into the Arch User Repository.
 ///
@@ -929,6 +991,19 @@ const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@E
           commit --quiet -m "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@GLOBAL_TAG}"
         git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD:master
       fi"#;
+
+/// Fresh clone and byte-for-byte readback of both promoted AUR descriptors.
+const AUR_READBACK_COMMAND: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+      git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
+        "${@ENVVAR@WORK}"
+      if ! cmp --silent "${pkgbuild}" "${@ENVVAR@WORK}/PKGBUILD" \
+        || ! cmp --silent "${srcinfo}" "${@ENVVAR@WORK}/.SRCINFO"; then
+        @ENVVAR@observe_state conflict \
+          "${@ENVVAR@DESTINATION} does not carry the promoted Arch package descriptors"
+        exit 0
+      fi
+      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}")
+"#;
 
 /// Index one alternate Cargo registry is declared with, if the workspace declares one.
 ///
@@ -1076,6 +1151,20 @@ const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
           printf '  version: "%s"\n' "${@ENVVAR@RETRIEVAL_VERSION}"
           printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_DIGEST}"
         } > "${@ENVVAR@OBSERVATION}"
+      }
+"#;
+
+/// Shell digesting a file tree exactly as `record-built-subject` does.
+const DIGEST_SUBJECT: &str = r#"      @ENVVAR@digest_subject() {
+        root=$1
+        manifest=$(mktemp)
+        while IFS= read -r -d '' member; do
+          relative=${member#"${root}/"}
+          printf '%s\0sha256:%s\n' "${relative}" "$(sha256sum "${member}" | cut -d' ' -f1)"
+        done < <(find "${root}" -type f ! -path "${root}/.git/*" -print0 | sort -z) > "${manifest}"
+        test -s "${manifest}"
+        printf 'sha256:%s\n' "$(sha256sum "${manifest}" | cut -d' ' -f1)"
+        rm -f "${manifest}"
       }
 "#;
 

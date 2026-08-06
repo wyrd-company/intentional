@@ -952,8 +952,9 @@ proposed-design:
     a tap and the Arch User Repository are repositories.
 
     A rerun that finds a destination already carrying this release commits
-    nothing and still succeeds, because destination readback decides whether a
-    publication is present rather than whether a step wrote.
+    nothing and still succeeds. After either a changed or unchanged push, a
+    fresh clone compares every promoted descriptor byte for byte and writes the
+    observation that publication verification reads.
 
   system-package-distribution: |-
     An APT repository and an RPM repository are directories of files served over
@@ -1120,11 +1121,15 @@ proposed-design:
     no destination reports its own publication, which is why every adapter
     reads its destination rather than trusting an accepted write. The
     observation deadline is configured rather than fixed, because the
-    arrangement that determines it belongs to the repository. Reaching the
-    deadline reports that the publication was not observed, which is the honest
-    claim — a repository that has not yet indexed the package and one whose
+    arrangement that determines it belongs to the repository. The recipe polls
+    the signed index with the configured interval, backoff, maximum interval,
+    and deadline. Reaching the deadline writes `pending` and reports that the
+    publication was not observed, which is the honest claim — a repository that
+    has not yet indexed the package and one whose
     delivery failed after the step returned are indistinguishable from outside,
-    and the failure is retryable so that a rerun reads again.
+    and verification treats that final observation as an immediate retryable
+    failure so that a rerun reads the destination again without paying the same
+    deadline twice.
 
   github-repository-authentication: >-
     A repository-installed GitHub App is the sole Git repository-write

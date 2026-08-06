@@ -157,39 +157,44 @@ impl Adapter {
     }
 }
 
-/// Publisher adapter a release unit explicitly opts into.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[serde(rename_all = "lowercase")]
-pub enum PublisherKind {
-    /// npm registry publication.
-    Npm,
-    /// Cargo registry publication.
-    Cargo,
-    /// Homebrew tap publication.
-    Homebrew,
-    /// RPM repository publication.
-    Rpm,
-    /// APT repository publication.
-    Apt,
-    /// Arch User Repository publication.
-    Aur,
-    /// OCI registry publication.
-    Oci,
+macro_rules! publisher_kinds {
+    ($(#[$documentation:meta] $variant:ident => $name:literal),+ $(,)?) => {
+        /// Publisher adapter a release unit explicitly opts into.
+        #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[serde(rename_all = "lowercase")]
+        pub enum PublisherKind {
+            $(#[$documentation] $variant),+
+        }
+
+        impl PublisherKind {
+            /// Every publisher adapter in declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Configuration property name for this publisher.
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+    };
 }
 
-impl PublisherKind {
-    /// Configuration property name for this publisher.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Npm => "npm",
-            Self::Cargo => "cargo",
-            Self::Homebrew => "homebrew",
-            Self::Rpm => "rpm",
-            Self::Apt => "apt",
-            Self::Aur => "aur",
-            Self::Oci => "oci",
-        }
-    }
+publisher_kinds! {
+    /// npm registry publication.
+    Npm => "npm",
+    /// Cargo registry publication.
+    Cargo => "cargo",
+    /// Homebrew tap publication.
+    Homebrew => "homebrew",
+    /// RPM repository publication.
+    Rpm => "rpm",
+    /// APT repository publication.
+    Apt => "apt",
+    /// Arch User Repository publication.
+    Aur => "aur",
+    /// OCI registry publication.
+    Oci => "oci",
 }
 
 impl fmt::Display for PublisherKind {

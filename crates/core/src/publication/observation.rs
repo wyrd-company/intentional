@@ -303,10 +303,11 @@ impl ConsistencyPolicy {
 
 /// Observe one publication until it is present or its policy is exhausted.
 ///
-/// A destination that has not yet indexed an accepted publication is
-/// indistinguishable from one that never received it, so a document the recipe
-/// has not written yet reads as pending. Only the recipe's own `absent` claim,
-/// made after a completed publish attempt, is a failure.
+/// A missing document means the recipe may still be running and is polled under
+/// the policy. A written `pending` document is the final result of a recipe that
+/// already spent that same policy reading its destination, so polling the
+/// immutable file would only pay the deadline twice. Only the recipe's own
+/// `absent` claim, made after a completed publish attempt, is a failure.
 pub fn observe(
     path: &Path,
     identity: &str,
@@ -334,6 +335,9 @@ pub fn observe(
                 return Err(Error::Validation(format!(
                     "publication {identity} is absent from its destination after a completed publish attempt"
                 )))
+            }
+            Some(observation) if observation.state == ObservationState::Pending => {
+                return Err(deadline_failure(identity, policy))
             }
             _ => {}
         }
@@ -504,48 +508,7 @@ state: pending
     }
 
     #[test]
-    fn a_pending_observation_becomes_present_within_the_deadline() {
-        let workspace = Workspace::new("observe-pending");
-        let path = workspace.root().join("observation.yml");
-        std::fs::write(&path, pending_document()).expect("pending observation");
-        struct PromotingClock<'a> {
-            elapsed: Cell<Duration>,
-            waits: Cell<u32>,
-            path: &'a Path,
-            document: &'a str,
-        }
-        impl Clock for PromotingClock<'_> {
-            fn elapsed(&self) -> Duration {
-                self.elapsed.get()
-            }
-
-            fn wait(&self, duration: Duration) {
-                self.elapsed.set(self.elapsed.get() + duration);
-                self.waits.set(self.waits.get() + 1);
-                if self.waits.get() == 3 {
-                    std::fs::write(self.path, self.document).expect("observation advances");
-                }
-            }
-        }
-        let document = present_document();
-        let clock = PromotingClock {
-            elapsed: Cell::new(Duration::ZERO),
-            waits: Cell::new(0),
-            path: &path,
-            document: &document,
-        };
-        let observed = observe(&path, "component/package/npm/primary", &policy(), &clock)
-            .expect("a publication that becomes observable is accepted");
-        assert_eq!(observed.state, ObservationState::Present);
-        assert_eq!(clock.waits.get(), 3, "each pending read waited once");
-        assert!(
-            clock.elapsed() < policy().deadline,
-            "the publication was accepted inside its deadline"
-        );
-    }
-
-    #[test]
-    fn a_pending_observation_past_the_deadline_is_a_retryable_failure() {
+    fn a_recipe_written_pending_observation_is_an_immediate_retryable_failure() {
         let workspace = Workspace::new("observe-deadline");
         workspace.write("observation.yml", &pending_document());
         let clock = TestClock::new();
@@ -564,14 +527,8 @@ state: pending
         assert!(message.contains("retryable"), "{message}");
         assert_eq!(
             *clock.waits.borrow(),
-            vec![
-                Duration::from_secs(5),
-                Duration::from_secs(10),
-                Duration::from_secs(20),
-                Duration::from_secs(20),
-                Duration::from_secs(5),
-            ],
-            "the interval backs off to the maximum and then to the remaining deadline"
+            Vec::<Duration>::new(),
+            "the verifier does not poll a document no derived step can update"
         );
     }
 
@@ -750,16 +707,8 @@ destination:
 
     #[test]
     fn maintained_policies_bound_every_publisher() {
-        for publisher in [
-            PublisherKind::Npm,
-            PublisherKind::Cargo,
-            PublisherKind::Homebrew,
-            PublisherKind::Rpm,
-            PublisherKind::Apt,
-            PublisherKind::Aur,
-            PublisherKind::Oci,
-        ] {
-            let policy = ConsistencyPolicy::maintained(publisher);
+        for publisher in PublisherKind::ALL {
+            let policy = ConsistencyPolicy::maintained(*publisher);
             assert!(policy.backoff > 1, "{publisher} backs off");
             assert!(
                 policy.interval <= policy.maximum_interval

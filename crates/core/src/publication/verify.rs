@@ -2010,7 +2010,11 @@ state: {}
                 .contains("past its 47 second observation deadline"),
             "{error}"
         );
-        assert_eq!(clock.elapsed(), Duration::from_secs(47));
+        assert_eq!(
+            clock.elapsed(),
+            Duration::ZERO,
+            "the recipe already consumed the configured deadline"
+        );
         assert!(!output.exists());
     }
 

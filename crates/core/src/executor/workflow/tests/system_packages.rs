@@ -777,14 +777,13 @@ release-units:
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow parses");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        for (job, coordinate, coordinate_value, action, format, deadline, base_url, key_url) in [
+        for (job, coordinate, coordinate_value, action, format, base_url, key_url) in [
             (
                 "release_automation_publish_component_package_rpm_primary",
                 "release-automation-rpm-channel",
                 "stable",
                 "./.github/actions/deliver-rpm",
                 "rpm",
-                "47",
                 "https://packages.invalid/rpm/",
                 "https://packages.invalid/rpm-key.asc",
             ),
@@ -794,7 +793,6 @@ release-units:
                 "current",
                 "./.github/actions/deliver-apt",
                 "deb",
-                "53",
                 "https://packages.invalid/apt",
                 "https://packages.invalid/apt-key.asc",
             ),
@@ -854,10 +852,6 @@ release-units:
             assert_eq!(
                 readback["env"]["RELEASE_AUTOMATION_PUBLIC_KEY_URL"].as_str(),
                 Some(key_url)
-            );
-            assert_eq!(
-                readback["env"]["RELEASE_AUTOMATION_DEADLINE"].as_str(),
-                Some(deadline)
             );
         }
         let apt_readback = jobs["release_automation_publish_component_package_apt_primary"]
@@ -1460,7 +1454,13 @@ release-units:
         assert!(outputs.lines().any(|line| line == "architecture=arm64"));
     }
 
-    fn run_apt_readback(label: &str, scenario: &str) -> bool {
+    struct ReadbackRun {
+        succeeded: bool,
+        observation: Option<crate::publication::observation::PublicationObservation>,
+        waits: Vec<u64>,
+    }
+
+    fn run_apt_readback(label: &str, scenario: &str) -> ReadbackRun {
         let workspace = system_package_workspace(label);
         converge(workspace.root(), WorkflowRole::Publish);
         let document: Value =
@@ -1501,6 +1501,7 @@ release-units:
             .trim_start_matches("sha256:")
             .to_owned();
         let stubs = temporary.join("stubs");
+        let sleep_log = temporary.join("sleep.log");
         std::fs::create_dir_all(&stubs).expect("stubs");
         for (name, body) in [
             ("curl", r#"#!/usr/bin/env bash
@@ -1522,6 +1523,7 @@ esac
             ("dpkg-deb", "#!/usr/bin/env bash\nprintf 'amd64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
             ("apt", "#!/usr/bin/env bash\nprintf 'apt 2.0\\n'\n"),
+            ("sleep", "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"${FAKE_SLEEP_LOG}\"\n"),
             ("apt-get", r#"#!/usr/bin/env bash
 set -euo pipefail
 etc= state= cache=
@@ -1567,7 +1569,8 @@ fi
             )
             .env("FAKE_SCENARIO", scenario)
             .env("FAKE_PACKAGES", packages)
-            .env("FAKE_PACKAGES_DIGEST", packages_digest);
+            .env("FAKE_PACKAGES_DIGEST", packages_digest)
+            .env("FAKE_SLEEP_LOG", &sleep_log);
         for (key, value) in step["env"].as_mapping().expect("env") {
             let value = value
                 .as_str()
@@ -1583,32 +1586,68 @@ fi
                 );
             command.env(key.as_str().expect("key"), value);
         }
-        command.status().expect("readback runs").success()
+        command
+            .env("RELEASE_AUTOMATION_INTERVAL", "2")
+            .env("RELEASE_AUTOMATION_BACKOFF", "2")
+            .env("RELEASE_AUTOMATION_MAXIMUM_INTERVAL", "3")
+            .env("RELEASE_AUTOMATION_DEADLINE", "7");
+        let succeeded = command.status().expect("readback runs").success();
+        let observation = step["env"]
+            .as_mapping()
+            .expect("environment")
+            .iter()
+            .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_OBSERVATION")))
+            .and_then(|(_, value)| value.as_str())
+            .map(|path| path.replace("${{ runner.temp }}", &temporary.display().to_string()))
+            .filter(|path| Path::new(path).is_file())
+            .map(|path| {
+                crate::publication::observation::PublicationObservation::load(Path::new(&path))
+                    .expect("readback observation loads")
+            });
+        let waits = std::fs::read_to_string(&sleep_log)
+            .unwrap_or_default()
+            .lines()
+            .map(|wait| wait.parse().expect("numeric wait"))
+            .collect();
+        ReadbackRun {
+            succeeded,
+            observation,
+            waits,
+        }
     }
 
     #[test]
     fn apt_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
-        assert!(run_apt_readback("apt-present", "ok"));
+        let run = run_apt_readback("apt-present", "ok");
+        assert!(run.succeeded);
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
+        assert!(run.waits.is_empty());
     }
 
     #[test]
-    fn apt_readback_refuses_an_absent_index() {
-        assert!(!run_apt_readback("apt-absent-index", "absent-index"));
+    fn apt_readback_exhausts_its_policy_when_the_index_is_absent() {
+        let run = run_apt_readback("apt-absent-index", "absent-index");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]
     fn apt_readback_refuses_an_index_with_an_unverified_signature() {
-        assert!(!run_apt_readback("apt-bad-signature", "bad-signature"));
+        assert!(!run_apt_readback("apt-bad-signature", "bad-signature").succeeded);
     }
 
     #[test]
     fn apt_readback_refuses_a_followed_digest_that_disagrees() {
-        assert!(!run_apt_readback("apt-followed-digest", "followed-digest"));
+        assert!(!run_apt_readback("apt-followed-digest", "followed-digest").succeeded);
     }
 
     #[test]
-    fn apt_readback_refuses_a_package_absent_from_the_signed_index() {
-        assert!(!run_apt_readback("apt-package-absent", "package-absent"));
+    fn apt_readback_exhausts_its_policy_for_a_package_absent_from_the_signed_index() {
+        let run = run_apt_readback("apt-package-absent", "package-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]
@@ -1616,10 +1655,10 @@ fi
         assert!(!run_apt_readback(
             "apt-retrieved-mismatch",
             "retrieved-mismatch"
-        ));
+        ).succeeded);
     }
 
-    fn run_rpm_readback(label: &str, scenario: &str) -> bool {
+    fn run_rpm_readback(label: &str, scenario: &str) -> ReadbackRun {
         let workspace = system_package_workspace(label);
         converge(workspace.root(), WorkflowRole::Publish);
         let document: Value =
@@ -1686,6 +1725,7 @@ fi
             .trim_start_matches("sha256:")
             .to_owned();
         let stubs = temporary.join("stubs");
+        let sleep_log = temporary.join("sleep.log");
         std::fs::create_dir_all(&stubs).expect("stubs");
         for (name, body) in [
             ("curl", r#"#!/usr/bin/env bash
@@ -1712,6 +1752,7 @@ esac
             ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
             ("rpm", "#!/usr/bin/env bash\nprintf 'arm64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
+            ("sleep", "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"${FAKE_SLEEP_LOG}\"\n"),
             ("dnf", r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = --version ]; then printf 'dnf 4.0\n'; exit 0; fi
@@ -1765,7 +1806,8 @@ fi
             )
             .env("FAKE_SCENARIO", scenario)
             .env("FAKE_PRIMARY_PATH", primary_fixture)
-            .env("FAKE_PRIMARY_DIGEST", primary_digest);
+            .env("FAKE_PRIMARY_DIGEST", primary_digest)
+            .env("FAKE_SLEEP_LOG", &sleep_log);
         for (key, value) in step["env"].as_mapping().expect("env") {
             let value = value
                 .as_str()
@@ -1781,12 +1823,42 @@ fi
                 );
             command.env(key.as_str().expect("key"), value);
         }
-        command.status().expect("readback runs").success()
+        command
+            .env("RELEASE_AUTOMATION_INTERVAL", "2")
+            .env("RELEASE_AUTOMATION_BACKOFF", "2")
+            .env("RELEASE_AUTOMATION_MAXIMUM_INTERVAL", "3")
+            .env("RELEASE_AUTOMATION_DEADLINE", "7");
+        let succeeded = command.status().expect("readback runs").success();
+        let observation = step["env"]
+            .as_mapping()
+            .expect("environment")
+            .iter()
+            .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_OBSERVATION")))
+            .and_then(|(_, value)| value.as_str())
+            .map(|path| path.replace("${{ runner.temp }}", &temporary.display().to_string()))
+            .filter(|path| Path::new(path).is_file())
+            .map(|path| {
+                crate::publication::observation::PublicationObservation::load(Path::new(&path))
+                    .expect("readback observation loads")
+            });
+        let waits = std::fs::read_to_string(&sleep_log)
+            .unwrap_or_default()
+            .lines()
+            .map(|wait| wait.parse().expect("numeric wait"))
+            .collect();
+        ReadbackRun {
+            succeeded,
+            observation,
+            waits,
+        }
     }
 
     #[test]
     fn rpm_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
-        assert!(run_rpm_readback("rpm-present", "ok"));
+        let run = run_rpm_readback("rpm-present", "ok");
+        assert!(run.succeeded);
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
+        assert!(run.waits.is_empty());
     }
 
     #[test]
@@ -1794,32 +1866,38 @@ fi
         assert!(run_rpm_readback(
             "rpm-alternate-location",
             "alternate-location"
-        ));
+        ).succeeded);
     }
 
     #[test]
     fn rpm_readback_reads_gzip_compressed_primary_metadata() {
-        assert!(run_rpm_readback("rpm-gzip-primary", "gzip-primary"));
+        assert!(run_rpm_readback("rpm-gzip-primary", "gzip-primary").succeeded);
     }
 
     #[test]
-    fn rpm_readback_refuses_an_absent_index() {
-        assert!(!run_rpm_readback("rpm-absent-index", "absent-index"));
+    fn rpm_readback_exhausts_its_policy_when_the_index_is_absent() {
+        let run = run_rpm_readback("rpm-absent-index", "absent-index");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]
     fn rpm_readback_refuses_an_index_with_an_unverified_signature() {
-        assert!(!run_rpm_readback("rpm-bad-signature", "bad-signature"));
+        assert!(!run_rpm_readback("rpm-bad-signature", "bad-signature").succeeded);
     }
 
     #[test]
     fn rpm_readback_refuses_a_followed_digest_that_disagrees() {
-        assert!(!run_rpm_readback("rpm-followed-digest", "followed-digest"));
+        assert!(!run_rpm_readback("rpm-followed-digest", "followed-digest").succeeded);
     }
 
     #[test]
-    fn rpm_readback_refuses_a_package_absent_from_the_signed_index() {
-        assert!(!run_rpm_readback("rpm-package-absent", "package-absent"));
+    fn rpm_readback_exhausts_its_policy_for_a_package_absent_from_the_signed_index() {
+        let run = run_rpm_readback("rpm-package-absent", "package-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]
@@ -1827,7 +1905,7 @@ fi
         assert!(!run_rpm_readback(
             "rpm-version-mismatch",
             "version-mismatch"
-        ));
+        ).succeeded);
     }
 
     #[test]
@@ -1835,7 +1913,7 @@ fi
         assert!(!run_rpm_readback(
             "rpm-architecture-mismatch",
             "architecture-mismatch"
-        ));
+        ).succeeded);
     }
 
     #[test]
@@ -1843,7 +1921,7 @@ fi
         assert!(!run_rpm_readback(
             "rpm-package-digest-mismatch",
             "package-digest-mismatch"
-        ));
+        ).succeeded);
     }
 
     #[test]
@@ -1851,7 +1929,7 @@ fi
         assert!(!run_rpm_readback(
             "rpm-retrieved-mismatch",
             "retrieved-mismatch"
-        ));
+        ).succeeded);
     }
 
 

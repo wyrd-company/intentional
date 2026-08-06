@@ -23,6 +23,7 @@
     pub(super) mod goreleaser_recipes {
         use super::*;
         use crate::executor::fixture::Workspace;
+        use crate::publication::observation::{ObservationState, PublicationObservation};
         use std::path::PathBuf;
 
         const HOMEBREW_JOB: &str = "intentional_publish_component_package_homebrew_primary";
@@ -206,10 +207,22 @@ aur:
 
             /// Run the derived promotion body, optionally with a drifted host key.
             fn run(&self) -> Outcome {
-                self.run_with_host_fingerprint(None)
+                self.run_with_overrides(None, None)
             }
 
             fn run_with_host_fingerprint(&self, fingerprint: Option<&str>) -> Outcome {
+                self.run_with_overrides(fingerprint, None)
+            }
+
+            fn run_with_subject_digest(&self, digest: &str) -> Outcome {
+                self.run_with_overrides(None, Some(digest))
+            }
+
+            fn run_with_overrides(
+                &self,
+                fingerprint: Option<&str>,
+                subject_digest: Option<&str>,
+            ) -> Outcome {
                 let root = self.workspace.root();
                 let step = publish_step(root, &self.job, &self.temp);
                 let pinned = step
@@ -240,6 +253,15 @@ aur:
                     .env("FAKE_HOST_FINGERPRINT", fingerprint.unwrap_or(&pinned));
                 for (name, value) in &step.env {
                     command.env(name, value);
+                }
+                let subject = self.temp.join("intentional_subject/bytes");
+                if subject.is_dir() {
+                    command.env(
+                        "INTENTIONAL_SUBJECT_DIGEST",
+                        subject_digest
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| digest_tree(&subject)),
+                    );
                 }
                 let output = command.output().expect("the promotion body runs");
                 Outcome {
@@ -283,6 +305,12 @@ aur:
             fn destination_exists(&self, name: &str) -> bool {
                 self.remotes.join(name).is_dir()
             }
+
+            fn observation(&self) -> PublicationObservation {
+                let step = publish_step(self.workspace.root(), &self.job, &self.temp);
+                PublicationObservation::load(Path::new(&step.env["INTENTIONAL_OBSERVATION"]))
+                    .expect("the repository readback writes a loadable observation")
+            }
         }
 
         /// Every tracked file beneath one checkout, by repository-relative path.
@@ -304,6 +332,39 @@ aur:
                     );
                 }
             }
+        }
+
+        fn digest_tree(root: &Path) -> String {
+            let mut members = Vec::new();
+            for entry in walkdir::WalkDir::new(root) {
+                let entry = entry.expect("subject member");
+                let relative = entry.path().strip_prefix(root).expect("relative member");
+                if entry.file_type().is_file()
+                    && !relative
+                        .components()
+                        .any(|component| component.as_os_str() == ".git")
+                {
+                    members.push(entry.into_path());
+                }
+            }
+            members.sort();
+            let mut manifest = Vec::new();
+            for member in members {
+                manifest.extend_from_slice(
+                    member
+                        .strip_prefix(root)
+                        .expect("relative member")
+                        .to_string_lossy()
+                        .as_bytes(),
+                );
+                manifest.push(0);
+                manifest.extend_from_slice(
+                    crate::evidence::digest_bytes(&std::fs::read(member).expect("member bytes"))
+                        .as_bytes(),
+                );
+                manifest.push(b'\n');
+            }
+            crate::evidence::digest_bytes(&manifest)
         }
 
         struct PublishStep {
@@ -354,6 +415,13 @@ aur:
             }
             if value.contains("secrets.") {
                 return "a-repository-supplied-secret".to_owned();
+            }
+            if value.contains("needs.") && value.ends_with(".outputs.version }}") {
+                return "1.0.0".to_owned();
+            }
+            if value.contains("needs.") && value.ends_with(".outputs.digest }}") {
+                return "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_owned();
             }
             value
                 .replace("${{ runner.temp }}", &temp.display().to_string())
@@ -438,17 +506,38 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 .with_destination("homebrew-tap")
                 .with_distribution();
             recipe.run().expect_success();
+            let files = recipe.destination_files("homebrew-tap");
+            let observation = recipe.observation();
+            assert_eq!(observation.state, ObservationState::Present);
             assert_eq!(
-                recipe
-                    .destination_files("homebrew-tap")
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                observation.destination.expect("destination").digest,
+                digest_tree(&recipe.workspace.root().join("read-homebrew-tap"))
+            );
+            assert_eq!(
+                observation.retrieval.expect("retrieval").digest,
+                digest_tree(&recipe.temp.join("intentional_subject/bytes"))
+            );
+            assert_eq!(
+                files.keys().cloned().collect::<Vec<_>>(),
                 vec![
                     "Formula/example-tool.rb".to_owned(),
                     "HomebrewFormula/example-tool.rb".to_owned(),
                 ],
                 "both declared taps receive their formula, and the cask is not one"
+            );
+        }
+
+        #[test]
+        fn descriptor_readback_refuses_subject_bytes_that_disagree_with_the_seal() {
+            let recipe = Recipe::new("recipe-homebrew-digest-drift", HOMEBREW_JOB)
+                .with_destination("homebrew-tap")
+                .with_distribution();
+            let outcome = recipe.run_with_subject_digest(
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            );
+            assert!(
+                !outcome.succeeded(),
+                "retrieved descriptor bytes must match the sealed subject digest"
             );
         }
 
@@ -491,6 +580,16 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 .with_distribution();
             recipe.run().expect_success();
             let files = recipe.destination_files(AUR_PACKAGE);
+            let observation = recipe.observation();
+            assert_eq!(observation.state, ObservationState::Present);
+            assert_eq!(
+                observation.destination.expect("destination").digest,
+                digest_tree(&recipe.workspace.root().join(format!("read-{AUR_PACKAGE}")))
+            );
+            assert_eq!(
+                observation.retrieval.expect("retrieval").digest,
+                digest_tree(&recipe.temp.join("intentional_subject/bytes"))
+            );
             assert_eq!(
                 files.keys().cloned().collect::<Vec<_>>(),
                 vec![".SRCINFO".to_owned(), "PKGBUILD".to_owned()],

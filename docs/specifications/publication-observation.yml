@@ -86,11 +86,12 @@ validation-criteria: >-
   destination identity is the configured registry or repository; its subject and
   destination versions are the release plan's version for that release unit; and
   its state carries exactly the members that state admits. `intentional verify
-  publication` re-reads the document under the adapter's bounded
-  eventual-consistency policy: a missing document and a `pending` state remain
-  pending until the deadline, a `conflict` fails immediately, an `absent`
-  observation after a completed publish attempt fails, and reaching the
-  deadline is a distinct retryable failure. The command writes its
+  publication` waits for a missing document under the adapter's bounded
+  eventual-consistency policy. A written `pending` state is the final result of
+  a recipe that already consumed that policy and is an immediate retryable
+  failure; no derived step can update it. A `conflict` fails immediately, an
+  `absent` observation after a completed publish attempt fails, and reaching
+  the deadline while the document is missing is a distinct retryable failure. The command writes its
   publisher-evidence fragment only after a `present` observation passes every
   check, including that `retrieval.mode` is the mode the destination's
   maintained recipe fixes. An `authenticated-draft` retrieval spells its digest
