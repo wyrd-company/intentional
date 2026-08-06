@@ -1236,6 +1236,61 @@
         }
     }
 
+    #[test]
+    fn npmjs_token_secret_reaches_only_the_npmjs_destination() {
+        let workspace = npm_workspace("workflow-npmjs-token-isolation");
+        let config = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+            .expect("configuration reads")
+            .replace(
+                "npm: { npmjs: {}, github: {} }",
+                "npm: { npmjs: { token-secret: EXAMPLE_BOOTSTRAP_TOKEN }, github: {} }",
+            );
+        workspace.write(".intentional/config.yml", &config);
+        converge(workspace.root(), WorkflowRole::Publish);
+
+        let primary = publisher_steps(workspace.root(), PRIMARY_TARGET);
+        let holders = primary
+            .iter()
+            .filter(|step| {
+                step_environment(step)
+                    .values()
+                    .any(|value| value == "${{ secrets.EXAMPLE_BOOTSTRAP_TOKEN }}")
+            })
+            .collect::<Vec<_>>();
+        let [authenticate] = holders.as_slice() else {
+            panic!("exactly one npmjs step reads its configured token-secret");
+        };
+        assert_eq!(
+            step_environment(authenticate)
+                .get("INTENTIONAL_BOOTSTRAP_TOKEN")
+                .map(String::as_str),
+            Some("${{ secrets.EXAMPLE_BOOTSTRAP_TOKEN }}")
+        );
+
+        let github = publisher_steps(workspace.root(), "github");
+        assert!(
+            github.iter().all(|step| step_environment(step)
+                .values()
+                .all(|value| !value.contains("EXAMPLE_BOOTSTRAP_TOKEN"))),
+            "the npmjs token-secret never reaches the GitHub Packages peer"
+        );
+        let github_tokens = github
+            .iter()
+            .filter_map(|step| {
+                step_environment(step)
+                    .get("INTENTIONAL_GITHUB_PACKAGES_TOKEN")
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        assert!(!github_tokens.is_empty(), "the GitHub peer authenticates");
+        assert!(
+            github_tokens
+                .iter()
+                .all(|value| value == "${{ secrets.GITHUB_TOKEN }}"),
+            "the GitHub peer uses only its job-scoped token: {github_tokens:?}"
+        );
+    }
+
     // The recipe fixes what its destination admits, and the observation it
     // writes has to say the same thing or `verify publication` refuses it. Both
     // sides are derived here, so a destination whose recipe changed one and not
