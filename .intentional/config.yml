@@ -44,10 +44,13 @@ discovery:
       evidence-digest: sha256:5108fe4c95aa4c8e69719ffcaeba52647fc6ac4b4069a55a8f491e55429b2089
     - detector: github-action
       path: actions/verify-publication/action.yml
-      evidence-digest: sha256:1be0cc02c7a1a295645b3fb4b372ae8ee2f70d3b701bb9c1c7e95619d316def2
+      evidence-digest: sha256:5424564b92501f1ac664acc95e00a95eb80f92cc5c619e7f63bd18a18c149479
     - detector: github-action
       path: actions/verify-release-tag/action.yml
       evidence-digest: sha256:91c078816a56b864a5b4404fe77fc6088e8cfc9b8384feaab43041992dbee54a
+    - detector: docker-image
+      path: scripts/ci/cargo-homebrew-bsdtar.Dockerfile
+      evidence-digest: sha256:6498260de06bcb37bcc832d0315df475153b3e4367dec32bc5c7987ebbd43e35
     - detector: npm-package
       path: crates/core/tests/fixtures/ecosystems/package.json
       evidence-digest: sha256:afa191b447a065141db78ba646e99b81e111434cad86ff49e4952b83ed478956
