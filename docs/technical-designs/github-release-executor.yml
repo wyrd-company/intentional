@@ -511,7 +511,7 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured three-publication mix fits. A fourth Cargo-shaped publication is
+    configured four-publication mix fits. A fifth Cargo-shaped publication is
     the first count that exceeds the limit with this repository and recipe mix.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
