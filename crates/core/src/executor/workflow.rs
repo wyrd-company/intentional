@@ -3056,7 +3056,7 @@ release-units:
           public-signing-key-url: https://packages.invalid/key.asc
           observation-deadline: 53
           suite: current
-          component: main
+          component: section-a
           with: {}
     tags:
       staged: { role: primary, template: '{id}/staged@{version}', require-phase: before-publication }
@@ -3280,7 +3280,7 @@ release-units:
                     ("release-automation-architecture", outputs[3].1),
                     ("release-automation-digest", outputs[4].1),
                     ("release-automation-apt-suite", "current"),
-                    ("release-automation-apt-component", "main"),
+                    ("release-automation-apt-component", "section-a"),
                 ],
             ),
         ] {
@@ -3812,8 +3812,8 @@ case "${url}" in
   https://packages.invalid/apt/dists/current/InRelease)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
-    printf 'SHA256:\n %s 1 main/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
-  https://packages.invalid/apt/dists/current/main/binary-amd64/Packages)
+    printf 'SHA256:\n %s 1 section-a/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
+  https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages)
     printf '%s' "${FAKE_PACKAGES}" > "${output}" ;;
   https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
@@ -3838,7 +3838,7 @@ test "${etc}" = "${RELEASE_AUTOMATION_WORK}/etc/apt"
 test "${state}" = "${RELEASE_AUTOMATION_WORK}/state"
 test "${cache}" = "${RELEASE_AUTOMATION_WORK}/cache"
 source_line=$(cat "${etc}/sources.list")
-test "${source_line}" = "deb [signed-by=${RELEASE_AUTOMATION_WORK}/keyring.gpg] https://packages.invalid/apt current main"
+test "${source_line}" = "deb [signed-by=${RELEASE_AUTOMATION_WORK}/keyring.gpg] https://packages.invalid/apt current section-a"
 if [[ " $* " == *' download '* ]]; then
   if [ "${FAKE_SCENARIO}" = retrieved-mismatch ]; then
     printf 'different retrieved bytes' > retrieved.deb
