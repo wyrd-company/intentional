@@ -13,6 +13,9 @@ pub mod recipe;
 pub(crate) mod steps;
 pub mod workflow;
 
+#[cfg(any(test, feature = "test-support"))]
+mod credential_derivation;
+
 pub use check::{check_executor, ExecutorCheck};
 pub use init::{
     initialize_executor, CandidateKind, Choice, ExecutorCandidate, ExecutorInitPlan,
@@ -168,8 +171,28 @@ release-units:
     /// second roster having to remember it.
     #[must_use]
     pub fn derived_recipe_workflows(label: &str) -> Vec<(crate::config::WorkflowRole, String)> {
-        let workspace = recipe_workspace(label);
+        let workspace = if label == "usage-claims-credential-populations" {
+            credential_population_workspace(label)
+        } else {
+            recipe_workspace(label)
+        };
         derive_workflows_under(workspace.root())
+    }
+
+    /// Exhaustive recipe workspace plus the alternate Cargo registry partition whose
+    /// emission uses stored token authentication rather than crates.io trusted publishing.
+    fn credential_population_workspace(label: &str) -> Workspace {
+        let workspace = recipe_workspace(label);
+        workspace
+            .write(
+                ".cargo/config.toml",
+                "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+            )
+            .write(
+                "rust-crate/Cargo.toml",
+                "[package]\nname = \"sample-crate\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+            );
+        workspace
     }
 
     /// Catalog entries for which workflow derivation owns complete shell steps.
@@ -225,19 +248,22 @@ release-units:
     #[must_use]
     pub fn long_lived_repository_write_credentials(
     ) -> Vec<(super::recipe::StoredCredentialKind, String)> {
-        super::recipe::long_lived_repository_write_credentials()
+        let workflows = derived_recipe_workflows("usage-claims-long-lived-credentials");
+        super::credential_derivation::long_lived_repository_write_credentials(&workflows)
     }
 
-    /// Publication routes whose maintained recipes implement registry trusted publishing.
+    /// Reader-facing labels for routes that authenticate every publication with a stored credential.
     #[must_use]
-    pub fn trusted_publishing_bootstrap_destinations() -> Vec<(PublisherKind, String)> {
-        super::recipe::trusted_publishing_bootstrap_destinations()
+    pub fn standing_credential_usage_labels() -> Vec<String> {
+        let workflows = derived_recipe_workflows("usage-claims-credential-populations");
+        super::credential_derivation::standing_credential_usage_labels(&workflows)
     }
 
-    /// Destinations whose maintained recipes read a stored credential on every publication.
+    /// Publication routes whose emitted bodies implement registry trusted publishing bootstrap.
     #[must_use]
-    pub fn standing_credential_destinations() -> Vec<super::recipe::StandingCredentialDestination> {
-        super::recipe::standing_credential_destinations()
+    pub fn trusted_publishing_bootstrap_route_count() -> usize {
+        let workflows = derived_recipe_workflows("usage-claims-bootstrap-routes");
+        super::credential_derivation::trusted_publishing_bootstrap_route_count(&workflows)
     }
 
     /// Workspace whose release units are generated from the maintained catalog.

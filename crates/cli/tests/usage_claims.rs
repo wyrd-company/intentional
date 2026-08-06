@@ -4,8 +4,8 @@
 // ---
 
 use intentional_core::executor::fixture::{
-    long_lived_repository_write_credentials, standing_credential_destinations,
-    trusted_publishing_bootstrap_destinations,
+    long_lived_repository_write_credentials, standing_credential_usage_labels,
+    trusted_publishing_bootstrap_route_count,
 };
 use intentional_core::executor::recipe::StoredCredentialKind;
 
@@ -101,12 +101,11 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
         .split_once("### Standing credentials")
         .expect("bootstrap subsection ends before standing credentials")
         .0;
-    let bootstrap_destinations = trusted_publishing_bootstrap_destinations();
+    let bootstrap_route_count = trusted_publishing_bootstrap_route_count();
 
     assert_eq!(
-        bootstrap_destinations.len(),
-        2,
-        "trusted publishing bootstraps exactly npmjs and crates.io"
+        bootstrap_route_count, 2,
+        "trusted publishing bootstraps exactly npmjs and crates.io in emitted workflows"
     );
     assert!(
         !bootstrap_section.contains("Two properties hold for these two destinations"),
@@ -128,11 +127,7 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
 #[test]
 fn usage_standing_credential_sentence_matches_derived_destinations() {
     let usage = usage_guide();
-    let destinations = standing_credential_destinations();
-    let labels = destinations
-        .iter()
-        .map(|destination| destination.usage_label())
-        .collect::<Vec<_>>();
+    let labels = standing_credential_usage_labels();
     let standing_section = registry_section(&usage)
         .split_once("### Standing credentials")
         .expect("registry section has standing credentials")
@@ -142,13 +137,13 @@ fn usage_standing_credential_sentence_matches_derived_destinations() {
         .0;
     let expected = format!(
         "{} authenticate every publication with the credential you stored",
-        join_usage_labels(&labels)
+        join_usage_labels(&labels.iter().map(String::as_str).collect::<Vec<_>>())
     );
 
     assert_eq!(
-        destinations.len(),
+        labels.len(),
         3,
-        "three standing-credential destinations are derived"
+        "three standing-credential destinations are derived from emitted publish jobs: {labels:?}"
     );
     assert!(
         normalize_whitespace(standing_section).contains(&expected),
