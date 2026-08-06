@@ -3985,7 +3985,22 @@ fi
         let primary = format!(
             "<metadata><package><name>{indexed_name}</name><arch>{indexed_architecture}</arch><version ver=\"{indexed_version}\" rel=\"1\"/><checksum>{indexed_checksum}</checksum></package></metadata>"
         );
-        let primary_digest = crate::evidence::digest_bytes(primary.as_bytes())
+        let primary_source = temporary.join("primary.xml");
+        std::fs::write(&primary_source, &primary).expect("primary source");
+        let primary_bytes = if scenario == "gzip-primary" {
+            let output = std::process::Command::new("gzip")
+                .args(["-n", "-c"])
+                .arg(&primary_source)
+                .output()
+                .expect("gzip runs");
+            assert!(output.status.success());
+            output.stdout
+        } else {
+            primary.into_bytes()
+        };
+        let primary_fixture = temporary.join("primary.fixture");
+        std::fs::write(&primary_fixture, &primary_bytes).expect("primary fixture");
+        let primary_digest = crate::evidence::digest_bytes(&primary_bytes)
             .trim_start_matches("sha256:")
             .to_owned();
         let stubs = temporary.join("stubs");
@@ -4000,13 +4015,13 @@ case "${url}" in
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
     location=metadata/current-primary.xml; [ "${FAKE_SCENARIO}" != alternate-location ] || location=indices/alternate-primary.xml
-    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="%s"/></data></repomd>' "${digest}" "${location}" > "${output}" ;;
+    printf '<repomd><data type="filelists"><checksum>ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff</checksum><location href="metadata/filelists.xml"/></data><data type="primary"><checksum>%s</checksum><location href="%s"/></data></repomd>' "${digest}" "${location}" > "${output}" ;;
   https://packages.invalid/rpm/stable/metadata/current-primary.xml)
     [ "${FAKE_SCENARIO}" != alternate-location ] || exit 64
-    printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+    cp "${FAKE_PRIMARY_PATH}" "${output}" ;;
   https://packages.invalid/rpm/stable/indices/alternate-primary.xml)
     [ "${FAKE_SCENARIO}" = alternate-location ] || exit 64
-    printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+    cp "${FAKE_PRIMARY_PATH}" "${output}" ;;
   https://packages.invalid/rpm-key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
 esac
@@ -4067,7 +4082,7 @@ fi
                 ),
             )
             .env("FAKE_SCENARIO", scenario)
-            .env("FAKE_PRIMARY", primary)
+            .env("FAKE_PRIMARY_PATH", primary_fixture)
             .env("FAKE_PRIMARY_DIGEST", primary_digest);
         for (key, value) in step["env"].as_mapping().expect("env") {
             let value = value
@@ -4098,6 +4113,11 @@ fi
             "rpm-alternate-location",
             "alternate-location"
         ));
+    }
+
+    #[test]
+    fn rpm_readback_reads_gzip_compressed_primary_metadata() {
+        assert!(run_rpm_readback("rpm-gzip-primary", "gzip-primary"));
     }
 
     #[test]
