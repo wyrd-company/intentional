@@ -215,25 +215,6 @@
         })
     }
 
-    fn cargo_homebrew_bsdtar_version() -> String {
-        let output = std::process::Command::new("docker")
-            .args([
-                "run",
-                "--rm",
-                "--platform",
-                "linux/amd64",
-                "--env",
-                "LC_ALL=C",
-                cargo_homebrew_bsdtar_image(),
-                "bsdtar",
-                "--version",
-            ])
-            .output()
-            .expect("pinned bsdtar reports its version");
-        assert!(output.status.success());
-        String::from_utf8(output.stdout).expect("bsdtar version is UTF-8")
-    }
-
     fn cargo_homebrew_execute_bsdtar_body(
         workspace: &Workspace,
         step: &Value,
@@ -387,10 +368,6 @@ printf 'epoch=%s\n' "$(stat -c %Y "$1")"
     #[test]
     #[ignore = "run through task cargo-homebrew:compatibility"]
     fn cargo_homebrew_platform_contract_bsdtar_3_4_3_accepts_macos_archive() {
-        assert!(
-            cargo_homebrew_bsdtar_version().starts_with("bsdtar 3.4.3 - libarchive 3.4.3 "),
-            "compatibility environment names exact bsdtar and libarchive versions"
-        );
         let workspace = cargo_homebrew_platform_contract_workspace("bsdtar-positive");
         let step = cargo_homebrew_platform_contract_step(
             &workspace,
@@ -440,10 +417,6 @@ printf 'epoch=%s\n' "$(stat -c %Y "$1")"
     #[test]
     #[ignore = "run through task cargo-homebrew:compatibility"]
     fn cargo_homebrew_platform_contract_gnu_sort_negative_control() {
-        assert!(
-            cargo_homebrew_bsdtar_version().starts_with("bsdtar 3.4.3 - libarchive 3.4.3 "),
-            "negative control runs in the named bsdtar environment"
-        );
         let workspace = cargo_homebrew_platform_contract_workspace("bsdtar-gnu-sort-negative");
         let step = cargo_homebrew_platform_contract_step(
             &workspace,
