@@ -399,15 +399,7 @@ steps:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/@JOB@cargo-@SLUG@-@PLATFORM@
 @PLATFORM_ENV@    run: |
       set -euo pipefail
-      metadata="$(cargo metadata --no-deps --format-version 1)"
-      manifest_path="$(realpath Cargo.toml)"
-      package_metadata="$(jq -c --arg manifest "${manifest_path}" '.packages[] | select(.manifest_path == $manifest)' <<<"${metadata}")"
-      if [[ -z "${package_metadata}" ]]; then printf 'No Cargo package matched manifest %s while deriving the native archive\n' "${manifest_path}" >&2; exit 1; fi
-      package_name="$(jq -r '.name' <<<"${package_metadata}")"
-      mapfile -t binaries < <(jq -r '[.targets[] | select(.kind | index("bin")) | .name] | unique | .[]' <<<"${package_metadata}")
-      if [[ "${#binaries[@]}" -ne 1 ]]; then printf 'Cargo package %s exposes %s binary targets; CargoArchive requires exactly one\n' "${package_name}" "${#binaries[@]}" >&2; exit 1; fi
-      binary="${binaries[0]}"
-      if [[ "${binary}" != "${@ENVVAR@SUBJECT_IDENTITY}" ]]; then printf 'Cargo package metadata names binary %s, but the sealed subject identity is %s\n' "${binary}" "${@ENVVAR@SUBJECT_IDENTITY}" >&2; exit 1; fi
+      metadata="$(cargo metadata --no-deps --format-version 1)"; manifest_path="$(realpath Cargo.toml)"; package_metadata="$(jq -c --arg manifest "${manifest_path}" '.packages[] | select(.manifest_path == $manifest)' <<<"${metadata}")"; if [[ -z "${package_metadata}" ]]; then printf 'No Cargo package matched manifest %s while deriving the native archive\n' "${manifest_path}" >&2; exit 1; fi; package_name="$(jq -r '.name' <<<"${package_metadata}")"; mapfile -t binaries < <(jq -r '[.targets[] | select(.kind | index("bin")) | .name] | unique | .[]' <<<"${package_metadata}"); if [[ "${#binaries[@]}" -ne 1 ]]; then printf 'Cargo package %s exposes %s binary targets; CargoArchive requires exactly one\n' "${package_name}" "${#binaries[@]}" >&2; exit 1; fi; binary="${binaries[0]}"; if [[ "${binary}" != "${@ENVVAR@SUBJECT_IDENTITY}" ]]; then printf 'Cargo package metadata names binary %s, but the sealed subject identity is %s\n' "${binary}" "${@ENVVAR@SUBJECT_IDENTITY}" >&2; exit 1; fi
 @BUILD_SETUP@      @BUILD_TOOL@ build --release --locked --target @TARGET@ --bin "${binary}"
       binary_path="${CARGO_TARGET_DIR}/@TARGET@/release/${binary}"
       chmod 755 "${binary_path}"
