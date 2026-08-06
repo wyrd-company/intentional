@@ -257,24 +257,16 @@ steps:
     run: |
       set -euo pipefail
       cargo build --release --locked --bin "${@ENVVAR@SUBJECT_IDENTITY}"
-      python3 - "target/release/${@ENVVAR@SUBJECT_IDENTITY}" \
-        "${RUNNER_TEMP}/${@ENVVAR@ARCHIVE}" "${@ENVVAR@SUBJECT_IDENTITY}" <<'PY'
-      import gzip
-      import io
-      import pathlib
-      import sys
-      import tarfile
-      source, output, name = map(pathlib.Path, sys.argv[1:])
-      info = tarfile.TarInfo(str(name))
-      data = source.read_bytes()
-      info.size = len(data)
-      info.mode = 0o755
-      info.mtime = 0
-      with output.open("wb") as raw:
-          with gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as compressed:
-              with tarfile.open(fileobj=compressed, mode="w") as archive:
-                  archive.addfile(info, io.BytesIO(data))
-      PY
+      tar --create --file=- \
+        --directory=target/release \
+        --sort=name \
+        --mtime=@0 \
+        --owner=0 \
+        --group=0 \
+        --numeric-owner \
+        --mode=0755 \
+        "${@ENVVAR@SUBJECT_IDENTITY}" \
+        | gzip -n > "${RUNNER_TEMP}/${@ENVVAR@ARCHIVE}"
   - name: Upload the @PLATFORM@ native archive
     uses: @UPLOAD@
     with:

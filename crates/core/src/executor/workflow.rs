@@ -4719,15 +4719,39 @@ release-units:
                 "the Rust Homebrew route derives {id}"
             );
         }
+        for (id, artifact, archive) in [
+            (
+                "intentional_build_component_cargo_archive_linux_x86_64",
+                "intentional_archive-component_cargo_archive-linux_x86_64",
+                "${{ runner.temp }}/linux-x86_64.tar.gz",
+            ),
+            (
+                "intentional_build_component_cargo_archive_linux_arm64",
+                "intentional_archive-component_cargo_archive-linux_arm64",
+                "${{ runner.temp }}/linux-arm64.tar.gz",
+            ),
+            (
+                "intentional_build_component_cargo_archive_macos_arm64",
+                "intentional_archive-component_cargo_archive-macos_arm64",
+                "${{ runner.temp }}/macos-arm64.tar.gz",
+            ),
+        ] {
+            let platform = job_steps(&jobs, id);
+            assert!(platform.iter().any(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("cargo build --release --locked --bin"))
+            }));
+            let upload = platform
+                .iter()
+                .find(|step| step["with"]["name"].as_str() == Some(artifact))
+                .unwrap_or_else(|| panic!("{id} uploads artifact {artifact}"));
+            assert_eq!(upload["with"]["path"].as_str(), Some(archive));
+        }
         let platform = job_steps(
             &jobs,
             "intentional_build_component_cargo_archive_linux_x86_64",
         );
-        assert!(platform.iter().any(|step| {
-            step["run"]
-                .as_str()
-                .is_some_and(|body| body.contains("cargo build --release --locked --bin"))
-        }));
         let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
         let aggregate_body = aggregate
             .iter()
@@ -4771,6 +4795,15 @@ release-units:
             download_pattern,
             "intentional_archive-component_cargo_archive-*"
         );
+        let download = aggregate
+            .iter()
+            .find(|step| step["with"]["pattern"].as_str() == Some(download_pattern))
+            .expect("archive download step");
+        assert_eq!(
+            download["with"]["path"].as_str(),
+            Some("${{ runner.temp }}/intentional_subject/component_cargo_archive/bytes")
+        );
+        assert_eq!(download["with"]["merge-multiple"].as_bool(), Some(true));
 
         let aggregate_root = workspace.root().join("aggregate-execution");
         let subject_root = aggregate_root.join("bytes");
@@ -4790,7 +4823,11 @@ release-units:
             .arg(aggregate_body)
             .current_dir(workspace.root().join("component"))
             .env("GITHUB_REF_NAME", "1.2.3")
-            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository");
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env(
+                "PATH",
+                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+            );
         for (key, value) in step_environment(
             aggregate
                 .iter()
@@ -4812,6 +4849,7 @@ release-units:
         for line in [
             "class SampleTool < Formula".to_owned(),
             "desc \"Sample command line tool\"".to_owned(),
+            "homepage \"https://github.com/sample-owner/sample-repository\"".to_owned(),
             "license \"MIT\"".to_owned(),
             "version \"1.2.3\"".to_owned(),
             format!(
@@ -4850,7 +4888,11 @@ release-units:
             .arg(aggregate_body)
             .current_dir(workspace.root().join("component"))
             .env("GITHUB_REF_NAME", "1.2.3")
-            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository");
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env(
+                "PATH",
+                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+            );
         for (key, value) in step_environment(
             aggregate
                 .iter()
@@ -4897,8 +4939,8 @@ release-units:
         }));
 
         // Execute the product-shaped platform body. The stub replaces only
-        // Cargo's external build boundary; Python and gzip create the real
-        // archive the generated job uploads.
+        // Cargo's external build boundary; tar and gzip create the real archive
+        // the generated job uploads.
         let build = platform
             .iter()
             .find(|step| step["run"].is_string())
@@ -4928,7 +4970,7 @@ release-units:
                 format!(
                     "{}:{}",
                     stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("RUNNER_TEMP", &temporary);

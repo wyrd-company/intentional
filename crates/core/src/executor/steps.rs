@@ -412,10 +412,10 @@ const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
 
 /// Promote the generated Homebrew formulas into the configured tap repository.
 ///
-/// The packager writes each formula to `homebrew/<directory>/<name>.rb` inside
-/// the distribution tree, where the directory and the name are the ones the
-/// release unit's own `brews` entry declares, and publishes it to that same
-/// relative path in the tap. Promotion therefore preserves the path rather than
+/// GoReleaser writes each declared `brews` formula beneath `homebrew`, while
+/// Intentional writes each Cargo archive formula beneath `homebrew/Formula`.
+/// The publisher promotes either source to the same relative path in the tap.
+/// Promotion therefore preserves the path rather than
 /// choosing one: a tap whose formulas do not live under `Formula` is stating
 /// where they live, and this recipe's premise is that the native configuration
 /// is the authority on that.
