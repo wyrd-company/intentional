@@ -50,13 +50,11 @@ if ! grep -Fq "hashFiles('Cross.toml'" "$workflow" || \
   exit 1
 fi
 
-for file in "$cross_toml"; do
-  for image in "$X86_64_GNU_CROSS_IMAGE" "$AARCH64_GNU_CROSS_IMAGE"; do
-    if ! grep -Fq "$image" "$file"; then
-      echo "$file is missing pinned image: $image" >&2
-      exit 1
-    fi
-  done
+for image in "$X86_64_GNU_CROSS_IMAGE" "$AARCH64_GNU_CROSS_IMAGE"; do
+  if ! grep -Fq "$image" "$cross_toml"; then
+    echo "$cross_toml is missing pinned image: $image" >&2
+    exit 1
+  fi
 done
 
 assert_executor_default() {
