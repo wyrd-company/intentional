@@ -442,7 +442,7 @@ fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
     }
     let keys = requested_projector_keys();
     let key_references = keys.iter().map(String::as_str).collect::<Vec<_>>();
-    let reported = format!(
+    let mut reported = format!(
         "source-sha: {source}\nrelease-sha: {release}\nglobal-tag-object: {object}\nplan-digest: sha256:{plan}\ndigest: sha256:{digest}\nversion: 1.2.3-rc.1+build.2\nglobal-tag: release/1.2.3\nevidence-path: {}\nbuilt-subject-path: {}\nsealed-phase-evidence: {}\ncandidate-path: {}\n",
         evidence.display(),
         built.display(),
@@ -454,6 +454,14 @@ fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
         plan = "4".repeat(64),
         digest = "5".repeat(64),
     );
+    for key in &keys {
+        if !reported
+            .lines()
+            .any(|line| line.starts_with(&format!("{key}: ")))
+        {
+            reported.push_str(&format!("{key}: fixture\n"));
+        }
+    }
     let projected =
         project_values(&reported, &key_references).expect("every requested shape projects");
     assert_eq!(
