@@ -41,7 +41,7 @@ for variable in "${required_env_vars[@]}"; do
   fi
 done
 
-if ! grep -Fq "Git $GNU_BUILD_GIT_VERSION" "$root/README.md"; then
+if ! grep -Fq "minimum supported Git is $GNU_BUILD_GIT_VERSION" "$root/README.md"; then
   echo "README.md must record minimum supported Git $GNU_BUILD_GIT_VERSION." >&2
   exit 1
 fi

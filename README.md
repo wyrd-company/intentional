@@ -49,9 +49,9 @@ x64 and arm64, macOS arm64, and Windows x64. GitHub Releases also publish those
 archives and `SHA256SUMS` for direct installation. Other platforms can build
 from source with `cargo install --path crates/cli --locked`.
 
-The minimum supported Rust version is 1.85, and the minimum supported Git
-version is 2.7.4. The library crate is `intentional-core`; the binary package
-is `intentional-cli` and installs the `intentional` executable.
+The minimum supported Rust version is 1.85. The minimum supported Git is 2.7.4.
+The library crate is `intentional-core`; the binary package is
+`intentional-cli` and installs the `intentional` executable.
 
 ## Agent workflow
 
