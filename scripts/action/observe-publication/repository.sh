@@ -30,6 +30,7 @@ PY
 }
 
 test "$(digest_tree "$INTENTIONAL_SUBJECT")" = "$INTENTIONAL_SUBJECT_DIGEST"
+mkdir -p "$(dirname "$INTENTIONAL_WORK")"
 
 read_homebrew() {
   local generated="$INTENTIONAL_SUBJECT/homebrew"

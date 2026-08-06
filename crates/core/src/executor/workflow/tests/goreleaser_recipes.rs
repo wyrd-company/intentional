@@ -471,6 +471,10 @@ aur:
                     "goreleaser",
                     "#!/usr/bin/env bash\nprintf '2.17.1\\n'\n".to_owned(),
                 ),
+                (
+                    "intentional",
+                    "#!/usr/bin/env bash\nprintf 'intentional 0.1.6\\n'\n".to_owned(),
+                ),
             ] {
                 let path = directory.join(name);
                 std::fs::write(&path, body).expect("stub written");
