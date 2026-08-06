@@ -19,6 +19,10 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
+include!("recipe/publishers/npm.rs");
+include!("recipe/publishers/cargo.rs");
+include!("recipe/publishers/goreleaser.rs");
+
 /// Canonical target identity of an adapter's implicit primary destination.
 pub const PRIMARY_TARGET: &str = "primary";
 
@@ -1394,6 +1398,11 @@ fn is_main_package_clause(line: &str) -> bool {
 mod tests {
     use super::*;
     use crate::executor::fixture::Workspace;
+
+    include!("recipe/tests/npm.rs");
+    include!("recipe/tests/cargo.rs");
+    include!("recipe/tests/goreleaser.rs");
+    include!("recipe/tests/oci.rs");
 
     const GITHUB: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2

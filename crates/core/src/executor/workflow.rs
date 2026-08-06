@@ -50,6 +50,9 @@ use templates::{
 /// derivation module rather than through a second path into the templates.
 pub(super) use templates::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
 
+include!("workflow/publishers.rs");
+include!("workflow/oci.rs");
+
 /// Step id every managed job carries, independently of the configurable prefix.
 pub const OWNERSHIP_SENTINEL: &str = "intentional_executor_contract";
 
@@ -2075,6 +2078,11 @@ mod tests {
     use crate::publication::observation::ObservationState;
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet};
+
+    include!("workflow/tests/goreleaser.rs");
+    include!("workflow/tests/registry.rs");
+    include!("workflow/tests/goreleaser_recipes.rs");
+    include!("workflow/tests/oci_recipes.rs");
 
     fn test_tool_path(base: &str) -> String {
         let mut directories = Vec::new();
