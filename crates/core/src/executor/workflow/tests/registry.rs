@@ -1115,6 +1115,67 @@
         }
     }
 
+    #[test]
+    fn classifies_only_cargo_registry_absence_as_missing() {
+        let body = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/action/observe-publication/cargo.sh"),
+        )
+        .expect("Cargo observer script");
+        let start = body
+            .find("resolve() {")
+            .expect("the observer defines its existence probe");
+        let end = body[start..]
+            .find("\n}\n")
+            .expect("the probe is a shell function");
+        let helper = &body[start..start + end + "\n}\n".len()];
+        let temporary = tempfile::tempdir().expect("temporary Cargo probe directory");
+
+        for (label, add, expected) in [
+            ("resolved release", "exit 0", 0),
+            (
+                "release absent from registry",
+                "echo 'could not be found in registry' >&2; exit 1",
+                1,
+            ),
+            (
+                "registry did not answer",
+                "echo 'network request failed' >&2; exit 1",
+                2,
+            ),
+        ] {
+            let stub = format!(
+                "if [[ \"$1\" == new ]]; then mkdir -p \"${{@: -1}}\"; exit 0; fi\n{add}"
+            );
+            let stubs = stub_client(&temporary.path().join(expected.to_string()), "cargo", &stub);
+            let output = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(format!(
+                    "ALLOWED=(\"PATH=$PATH\")\nREGISTRY_ARGUMENTS=()\n{helper}\nresolve \"{}\"",
+                    temporary.path().join(format!("probe-{expected}")).display()
+                ))
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:{}",
+                        stubs.display(),
+                        test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                    ),
+                )
+                .env("INTENTIONAL_SUBJECT_IDENTITY", "sample-library")
+                .env("INTENTIONAL_VERSION", "1.2.3")
+                .output()
+                .expect("the Cargo probe runs");
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "{label} classifies as {expected}: {}; calls: {}",
+                String::from_utf8_lossy(&output.stderr),
+                std::fs::read_to_string(stubs.join("calls.log")).unwrap_or_default()
+            );
+        }
+    }
+
     // A probe that did not succeed is not evidence of absence. `npm view` and
     // `cargo add` fail the same way on a missing package, a rate limit, a proxy
     // failure and a 5xx, and absence is the one condition that unlocks the
