@@ -1844,13 +1844,13 @@ release-units:
         );
     }
 
-    /// Attempts the racing harness makes before it concludes nothing raced.
+    /// Attempts the racing harness makes after its positive control succeeds.
     ///
     /// The bound caps the test's runtime. It is not a sample size the result
     /// depends on: the probe does not retry, so a removal it sees is resolved on
     /// the spot and one observation settles the question. What the bound has to
-    /// be large enough for is the harness's own liveness check, which needs the
-    /// competitor to be caught publishing at least once.
+    /// be large enough for is opening the removal window often enough to catch
+    /// the check-to-read interleaving.
     const RACING_ATTEMPTS: usize = 20_000;
 
     /// Run one probe against a file another thread keeps taking away.
@@ -1861,11 +1861,12 @@ release-units:
     /// there, then it was not, which is the interleaving a concurrently dropped
     /// fixture workspace produces.
     ///
-    /// Absence is also what a competitor that never publishes produces, and it
-    /// is what every filesystem call here would produce if it started failing,
-    /// because each one is discarded. `present` distinguishes the two: the run
-    /// has to catch the file published at least once, or the race it reports
-    /// surviving was never run.
+    /// Absence is also what a competitor that never publishes produces. The
+    /// publication rendezvous distinguishes the two: before racing, the probe
+    /// has to observe a publication while the competitor holds it in place.
+    /// Every raced attempt then starts from another confirmed publication and
+    /// explicitly releases its withdrawal, so scheduler speed cannot make the
+    /// competitor miss the bounded probe loop.
     fn under_removal<T>(
         label: &str,
         file: &str,
@@ -1873,54 +1874,93 @@ release-units:
         present: impl Fn(&T) -> bool,
         contents: &str,
     ) {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
+        use std::sync::mpsc;
+
+        #[derive(Clone, Copy)]
+        enum CompetitorCommand {
+            Withdraw,
+            Stop,
+        }
 
         let workspace = Workspace::new(label);
         let root = workspace.root().to_path_buf();
         let path = root.join(file);
-        let stop = Arc::new(AtomicBool::new(false));
         let staged = root.join("staged-contents");
         std::fs::write(&staged, contents).expect("stage the contents the competitor publishes");
+        let (published, publication) = mpsc::channel();
+        let (command, commands) = mpsc::channel();
         let competitor = {
-            let stop = Arc::clone(&stop);
             let staged = staged.clone();
             std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
+                loop {
                     // Published by rename and withdrawn by removal, so the
                     // probe sees the file whole or not at all. This harness
                     // opens the removal window, not a torn read.
                     let scratch = path.with_extension("staging");
-                    let _ = std::fs::copy(&staged, &scratch);
-                    let _ = std::fs::rename(&scratch, &path);
-                    let _ = std::fs::remove_file(&path);
+                    std::fs::copy(&staged, &scratch).expect("stage the next publication");
+                    std::fs::rename(&scratch, &path).expect("publish the probed file");
+                    published
+                        .send(())
+                        .expect("the probe waits for each publication");
+                    match commands
+                        .recv()
+                        .expect("the probe releases each publication")
+                    {
+                        CompetitorCommand::Withdraw => {
+                            std::fs::remove_file(&path).expect("withdraw the probed file");
+                        }
+                        CompetitorCommand::Stop => {
+                            std::fs::remove_file(&path).expect("withdraw the final publication");
+                            break;
+                        }
+                    }
                 }
             })
         };
 
         let relative = Path::new(file);
-        let mut observed_present = 0_usize;
+        publication
+            .recv()
+            .expect("the competitor publishes the positive control");
+        let control = probe(&root, relative);
+        let control_was_present = control.as_ref().is_ok_and(&present);
+        command
+            .send(CompetitorCommand::Withdraw)
+            .expect("release the positive-control publication");
+
         let mut failure = None;
-        for _ in 0..RACING_ATTEMPTS {
-            match probe(&root, relative) {
-                Ok(answer) if present(&answer) => observed_present += 1,
-                Ok(_) => {}
-                Err(error) => {
+        if control_was_present {
+            for _ in 0..RACING_ATTEMPTS {
+                publication
+                    .recv()
+                    .expect("the competitor publishes before each raced probe");
+                command
+                    .send(CompetitorCommand::Withdraw)
+                    .expect("release the withdrawal raced by this probe");
+                if let Err(error) = probe(&root, relative) {
                     failure = Some(error);
                     break;
                 }
             }
         }
 
-        stop.store(true, Ordering::Relaxed);
+        command
+            .send(CompetitorCommand::Stop)
+            .expect("stop the competitor after its final publication");
         competitor.join().expect("the competing thread finishes");
 
+        if !control_was_present {
+            match control {
+                Ok(_) => panic!(
+                    "the probe did not observe the competitor's held publication of {file}, so the removal race was not started"
+                ),
+                Err(error) => panic!(
+                    "the probe failed while the competitor held {file} published as a positive control: {error:?}"
+                ),
+            }
+        }
         if let Some(error) = failure {
             panic!("{file} was removed while the probe ran and became a failure: {error:?}");
         }
-        assert!(
-            observed_present > 0,
-            "the competitor never published {file}, so no removal was ever raced and this run proves nothing"
-        );
     }
 }
