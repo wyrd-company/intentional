@@ -347,6 +347,149 @@ fn hosted_gate_queries_every_check_for_the_selected_pull_request() {
     );
 }
 
+/// Every checkout step a derived workflow carries, paired with its job id.
+///
+/// The walk reads the parsed document rather than a roster of templates, so a
+/// managed job added later is covered without a second list remembering it.
+fn collect_checkouts(document: &Value) -> Vec<(String, Value)> {
+    let mut checkouts = Vec::new();
+    let Some(jobs) = document["jobs"].as_mapping() else {
+        return checkouts;
+    };
+    for (job, body) in jobs {
+        let Some(steps) = body["steps"].as_sequence() else {
+            continue;
+        };
+        for step in steps {
+            if step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.starts_with("actions/checkout@"))
+            {
+                checkouts.push((
+                    job.as_str().expect("job id").to_owned(),
+                    step.clone(),
+                ));
+            }
+        }
+    }
+    checkouts
+}
+
+/// Count authored checkout steps independently of the YAML tree walk.
+fn textual_checkout_count(workflow: &str) -> usize {
+    workflow
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            (line.starts_with("uses:") || line.starts_with("- uses:"))
+                && line.contains("actions/checkout@")
+        })
+        .count()
+}
+
+/// Checkout option whose absence removes a guarantee the release protocol needs.
+#[derive(Clone, Copy)]
+enum CheckoutOption {
+    FetchDepth,
+    FetchTags,
+    PersistCredentials,
+}
+
+impl CheckoutOption {
+    const ALL: [Self; 3] = [Self::FetchDepth, Self::FetchTags, Self::PersistCredentials];
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::FetchDepth => "fetch-depth",
+            Self::FetchTags => "fetch-tags",
+            Self::PersistCredentials => "persist-credentials",
+        }
+    }
+
+    fn required(self) -> Value {
+        match self {
+            Self::FetchDepth => Value::from(0),
+            Self::FetchTags => Value::from(true),
+            Self::PersistCredentials => Value::from(false),
+        }
+    }
+
+    /// What a release run loses when the option is absent or wrong.
+    const fn guarantee(self) -> &'static str {
+        match self {
+            Self::FetchDepth => {
+                "verification rebuilds the candidate from S, so a shallow checkout cannot reach it"
+            }
+            Self::FetchTags => {
+                "version authority and the global release tag are derived from annotated tags, which a checkout without them cannot see"
+            }
+            Self::PersistCredentials => {
+                "an unprivileged job that persists the runner token holds authority the protocol grants only to the privileged job"
+            }
+        }
+    }
+}
+
+/// Hold the module header's claim about managed checkouts to the derived text.
+///
+/// `templates.rs` states that every managed checkout requests tags explicitly
+/// rather than inheriting them, and explains why shortening a fetch would
+/// silently remove a guarantee. That explanation is the only place the property
+/// existed: the options are spelled in eleven separate template literals, and a
+/// twelfth added without them would have failed nothing.
+///
+/// The tree walk is cross-checked against an independent textual count so the
+/// assertions cannot pass by reaching no checkout at all. A selector that
+/// matched nothing would otherwise satisfy every `for` body below.
+#[test]
+fn every_managed_checkout_states_the_options_the_release_protocol_depends_on() {
+    let workflows = derived_recipe_workflows("derived-workflow-checkouts");
+    let mut total = 0usize;
+
+    for (role, workflow) in &workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let checkouts = collect_checkouts(&document);
+        assert_eq!(
+            checkouts.len(),
+            textual_checkout_count(workflow),
+            "the {role} tree walk reads every checkout the derived text carries"
+        );
+        assert!(
+            !checkouts.is_empty(),
+            "the {role} workflow derives at least one checkout to check"
+        );
+        total += checkouts.len();
+
+        for (job, step) in checkouts {
+            let with = step["with"]
+                .as_mapping()
+                .unwrap_or_else(|| panic!("{role} job {job} checkout states its options"));
+            for option in CheckoutOption::ALL {
+                let stated = with.get(Value::from(option.key())).unwrap_or_else(|| {
+                    panic!(
+                        "{role} job {job} checkout omits {}: {}",
+                        option.key(),
+                        option.guarantee()
+                    )
+                });
+                assert_eq!(
+                    stated,
+                    &option.required(),
+                    "{role} job {job} checkout sets {} to {stated:?}: {}",
+                    option.key(),
+                    option.guarantee()
+                );
+            }
+        }
+    }
+
+    assert!(
+        total >= workflows.len(),
+        "every derived workflow contributed at least one checkout: {total} across {} workflows",
+        workflows.len()
+    );
+}
+
 /// Recipe identity carried by a derived publisher's shell environment.
 fn recipe_identity(step: &Value) -> Option<(String, String, String)> {
     let environment = step["env"].as_mapping()?;
