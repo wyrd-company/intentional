@@ -1153,8 +1153,33 @@ const CRATES_IO: &str = "crates.io";
 
 #[cfg(test)]
 thread_local! {
-    static PROBED_FILE_BEFORE_READ: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+    static PROBED_FILE_BEFORE_READ: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+struct ProbedFileBeforeReadHook;
+
+#[cfg(test)]
+impl ProbedFileBeforeReadHook {
+    fn install(before_read: impl FnOnce() + 'static) -> Self {
+        PROBED_FILE_BEFORE_READ.with(|slot| {
+            assert!(
+                slot.replace(Some(Box::new(before_read))).is_none(),
+                "only one probed-file hook may be installed on a test thread"
+            );
+        });
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for ProbedFileBeforeReadHook {
+    fn drop(&mut self) {
+        PROBED_FILE_BEFORE_READ.with(|slot| {
+            slot.replace(None);
+        });
+    }
 }
 
 /// Read one probed file, or `None` when it is not there to be read.
@@ -1170,7 +1195,7 @@ thread_local! {
 fn probed_file_text(path: &Path) -> Result<Option<String>> {
     #[cfg(test)]
     PROBED_FILE_BEFORE_READ.with(|before_read| {
-        if let Some(before_read) = before_read.borrow().as_ref() {
+        if let Some(before_read) = before_read.borrow_mut().take() {
             before_read();
         }
     });
@@ -1857,21 +1882,40 @@ release-units:
         );
     }
 
+    #[test]
+    fn a_probed_file_hook_is_cleared_when_its_callback_panics() {
+        let workspace = Workspace::new("probe-hook-panic");
+        let path = workspace.root().join("input.txt");
+        std::fs::write(&path, "sample").expect("write the probed input");
+        let _hook = ProbedFileBeforeReadHook::install(|| panic!("forced hook failure"));
+
+        let panic = std::panic::catch_unwind(|| probed_file_text(&path));
+
+        assert!(panic.is_err(), "the hook callback must have run");
+        PROBED_FILE_BEFORE_READ.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "a panicking hook callback must not remain installed"
+            );
+        });
+    }
+
     /// Run one raced probe after proving it can see a held publication.
     ///
-    /// The competitor publishes and withdraws the file through rendezvous with
-    /// the probing thread. The raced probe passes its existence check while the
-    /// file is there, then reads after it is not, which is the interleaving a
-    /// concurrently dropped fixture workspace produces. Any error the probe
-    /// returns is the defect.
+    /// The probing thread commands each publication and withdrawal. The raced
+    /// probe passes its existence check while the file is there, then reads
+    /// after the competitor has removed it and blocked. This is the
+    /// interleaving a concurrently dropped fixture workspace produces. An
+    /// error or a raced answer that still reports the file present is a defect.
     ///
     /// Absence is also what a competitor that never publishes produces. The
     /// publication rendezvous distinguishes the two: before racing, the probe
     /// has to observe a publication while the competitor holds it in place.
     /// The raced probe then starts from another confirmed publication. A
-    /// test-only hook releases its withdrawal after the existence check enters
-    /// `probed_file_text` and waits for the removal before the read, so scheduler
-    /// speed cannot move the competitor outside the check-to-read window.
+    /// one-shot test hook commands withdrawal after the existence check enters
+    /// `probed_file_text`, waits until removal completes, and clears itself on
+    /// unwind. The competitor accepts no further command until the raced read
+    /// returns, and the raced answer is asserted absent.
     fn under_removal<T>(
         label: &str,
         file: &str,
@@ -1883,6 +1927,7 @@ release-units:
 
         #[derive(Clone, Copy)]
         enum CompetitorCommand {
+            Publish,
             Withdraw,
             Stop,
         }
@@ -1899,19 +1944,21 @@ release-units:
             let staged = staged.clone();
             std::thread::spawn(move || {
                 loop {
-                    // Published by rename and withdrawn by removal, so the
-                    // probe sees the file whole or not at all. This harness
-                    // opens the removal window, not a torn read.
-                    let scratch = path.with_extension("staging");
-                    std::fs::copy(&staged, &scratch).expect("stage the next publication");
-                    std::fs::rename(&scratch, &path).expect("publish the probed file");
-                    published
-                        .send(())
-                        .expect("the probe waits for each publication");
                     match commands
                         .recv()
-                        .expect("the probe releases each publication")
+                        .expect("the probe commands each competitor transition")
                     {
+                        CompetitorCommand::Publish => {
+                            // Published by rename and withdrawn by removal, so
+                            // the probe sees the file whole or not at all. This
+                            // harness opens the removal window, not a torn read.
+                            let scratch = path.with_extension("staging");
+                            std::fs::copy(&staged, &scratch).expect("stage the next publication");
+                            std::fs::rename(&scratch, &path).expect("publish the probed file");
+                            published
+                                .send(())
+                                .expect("the probe waits for each publication");
+                        }
                         CompetitorCommand::Withdraw => {
                             std::fs::remove_file(&path).expect("withdraw the probed file");
                             withdrawn
@@ -1919,7 +1966,6 @@ release-units:
                                 .expect("the probe waits for each withdrawal");
                         }
                         CompetitorCommand::Stop => {
-                            std::fs::remove_file(&path).expect("withdraw the final publication");
                             break;
                         }
                     }
@@ -1928,6 +1974,9 @@ release-units:
         };
 
         let relative = Path::new(file);
+        command
+            .send(CompetitorCommand::Publish)
+            .expect("command the positive-control publication");
         publication
             .recv()
             .expect("the competitor publishes the positive control");
@@ -1940,29 +1989,24 @@ release-units:
             .recv()
             .expect("the competitor withdraws the positive control");
 
-        let mut failure = None;
-        if control_was_present {
+        let raced = control_was_present.then(|| {
             let window_command = command.clone();
-            PROBED_FILE_BEFORE_READ.with(|before_read| {
-                before_read.replace(Some(Box::new(move || {
-                    window_command
-                        .send(CompetitorCommand::Withdraw)
-                        .expect("release the withdrawal inside the probe window");
-                    withdrawal
-                        .recv()
-                        .expect("the file is withdrawn before the probe reads it");
-                })));
+            let _hook = ProbedFileBeforeReadHook::install(move || {
+                window_command
+                    .send(CompetitorCommand::Withdraw)
+                    .expect("release the withdrawal inside the probe window");
+                withdrawal
+                    .recv()
+                    .expect("the file is withdrawn before the probe reads it");
             });
+            command
+                .send(CompetitorCommand::Publish)
+                .expect("command the raced publication");
             publication
                 .recv()
                 .expect("the competitor publishes before the raced probe");
-            if let Err(error) = probe(&root, relative) {
-                failure = Some(error);
-            }
-            PROBED_FILE_BEFORE_READ.with(|before_read| {
-                before_read.replace(None);
-            });
-        }
+            probe(&root, relative)
+        });
 
         command
             .send(CompetitorCommand::Stop)
@@ -1979,8 +2023,16 @@ release-units:
                 ),
             }
         }
-        if let Some(error) = failure {
-            panic!("{file} was removed while the probe ran and became a failure: {error:?}");
+        if let Some(raced) = raced {
+            match raced {
+                Err(error) => {
+                    panic!("{file} was removed while the probe ran and became a failure: {error:?}")
+                }
+                Ok(answer) => assert!(
+                    !present(&answer),
+                    "the raced probe still saw {file} present after its forced withdrawal"
+                ),
+            }
         }
     }
 }
