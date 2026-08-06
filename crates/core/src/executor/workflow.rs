@@ -1843,6 +1843,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     include!("workflow/tests/goreleaser.rs");
+    include!("workflow/tests/homebrew.rs");
+    include!("workflow/tests/system_packages.rs");
+    include!("workflow/tests/aur.rs");
     include!("workflow/tests/registry.rs");
     include!("workflow/tests/goreleaser_recipes.rs");
     include!("workflow/tests/oci_recipes.rs");
