@@ -755,11 +755,15 @@ const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       packages_download="${@ENVVAR@WORK}/Packages.download"
       packages="${@ENVVAR@WORK}/Packages"
       @ENVVAR@apt_probe() {
+        advertised_members=$(awk -v directory="${package_directory}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 ~ ("^" directory "/Packages\\.") { print $3 }' "${index}")
         index_member=$(awk -v directory="${package_directory}" '
           $1 == "SHA256:" { section=1; next }
           section && NF == 3 && ($3 == directory "/Packages.xz" || $3 == directory "/Packages.gz" || $3 == directory "/Packages") { print $3; exit }
         ' "${index}")
-        test -n "${index_member}" || return 1
+        if [ -z "${index_member}" ]; then
+          if [ -n "${advertised_members}" ]; then printf 'APT index advertises unsupported package index form(s): %s\n' "$(printf '%s' "${advertised_members}" | tr '\n' ' ')" >&2; exit 1; fi
+          return 1
+        fi
         expected=$(awk -v wanted="${index_member}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
         test -n "${expected}" || return 1
         relative="${index_member}"
@@ -2201,11 +2205,10 @@ const OCI_PROLOGUE: &str = r#"      version="${@ENVVAR@VERSION}"
 ///
 /// Existence is decided from the destination's tag listing. The Open Container
 /// Initiative Distribution API defines `NAME_UNKNOWN` for a repository name the
-/// registry does not know, and crane preserves that code in its diagnostic;
-/// this premise is MEASURED by reading the protocol and client behavior. Only
-/// that not-yet-created case reads as an empty repository. Authentication,
-/// transport, and transient registry failures remain non-zero, so recovery
-/// before promotion cannot bypass the immutable-version conflict gate.
+/// registry does not know. Whether crane preserves that code in diagnostics is
+/// UNMEASURED until observed against the pinned client and a live registry. The
+/// recipe assumes it does and treats only that code as empty; every other error
+/// stops before the immutable-version conflict gate can be bypassed.
 const OCI_EXISTING: &str = r#"      listing_error="${@ENVVAR@WORK}/listing-error"
       if ! known_tags="$(crane ls "${repository}" 2>"${listing_error}")"; then
         if grep -Eq '(^|[^A-Z_])NAME_UNKNOWN([^A-Z_]|$)' "${listing_error}"; then
@@ -2371,24 +2374,26 @@ const OCI_ALIAS_READBACK: &str = r#"      for alias in latest "${minor}" "${majo
 
 /// Read back aliases the Dev Container client owns itself.
 ///
-/// Feature publication does not use Intentional's newest-version entitlement:
-/// the native client creates its exact, minor, major, and latest tags in one
-/// operation. This readback verifies that client contract without treating its
-/// major-zero or backport behavior as an unauthorized Intentional alias move.
+/// Stable Feature publication requires every mutable alias the native client
+/// owns, including major zero. Prereleases require only their exact version;
+/// if a client nevertheless moves a stable alias, the observation records it
+/// instead of silently claiming nothing moved.
 const DEV_CONTAINER_ALIAS_READBACK: &str = r#"      core="${version%%-*}"
       major="${core%%.*}"
       minor="${core%.*}"
-      feature_minor="${version%.*}"
-      feature_aliases="${feature_minor}"
+      stable=""
       case "${version}" in
         *-*) ;;
-        *) feature_aliases="latest ${minor} ${major}" ;;
+        *) stable="yes" ;;
       esac
-      for alias in ${feature_aliases}; do
-        alias_digest="$(crane digest "${repository}:${alias}")"
-        test "${alias_digest}" = "${published}"
-        printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
-          >> "${aliases_file}"
+      for alias in latest "${minor}" "${major}"; do
+        alias_digest="$(crane digest "${repository}:${alias}" 2>/dev/null || true)"
+        if [ "${alias_digest}" = "${published}" ]; then
+          printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
+            >> "${aliases_file}"
+        else
+          test -z "${stable}"
+        fi
       done
 "#;
 

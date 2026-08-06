@@ -83,12 +83,8 @@ pub struct GoReleaserConfig {
     pub pipes: Vec<String>,
     /// Formats `nfpms` declares across every entry.
     pub nfpm_formats: Vec<String>,
-    /// Repository each `brews` entry declares, as `owner/name`.
-    ///
-    /// An absent or incomplete repository remains `None`, so conformance can
-    /// distinguish a declaration that agrees with the maintained destination
-    /// from one whose destination cannot be established.
-    pub brew_repositories: Vec<Option<String>>,
+    /// Repository each `brews` entry declares.
+    pub brew_repositories: Vec<BrewRepository>,
     /// What each `aur` entry declares as its name, in declaration order.
     ///
     /// An entry that declares none is `None` rather than absent, because the
@@ -97,6 +93,17 @@ pub struct GoReleaserConfig {
     /// release unit whose first entry takes the packager's default would then
     /// derive its sibling's package as its own destination.
     pub aur_names: Vec<Option<String>>,
+}
+
+/// Static comparability of one GoReleaser Homebrew repository declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrewRepository {
+    /// Complete literal `owner/name` available for conformance comparison.
+    Literal(String),
+    /// Complete declaration resolved by GoReleaser templating at runtime.
+    Dynamic,
+    /// Absent or incomplete declaration whose destination cannot be established.
+    Incomplete,
 }
 
 /// Read one release unit's native GoReleaser configuration.
@@ -156,16 +163,28 @@ fn parse(name: &Path, document: &serde_yaml::Value) -> GoReleaserConfig {
         brew_repositories: sequence(document, "brews")
             .iter()
             .map(|entry| {
-                let repository = entry.get("repository")?;
-                let owner = repository
-                    .get("owner")?
-                    .as_str()
-                    .filter(|value| !value.trim().is_empty())?;
-                let name = repository
-                    .get("name")?
-                    .as_str()
-                    .filter(|value| !value.trim().is_empty())?;
-                Some(format!("{owner}/{name}"))
+                let Some(repository) = entry.get("repository") else {
+                    return BrewRepository::Incomplete;
+                };
+                let Some(owner) = repository
+                    .get("owner")
+                    .and_then(serde_yaml::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return BrewRepository::Incomplete;
+                };
+                let Some(name) = repository
+                    .get("name")
+                    .and_then(serde_yaml::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                else {
+                    return BrewRepository::Incomplete;
+                };
+                if owner.contains("{{") || name.contains("{{") {
+                    BrewRepository::Dynamic
+                } else {
+                    BrewRepository::Literal(format!("{owner}/{name}"))
+                }
             })
             .collect(),
         aur_names: sequence(document, "aur")
@@ -427,7 +446,9 @@ mod tests {
         assert!(config.pipes.contains(&"brews".to_owned()));
         assert_eq!(
             config.brew_repositories,
-            vec![Some("example-org/homebrew-tap".to_owned())]
+            vec![BrewRepository::Literal(
+                "example-org/homebrew-tap".to_owned()
+            )]
         );
         assert_eq!(
             config.nfpm_formats,

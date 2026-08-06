@@ -633,10 +633,13 @@ mkdir -p "${registry}/blobs"
 printf '%s' "${manifest}" > "${registry}/blobs/${digest}"
 directory="${registry}/tags/$(slug "${repository}")"
 mkdir -p "${directory}"
-tags="${version} ${version%.*}"
+tags="${version}"
 case "${version}" in
-  *-*) if [ "${FAKE_DRIFT:-}" = "prerelease-aliases" ]; then tags="${tags} ${version%%.*} latest"; fi ;;
-  *) tags="${tags} ${version%%.*} latest" ;;
+  *-*)
+    if [ "${FAKE_DRIFT:-}" = "prerelease-aliases" ]; then
+      core="${version%%-*}"; tags="${tags} ${core%%.*} latest"
+    fi ;;
+  *) tags="${tags} ${version%.*} ${version%%.*} latest" ;;
 esac
 for tag in ${tags}; do
   printf '%s' "${digest}" > "${directory}/${tag}"
@@ -926,6 +929,11 @@ done
                     by_kind
                 });
             assert_eq!(
+                attached.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from(["provenance", "sbom", "signature"]),
+                "the recipe records exactly the selected component kinds"
+            );
+            assert_eq!(
                 attached.get("sbom"),
                 Some(&BTreeSet::from([
                     SBOM_DIGEST.to_owned(),
@@ -942,6 +950,28 @@ done
                 "each platform provenance predicate is recorded"
             );
             assert!(attached.contains_key("signature"), "{attached:?}");
+            let attestation_references = BTreeSet::from([
+                format!("{DOCKERHUB_REPOSITORY}@{}", manifest_digest(AMD64_ATTESTATION_MANIFEST)),
+                format!("{DOCKERHUB_REPOSITORY}@{}", manifest_digest(ARM64_ATTESTATION_MANIFEST)),
+            ]);
+            for kind in ["sbom", "provenance"] {
+                assert_eq!(
+                    outcome.observation().attached_metadata.iter()
+                        .filter(|component| component.kind.to_string() == kind)
+                        .filter_map(|component| component.reference.clone())
+                        .collect::<BTreeSet<_>>(),
+                    attestation_references,
+                    "{kind} references name the attestation manifest that contains it"
+                );
+            }
+            let signature_reference = format!("{DOCKERHUB_REPOSITORY}@{}", outcome.index_digest);
+            assert_eq!(
+                outcome.observation().attached_metadata.iter()
+                    .find(|component| component.kind.to_string() == "signature")
+                    .and_then(|component| component.reference.as_deref()),
+                Some(signature_reference.as_str()),
+                "signature references the published subject digest"
+            );
             let signed =
                 std::fs::read_to_string(outcome.registry.join("signed.log")).expect("signing log");
             assert!(
@@ -1445,16 +1475,25 @@ done
             );
         }
 
-        /// Native Feature aliases are the native client's contract, not
-        /// Intentional's newest-version entitlement policy.
+        /// A prerelease that moved stable aliases records every move.
         #[test]
-        fn accepts_the_feature_clients_own_prerelease_aliases() {
+        fn records_stable_aliases_a_prerelease_client_moved() {
             let recipe = Recipe::feature("oci-feature-prerelease");
             let outcome = recipe.run_with_drift("2.0.0-rc.1", "prerelease-aliases");
             assert!(
                 outcome.status.success(),
                 "the recipe verifies rather than overrides the native alias policy: {}",
                 outcome.stderr
+            );
+            assert_eq!(
+                outcome
+                    .observation()
+                    .destination_aliases
+                    .iter()
+                    .map(|alias| alias.name.as_str())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["latest", "2"]),
+                "unexpected stable alias moves remain visible in release evidence"
             );
         }
 
@@ -1490,17 +1529,15 @@ done
                 "a prerelease Feature is publishable: {}",
                 outcome.stderr
             );
-            assert!(
+            assert!(outcome.observation().destination_aliases.is_empty());
+            assert_eq!(
                 outcome
-                    .observation()
-                    .destination_aliases
-                    .iter()
-                    .any(|alias| alias.name == "2.0.0-rc"),
-                "the native client's prerelease truncation is read back"
-            );
-            assert!(
-                outcome.tags(FEATURE_REPOSITORY).contains_key("2.0.0-rc"),
-                "the client's own truncation of a prerelease is not an alias the rules govern"
+                    .tags(FEATURE_REPOSITORY)
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["2.0.0-rc.1"]),
+                "the independent client fixture applies semver prerelease rules"
             );
         }
 

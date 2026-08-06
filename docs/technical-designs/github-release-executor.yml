@@ -1277,8 +1277,10 @@ proposed-design:
     multi-platform index, every platform manifest has its own attestation
     manifest. The recipe verifies and records the SBOM and provenance predicate
     from each one rather than treating the first platform as evidence for the
-    index. OCI destinations receive a keyless signature bound to their
-    published subject by default. The recipe verifies generated provenance,
+    index. Each metadata reference names the platform attestation manifest that
+    contains the predicate, not the published index. OCI destinations receive a
+    keyless signature bound to their published subject by default. The recipe
+    verifies generated provenance,
     attached metadata, annotations, and signatures and records their positive
     results. An explicit
     target omission suppresses the corresponding component for that target

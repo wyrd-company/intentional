@@ -67,6 +67,50 @@ release-units:
         workspace
     }
 
+    fn run_aggregate_after_manifest_change(label: &str, changed_manifest: &str) -> std::process::Output {
+        let initial = "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\ndescription = \"Sample package\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n";
+        let workspace = rust_homebrew_workspace(label, initial);
+        workspace.write("component/src/main.rs", "fn main() {}\n");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
+        let build = aggregate.iter().find(|step| step["run"].is_string()).expect("aggregate build step");
+        workspace.write("component/Cargo.toml", changed_manifest);
+        let subject = workspace.root().join("aggregate-refusal/bytes");
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        for archive in ["linux-x86_64.tar.gz", "linux-arm64.tar.gz", "macos-arm64.tar.gz"] {
+            std::fs::write(subject.join(archive), b"sealed archive").expect("archive fixture");
+        }
+        let mut command = std::process::Command::new("bash");
+        command.arg("-c").arg(build["run"].as_str().expect("aggregate body"))
+            .current_dir(workspace.root().join("component"))
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env("PATH", test_tool_path(&std::env::var("PATH").unwrap_or_default()));
+        for (key, value) in step_environment(build) { command.env(key, value); }
+        command.env("INTENTIONAL_SUBJECT", &subject).output().expect("aggregate body runs")
+    }
+
+    #[test]
+    fn cargo_archive_refuses_multiple_binary_targets_at_aggregate_time() {
+        let output = run_aggregate_after_manifest_change(
+            "cargo-aggregate-multiple-binaries",
+            "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\ndescription = \"Sample package\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"other-tool\"\npath = \"src/other.rs\"\n",
+        );
+        assert!(!output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "Cargo package sample-package exposes 2 binary targets; CargoArchive requires exactly one\n");
+    }
+
+    #[test]
+    fn cargo_archive_refuses_a_binary_that_disagrees_with_the_sealed_identity() {
+        let output = run_aggregate_after_manifest_change(
+            "cargo-aggregate-identity",
+            "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\ndescription = \"Sample package\"\n\n[[bin]]\nname = \"other-tool\"\npath = \"src/main.rs\"\n",
+        );
+        assert!(!output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stderr), "Cargo package metadata names binary other-tool, but the sealed subject identity is sample-tool\n");
+    }
+
     #[test]
     fn scopes_cargo_archive_build_environment_away_from_buildx() {
         fn build_environment(jobs: &serde_yaml::Mapping, id: &str) -> BTreeSet<String> {

@@ -127,12 +127,16 @@ fn native_packager_findings(
     if publication.publisher == PublisherKind::Homebrew {
         let configured = publication.destination.as_deref().unwrap_or_default();
         for (index, declared) in config.brew_repositories.iter().enumerate() {
-            if declared.as_deref() != Some(configured) {
-                let declared = declared.as_deref().unwrap_or("no complete repository");
-                findings.push(format!(
+            let declared = match declared {
+                goreleaser::BrewRepository::Literal(declared) if declared != configured => declared,
+                goreleaser::BrewRepository::Incomplete => "no complete repository",
+                goreleaser::BrewRepository::Literal(_) | goreleaser::BrewRepository::Dynamic => {
+                    continue
+                }
+            };
+            findings.push(format!(
                     "{identity} publishes to configured tap {configured}, but brews[{index}].repository in {file} declares {declared}"
                 ));
-            }
         }
     }
     // `brews` handles multiplicity by promoting every generated formula; `aur`
@@ -490,6 +494,28 @@ aur:
                 "brews[1].repository in component/.goreleaser.yaml declares example-org/alternate-tap"
             )),
             "the disagreeing native destination is reported before publication: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_templated_homebrew_repository_that_cannot_be_compared_statically() {
+        let workspace = go_workspace(
+            "check-goreleaser-homebrew-template",
+            "    homebrew: { repository: example-org/homebrew-tap }\n",
+        );
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace(
+                "owner: example-org, name: homebrew-tap",
+                "owner: '{{ .Env.TAP_OWNER }}', name: '{{ .Env.TAP_NAME }}'",
+            ),
+        );
+        let findings = packager_findings(&workspace);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| !finding.contains(".repository")),
+            "runtime template values are not literal disagreements: {findings:?}"
         );
     }
 

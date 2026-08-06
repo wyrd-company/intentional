@@ -74,6 +74,18 @@ pub const WORKFLOW_DIFF_SCHEMA: &str = "https://intentional.foo/schemas/workflow
 /// writes remains readable by the next comparison.
 const MAX_WORKFLOW_LINES: usize = 2_000;
 
+/// Largest single workflow line the comparison will read or propose.
+///
+/// This companion bound prevents line compaction from hiding unbounded input
+/// behind the line-count limit.
+const MAX_WORKFLOW_LINE_BYTES: usize = 2_048;
+
+fn oversized_workflow_line(text: &str) -> Option<(usize, usize)> {
+    text.lines().enumerate().find_map(|(index, line)| {
+        (line.len() > MAX_WORKFLOW_LINE_BYTES).then_some((index + 1, line.len()))
+    })
+}
+
 /// Outcome of comparing a workflow with its derived contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComparisonStatus {
@@ -303,6 +315,14 @@ pub fn compare_configured_workflow(
         );
         return Ok(blocked(role, relative, file, text, vec![diagnostic]));
     }
+    if let Some((line, bytes)) = oversized_workflow_line(&text) {
+        let diagnostic = WorkflowDiagnostic::at(
+            "workflow-line-too-long",
+            format!("{} line {line} has {bytes} bytes; the comparison reads at most {MAX_WORKFLOW_LINE_BYTES} per line", relative.display()),
+            &relative.display().to_string(),
+        );
+        return Ok(blocked(role, relative, file, text, vec![diagnostic]));
+    }
     let document = match Document::parse(&text) {
         Ok(document) => document,
         Err(error) => {
@@ -335,6 +355,14 @@ pub fn compare_configured_workflow(
                 "the derived transformation for {} has {output_lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}",
                 relative.display()
             ),
+            &relative.display().to_string(),
+        );
+        return Ok(blocked(role, relative, file, text, vec![diagnostic]));
+    }
+    if let Some((line, bytes)) = oversized_workflow_line(&output) {
+        let diagnostic = WorkflowDiagnostic::at(
+            "workflow-line-too-long",
+            format!("the derived transformation for {} has {bytes} bytes on line {line}; the comparison reads at most {MAX_WORKFLOW_LINE_BYTES} per line", relative.display()),
             &relative.display().to_string(),
         );
         return Ok(blocked(role, relative, file, text, vec![diagnostic]));
@@ -8888,6 +8916,26 @@ release-units:
     }
 
     #[test]
+    fn refuses_to_compare_a_workflow_with_an_unbounded_line() {
+        let workspace = workspace("workflow-line-too-long");
+        workspace.write(
+            "oversized-line.yml",
+            &format!(
+                "# {}\n{REPOSITORY_RELEASE_WORKFLOW}",
+                "x".repeat(MAX_WORKFLOW_LINE_BYTES)
+            ),
+        );
+        let comparison = compare_workflow(
+            workspace.root(),
+            WorkflowRole::Release,
+            Some(Path::new("oversized-line.yml")),
+        )
+        .expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.diagnostics[0].code, "workflow-line-too-long");
+    }
+
+    #[test]
     fn refuses_to_propose_a_workflow_too_large_to_read_back() {
         let workspace = workspace("workflow-derived-too-large");
         let base_lines = REPOSITORY_RELEASE_WORKFLOW.lines().count();
@@ -8938,6 +8986,10 @@ release-units:
         assert!(
             output.lines().count() <= MAX_WORKFLOW_LINES,
             "Intentional's own publication shape must remain readable after apply"
+        );
+        assert!(
+            oversized_workflow_line(&output).is_none(),
+            "Intentional's own publication shape must fit the per-line byte bound"
         );
     }
 

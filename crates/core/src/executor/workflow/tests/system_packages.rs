@@ -1456,6 +1456,7 @@ release-units:
 
     struct ReadbackRun {
         succeeded: bool,
+        stderr: String,
         observation: Option<crate::publication::observation::PublicationObservation>,
         waits: Vec<u64>,
         requests: Vec<String>,
@@ -1571,6 +1572,7 @@ case "${url}" in
     digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
     relative=section-a/binary-amd64/Packages
     [ "${FAKE_SCENARIO}" != packages-gzip ] || relative=${relative}.gz
+    [ "${FAKE_SCENARIO}" != packages-zstd ] || relative=${relative}.zst
     if [ "${FAKE_SCENARIO}" = packages-xz ] || [ "${FAKE_SCENARIO}" = packages-by-hash ]; then relative=${relative}.xz; fi
     [ "${FAKE_SCENARIO}" != component-absent ] || relative=section-b/binary-amd64/Packages
     if [ "${FAKE_SCENARIO}" = packages-by-hash ]; then printf 'Acquire-By-Hash: yes\n'; fi > "${output}"
@@ -1659,7 +1661,9 @@ fi
             .env("RELEASE_AUTOMATION_BACKOFF", "2")
             .env("RELEASE_AUTOMATION_MAXIMUM_INTERVAL", "3")
             .env("RELEASE_AUTOMATION_DEADLINE", "7");
-        let succeeded = command.status().expect("readback runs").success();
+        let output = command.output().expect("readback runs");
+        let succeeded = output.status.success();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         let observation = step["env"]
             .as_mapping()
             .expect("environment")
@@ -1684,6 +1688,7 @@ fi
             .collect();
         ReadbackRun {
             succeeded,
+            stderr,
             observation,
             waits,
             requests,
@@ -1727,6 +1732,18 @@ fi
             "the advertised by-hash object is retrieved: {:?}",
             run.requests
         );
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_unsupported_signed_index_form_with_a_diagnostic() {
+        let run = run_apt_readback("apt-packages-zstd", "packages-zstd");
+        assert!(!run.succeeded);
+        assert_eq!(
+            run.stderr,
+            "APT index advertises unsupported package index form(s): section-a/binary-amd64/Packages.zst\n"
+        );
+        assert!(run.observation.is_none());
+        assert!(run.waits.is_empty());
     }
 
     #[test]
@@ -2001,6 +2018,7 @@ fi
             .collect();
         ReadbackRun {
             succeeded,
+            stderr: String::new(),
             observation,
             waits,
             requests: Vec::new(),
