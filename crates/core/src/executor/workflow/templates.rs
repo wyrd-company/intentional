@@ -45,6 +45,9 @@ pub(super) const DOWNLOAD_ARTIFACT_ACTION: &str =
 /// Action installing the GoReleaser command a stock runner does not carry.
 pub(super) const GORELEASER_INSTALL_ACTION: &str =
     "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94";
+/// Installer for the Cross version bound to the Linux GNU baseline.
+pub(super) const CROSS_INSTALL_ACTION: &str =
+    "taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8";
 
 /// Multi-platform emulation a container-driver Buildx build needs.
 pub(super) const SETUP_QEMU_ACTION: &str =
@@ -249,22 +252,20 @@ steps:
       fetch-depth: 0
       fetch-tags: true
       persist-credentials: false
-  - name: Build the @PLATFORM@ native executable
+@PLATFORM_TOOLCHAIN@  - name: Build the @PLATFORM@ native executable
     working-directory: @WORKING_DIRECTORY@
     env:
       @ENVVAR@SUBJECT_IDENTITY: @SUBJECT_IDENTITY@
       @ENVVAR@ARCHIVE: @ARCHIVE@
-    run: |
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/@JOB@cargo-@SLUG@-@PLATFORM@
+@PLATFORM_ENV@    run: |
       set -euo pipefail
-      cargo build --release --locked --bin "${@ENVVAR@SUBJECT_IDENTITY}"
-      tar --create --file=- \
-        --directory=target/release \
-        --sort=name \
-        --mtime=@0 \
-        --owner=0 \
-        --group=0 \
-        --numeric-owner \
-        --mode=0755 \
+@BUILD_SETUP@      @BUILD_TOOL@ build --release --locked --target @TARGET@ \
+        --bin "${@ENVVAR@SUBJECT_IDENTITY}"
+      binary_path="${CARGO_TARGET_DIR}/@TARGET@/release/${@ENVVAR@SUBJECT_IDENTITY}"
+      chmod 755 "${binary_path}"
+      touch -t 197001010000 "${binary_path}"
+      tar -cf - -C "$(dirname "${binary_path}")" \
         "${@ENVVAR@SUBJECT_IDENTITY}" \
         | gzip -n > "${RUNNER_TEMP}/${@ENVVAR@ARCHIVE}"
   - name: Upload the @PLATFORM@ native archive
@@ -372,6 +373,7 @@ pub(super) fn job(
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
         .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
+        .replace("@CROSS_INSTALL@", CROSS_INSTALL_ACTION)
         .replace("@SETUP_QEMU@", SETUP_QEMU_ACTION)
         .replace("@SETUP_BUILDX@", SETUP_BUILDX_ACTION)
         .replace("@GORELEASER_VERSION@", &scalar(GORELEASER_VERSION))

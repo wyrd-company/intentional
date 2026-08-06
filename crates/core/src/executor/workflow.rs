@@ -1580,12 +1580,48 @@ fn cargo_archive_platforms(
     verify: &str,
 ) -> Vec<(String, std::result::Result<Value, WorkflowDiagnostic>)> {
     [
-        ("linux_x86_64", "ubuntu-latest", "linux-x86_64.tar.gz"),
-        ("linux_arm64", "ubuntu-24.04-arm", "linux-arm64.tar.gz"),
-        ("macos_arm64", "macos-14", "macos-arm64.tar.gz"),
+        (
+            "linux_x86_64",
+            "ubuntu-latest",
+            "linux-x86_64.tar.gz",
+            "x86_64-unknown-linux-gnu",
+            "cross",
+            "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
+            "      @ENVVAR@CROSS_CONFIG: ${{ runner.temp }}/intentional-cross.toml\n      @ENVVAR@CROSS_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f\n",
+            "      printf '[target.%s]\\nimage = \\\"%s\\\"\\n' @TARGET@ \"${@ENVVAR@CROSS_IMAGE}\" > \"${@ENVVAR@CROSS_CONFIG}\"\n      export CROSS_CONFIG=\"${@ENVVAR@CROSS_CONFIG}\"\n",
+        ),
+        (
+            "linux_arm64",
+            "ubuntu-latest",
+            "linux-arm64.tar.gz",
+            "aarch64-unknown-linux-gnu",
+            "cross",
+            "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
+            "      @ENVVAR@CROSS_CONFIG: ${{ runner.temp }}/intentional-cross.toml\n      @ENVVAR@CROSS_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c\n",
+            "      printf '[target.%s]\\nimage = \\\"%s\\\"\\n' @TARGET@ \"${@ENVVAR@CROSS_IMAGE}\" > \"${@ENVVAR@CROSS_CONFIG}\"\n      export CROSS_CONFIG=\"${@ENVVAR@CROSS_CONFIG}\"\n",
+        ),
+        (
+            "macos_arm64",
+            "macos-14",
+            "macos-arm64.tar.gz",
+            "aarch64-apple-darwin",
+            "cargo",
+            "",
+            "",
+            "",
+        ),
     ]
     .into_iter()
-    .map(|(platform, runner, archive)| {
+    .map(|(
+        platform,
+        runner,
+        archive,
+        target,
+        build_tool,
+        platform_toolchain,
+        platform_env,
+        build_setup,
+    )| {
         let id = format!("{}build_{}_{}", namespaces.job, subject.slug, platform);
         let rendered = job(
             templates::PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB,
@@ -1598,6 +1634,11 @@ fn cargo_archive_platforms(
                 ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
                 ("@ARCHIVE@", archive),
                 ("@SLUG@", &subject.slug),
+                ("@TARGET@", target),
+                ("@BUILD_TOOL@", build_tool),
+                ("@PLATFORM_TOOLCHAIN@", platform_toolchain),
+                ("@PLATFORM_ENV@", platform_env),
+                ("@BUILD_SETUP@", build_setup),
             ],
         );
         (id, rendered)
@@ -2017,8 +2058,9 @@ fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
 #[cfg(test)]
 mod tests {
     use super::templates::{
-        ACTION_REPOSITORY, APP_TOKEN_ACTION, CHECKOUT_ACTION, DOWNLOAD_ARTIFACT_ACTION,
-        GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION, SETUP_QEMU_ACTION, UPLOAD_ARTIFACT_ACTION,
+        ACTION_REPOSITORY, APP_TOKEN_ACTION, CHECKOUT_ACTION, CROSS_INSTALL_ACTION,
+        DOWNLOAD_ARTIFACT_ACTION, GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION,
+        SETUP_QEMU_ACTION, UPLOAD_ARTIFACT_ACTION,
     };
     use super::*;
     use crate::evidence::assemble::CleanClientMode;
@@ -2091,6 +2133,7 @@ release-units:
             ("SETUP_BUILDX_ACTION", SETUP_BUILDX_ACTION),
             ("SETUP_QEMU_ACTION", SETUP_QEMU_ACTION),
             ("GORELEASER_INSTALL_ACTION", GORELEASER_INSTALL_ACTION),
+            ("CROSS_INSTALL_ACTION", CROSS_INSTALL_ACTION),
             ("SETUP_CRANE_ACTION", SETUP_CRANE_ACTION),
             ("COSIGN_INSTALLER_ACTION", COSIGN_INSTALLER_ACTION),
         ]
@@ -2143,10 +2186,16 @@ release-units:
             })
             .collect::<BTreeSet<_>>();
         let mut reached = BTreeSet::new();
+        let rust = rust_homebrew_workspace(
+            "workflow-action-pins-rust",
+            "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\n",
+        );
+        rust.write("component/src/main.rs", "fn main() {}\n");
 
         for (fixture, workspace) in [
             ("base", workspace("workflow-action-pins-base")),
             ("goreleaser", go_workspace("workflow-action-pins-go")),
+            ("rust", rust),
             (
                 "buildx",
                 two_destination_workspace("workflow-action-pins-buildx"),
@@ -4664,6 +4713,10 @@ release-units:
         let workspace = Workspace::new(label);
         workspace
             .write(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"component\"]\nresolver = \"2\"\n",
+            )
+            .write(
                 ".intentional/config.yml",
                 r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
@@ -4719,29 +4772,74 @@ release-units:
                 "the Rust Homebrew route derives {id}"
             );
         }
-        for (id, artifact, archive) in [
+        for (id, artifact, archive, build_tool, target, image) in [
             (
                 "intentional_build_component_cargo_archive_linux_x86_64",
                 "intentional_archive-component_cargo_archive-linux_x86_64",
                 "${{ runner.temp }}/linux-x86_64.tar.gz",
+                "cross",
+                "x86_64-unknown-linux-gnu",
+                Some("ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f"),
             ),
             (
                 "intentional_build_component_cargo_archive_linux_arm64",
                 "intentional_archive-component_cargo_archive-linux_arm64",
                 "${{ runner.temp }}/linux-arm64.tar.gz",
+                "cross",
+                "aarch64-unknown-linux-gnu",
+                Some("ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"),
             ),
             (
                 "intentional_build_component_cargo_archive_macos_arm64",
                 "intentional_archive-component_cargo_archive-macos_arm64",
                 "${{ runner.temp }}/macos-arm64.tar.gz",
+                "cargo",
+                "aarch64-apple-darwin",
+                None,
             ),
         ] {
             let platform = job_steps(&jobs, id);
-            assert!(platform.iter().any(|step| {
-                step["run"]
-                    .as_str()
-                    .is_some_and(|body| body.contains("cargo build --release --locked --bin"))
-            }));
+            let build = platform
+                .iter()
+                .find(|step| step["run"].is_string())
+                .expect("platform build body");
+            let body = build["run"].as_str().expect("platform build script");
+            assert!(body.contains(&format!(
+                "{build_tool} build --release --locked --target {target}"
+            )));
+            assert!(body.contains("tar -cf - -C"));
+            assert!(!body.contains("--sort=name"));
+            let expected_target_dir = format!(
+                "${{{{ github.workspace }}}}/target/intentional_cargo-component_cargo_archive-{id_suffix}",
+                id_suffix = id
+                    .strip_prefix("intentional_build_component_cargo_archive_")
+                    .expect("platform suffix")
+            );
+            assert_eq!(
+                build["env"]["CARGO_TARGET_DIR"].as_str(),
+                Some(expected_target_dir.as_str())
+            );
+            let image_value = build["env"]
+                .as_mapping()
+                .expect("build environment")
+                .iter()
+                .find_map(|(key, value)| {
+                    key.as_str()
+                        .filter(|key| key.ends_with("CROSS_IMAGE"))
+                        .and_then(|_| value.as_str())
+                });
+            assert_eq!(image_value, image);
+            assert_eq!(
+                body.contains("export CROSS_CONFIG=\"${INTENTIONAL_CROSS_CONFIG}\""),
+                build_tool == "cross"
+            );
+            assert_eq!(
+                platform.iter().any(|step| {
+                    step["uses"].as_str() == Some(CROSS_INSTALL_ACTION)
+                        && step["with"]["tool"].as_str() == Some("cross@0.2.5")
+                }),
+                build_tool == "cross"
+            );
             let upload = platform
                 .iter()
                 .find(|step| step["with"]["name"].as_str() == Some(artifact))
@@ -4799,10 +4897,14 @@ release-units:
             .iter()
             .find(|step| step["with"]["pattern"].as_str() == Some(download_pattern))
             .expect("archive download step");
-        assert_eq!(
-            download["with"]["path"].as_str(),
-            Some("${{ runner.temp }}/intentional_subject/component_cargo_archive/bytes")
-        );
+        let aggregate_build = aggregate
+            .iter()
+            .find(|step| step["run"].as_str() == Some(aggregate_body))
+            .expect("aggregate build step");
+        let aggregate_subject = aggregate_build["env"]["INTENTIONAL_SUBJECT"]
+            .as_str()
+            .expect("aggregate subject path");
+        assert_eq!(download["with"]["path"].as_str(), Some(aggregate_subject));
         assert_eq!(download["with"]["merge-multiple"].as_bool(), Some(true));
 
         let aggregate_root = workspace.root().join("aggregate-execution");
@@ -4951,7 +5053,7 @@ release-units:
         let cargo = stubs.join("cargo");
         std::fs::write(
             &cargo,
-            "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p target/release\nprintf '#!/usr/bin/env bash\\nprintf \\\"sample-tool 1.2.3\\\\n\\\"\\n' > target/release/sample-tool\nchmod 755 target/release/sample-tool\n",
+            "#!/usr/bin/env bash\nset -euo pipefail\ntarget=''\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == --target ]]; then target=$2; shift 2; else shift; fi\ndone\ntest -n \"$target\"\nmkdir -p \"${CARGO_TARGET_DIR}/${target}/release\"\nprintf '#!/usr/bin/env bash\\nprintf \\\"sample-tool 1.2.3\\\\n\\\"\\n' > \"${CARGO_TARGET_DIR}/${target}/release/sample-tool\"\nchmod 755 \"${CARGO_TARGET_DIR}/${target}/release/sample-tool\"\n",
         )
         .expect("Cargo stub");
         #[cfg(unix)]
@@ -4960,6 +5062,8 @@ release-units:
             std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755))
                 .expect("executable stub");
         }
+        let cross = stubs.join("cross");
+        std::fs::copy(&cargo, &cross).expect("Cross stub");
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -4977,6 +5081,12 @@ release-units:
         for (key, value) in step_environment(build) {
             command.env(key, value);
         }
+        command
+            .env(
+                "CARGO_TARGET_DIR",
+                workspace.root().join("target/platform-execution"),
+            )
+            .env("INTENTIONAL_CROSS_CONFIG", temporary.join("cross.toml"));
         let output = command.output().expect("platform build runs");
         assert!(
             output.status.success(),
