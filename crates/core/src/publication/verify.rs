@@ -1954,18 +1954,63 @@ state: {}
         );
         let context = TestContext::new();
         let clock = clock();
+        let observation = workspace.root().join("observation.yml");
         let output = workspace.root().join("evidence.yml");
         let error = verify_publication(&request(
             &workspace,
             PublisherKind::Npm,
             None,
-            &workspace.root().join("observation.yml"),
+            &observation,
             &output,
             &clock,
             &context,
         ))
         .expect_err("an exhausted deadline is reported");
         assert!(error.to_string().contains("retryable"), "{error}");
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn a_system_package_uses_its_configured_observation_deadline_when_no_policy_is_supplied() {
+        let workspace = workspace(
+            "verify-system-package-deadline",
+            "    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n",
+            &[(
+                "component/.goreleaser.yml",
+                "version: 2\nproject_name: example-tool\nbuilds:\n  - main: ./cmd/example-tool\nnfpms:\n  - formats: [rpm]\n",
+            ),
+            ("component/go.mod", "module example.test/example-module\n"),
+            ("component/cmd/example-tool/main.go", "package main\n\nfunc main() {}\n")],
+        );
+        workspace.write(
+            "observation.yml",
+            &format!(
+                "$schema: {PUBLICATION_OBSERVATION_SCHEMA}\ncontract: {PUBLICATION_OBSERVATION_CONTRACT}\nrelease-unit: component\npackage: package\npublisher: rpm\ntarget: primary\nstate: {}\n",
+                ObservationState::Pending
+            ),
+        );
+        let context = TestContext::new();
+        let clock = clock();
+        let observation = workspace.root().join("observation.yml");
+        let output = workspace.root().join("evidence.yml");
+        let mut request = request(
+            &workspace,
+            PublisherKind::Rpm,
+            None,
+            &observation,
+            &output,
+            &clock,
+            &context,
+        );
+        request.policy = None;
+        let error = verify_publication(&request).expect_err("the configured deadline expires");
+        assert!(
+            error
+                .to_string()
+                .contains("past its 47 second observation deadline"),
+            "{error}"
+        );
+        assert_eq!(clock.elapsed(), Duration::from_secs(47));
         assert!(!output.exists());
     }
 

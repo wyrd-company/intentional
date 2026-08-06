@@ -3069,7 +3069,13 @@ release-units:
             .map(|name| format!("  {name}: {{}}"))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("name: delivery\ninputs:\n{inputs}\nruns:\n  using: {using}\n  steps:\n    - shell: bash\n      run: 'true'\n")
+        let recording = inputs
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix(": {}"))
+            .map(|name| format!("        printf '%s=%s\\n' '{name}' '${{{{ inputs.{name} }}}}' >> \"${{RECORDING}}\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("name: delivery\ninputs:\n{inputs}\nruns:\n  using: {using}\n  steps:\n    - shell: bash\n      run: |\n{recording}\n")
     }
 
     fn system_package_workspace(label: &str) -> Workspace {
@@ -3127,15 +3133,23 @@ release-units:
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow parses");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        for (job, coordinate, base_url) in [
+        for (job, coordinate, coordinate_value, action, format, deadline, base_url) in [
             (
                 "release_automation_publish_component_package_rpm_primary",
                 "release-automation-rpm-channel",
+                "stable",
+                "./.github/actions/deliver-rpm",
+                "rpm",
+                "47",
                 "https://packages.invalid/rpm/",
             ),
             (
                 "release_automation_publish_component_package_apt_primary",
                 "release-automation-apt-suite",
+                "current",
+                "./.github/actions/deliver-apt",
+                "deb",
+                "53",
                 "https://packages.invalid/apt",
             ),
         ] {
@@ -3149,15 +3163,33 @@ release-units:
                         .is_some_and(|name| name.starts_with("Deliver "))
                 })
                 .expect("delivery step");
-            assert!(step["with"]
-                .get("release-automation-package-path")
-                .is_some());
-            assert!(step["with"].get(coordinate).is_some());
+            assert_eq!(
+                step["with"]["release-automation-package-path"].as_str(),
+                Some("${{ steps.intentional_establish.outputs.path }}")
+            );
+            assert_eq!(step["with"][coordinate].as_str(), Some(coordinate_value));
+            assert_eq!(
+                step["with"]["release-automation-format"].as_str(),
+                Some(format)
+            );
+            assert_eq!(
+                step["with"]["release-automation-name"].as_str(),
+                Some("${{ steps.intentional_establish.outputs.name }}")
+            );
+            assert_eq!(
+                step["with"]["release-automation-version"].as_str(),
+                Some("${{ steps.intentional_establish.outputs.version }}")
+            );
+            assert_eq!(
+                step["with"]["release-automation-architecture"].as_str(),
+                Some("${{ steps.intentional_establish.outputs.architecture }}")
+            );
+            assert_eq!(
+                step["with"]["release-automation-digest"].as_str(),
+                Some("${{ steps.intentional_establish.outputs.digest }}")
+            );
             assert!(step["with"].get("intentional-package-path").is_none());
-            assert!(step["uses"]
-                .as_str()
-                .expect("uses")
-                .starts_with("./.github/actions/deliver-"));
+            assert_eq!(step["uses"].as_str(), Some(action));
             let readback = jobs[job]["steps"]
                 .as_sequence()
                 .expect("steps")
@@ -3176,6 +3208,10 @@ release-units:
             assert_eq!(
                 readback["env"]["RELEASE_AUTOMATION_PUBLIC_KEY_URL"].as_str(),
                 Some("https://packages.invalid/key.asc")
+            );
+            assert_eq!(
+                readback["env"]["RELEASE_AUTOMATION_DEADLINE"].as_str(),
+                Some(deadline)
             );
         }
         let rpm = &jobs["release_automation_publish_component_package_rpm_primary"]["steps"]
@@ -3201,6 +3237,107 @@ release-units:
             rpm["unavailable-context"].as_str(),
             Some("${{ matrix.destination }}")
         );
+    }
+
+    #[test]
+    fn executes_each_derived_delivery_call_against_its_recording_action() {
+        let workspace = system_package_workspace("system-package-delivery-recording");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow parses");
+        let outputs = [
+            ("path", "/runner/subject/example-tool.pkg"),
+            ("name", "example-tool"),
+            ("version", "1.2.3"),
+            ("architecture", "arm64"),
+            (
+                "digest",
+                "sha256:4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213",
+            ),
+        ];
+        for (job, expected) in [
+            (
+                "release_automation_publish_component_package_rpm_primary",
+                vec![
+                    ("release-automation-package-path", outputs[0].1),
+                    ("release-automation-format", "rpm"),
+                    ("release-automation-name", outputs[1].1),
+                    ("release-automation-version", outputs[2].1),
+                    ("release-automation-architecture", outputs[3].1),
+                    ("release-automation-digest", outputs[4].1),
+                    ("release-automation-rpm-channel", "stable"),
+                ],
+            ),
+            (
+                "release_automation_publish_component_package_apt_primary",
+                vec![
+                    ("release-automation-package-path", outputs[0].1),
+                    ("release-automation-format", "deb"),
+                    ("release-automation-name", outputs[1].1),
+                    ("release-automation-version", outputs[2].1),
+                    ("release-automation-architecture", outputs[3].1),
+                    ("release-automation-digest", outputs[4].1),
+                    ("release-automation-apt-suite", "current"),
+                    ("release-automation-apt-component", "main"),
+                ],
+            ),
+        ] {
+            let step = document["jobs"][job]["steps"]
+                .as_sequence()
+                .expect("steps")
+                .iter()
+                .find(|step| {
+                    step["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Deliver "))
+                })
+                .expect("delivery step");
+            let action = step["uses"]
+                .as_str()
+                .expect("uses")
+                .trim_start_matches("./");
+            let metadata: Value = serde_yaml::from_str(
+                &std::fs::read_to_string(workspace.root().join(action).join("action.yml"))
+                    .or_else(|_| {
+                        std::fs::read_to_string(workspace.root().join(action).join("action.yaml"))
+                    })
+                    .expect("Action metadata"),
+            )
+            .expect("Action metadata parses");
+            let mut script = metadata["runs"]["steps"][0]["run"]
+                .as_str()
+                .expect("recording script")
+                .to_owned();
+            for (name, value) in step["with"].as_mapping().expect("with") {
+                let name = name.as_str().expect("input name");
+                let mut value = value.as_str().expect("input value").to_owned();
+                for (output, replacement) in outputs {
+                    value = value.replace(
+                        &format!("${{{{ steps.intentional_establish.outputs.{output} }}}}"),
+                        replacement,
+                    );
+                }
+                script = script.replace(&format!("${{{{ inputs.{name} }}}}"), &value);
+            }
+            let recording = workspace.root().join(format!("{job}.inputs"));
+            let status = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(script)
+                .env("RECORDING", &recording)
+                .status()
+                .expect("delivery Action runs");
+            assert!(status.success());
+            let recorded = std::fs::read_to_string(recording).expect("recorded inputs");
+            for (name, value) in expected {
+                assert!(
+                    recorded
+                        .lines()
+                        .any(|line| line == format!("{name}={value}")),
+                    "{job} did not receive {name}={value}:\n{recorded}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3275,21 +3412,68 @@ release-units:
     }
 
     #[test]
-    fn comparison_revalidates_delivery_metadata_without_workflow_drift() {
-        let workspace = system_package_workspace("system-package-revalidate");
-        converge(workspace.root(), WorkflowRole::Publish);
-        let before = workflow(workspace.root(), WorkflowRole::Publish);
-        let path = workspace
-            .root()
-            .join(".github/actions/deliver-rpm/action.yml");
-        let metadata = std::fs::read_to_string(&path)
-            .expect("metadata")
-            .replace("  release-automation-digest: {}\n", "");
-        workspace.write(".github/actions/deliver-rpm/action.yml", &metadata);
+    fn refuses_a_delivery_directory_with_both_metadata_filenames() {
+        let workspace = system_package_workspace("system-package-two-metadata-files");
+        let metadata = std::fs::read_to_string(
+            workspace
+                .root()
+                .join(".github/actions/deliver-rpm/action.yml"),
+        )
+        .expect("metadata");
+        workspace.write(".github/actions/deliver-rpm/action.yaml", &metadata);
         assert!(blocked_diagnostics(&workspace)
             .iter()
-            .any(|message| message.contains("release-automation-digest")));
-        assert_eq!(workflow(workspace.root(), WorkflowRole::Publish), before);
+            .any(|message| message.contains("must contain exactly one")));
+    }
+
+    #[test]
+    fn refuses_a_delivery_directory_without_metadata() {
+        let workspace = system_package_workspace("system-package-missing-metadata");
+        let config = SYSTEM_PACKAGE_CONFIG
+            .replace(".github/actions/deliver-rpm", ".github/actions/missing-rpm");
+        workspace.write(".intentional/config.yml", &config);
+        assert!(blocked_diagnostics(&workspace)
+            .iter()
+            .any(|message| message.contains("missing-rpm")
+                && message.contains("must contain exactly one")));
+    }
+
+    #[test]
+    fn comparison_revalidates_delivery_metadata_without_workflow_drift() {
+        for (label, mutate, expected) in [
+            (
+                "reserved",
+                fn_remove_reserved as fn(String) -> String,
+                "release-automation-digest",
+            ),
+            ("required", fn_add_required, "requires input \"uncovered\""),
+            ("kind", fn_change_kind, "runs.using: composite"),
+        ] {
+            let workspace = system_package_workspace(&format!("system-package-revalidate-{label}"));
+            converge(workspace.root(), WorkflowRole::Publish);
+            let before = workflow(workspace.root(), WorkflowRole::Publish);
+            let path = workspace
+                .root()
+                .join(".github/actions/deliver-rpm/action.yml");
+            let metadata = mutate(std::fs::read_to_string(&path).expect("metadata"));
+            workspace.write(".github/actions/deliver-rpm/action.yml", &metadata);
+            assert!(blocked_diagnostics(&workspace)
+                .iter()
+                .any(|message| message.contains(expected)));
+            assert_eq!(workflow(workspace.root(), WorkflowRole::Publish), before);
+        }
+    }
+
+    fn fn_remove_reserved(metadata: String) -> String {
+        metadata.replace("  release-automation-digest: {}\n", "")
+    }
+
+    fn fn_add_required(metadata: String) -> String {
+        metadata.replace("inputs:\n", "inputs:\n  uncovered: { required: true }\n")
+    }
+
+    fn fn_change_kind(metadata: String) -> String {
+        metadata.replace("using: composite", "using: node20")
     }
 
     fn run_apt_establishment(
@@ -3443,7 +3627,7 @@ release-units:
         std::fs::write(subject.join("sample-command.deb"), "sealed package bytes")
             .expect("package");
         let digest = crate::evidence::digest_bytes(b"sealed package bytes");
-        let packages = "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 7c2aa18a7daff6559702550c3f6c3a15e1234a870a81d36402f26650211b9708\n\n";
+        let packages = "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n";
         let packages_digest = crate::evidence::digest_bytes(packages.as_bytes())
             .trim_start_matches("sha256:")
             .to_owned();
@@ -3511,6 +3695,11 @@ esac
     }
 
     #[test]
+    fn apt_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
+        assert!(run_apt_readback("apt-present", "ok"));
+    }
+
+    #[test]
     fn apt_readback_refuses_an_absent_index() {
         assert!(!run_apt_readback("apt-absent-index", "absent-index"));
     }
@@ -3528,6 +3717,144 @@ esac
     #[test]
     fn apt_readback_refuses_a_package_absent_from_the_signed_index() {
         assert!(!run_apt_readback("apt-package-absent", "package-absent"));
+    }
+
+    fn run_rpm_readback(label: &str, scenario: &str) -> bool {
+        let workspace = system_package_workspace(label);
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow");
+        let step = document["jobs"]["release_automation_publish_component_package_rpm_primary"]
+            ["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Read back "))
+            })
+            .expect("readback step");
+        let temporary = workspace.root().join("runner-rpm-readback");
+        let subject = PathBuf::from(
+            step["env"]
+                .as_mapping()
+                .expect("environment")
+                .iter()
+                .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_SUBJECT")))
+                .and_then(|(_, value)| value.as_str())
+                .expect("subject path")
+                .replace("${{ runner.temp }}", &temporary.display().to_string()),
+        );
+        std::fs::create_dir_all(&subject).expect("subject");
+        std::fs::write(subject.join("example-tool.rpm"), "sealed package bytes").expect("package");
+        let digest = crate::evidence::digest_bytes(b"sealed package bytes");
+        let package_checksum = digest.trim_start_matches("sha256:");
+        let primary = if scenario == "package-absent" {
+            format!("<metadata><package><name>another-tool</name><arch>arm64</arch><version ver=\"1.2.3\" rel=\"1\"/><checksum>{package_checksum}</checksum></package></metadata>")
+        } else {
+            format!("<metadata><package><name>example-tool</name><arch>arm64</arch><version ver=\"1.2.3\" rel=\"1\"/><checksum>{package_checksum}</checksum></package></metadata>")
+        };
+        let primary_digest = crate::evidence::digest_bytes(primary.as_bytes())
+            .trim_start_matches("sha256:")
+            .to_owned();
+        let stubs = temporary.join("stubs");
+        std::fs::create_dir_all(&stubs).expect("stubs");
+        for (name, body) in [
+            ("curl", r#"#!/usr/bin/env bash
+set -euo pipefail
+output=${*: -1}; url=${*: -3:1}
+case "${url}" in
+  *repomd.xml.asc) printf 'signature' > "${output}" ;;
+  *repomd.xml)
+    [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
+    digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
+    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="repodata/primary.xml"/></data></repomd>' "${digest}" > "${output}" ;;
+  *primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+  *) printf 'key served today' > "${output}" ;;
+esac
+"#),
+            ("gpg", "#!/usr/bin/env bash\nset -euo pipefail\nout=\"$5\"; in=\"$6\"; cp \"${in}\" \"${out}\"\n"),
+            ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
+            ("rpm", "#!/usr/bin/env bash\nprintf 'arm64\\n'\n"),
+            ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
+            ("dnf", r#"#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = --version ]; then printf 'dnf 4.0\n'; exit 0; fi
+test "${1}" = --config
+test "${2}" = /dev/null
+[[ " $* " == *' --setopt=reposdir='* ]]
+[[ " $* " == *' install example-tool-1.2.3.arm64 '* ]]
+printf 'sealed package bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+"#),
+        ] {
+            let path = stubs.join(name);
+            std::fs::write(&path, body).expect("stub");
+            let status = std::process::Command::new("chmod")
+                .args(["+x", path.to_str().expect("path")])
+                .status()
+                .expect("chmod");
+            assert!(status.success());
+        }
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(step["run"].as_str().expect("run"))
+            .current_dir(workspace.root())
+            .env_clear()
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("FAKE_SCENARIO", scenario)
+            .env("FAKE_PRIMARY", primary)
+            .env("FAKE_PRIMARY_DIGEST", primary_digest);
+        for (key, value) in step["env"].as_mapping().expect("env") {
+            let value = value
+                .as_str()
+                .expect("value")
+                .replace("${{ runner.temp }}", &temporary.display().to_string())
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.version }}",
+                    "1.2.3",
+                )
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.digest }}",
+                    &digest,
+                );
+            command.env(key.as_str().expect("key"), value);
+        }
+        command.status().expect("readback runs").success()
+    }
+
+    #[test]
+    fn rpm_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
+        assert!(run_rpm_readback("rpm-present", "ok"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_an_absent_index() {
+        assert!(!run_rpm_readback("rpm-absent-index", "absent-index"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_an_index_with_an_unverified_signature() {
+        assert!(!run_rpm_readback("rpm-bad-signature", "bad-signature"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_a_followed_digest_that_disagrees() {
+        assert!(!run_rpm_readback("rpm-followed-digest", "followed-digest"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_a_package_absent_from_the_signed_index() {
+        assert!(!run_rpm_readback("rpm-package-absent", "package-absent"));
     }
 
     // The sealed subject identity is what a publisher fragment is compared
@@ -9819,16 +10146,15 @@ release-units:
     // # Publisher kinds this gate does not read, and why
     //
     // `recipe::catalog()` names seven publisher kinds and this configuration
-    // resolves five. `PublisherKind::Rpm` and `PublisherKind::Apt` are the two
-    // it does not, and they derive no privileged shell for anything to read:
-    // configuring either blocks derivation with `maintained-recipe-underived`,
-    // proved at `refuses_a_publication_whose_maintained_recipe_is_not_derived`.
-    // So this is not the "three of five" shortfall one notch further out. There
-    // is no rpm or apt promote body in existence to sweep. When a maintained
-    // recipe derives one for this configuration, the publisher-span equality
-    // above holds the sweep to reading its shell, because that equality's
-    // expected side is production's resolution rather than anything written
-    // down here -- the same property the sweep-narrowing mutation exercises.
+    // resolves five. `PublisherKind::Rpm` and `PublisherKind::Apt` are excluded
+    // because their configuration requires repository-local Action metadata
+    // and destination coordinates that this cross-recipe fixture does not
+    // supply. Their configured values are swept separately by
+    // `derives_system_package_delivery_calls_under_the_non_default_prefix`,
+    // which asserts every value at its `env:` or `with:` consumer, and by
+    // `executes_each_derived_delivery_call_against_its_recording_action`, which
+    // executes both derived calls. This test therefore makes no claim about
+    // RPM or APT establishment and readback shell bodies.
     #[test]
     fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
         // How much the gate inspected is established before any rule is

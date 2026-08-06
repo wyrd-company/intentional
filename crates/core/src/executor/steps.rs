@@ -41,6 +41,7 @@
 //! observable yet, which is what a bounded wait is for.
 
 use crate::config::{AptPublisher, ReleaseUnitConfig, RpmPublisher};
+use crate::executor::goreleaser::nfpm_format;
 use crate::executor::names::{self, SuppliedName};
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
 use crate::executor::workflow::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
@@ -274,8 +275,20 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
 
 /// Whether workflow derivation has a complete publisher recipe for this pair.
 pub(super) const fn recipe_is_derived(packager: Packager, publisher: PublisherKind) -> bool {
-    let _ = (packager, publisher);
-    true
+    matches!(
+        (packager, publisher),
+        (Packager::Npm, PublisherKind::Npm)
+            | (Packager::Cargo, PublisherKind::Cargo)
+            | (
+                Packager::GoReleaser,
+                PublisherKind::Homebrew
+                    | PublisherKind::Aur
+                    | PublisherKind::Rpm
+                    | PublisherKind::Apt
+            )
+            | (Packager::Buildx, PublisherKind::Oci)
+            | (Packager::DevContainerCli, PublisherKind::Oci)
+    )
 }
 
 /// One publication's recipe steps before the shared placeholders are rendered.
@@ -484,7 +497,12 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefu
             "package-path",
             "${{ steps.intentional_establish.outputs.path }}".to_owned(),
         ),
-        ("format", context.publication.publisher.as_str().to_owned()),
+        (
+            "format",
+            nfpm_format(context.publication.publisher)
+                .expect("system package publisher has an nfpm format")
+                .to_owned(),
+        ),
         (
             "name",
             "${{ steps.intentional_establish.outputs.name }}".to_owned(),
@@ -516,11 +534,11 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefu
     let metadata = if context.publication.publisher == PublisherKind::Apt {
         "name=$(dpkg-deb -f \"${package}\" Package)\n      version=$(dpkg-deb -f \"${package}\" Version)\n      architecture=$(dpkg-deb -f \"${package}\" Architecture)"
     } else {
-        "name=$(rpm -qp --qf '%{NAME}' \"${package}\")\n      version=$(rpm -qp --qf '%{VERSION}-%{RELEASE}' \"${package}\")\n      architecture=$(rpm -qp --qf '%{ARCH}' \"${package}\")"
+        "name=$(rpm -qp --qf '%{NAME}' \"${package}\")\n      version=$(rpm -qp --qf '%{VERSION}' \"${package}\")\n      architecture=$(rpm -qp --qf '%{ARCH}' \"${package}\")"
     };
     let readback = system_package_readback(context, &configured);
     Ok(format!(
-        "  - id: intentional_establish\n    name: {}\n    env:\n{}    run: |\n      set -euo pipefail\n      mapfile -t packages < <(find \"${{@ENVVAR@SUBJECT}}\" -type f -maxdepth 1 -print)\n      test \"${{#packages[@]}}\" -eq 1\n      package=${{packages[0]}}\n      digest=sha256:$(sha256sum \"${{package}}\" | cut -d' ' -f1)\n      test \"${{digest}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n      {metadata}\n      test \"${{name}}\" = \"${{@ENVVAR@SUBJECT_IDENTITY}}\"\n      test \"${{version}}\" = \"${{@ENVVAR@VERSION}}\"\n      printf 'path=%s\\nname=%s\\nversion=%s\\narchitecture=%s\\ndigest=%s\\n' \"${{package}}\" \"${{name}}\" \"${{version}}\" \"${{architecture}}\" \"${{digest}}\" >> \"${{GITHUB_OUTPUT}}\"\n  - name: {}\n    uses: {}\n    with:\n{with}{readback}",
+        "  - id: intentional_establish\n    name: {}\n    env:\n{}    run: |\n      set -euo pipefail\n      mapfile -t packages < <(find \"${{@ENVVAR@SUBJECT}}\" -maxdepth 1 -type f -print)\n      test \"${{#packages[@]}}\" -eq 1\n      package=${{packages[0]}}\n      digest=sha256:$(sha256sum \"${{package}}\" | cut -d' ' -f1)\n      test \"${{digest}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n      {metadata}\n      test \"${{name}}\" = \"${{@ENVVAR@SUBJECT_IDENTITY}}\"\n      test \"${{version}}\" = \"${{@ENVVAR@VERSION}}\"\n      printf 'path=%s\\nname=%s\\nversion=%s\\narchitecture=%s\\ndigest=%s\\n' \"${{package}}\" \"${{name}}\" \"${{version}}\" \"${{architecture}}\" \"${{digest}}\" >> \"${{GITHUB_OUTPUT}}\"\n  - name: {}\n    uses: {}\n    with:\n{with}{readback}",
         scalar(&format!("Establish the {} package", format.to_uppercase())),
         subject_environment(context),
         scalar(&format!("Deliver {}", context.publication.identity())),
@@ -766,14 +784,14 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
           checksum = fields.get('checksum')
           version = fields.get('version')
           if (fields.get('name') is not None and fields['name'].text == sys.argv[2]
-              and version is not None and f"{version.attrib.get('ver')}-{version.attrib.get('rel')}" == sys.argv[3]
+              and version is not None and version.attrib.get('ver') == sys.argv[3]
               and fields.get('arch') is not None and fields['arch'].text == sys.argv[4]
               and checksum is not None and checksum.text == sys.argv[5]):
               sys.exit(0)
       sys.exit(1)
       PY
       printf '[intentional]\nname=Intentional scratch\nbaseurl=%s/%s\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "${@ENVVAR@DESTINATION%/}" "${@ENVVAR@RPM_CHANNEL}" "${@ENVVAR@WORK}/key" > "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo"
-      dnf --config "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo" --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
+      dnf --config /dev/null --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
       retrieved=$(find "${@ENVVAR@WORK}/retrieved" -type f -name '*.rpm' -print -quit)
       @ENVVAR@DESTINATION_DIGEST="${@ENVVAR@SUBJECT_DIGEST}"
       @ENVVAR@RETRIEVED_DIGEST=sha256:$(sha256sum "${retrieved}" | cut -d' ' -f1)
