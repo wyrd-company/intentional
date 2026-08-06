@@ -269,7 +269,10 @@ publisher job can mint a token scoped to that repository.
 
 For RPM or APT, provide the repository-owned composite delivery Action, public
 repository base URL, public index-signing-key URL, observation deadline, and
-index coordinates. RPM requires a channel. APT requires a suite and component.
+index coordinates. These routes currently package only the Linux x86-64
+archive. The Cargo package must declare at least one author, which becomes the
+downstream package maintainer. RPM requires a channel. APT requires a suite and
+component.
 The optional `with` mapping supplies the delivery Action's remaining inputs.
 The Action receives the sealed package path, format, name, version,
 architecture, digest, and coordinates under the configured executor prefix.

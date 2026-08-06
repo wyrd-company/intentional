@@ -364,8 +364,9 @@ proposed-design:
     the configured outputs from those archives and seals the combined subject.
     Homebrew and AUR receive descriptors that resolve the sealed archives. RPM
     and APT receive packages produced from the sealed Linux x86-64 executable by
-    digest-pinned nFPM. Publisher jobs promote or deliver those outputs and
-    never rebuild an archive.
+    digest-pinned nFPM. Their maintainer metadata comes from the Cargo package's
+    declared authors; absent authors refuse those routes. Publisher jobs promote
+    or deliver those outputs and never rebuild an archive.
 
     Capability derivation consumes the same detector evidence produced by
     `intentional init`. It filters that lossless evidence to the declared package

@@ -155,7 +155,9 @@ A Rust command can use the same sealed archives for system publication. A
 Homebrew package provides its tap repository and installs the release GitHub
 App there. RPM and APT packages provide a repository-owned composite delivery
 Action, public repository and signing-key URLs, an observation deadline, and
-their index coordinates. An Arch User Repository (AUR) package declares
+their index coordinates. Their Cargo package declares at least one author for
+the downstream package maintainer field. An Arch User Repository (AUR) package
+declares
 `aur: {}` and provides the `INTENTIONAL_AUR_KEY` repository secret. Intentional
 derives the command identity, creates the configured native packages or
 descriptors in the aggregate build, and never rebuilds source in a publisher

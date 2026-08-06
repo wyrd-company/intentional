@@ -221,6 +221,11 @@ pub(super) fn build_command(packager: Packager) -> String {
           "end" > "${{formula}}"
       fi
       if [[ "${{@ENVVAR@RPM}}" == true || "${{@ENVVAR@APT}}" == true ]]; then
+        maintainer="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .authors | map(select(length > 0)) | join(", ")' <<<"${{metadata}}")"
+        if [[ -z "${{maintainer}}" ]]; then
+          printf 'Cargo package %s must declare at least one author before Intentional can derive RPM or APT maintainer metadata\n' "${{binary}}" >&2
+          exit 1
+        fi
         package_root="${{RUNNER_TEMP}}/@JOB@package-root"
         rm -rf "${{package_root}}"
         install -d "${{package_root}}/usr/bin"
@@ -228,13 +233,14 @@ pub(super) fn build_command(packager: Packager) -> String {
           -C "${{package_root}}/usr/bin" "${{binary}}"
         source_literal="$(jq -Rn --arg value "${{package_root}}/usr/bin/${{binary}}" '$value')"
         destination_literal="$(jq -Rn --arg value "/usr/bin/${{binary}}" '$value')"
+        maintainer_literal="$(jq -Rn --arg value "${{maintainer}}" '$value')"
         nfpm_config="${{RUNNER_TEMP}}/@JOB@nfpm.yml"
         printf '%s\n' \
           "name: ${{binary}}" \
           "arch: amd64" \
           "platform: linux" \
           "version: ${{version}}" \
-          "maintainer: Intentional <releases@intentional.foo>" \
+          "maintainer: ${{maintainer_literal}}" \
           "description: ${{description_literal}}" \
           "license: ${{license_literal}}" \
           "contents:" \
@@ -256,13 +262,11 @@ pub(super) fn build_command(packager: Packager) -> String {
         description_shell="$(jq -Rr '@sh' <<<"${{description//$'\n'/ }}")"
         license_shell="$(jq -Rr '@sh' <<<"${{license}}")"
         license_pkgbuild=""
-        license_srcinfo=""
         if [[ -n "${{license}}" ]]; then
           license_pkgbuild="license=(${{license_shell}})"
-          license_srcinfo="\tlicense = ${{license}}"
         fi
-        x86_source="${{binary}}-${{version}}-linux-x86_64.tar.gz"
-        arm64_source="${{binary}}-${{version}}-linux-aarch64.tar.gz"
+        x86_source="${{linux_x86_64_archive}}"
+        arm64_source="${{linux_arm64_archive%-linux-arm64.tar.gz}}-linux-aarch64.tar.gz"
         base_url="https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}"
         pkgbuild="${{@ENVVAR@SUBJECT}}/aur/${{pkgname}}.pkgbuild"
         srcinfo="${{@ENVVAR@SUBJECT}}/aur/${{pkgname}}.srcinfo"
@@ -282,20 +286,25 @@ pub(super) fn build_command(packager: Packager) -> String {
           "package() {{" \
           "  install -Dm755 \"\${{srcdir}}/${{binary}}\" \"\${{pkgdir}}/usr/bin/${{binary}}\"" \
           "}}" > "${{pkgbuild}}"
-        printf '%s\n' \
-          "pkgbase = ${{pkgname}}" \
-          "\tpkgdesc = ${{description//$'\n'/ }}" \
-          "\tpkgver = ${{pkgver}}" \
-          "\tpkgrel = 1" \
-          "\turl = https://github.com/${{GITHUB_REPOSITORY}}" \
-          "\tarch = x86_64" \
-          "\tarch = aarch64" \
-          "${{license_srcinfo}}" \
-          "\tsource_x86_64 = ${{x86_source}}::${{base_url}}/${{linux_x86_64_archive}}" \
-          "\tsha256sums_x86_64 = ${{linux_x86_64_digest}}" \
-          "\tsource_aarch64 = ${{arm64_source}}::${{base_url}}/${{linux_arm64_archive}}" \
-          "\tsha256sums_aarch64 = ${{linux_arm64_digest}}" \
-          "" \
+        srcinfo_indent=$'\t'
+        srcinfo_fields=(
+          "${{srcinfo_indent}}pkgdesc = ${{description//$'\n'/ }}"
+          "${{srcinfo_indent}}pkgver = ${{pkgver}}"
+          "${{srcinfo_indent}}pkgrel = 1"
+          "${{srcinfo_indent}}url = https://github.com/${{GITHUB_REPOSITORY}}"
+          "${{srcinfo_indent}}arch = x86_64"
+          "${{srcinfo_indent}}arch = aarch64"
+        )
+        if [[ -n "${{license}}" ]]; then
+          srcinfo_fields+=("${{srcinfo_indent}}license = ${{license}}")
+        fi
+        srcinfo_fields+=(
+          "${{srcinfo_indent}}source_x86_64 = ${{x86_source}}::${{base_url}}/${{linux_x86_64_archive}}"
+          "${{srcinfo_indent}}sha256sums_x86_64 = ${{linux_x86_64_digest}}"
+          "${{srcinfo_indent}}source_aarch64 = ${{arm64_source}}::${{base_url}}/${{linux_arm64_archive}}"
+          "${{srcinfo_indent}}sha256sums_aarch64 = ${{linux_arm64_digest}}"
+        )
+        printf '%s\n' "pkgbase = ${{pkgname}}" "${{srcinfo_fields[@]}}" "" \
           "pkgname = ${{pkgname}}" > "${{srcinfo}}"
       fi"#,
             linux_x86_64_input = super::build::CARGO_ARCHIVE_LINUX_X86_64,

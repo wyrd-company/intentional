@@ -125,7 +125,7 @@ release-units:
             )
             .write(
                 "component/Cargo.toml",
-                "[package]\nname = \"sample-utility\"\nversion = \"1.2.3\"\ndescription = \"Sample utility\"\nlicense = \"MIT\"\n",
+                "[package]\nname = \"sample-utility\"\nversion = \"1.2.3\"\ndescription = \"Sample utility\"\nauthors = [\"Release Maintainers <maintainers@example.invalid>\"]\nlicense = \"MIT\"\n",
             )
             .write("component/src/main.rs", "fn main() {}\n")
             .write(
@@ -183,6 +183,39 @@ release-units:
         workspace
     }
 
+    fn parse_srcinfo(srcinfo: &str) -> (String, BTreeMap<String, Vec<String>>, String) {
+        let mut lines = srcinfo.lines();
+        let pkgbase = lines
+            .next()
+            .and_then(|line| line.strip_prefix("pkgbase = "))
+            .expect(".SRCINFO opens with its pkgbase identity")
+            .to_owned();
+        let mut fields = BTreeMap::<String, Vec<String>>::new();
+        loop {
+            let line = lines.next().expect(".SRCINFO closes its pkgbase section");
+            if line.is_empty() {
+                break;
+            }
+            let attribute = line
+                .strip_prefix('\t')
+                .unwrap_or_else(|| panic!(".SRCINFO attribute uses one tab separator: {line:?}"));
+            let (name, value) = attribute
+                .split_once(" = ")
+                .unwrap_or_else(|| panic!(".SRCINFO attribute names its value: {line:?}"));
+            fields
+                .entry(name.to_owned())
+                .or_default()
+                .push(value.to_owned());
+        }
+        let pkgname = lines
+            .next()
+            .and_then(|line| line.strip_prefix("pkgname = "))
+            .expect(".SRCINFO closes with its package identity")
+            .to_owned();
+        assert!(lines.next().is_none(), ".SRCINFO carries one package section");
+        (pkgbase, fields, pkgname)
+    }
+
     #[cfg(unix)]
     #[test]
     fn cargo_system_routes_build_one_sealed_subject_from_the_open_catalog() {
@@ -228,6 +261,7 @@ release-units:
                 route.publisher.as_str()
             );
             let steps = job_steps(&jobs, &job);
+            let publisher_body = job_run_bodies(&jobs, &job);
             assert!(!steps.is_empty(), "the {} route derives {job}", route.publisher);
             if matches!(route.publisher, PublisherKind::Rpm | PublisherKind::Apt) {
                 for prefix in ["Establish ", "Deliver ", "Read back "] {
@@ -239,16 +273,21 @@ release-units:
                     );
                 }
             } else {
-                let body = job_run_bodies(&jobs, &job);
-                assert!(body.contains("aur.archlinux.org/${INTENTIONAL_DESTINATION}.git"));
-                assert!(body.contains("aur/${INTENTIONAL_DESTINATION}.pkgbuild"));
-                assert!(!body.contains("cargo build"));
+                assert!(
+                    publisher_body.contains("aur.archlinux.org/${INTENTIONAL_DESTINATION}.git")
+                );
+                assert!(publisher_body.contains("aur/${INTENTIONAL_DESTINATION}.pkgbuild"));
                 let destination = steps
                     .iter()
                     .find_map(|step| step["env"]["INTENTIONAL_DESTINATION"].as_str())
                     .expect("the AUR route carries its derived destination as data");
                 assert_eq!(destination, "sample-utility-bin");
             }
+            assert!(
+                !publisher_body.contains("cargo "),
+                "the {} publisher promotes its sealed aggregate without invoking Cargo: {publisher_body}",
+                route.publisher
+            );
         }
 
         for id in [
@@ -301,8 +340,9 @@ release-units:
         }
         let execution = workspace.root().join("aggregate-execution");
         let subject = execution.join("subject");
+        let archive_fixtures = execution.join("archives");
         let archive_input = execution.join("archive-input");
-        std::fs::create_dir_all(&subject).expect("subject directory");
+        std::fs::create_dir_all(&archive_fixtures).expect("archive fixture directory");
         std::fs::create_dir_all(&archive_input).expect("archive input directory");
         for (producer, archive) in &produced_archives {
             std::fs::write(
@@ -312,7 +352,7 @@ release-units:
             .expect("architecture-specific archive executable");
             let status = std::process::Command::new("tar")
                 .args(["-czf"])
-                .arg(subject.join(archive))
+                .arg(archive_fixtures.join(archive))
                 .arg("-C")
                 .arg(&archive_input)
                 .arg("sample-utility")
@@ -340,26 +380,35 @@ printf 'external package outcome\n' > "${target}"
         permissions.set_mode(0o755);
         std::fs::set_permissions(&stub, permissions).expect("executable stub");
         let recording = execution.join("nfpm.args");
-        let mut command = std::process::Command::new("bash");
-        command
-            .arg("-c")
-            .arg(&body)
-            .current_dir(workspace.root().join("component"))
-            .env("GITHUB_REF_NAME", "1.2.3")
-            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
-            .env("RUNNER_TEMP", &execution)
-            .env("NFPM_RECORDING", &recording)
-            .env(
-                "PATH",
-                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
-            );
-        for (key, value) in step_environment(build) {
-            command.env(key, value);
-        }
-        command
-            .env("INTENTIONAL_SUBJECT", &subject)
-            .env("INTENTIONAL_NFPM", &stub);
-        let output = command.output().expect("aggregate body runs");
+        let run_aggregate = |subject: &std::path::Path, recording: &std::path::Path| {
+            std::fs::create_dir_all(subject).expect("subject directory");
+            for archive in produced_archives.values() {
+                std::fs::copy(archive_fixtures.join(archive), subject.join(archive))
+                    .unwrap_or_else(|error| panic!("copy {archive} into subject: {error}"));
+            }
+            let mut command = std::process::Command::new("bash");
+            command
+                .arg("-c")
+                .arg(&body)
+                .current_dir(workspace.root().join("component"))
+                .env("GITHUB_REF_NAME", "1.2.3")
+                .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+                .env("RUNNER_TEMP", &execution)
+                .env("NFPM_RECORDING", recording)
+                .env(
+                    "PATH",
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+                );
+            for (key, value) in step_environment(build) {
+                command.env(key, value);
+            }
+            command
+                .env("INTENTIONAL_SUBJECT", subject)
+                .env("INTENTIONAL_NFPM", &stub)
+                .output()
+                .expect("aggregate body runs")
+        };
+        let output = run_aggregate(&subject, &recording);
         assert!(
             output.status.success(),
             "aggregate body failed: {}",
@@ -380,6 +429,8 @@ printf 'external package outcome\n' > "${target}"
         for expected in [
             "name: sample-utility",
             "version: 1.2.3",
+            "arch: amd64",
+            "maintainer: \"Release Maintainers <maintainers@example.invalid>\"",
             "description: \"Sample utility\"",
             "dst: \"/usr/bin/sample-utility\"",
         ] {
@@ -423,31 +474,177 @@ printf 'external package outcome\n' > "${target}"
         ] {
             assert!(pkgbuild.contains(&expected), "PKGBUILD carries {expected}: {pkgbuild}");
         }
-        for expected in [
-            "pkgbase = sample-utility-bin",
-            "pkgdesc = Sample utility",
-            "pkgver = 1.2.3",
-            "pkgrel = 1",
-            "url = https://github.com/sample-owner/sample-repository",
-            "arch = x86_64",
-            "arch = aarch64",
-            "license = MIT",
-            "source_x86_64 = sample-utility-1.2.3-linux-x86_64.tar.gz::",
-            "source_aarch64 = sample-utility-1.2.3-linux-aarch64.tar.gz::",
-            "pkgname = sample-utility-bin",
-        ] {
-            assert!(srcinfo.contains(expected), ".SRCINFO carries {expected}: {srcinfo}");
-        }
-        for expected in [
-            format!("sha256sums_x86_64 = {}", x86_digest),
-            format!("sha256sums_aarch64 = {}", arm_digest),
-        ] {
-            assert!(srcinfo.contains(&expected), ".SRCINFO carries {expected}: {srcinfo}");
-        }
+        let (pkgbase, srcinfo_fields, pkgname) = parse_srcinfo(&srcinfo);
+        assert_eq!(pkgbase, "sample-utility-bin");
+        assert_eq!(pkgname, "sample-utility-bin");
+        let expected_srcinfo_fields = BTreeMap::from([
+            ("arch".to_owned(), vec!["x86_64".to_owned(), "aarch64".to_owned()]),
+            ("license".to_owned(), vec!["MIT".to_owned()]),
+            ("pkgdesc".to_owned(), vec!["Sample utility".to_owned()]),
+            ("pkgrel".to_owned(), vec!["1".to_owned()]),
+            ("pkgver".to_owned(), vec!["1.2.3".to_owned()]),
+            (
+                "sha256sums_aarch64".to_owned(),
+                vec![arm_digest.clone()],
+            ),
+            ("sha256sums_x86_64".to_owned(), vec![x86_digest.clone()]),
+            (
+                "source_aarch64".to_owned(),
+                vec!["sample-utility-1.2.3-linux-aarch64.tar.gz::https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-utility-1.2.3-linux-arm64.tar.gz".to_owned()],
+            ),
+            (
+                "source_x86_64".to_owned(),
+                vec!["sample-utility-1.2.3-linux-x86_64.tar.gz::https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-utility-1.2.3-linux-x86_64.tar.gz".to_owned()],
+            ),
+            (
+                "url".to_owned(),
+                vec!["https://github.com/sample-owner/sample-repository".to_owned()],
+            ),
+        ]);
+        assert_eq!(srcinfo_fields, expected_srcinfo_fields);
+
+        let manifest_path = workspace.root().join("component/Cargo.toml");
+        let licensed_manifest = std::fs::read_to_string(&manifest_path).expect("Cargo manifest");
+        let unlicensed_manifest = licensed_manifest.replace("license = \"MIT\"\n", "");
+        std::fs::write(&manifest_path, &unlicensed_manifest).expect("license-less Cargo manifest");
+        let unlicensed_subject = execution.join("unlicensed-subject");
+        let unlicensed_recording = execution.join("unlicensed-nfpm.args");
+        let unlicensed_output = run_aggregate(&unlicensed_subject, &unlicensed_recording);
+        assert!(
+            unlicensed_output.status.success(),
+            "license-less aggregate failed: {}",
+            String::from_utf8_lossy(&unlicensed_output.stderr)
+        );
+        let unlicensed_srcinfo = std::fs::read_to_string(
+            unlicensed_subject.join("aur/sample-utility-bin.srcinfo"),
+        )
+        .expect("license-less .SRCINFO");
+        let (pkgbase, mut unlicensed_fields, pkgname) = parse_srcinfo(&unlicensed_srcinfo);
+        assert_eq!(pkgbase, "sample-utility-bin");
+        assert_eq!(pkgname, "sample-utility-bin");
+        assert!(
+            unlicensed_fields.remove("license").is_none(),
+            "license-less .SRCINFO omits the optional field"
+        );
+        let mut fields_without_license = expected_srcinfo_fields.clone();
+        fields_without_license.remove("license");
+        assert_eq!(unlicensed_fields, fields_without_license);
+        let unlicensed_pkgbuild = std::fs::read_to_string(
+            unlicensed_subject.join("aur/sample-utility-bin.pkgbuild"),
+        )
+        .expect("license-less PKGBUILD");
+        assert!(!unlicensed_pkgbuild.lines().any(|line| line.starts_with("license=")));
+
+        let authorless_manifest = unlicensed_manifest.replace(
+            "authors = [\"Release Maintainers <maintainers@example.invalid>\"]\n",
+            "",
+        );
+        std::fs::write(&manifest_path, authorless_manifest).expect("author-less Cargo manifest");
+        let authorless_subject = execution.join("authorless-subject");
+        let authorless_recording = execution.join("authorless-nfpm.args");
+        let authorless_output = run_aggregate(&authorless_subject, &authorless_recording);
+        assert!(!authorless_output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&authorless_output.stderr),
+            "Cargo package sample-utility must declare at least one author before Intentional can derive RPM or APT maintainer metadata\n"
+        );
         assert!(
             !subject.join("homebrew").exists(),
             "an unconfigured descriptor route produces no formula"
         );
+    }
+
+    #[test]
+    fn refuses_rpm_and_apt_routes_without_one_cargo_binary_identity() {
+        for (publisher, mapping, action, coordinate) in [
+            (
+                "rpm",
+                "          delivery-action: .github/actions/deliver-rpm\n          base-url: https://packages.invalid/rpm\n          public-signing-key-url: https://packages.invalid/rpm-key.asc\n          observation-deadline: 47\n          channel: stable\n          with: {}\n",
+                ".github/actions/deliver-rpm/action.yml",
+                "intentional-rpm-channel",
+            ),
+            (
+                "apt",
+                "          delivery-action: .github/actions/deliver-apt\n          base-url: https://packages.invalid/apt\n          public-signing-key-url: https://packages.invalid/apt-key.asc\n          observation-deadline: 53\n          suite: current\n          component: main\n          with: {}\n",
+                ".github/actions/deliver-apt/action.yml",
+                "intentional-apt-suite",
+            ),
+        ] {
+            let workspace = Workspace::new(&format!("cargo-{publisher}-identity-refusal"));
+            workspace
+                .write(
+                    "Cargo.toml",
+                    "[workspace]\nmembers = [\"component\"]\nresolver = \"2\"\n",
+                )
+                .write(
+                    "component/Cargo.toml",
+                    "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
+                )
+                .write("component/src/lib.rs", "pub fn value() -> usize { 1 }\n")
+                .write(
+                    ".intentional/config.yml",
+                    &format!(
+                        r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release: {{ template: '{{version}}' }}
+github:
+  workflows:
+    release: {{ path: .github/workflows/release.yml }}
+    publish: {{ path: .github/workflows/publish.yml }}
+release-units:
+  component:
+    path: component
+    packages:
+      utility:
+        path: .
+        {publisher}:
+{mapping}    tags:
+      staged: {{ role: primary, template: '{{id}}@{{version}}', require-phase: before-publication }}
+"#
+                    ),
+                )
+                .write(
+                    ".github/workflows/release.yml",
+                    "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+                )
+                .write(
+                    ".github/workflows/publish.yml",
+                    "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+                );
+            let mut inputs = vec![
+                "intentional-package-path",
+                "intentional-format",
+                "intentional-name",
+                "intentional-version",
+                "intentional-architecture",
+                "intentional-digest",
+                coordinate,
+            ];
+            if publisher == "apt" {
+                inputs.push("intentional-apt-component");
+            }
+            workspace.write(action, &delivery_action(&inputs, "composite"));
+
+            let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+                .expect("comparison runs");
+            assert_eq!(comparison.status, ComparisonStatus::Blocked);
+            let diagnostic = comparison
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "cargo-archive-identity-underived")
+                .unwrap_or_else(|| panic!("{publisher} reports its Cargo identity refusal"));
+            assert_eq!(
+                diagnostic.path.as_deref(),
+                Some("release-units.component.packages.utility")
+            );
+            assert!(
+                diagnostic
+                    .message
+                    .contains("cannot derive one native executable identity"),
+                "{publisher} refusal names the missing identity: {diagnostic:?}"
+            );
+        }
     }
 
     fn blocked_diagnostics(workspace: &Workspace) -> Vec<String> {

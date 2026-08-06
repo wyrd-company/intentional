@@ -297,7 +297,8 @@ through the digest-pinned Cross 0.2.5 images and creates macOS Arm64 with Cargo.
 Its aggregate job creates only the configured descriptors and native packages
 inside the same sealed subject. Publisher jobs never invoke Cargo. A library or
 multi-binary package must not declare these native-distribution publishers
-because it does not determine one binary identity.
+because it does not determine one binary identity. RPM and APT also require at
+least one Cargo package author, which supplies their package maintainer metadata.
 
 A Go release unit publishes through GoReleaser, and its native
 `.goreleaser.yaml` is where the rest of the contract lives. `intentional

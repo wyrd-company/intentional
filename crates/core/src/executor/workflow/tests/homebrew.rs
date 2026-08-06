@@ -365,7 +365,7 @@ release-units:
         assert!(publisher.iter().all(|step| {
             step["run"]
                 .as_str()
-                .is_none_or(|body| !body.contains("cargo build"))
+                .is_none_or(|body| !body.contains("cargo "))
         }));
 
         // Execute the product-shaped platform body. The stub replaces only
