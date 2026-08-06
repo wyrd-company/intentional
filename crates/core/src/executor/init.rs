@@ -12,8 +12,6 @@ use crate::config::{
     DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
-#[cfg(test)]
-use crate::executor::recipe::PRIMARY_TARGET;
 use crate::executor::recipe::{
     capability_set, derive_capabilities, derive_package_candidates, recipes_for,
     resolve_publications, Capability, CapabilityEvidence, PackageCandidateEvidence, Packager,
@@ -2073,14 +2071,32 @@ github:
 
         let first = run(&workspace);
         assert_eq!(first.state, ExecutorInitState::NeedsInput);
-        for target in [PRIMARY_TARGET, "github"] {
-            resolve(
-                workspace.root(),
-                "node-package",
-                &format!("npm/{target}"),
-                DECLINE_CHOICE,
-            );
+        let mut plan = first.plan;
+        let mut expected_declines = BTreeSet::new();
+        for candidate in plan
+            .candidates
+            .iter_mut()
+            .filter(|candidate| candidate.kind == CandidateKind::PublicationIntent)
+        {
+            let accepted = candidate
+                .choices
+                .iter()
+                .find(|choice| choice.id == ACCEPT_CHOICE)
+                .expect("publication offer has an accept choice");
+            expected_declines.insert(format!(
+                "{}/{}/{}/{}",
+                candidate.release_unit,
+                candidate.package.as_deref().expect("publication package"),
+                accepted.publisher.expect("publication publisher"),
+                accepted.target.as_deref().expect("publication target")
+            ));
+            candidate.resolution = Some(DECLINE_CHOICE.to_owned());
         }
+        std::fs::write(
+            workspace.root().join(EXECUTOR_INIT_PLAN_PATH),
+            plan.to_yaml().expect("resolved plan serializes"),
+        )
+        .expect("resolved plan writes");
 
         let reported = run(&workspace);
         assert_eq!(reported.state, ExecutorInitState::Ready);
@@ -2096,10 +2112,7 @@ github:
                 .github
                 .expect("GitHub executor")
                 .declined_publications,
-            BTreeSet::from([
-                "component/package/npm/github".to_owned(),
-                "component/package/npm/primary".to_owned(),
-            ])
+            expected_declines
         );
     }
 
