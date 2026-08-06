@@ -449,7 +449,7 @@ fn prerequisites(github: &GithubConfig) -> Result<Vec<String>> {
     Ok(vec![
         "report: the repository GitHub App must be a ruleset bypass actor for the default branch and every Intentional-managed release tag namespace; Intentional does not mutate repository settings".to_owned(),
         format!(
-            "report: the repository must define GitHub App credentials {}GITHUB_APP_ID and {}GITHUB_APP_PRIVATE_KEY",
+            "report: the repository must define repository variable {}GITHUB_APP_ID for the GitHub App ID and repository secret {}GITHUB_APP_PRIVATE_KEY for its private key",
             namespaces.envvar, namespaces.envvar
         ),
         format!(
@@ -1392,6 +1392,32 @@ release-units:
             Config::load(workspace.root()).expect("config loads").github,
             None,
             "an unresolved plan never configures the executor"
+        );
+    }
+
+    /// The credential kinds are literal product vocabulary here so changing the
+    /// report cannot also move the test oracle that distinguishes them.
+    #[test]
+    fn reports_github_app_credential_kinds_with_the_configured_prefix() {
+        let mut github = default_github();
+        github.prefix = Some(crate::config::ExecutorPrefix::Namespaces {
+            job: "managed".to_owned(),
+            envvar: "SAMPLE".to_owned(),
+        });
+
+        let credential_report = prerequisites(&github)
+            .expect("prerequisites resolve")
+            .into_iter()
+            .find(|operation| operation.contains("GITHUB_APP_ID"))
+            .expect("credential prerequisite is reported");
+
+        assert!(
+            credential_report.contains("repository variable SAMPLE_GITHUB_APP_ID"),
+            "the App ID is reported as a repository variable: {credential_report}"
+        );
+        assert!(
+            credential_report.contains("repository secret SAMPLE_GITHUB_APP_PRIVATE_KEY"),
+            "the private key is reported as a repository secret: {credential_report}"
         );
     }
 
