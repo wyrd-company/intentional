@@ -1815,14 +1815,24 @@ release-units:
 
     #[test]
     fn cargo_homebrew_cross_images_must_be_digest_pinned() {
-        let text = with_github(
-            "  cargo-homebrew:\n    linux-x86-64-cross-image: registry.invalid/toolchain/x86:latest\n    linux-arm64-cross-image: registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
-        );
-        let error = Config::from_yaml(&text).expect_err("mutable image tag rejected");
-        assert!(
-            error.to_string().contains("linux-x86-64-cross-image"),
-            "{error}"
-        );
+        for (field, x86_image, arm_image) in [
+            (
+                "linux-x86-64-cross-image",
+                "registry.invalid/toolchain/x86:latest",
+                "registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            (
+                "linux-arm64-cross-image",
+                "registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "registry.invalid/toolchain/arm:latest",
+            ),
+        ] {
+            let text = with_github(&format!(
+                "  cargo-homebrew:\n    linux-x86-64-cross-image: {x86_image}\n    linux-arm64-cross-image: {arm_image}\n"
+            ));
+            let error = Config::from_yaml(&text).expect_err("mutable image tag rejected");
+            assert!(error.to_string().contains(field), "{error}");
+        }
     }
 
     #[test]
@@ -2135,6 +2145,29 @@ release-units:
         let github = &schema["$defs"]["github"];
         assert_eq!(github["additionalProperties"].as_bool(), Some(false));
         assert_eq!(github["required"].as_sequence().expect("required").len(), 1);
+        let homebrew = &github["properties"]["cargo-homebrew"];
+        assert_eq!(homebrew["additionalProperties"].as_bool(), Some(false));
+        for (field, default) in [
+            (
+                "linux-x86-64-cross-image",
+                DEFAULT_CARGO_HOMEBREW_LINUX_X86_64_CROSS_IMAGE,
+            ),
+            (
+                "linux-arm64-cross-image",
+                DEFAULT_CARGO_HOMEBREW_LINUX_ARM64_CROSS_IMAGE,
+            ),
+        ] {
+            assert_eq!(
+                homebrew["properties"][field]["pattern"].as_str(),
+                Some("^.+@sha256:[0-9a-f]{64}$"),
+                "schema requires a digest pin for {field}"
+            );
+            assert_eq!(
+                homebrew["properties"][field]["default"].as_str(),
+                Some(default),
+                "schema default agrees with runtime default for {field}"
+            );
+        }
         let package = &schema["$defs"]["package"]["properties"];
         for publisher in ["npm", "cargo", "homebrew", "rpm", "apt", "aur", "oci"] {
             assert!(
