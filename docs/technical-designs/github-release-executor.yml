@@ -1115,8 +1115,8 @@ proposed-design:
     derivation. RPM and APT recipe changes integrate on top of this contract and
     identify the package whose native artifact they distribute. Package identity
     changes selection and evidence addressing; it grants no retrieval authority.
-    RPM and APT destinations are public, and their retrieval runs without a
-    credential.
+    RPM and APT destinations are public. Intentional does not copy configured
+    delivery inputs into the RPM or APT readback environment or body.
 
   external-publisher-authentication: >-
     Publisher adapters prefer registry-supported trusted publishing. Each
