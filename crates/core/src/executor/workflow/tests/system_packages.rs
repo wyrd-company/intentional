@@ -243,16 +243,41 @@ printf 'conflicts=%s\n' "${conflicts[@]}"
             "Bash could not consume the generated PKGBUILD: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        String::from_utf8(output.stdout)
-            .expect("PKGBUILD field readback is UTF-8")
-            .lines()
-            .map(|line| {
-                let (name, value) = line
-                    .split_once('=')
-                    .unwrap_or_else(|| panic!("PKGBUILD field readback names its value: {line:?}"));
-                (name.to_owned(), vec![value.to_owned()])
-            })
-            .collect()
+        let stdout = String::from_utf8(output.stdout).expect("PKGBUILD field readback is UTF-8");
+        let mut relationships = BTreeMap::<String, Vec<String>>::new();
+        for line in stdout.lines() {
+            let (name, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("PKGBUILD field readback names its value: {line:?}"));
+            relationships
+                .entry(name.to_owned())
+                .or_default()
+                .push(value.to_owned());
+        }
+        relationships
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pkgbuild_readback_preserves_each_relationship_element() {
+        let workspace = Workspace::new("pkgbuild-relationship-readback");
+        let pkgbuild = workspace.root().join("PKGBUILD");
+        std::fs::write(
+            &pkgbuild,
+            "provides=('first-interface' 'second-interface')\nconflicts=('reserved-interface')\n",
+        )
+        .expect("PKGBUILD fixture");
+
+        let relationships = parse_pkgbuild_relationships(&pkgbuild);
+
+        assert_eq!(
+            relationships.get("provides"),
+            Some(&vec![
+                "first-interface".to_owned(),
+                "second-interface".to_owned(),
+            ]),
+            "PKGBUILD readback preserves each provides element in order"
+        );
     }
 
     #[cfg(unix)]
