@@ -483,7 +483,11 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
     const EXPECTED_DERIVATION_SITES: &[(&str, &str, &str)] = &[
         ("release", "intentional_release", "intentional_token"),
         ("publish", "intentional_close_release", "intentional_token"),
-        ("publish", "intentional_upload_deliverables", "intentional_token"),
+        (
+            "publish",
+            "intentional_upload_deliverables",
+            "intentional_token",
+        ),
         (
             "publish",
             "intentional_tag_before_publication",
