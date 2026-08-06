@@ -1151,6 +1151,12 @@ fn considered_candidate_paths(
 /// Default Cargo registry when a manifest states no explicit destination.
 const CRATES_IO: &str = "crates.io";
 
+#[cfg(test)]
+thread_local! {
+    static PROBED_FILE_BEFORE_READ: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Read one probed file, or `None` when it is not there to be read.
 ///
 /// A capability probe asks whether a path is a file and then reads it, and the
@@ -1162,6 +1168,13 @@ const CRATES_IO: &str = "crates.io";
 /// unexplained missing-file error naming a path nobody can inspect any more.
 /// Every other read failure is still reported.
 fn probed_file_text(path: &Path) -> Result<Option<String>> {
+    #[cfg(test)]
+    PROBED_FILE_BEFORE_READ.with(|before_read| {
+        if let Some(before_read) = before_read.borrow().as_ref() {
+            before_read();
+        }
+    });
+
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(Some(text)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1847,10 +1860,8 @@ release-units:
     /// Attempts the racing harness makes after its positive control succeeds.
     ///
     /// The bound caps the test's runtime. It is not a sample size the result
-    /// depends on: the probe does not retry, so a removal it sees is resolved on
-    /// the spot and one observation settles the question. What the bound has to
-    /// be large enough for is opening the removal window often enough to catch
-    /// the check-to-read interleaving.
+    /// depends on: the rendezvous opens the removal window on every attempt, so
+    /// one observation settles the question.
     const RACING_ATTEMPTS: usize = 20_000;
 
     /// Run one probe against a file another thread keeps taking away.
@@ -1864,9 +1875,10 @@ release-units:
     /// Absence is also what a competitor that never publishes produces. The
     /// publication rendezvous distinguishes the two: before racing, the probe
     /// has to observe a publication while the competitor holds it in place.
-    /// Every raced attempt then starts from another confirmed publication and
-    /// explicitly releases its withdrawal, so scheduler speed cannot make the
-    /// competitor miss the bounded probe loop.
+    /// Every raced attempt then starts from another confirmed publication. A
+    /// test-only hook releases its withdrawal after the existence check enters
+    /// `probed_file_text` and waits for the removal before the read, so scheduler
+    /// speed cannot move the competitor outside the check-to-read window.
     fn under_removal<T>(
         label: &str,
         file: &str,
@@ -1888,6 +1900,7 @@ release-units:
         let staged = root.join("staged-contents");
         std::fs::write(&staged, contents).expect("stage the contents the competitor publishes");
         let (published, publication) = mpsc::channel();
+        let (withdrawn, withdrawal) = mpsc::channel();
         let (command, commands) = mpsc::channel();
         let competitor = {
             let staged = staged.clone();
@@ -1908,6 +1921,9 @@ release-units:
                     {
                         CompetitorCommand::Withdraw => {
                             std::fs::remove_file(&path).expect("withdraw the probed file");
+                            withdrawn
+                                .send(())
+                                .expect("the probe waits for each withdrawal");
                         }
                         CompetitorCommand::Stop => {
                             std::fs::remove_file(&path).expect("withdraw the final publication");
@@ -1927,21 +1943,35 @@ release-units:
         command
             .send(CompetitorCommand::Withdraw)
             .expect("release the positive-control publication");
+        withdrawal
+            .recv()
+            .expect("the competitor withdraws the positive control");
 
         let mut failure = None;
         if control_was_present {
+            let window_command = command.clone();
+            PROBED_FILE_BEFORE_READ.with(|before_read| {
+                before_read.replace(Some(Box::new(move || {
+                    window_command
+                        .send(CompetitorCommand::Withdraw)
+                        .expect("release the withdrawal inside the probe window");
+                    withdrawal
+                        .recv()
+                        .expect("the file is withdrawn before the probe reads it");
+                })));
+            });
             for _ in 0..RACING_ATTEMPTS {
                 publication
                     .recv()
                     .expect("the competitor publishes before each raced probe");
-                command
-                    .send(CompetitorCommand::Withdraw)
-                    .expect("release the withdrawal raced by this probe");
                 if let Err(error) = probe(&root, relative) {
                     failure = Some(error);
                     break;
                 }
             }
+            PROBED_FILE_BEFORE_READ.with(|before_read| {
+                before_read.replace(None);
+            });
         }
 
         command
