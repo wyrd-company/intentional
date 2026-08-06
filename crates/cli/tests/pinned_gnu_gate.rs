@@ -126,6 +126,10 @@ fi
         "#!/usr/bin/env bash\nset -euo pipefail\ncat >/dev/null\n",
     );
     write_executable(
+        &root.join("bin/uname"),
+        "#!/usr/bin/env bash\nset -euo pipefail\necho x86_64\n",
+    );
+    write_executable(
         &root.join("bin/tar"),
         r#"#!/usr/bin/env bash
 set -euo pipefail
