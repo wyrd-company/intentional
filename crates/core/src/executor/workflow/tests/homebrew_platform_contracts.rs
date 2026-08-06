@@ -62,6 +62,44 @@
         workspace: &Workspace,
         step: &Value,
     ) -> PathBuf {
+        let configuration = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+            .expect("platform contract configuration is readable");
+        let configuration: Value =
+            serde_yaml::from_str(&configuration).expect("platform contract configuration parses");
+        let release_units = configuration["release-units"]
+            .as_mapping()
+            .expect("platform contract configuration declares release units");
+        let mut release_units = release_units.values();
+        let release_unit = release_units
+            .next()
+            .expect("platform contract configuration declares one release unit");
+        assert!(
+            release_units.next().is_none(),
+            "platform contract configuration selects one release unit"
+        );
+        let packages = release_unit["packages"]
+            .as_mapping()
+            .expect("platform contract release unit declares packages");
+        let mut packages = packages.values();
+        let package = packages
+            .next()
+            .expect("platform contract release unit declares one package");
+        assert!(
+            packages.next().is_none(),
+            "platform contract release unit selects one package"
+        );
+        let configured_directory = workspace
+            .root()
+            .join(
+                release_unit["path"]
+                    .as_str()
+                    .expect("platform contract release unit declares its path"),
+            )
+            .join(
+                package["path"]
+                    .as_str()
+                    .expect("platform contract package declares its path"),
+            );
         let working_directory = step["working-directory"]
             .as_str()
             .expect("parsed job declares its working directory");
@@ -70,6 +108,15 @@
             execution_directory.is_dir(),
             "emitted workspace working directory exists: {}",
             execution_directory.display()
+        );
+        assert_eq!(
+            execution_directory
+                .canonicalize()
+                .expect("emitted workspace working directory resolves"),
+            configured_directory
+                .canonicalize()
+                .expect("configured package working directory resolves"),
+            "emitted Cargo archive working directory matches the configured package path"
         );
         execution_directory
     }
