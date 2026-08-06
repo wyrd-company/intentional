@@ -2381,18 +2381,19 @@ const OCI_ALIAS_READBACK: &str = r#"      for alias in latest "${minor}" "${majo
 const DEV_CONTAINER_ALIAS_READBACK: &str = r#"      core="${version%%-*}"
       major="${core%%.*}"
       minor="${core%.*}"
-      stable=""
-      case "${version}" in
-        *-*) ;;
-        *) stable="yes" ;;
-      esac
+      stable=""; alias_error="${@ENVVAR@WORK}/feature-alias-error"
+      case "${version}" in *-*) ;; *) stable="yes" ;; esac
       for alias in latest "${minor}" "${major}"; do
-        alias_digest="$(crane digest "${repository}:${alias}" 2>/dev/null || true)"
-        if [ "${alias_digest}" = "${published}" ]; then
-          printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
-            >> "${aliases_file}"
+        if alias_digest="$(crane digest "${repository}:${alias}" 2>"${alias_error}")"; then
+          if [ "${alias_digest}" = "${published}" ]; then
+            printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
+              >> "${aliases_file}"
+          elif [ -n "${stable}" ]; then printf 'Required stable Feature alias %s resolves %s instead of %s\n' "${alias}" "${alias_digest}" "${published}" >&2; exit 1
+          fi
+        elif grep -Eq '(^|[^A-Z_])MANIFEST_UNKNOWN([^A-Z_]|$)' "${alias_error}"; then
+          if [ -n "${stable}" ]; then printf 'Required stable Feature alias %s is missing after publication\n' "${alias}" >&2; exit 1; fi
         else
-          test -z "${stable}"
+          printf 'Could not read Feature alias %s after publication: ' "${alias}" >&2; cat "${alias_error}" >&2; exit 1
         fi
       done
 "#;

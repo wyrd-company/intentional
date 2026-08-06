@@ -8918,12 +8918,15 @@ release-units:
     #[test]
     fn refuses_to_compare_a_workflow_with_an_unbounded_line() {
         let workspace = workspace("workflow-line-too-long");
+        let oversized_line = format!("# {}", "x".repeat(2_047));
+        assert_eq!(
+            oversized_line.len(),
+            2_049,
+            "the unsafe side is fixture-owned"
+        );
         workspace.write(
             "oversized-line.yml",
-            &format!(
-                "# {}\n{REPOSITORY_RELEASE_WORKFLOW}",
-                "x".repeat(MAX_WORKFLOW_LINE_BYTES)
-            ),
+            &format!("{oversized_line}\n{REPOSITORY_RELEASE_WORKFLOW}"),
         );
         let comparison = compare_workflow(
             workspace.root(),
@@ -8983,6 +8986,11 @@ release-units:
             comparison.diagnostics
         );
         let output = comparison.output.expect("different comparison has output");
+        assert_eq!(
+            output.lines().map(str::len).max(),
+            Some(1_003),
+            "the real derived width pins the safe side of the per-line bracket"
+        );
         assert!(
             output.lines().count() <= MAX_WORKFLOW_LINES,
             "Intentional's own publication shape must remain readable after apply"

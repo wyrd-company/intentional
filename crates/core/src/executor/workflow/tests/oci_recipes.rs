@@ -493,7 +493,11 @@
           test -f "${registry}/blobs/${1#*@}"
           printf '%s' "${1#*@}"
           ;;
-        *) cat "${registry}/tags/$(slug "${1%:*}")/${1##*:}" ;;
+        *)
+          tag="${registry}/tags/$(slug "${1%:*}")/${1##*:}"
+          if [ ! -f "${tag}" ]; then printf 'MANIFEST_UNKNOWN: manifest unknown\n' >&2; exit 1; fi
+          cat "${tag}"
+          ;;
       esac
     }
     case "${1}" in
@@ -513,6 +517,10 @@
         ;;
       digest)
         printf '%s\n' "${DOCKER_CONFIG:-inherited}" >> "${registry}/docker-config.log"
+        if [ "${FAKE_DRIFT:-}" = "alias-read-error" ] && [[ "${2}" == *:latest ]]; then
+          printf 'UNAVAILABLE: transient registry failure\n' >&2
+          exit 1
+        fi
         if [ "${FAKE_DRIFT:-}" = "private" ] && [ -n "${DOCKER_CONFIG:-}" ]; then
           exit 1
         fi
@@ -639,11 +647,18 @@ case "${version}" in
     if [ "${FAKE_DRIFT:-}" = "prerelease-aliases" ]; then
       core="${version%%-*}"; tags="${tags} ${core%%.*} latest"
     fi ;;
-  *) tags="${tags} ${version%.*} ${version%%.*} latest" ;;
+  *)
+    tags="${tags} ${version%.*} latest"
+    [ "${FAKE_DRIFT:-}" = "stable-missing-alias" ] || tags="${tags} ${version%%.*}"
+    ;;
 esac
 for tag in ${tags}; do
   printf '%s' "${digest}" > "${directory}/${tag}"
 done
+if [ "${FAKE_DRIFT:-}" = "stable-wrong-alias" ]; then
+  printf 'sha256:6666666666666666666666666666666666666666666666666666666666666666' \
+    > "${directory}/${version%%.*}"
+fi
 "#;
 
         const DOCKERHUB_JOB: &str = "intentional_publish_component_package_oci_dockerhub";
@@ -1450,6 +1465,46 @@ done
                 aliases,
                 BTreeSet::from(["latest".to_owned(), "1.2".to_owned(), "1".to_owned()]),
                 "the aliases its own client maintains are read back and recorded"
+            );
+        }
+
+        /// A stable Feature must expose every alias its native client contract owns.
+        #[test]
+        fn refuses_a_stable_feature_missing_a_required_alias() {
+            let recipe = Recipe::feature("oci-feature-stable-missing-alias");
+            let outcome = recipe.run_with_drift("1.2.3", "stable-missing-alias");
+            assert!(!outcome.status.success());
+            assert_eq!(
+                outcome.stderr,
+                "Required stable Feature alias 1 is missing after publication\n"
+            );
+        }
+
+        /// A registry failure is not misreported as an alias the client omitted.
+        #[test]
+        fn reports_a_stable_feature_alias_read_failure_separately() {
+            let recipe = Recipe::feature("oci-feature-alias-read-error");
+            let outcome = recipe.run_with_drift("1.2.3", "alias-read-error");
+            assert!(!outcome.status.success());
+            assert_eq!(
+                outcome.stderr,
+                "Could not read Feature alias latest after publication: UNAVAILABLE: transient registry failure\n"
+            );
+        }
+
+        /// A stable alias pointing elsewhere is distinct from an absent alias.
+        #[test]
+        fn refuses_a_stable_feature_alias_resolving_another_subject() {
+            let recipe = Recipe::feature("oci-feature-stable-wrong-alias");
+            let outcome = recipe.run_with_drift("1.2.3", "stable-wrong-alias");
+            assert!(!outcome.status.success());
+            let published = &outcome.tags(FEATURE_REPOSITORY)["1.2.3"];
+            assert_eq!(
+                outcome.stderr,
+                format!(
+                    "Required stable Feature alias 1 resolves {FOREIGN_DIGEST} instead of {}\n",
+                    published
+                )
             );
         }
 

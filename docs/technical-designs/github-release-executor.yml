@@ -1360,8 +1360,9 @@ proposed-design:
     bytes, notably the Dev Container CLI, is held to the same rules rather than
     trusted to follow them. The conflict decision is taken before it runs,
     because afterwards it would compare against bytes that client just pushed.
-    Its native client owns exact, minor, major, and `latest` alias mutation, so
-    the recipe reads back the aliases that operation defines rather than
+    Its native client owns alias mutation: stable releases carry exact, minor,
+    major, and `latest`, while prereleases carry only exact. The recipe reads
+    back the aliases that operation defines rather than
     applying Intentional's runnable-image entitlement policy to a client that
     does not implement it. What it published is compared against the packaged
     bytes, so a repackage that produced something else fails instead of passing
