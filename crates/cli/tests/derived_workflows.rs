@@ -405,6 +405,78 @@ fn every_catalog_recipe_is_either_derived_or_refused() {
     );
 }
 
+/// Hold the unprivileged half of the authority split to the derived text.
+///
+/// The usage documentation says the preparation job "runs in no environment,
+/// mints no token, and checks out without persisting credentials, so nothing it
+/// does can reach the repository". Two of those three were asserted somewhere:
+/// minting a token in the preparation job kills
+/// `resolves_every_intentional_action_before_any_credential_is_minted`, and the
+/// checkout options are held by the test below. The environment half was held by
+/// nothing — `environment:` could be added to `RELEASE_PREPARE_JOB` and the whole
+/// suite stayed green.
+///
+/// The invariant is one-directional, and deliberately so. "Mints a token
+/// therefore declares an environment" is **false**: the Homebrew publisher mints
+/// one scoped to the destination tap rather than to this repository, and
+/// declares no environment. What must hold is the converse — a job holding no
+/// repository token has no business inside the protected environment, where it
+/// would gain that environment's secrets and the reviewer gate would stop
+/// separating the two jobs.
+///
+/// Both directions of non-vacuity are checked. A run that reached no managed job,
+/// or one where nothing declares an environment, would satisfy the loop while
+/// proving nothing.
+#[test]
+fn a_managed_job_that_mints_no_token_declares_no_environment() {
+    let workflows = derived_recipe_workflows("derived-workflow-environments");
+    let mut managed = 0usize;
+    let mut with_environment = 0usize;
+
+    for (role, workflow) in &workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived workflow jobs");
+        for (job, body) in jobs {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            if !steps
+                .iter()
+                .any(|step| step["id"].as_str() == Some(OWNERSHIP_SENTINEL))
+            {
+                continue;
+            }
+            managed += 1;
+            let job = job.as_str().expect("job id");
+            let environment = body["environment"].as_str();
+            let mints = steps.iter().any(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))
+            });
+            if environment.is_some() {
+                with_environment += 1;
+            }
+            assert!(
+                mints || environment.is_none(),
+                "{role} job {job} mints no repository token but declares environment {environment:?}: \
+                 an unprivileged job placed in the protected environment gains that \
+                 environment's secrets, and the gate stops separating it from the \
+                 privileged job"
+            );
+        }
+    }
+
+    assert!(managed > 0, "the fixture derived managed jobs to check");
+    assert!(
+        with_environment > 0,
+        "at least one managed job declares an environment, so the assertion above \
+         is not passing because nothing ever declares one"
+    );
+}
+
 /// Every checkout step a derived workflow carries, paired with its job id.
 ///
 /// The walk reads the parsed document rather than a roster of templates, so a
