@@ -82,9 +82,9 @@ description: >-
 validation-criteria: >-
   An observation conforms when it validates against
   `publication-observation.json-schema.yml`; its release unit, package,
-  publisher, and canonical target name a publication the workspace configuration selects; its
-  destination identity is the configured registry or repository; its subject and
-  destination versions are the release plan's version for that release unit; and
+  publisher, and canonical target name a publication the workspace configuration
+  selects; its destination identity is the configured registry or repository;
+  its subject and destination versions are the release plan's version for that release unit; and
   its state carries exactly the members that state admits. `intentional verify
   publication` waits for a missing document under the adapter's bounded
   eventual-consistency policy. A written `pending` state is the final result of
