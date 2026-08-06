@@ -112,6 +112,27 @@ fi
     );
 }
 
+/// Every Action supplies its declared version input to the one installer. A
+/// missing value must not silently turn into a moving `latest` selection.
+#[test]
+fn action_installer_requires_an_explicit_version_through_both_paths() {
+    for installer in [
+        "../../scripts/action/install-intentional.sh",
+        "../../actions/install.sh",
+    ] {
+        let output = Command::new("bash")
+            .arg(installer)
+            .output()
+            .unwrap_or_else(|_| panic!("execute {installer}"));
+        assert!(!output.status.success(), "{installer} refuses no version");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("requested intentional version"),
+            "{installer} reaches the canonical explicit-version guard:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 #[test]
 fn pinned_gnu_task_executes_shared_all_target_and_doctest_contracts() {
     let taskfile = fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
