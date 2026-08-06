@@ -1962,7 +1962,7 @@ release-units:
     packages:
       package:
         path: .
-        cargo: {}
+        cargo: { registry: {} }
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
       staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
@@ -5922,7 +5922,7 @@ release-units:
         workspace.write(
             ".intentional/config.yml",
             &CONFIG.replace(
-                "    packages:\n      package:\n        path: .\n        cargo: {}\n",
+                "    packages:\n      package:\n        path: .\n        cargo: { registry: {} }\n",
                 "",
             ),
         );
@@ -6063,7 +6063,7 @@ release-units:
                 ".intentional/config.yml",
                 &CONFIG.replace(
                     "release-units:\n  component:\n",
-                    "release-units:\n  component.one:\n    path: one\n    packages:\n      package:\n        path: .\n        cargo: {}\n    tags:\n      primary: { role: primary, template: 'one@{version}', require-phase: after-publication }\n  component_one:\n",
+                    "release-units:\n  component.one:\n    path: one\n    packages:\n      package:\n        path: .\n        cargo: { registry: {} }\n    tags:\n      primary: { role: primary, template: 'one@{version}', require-phase: after-publication }\n  component_one:\n",
                 ),
             )
             .write(
@@ -6294,12 +6294,14 @@ release-units:
       node:
         path: .
         npm:
-          token-secret: KQVBZTLM
-          additional-targets: { github: {} }
+          npmjs:
+            token-secret: KQVBZTLM
+          github: {}
       rust:
         path: .
         cargo:
-          token-secret: HGWRXPFD
+          registry:
+            token-secret: HGWRXPFD
         homebrew: { repository: zlfrhd/cbnwvk }
     tags:
       staged:
@@ -8318,8 +8320,10 @@ release-units:
                     workspace.write(
                         ".intentional/config.yml",
                         &CONFIG.replace(
-                            "    cargo: {}\n",
-                            &format!("    cargo: {{ token-secret: \"{hostile}\" }}\n"),
+                            "    cargo: { registry: {} }\n",
+                            &format!(
+                                "    cargo: {{ registry: {{ token-secret: \"{hostile}\" }} }}\n"
+                            ),
                         ),
                     );
                 } else {

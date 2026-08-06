@@ -6,16 +6,18 @@
 //! Executor initialization plan creation, resumption, and application.
 
 use crate::config::{
-    CargoHomebrewConfig, Config, ExcludedPathReceipt, GithubConfig, GithubWorkflow,
-    GithubWorkflows, ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher,
-    OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW,
-    DEFAULT_RELEASE_WORKFLOW,
+    CargoHomebrewConfig, CargoPublisher, CargoRegistryTarget, Config, ExcludedPathReceipt,
+    GithubConfig, GithubWorkflow, GithubWorkflows, ManagedPathReceipt, NpmGithubTarget,
+    NpmPublisher, NpmjsTarget, OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH,
+    DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
+#[cfg(test)]
+use crate::executor::recipe::PRIMARY_TARGET;
 use crate::executor::recipe::{
     capability_set, derive_capabilities, derive_package_candidates, recipes_for,
-    select_publications, Capability, CapabilityEvidence, PackageCandidateEvidence, Packager,
-    PRIMARY_TARGET,
+    resolve_publications, select_publications, Capability, CapabilityEvidence,
+    PackageCandidateEvidence, Packager,
 };
 use crate::init::SourceEvidence;
 use crate::model::{PublisherKind, ReleaseUnitDisposition};
@@ -507,14 +509,6 @@ fn derive_candidates(
                     .as_ref()
                     .is_some_and(|github| github.declined_publications.contains(&identity))
                     || configured(package, publisher, &target)
-                    || !prerequisite_met(
-                        package,
-                        &candidates,
-                        publisher,
-                        &target,
-                        id,
-                        &evidence.package,
-                    )
                 {
                     continue;
                 }
@@ -684,40 +678,16 @@ fn required_configuration(publisher: PublisherKind, target: &str) -> Option<&'st
     }
 }
 
-/// npm's additional GitHub target is offered only after its primary is accepted.
-fn prerequisite_met(
-    package_config: &PackageConfig,
-    candidates: &[ExecutorCandidate],
-    publisher: PublisherKind,
-    target: &str,
-    release_unit: &str,
-    package: &str,
-) -> bool {
-    if publisher != PublisherKind::Npm || target != "github" {
-        return true;
-    }
-    if configured(package_config, PublisherKind::Npm, PRIMARY_TARGET) {
-        return true;
-    }
-    candidates.iter().any(|candidate| {
-        candidate.release_unit == release_unit
-            && candidate.package.as_deref() == Some(package)
-            && candidate.resolution.as_deref() == Some(ACCEPT_CHOICE)
-            && candidate
-                .selected()
-                .is_some_and(|choice| choice.target.as_deref() == Some(PRIMARY_TARGET))
-    })
-}
-
 fn configured(package: &PackageConfig, publisher: PublisherKind, target: &str) -> bool {
     match (publisher, target) {
-        (PublisherKind::Npm, "github") => package
-            .npm
+        (PublisherKind::Npm, "github") => {
+            package.npm.as_ref().is_some_and(|npm| npm.github.is_some())
+        }
+        (PublisherKind::Npm, _) => package.npm.as_ref().is_some_and(|npm| npm.npmjs.is_some()),
+        (PublisherKind::Cargo, _) => package
+            .cargo
             .as_ref()
-            .and_then(|npm| npm.additional_targets.as_ref())
-            .is_some_and(|targets| targets.github.is_some()),
-        (PublisherKind::Npm, _) => package.npm.is_some(),
-        (PublisherKind::Cargo, _) => package.cargo.is_some(),
+            .is_some_and(|cargo| cargo.registry.is_some()),
         (PublisherKind::Homebrew, _) => package.homebrew.is_some(),
         (PublisherKind::Rpm, _) => package.rpm.is_some(),
         (PublisherKind::Apt, _) => package.apt.is_some(),
@@ -786,7 +756,7 @@ fn packager_candidates(
     resolutions: &Resolutions,
 ) -> Result<Vec<ExecutorCandidate>> {
     let mut required = BTreeMap::new();
-    for publication in select_publications(root, config)? {
+    for publication in resolve_publications(root, config)?.selected {
         let package =
             &config.release_units[&publication.release_unit].packages[&publication.package];
         required.insert(
@@ -1148,16 +1118,21 @@ fn enable_package_publisher(
     match (publisher, target) {
         (PublisherKind::Npm, "github") => {
             let npm = package.npm.get_or_insert_with(NpmPublisher::default);
-            npm.additional_targets
-                .get_or_insert_with(NpmAdditionalTargets::default)
-                .github
-                .get_or_insert_with(NpmGithubTarget::default);
+            npm.github.get_or_insert_with(NpmGithubTarget::default);
         }
         (PublisherKind::Npm, _) => {
-            package.npm.get_or_insert_with(NpmPublisher::default);
+            package
+                .npm
+                .get_or_insert_with(NpmPublisher::default)
+                .npmjs
+                .get_or_insert_with(NpmjsTarget::default);
         }
         (PublisherKind::Cargo, _) => {
-            package.cargo.get_or_insert_with(Default::default);
+            package
+                .cargo
+                .get_or_insert_with(CargoPublisher::default)
+                .registry
+                .get_or_insert_with(CargoRegistryTarget::default);
         }
         (PublisherKind::Rpm, _) => {
             return Err(explicit_configuration_error(publisher, target));
@@ -1621,11 +1596,7 @@ release-units:
         );
         let component = &config.release_units["component"];
         assert!(component.npm().is_some());
-        assert!(component
-            .npm()
-            .expect("npm publisher")
-            .additional_targets
-            .is_none());
+        assert!(component.npm().expect("npm publisher").github.is_none());
         assert_eq!(
             github.declined_publications,
             BTreeSet::from(["component/example-component/npm/github".to_owned()])
@@ -1824,7 +1795,7 @@ release-units:
             "an edit never materializes defaults the user did not write: {updated}"
         );
         assert!(
-            updated.contains("cargo: {}"),
+            updated.contains("cargo:\n          registry: {}"),
             "the accepted publisher is written into the release unit: {updated}"
         );
         assert_eq!(
@@ -1967,11 +1938,7 @@ release-units:
             .release_units["component"]
             .packages
             .values()
-            .all(|package| package
-                .npm
-                .as_ref()
-                .and_then(|npm| npm.additional_targets.as_ref())
-                .is_some_and(|targets| targets.github.is_some())));
+            .all(|package| package.npm.as_ref().is_some_and(|npm| npm.github.is_some())));
     }
 
     #[test]
@@ -1988,8 +1955,8 @@ release-units:
     packages:
       alpha:
         path: alpha
-        npm: { additional-targets: { github: {} } }
-      beta: { path: beta, npm: {} }
+        npm: { npmjs: {}, github: {} }
+      beta: { path: beta, npm: { npmjs: {} } }
     tags:
       primary: { role: primary, template: '{id}@{version}' }
 github:
@@ -2020,39 +1987,46 @@ github:
     }
 
     #[test]
-    fn one_packages_primary_does_not_unlock_its_siblings_additional_target() {
-        let accepted = ExecutorCandidate {
-            id: "candidate:accepted".to_owned(),
-            kind: CandidateKind::Package,
-            release_unit: "component".to_owned(),
-            package: Some("alpha".to_owned()),
-            path: Some(PathBuf::from("alpha")),
-            detector: Some("npm-package".to_owned()),
-            capability: "node-package".to_owned(),
-            evidence: vec![SourceEvidence {
-                path: PathBuf::from("component/alpha/package.json"),
-                digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_owned(),
-                lines: Vec::new(),
-            }],
-            choices: vec![Choice {
-                id: ACCEPT_CHOICE.to_owned(),
-                label: "Configure alpha".to_owned(),
-                publisher: Some(PublisherKind::Npm),
-                target: Some(PRIMARY_TARGET.to_owned()),
-                packager: None,
-            }],
-            recommended: None,
-            resolution: Some(ACCEPT_CHOICE.to_owned()),
-        };
-        assert!(!prerequisite_met(
-            &PackageConfig::new(PathBuf::from("beta")),
-            &[accepted],
-            PublisherKind::Npm,
-            "github",
-            "component",
-            "beta",
-        ));
+    fn reports_each_target_missing_from_an_empty_publisher_mapping() {
+        let workspace = Workspace::new("init-publisher-without-target");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+release-units:
+  component:
+    path: component
+    packages:
+      package:
+        path: .
+        npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+"#,
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"sample-library","version":"1.0.0"}"#,
+            );
+
+        let result = initialize_executor(workspace.root()).expect("executor init runs");
+        assert_eq!(result.state, ExecutorInitState::NeedsInput);
+        assert_eq!(
+            result
+                .plan
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.kind == CandidateKind::PublicationIntent)
+                .filter_map(|candidate| candidate.choices[0].target.as_deref())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([PRIMARY_TARGET, "github"]),
+            "initialization names every available destination instead of silently selecting one"
+        );
     }
 
     #[test]

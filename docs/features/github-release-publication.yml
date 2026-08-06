@@ -288,10 +288,10 @@ rules:
           - then: Verification selects exactly that release unit, package, publisher, and target contract
             world:
               evidence_verifies: true
-      identify-implicit-primary-target-canonically:
+      identify-explicit-npmjs-target-canonically:
         addresses: Primary publication target alias
         steps:
-          - given: An npm publisher uses its implicit primary destination
+          - given: An npm publisher explicitly names its npmjs destination
             world:
               release_unit_option: example-component
               package_option: example-package
@@ -538,30 +538,30 @@ rules:
               provenance_present: true
               signature_present: false
               omission_recorded: false
-      apply-adapter-omit-to-primary-only:
-        addresses: Primary target component omission
+      apply-target-omit-to-one-peer-only:
+        addresses: Peer target component omission
         steps:
-          - given: A publisher adapter omits a component supported by its primary recipe
+          - given: One publisher target omits a component supported by its recipe
             world:
               omitted_component: signature
               primary_signature_present: false
               additional_signature_present: true
-          - when: The primary and additional targets are published
-          - then: The omission applies to the primary without changing the additional target
+          - when: Both peer targets are published
+          - then: The omission applies to the named target without changing its peer
             world:
               primary_signature_present: false
               additional_signature_present: true
               omission_recorded: false
-      apply-additional-target-omit-independently:
-        addresses: Additional target component omission
+      apply-peer-target-omit-independently:
+        addresses: Peer target component omission
         steps:
-          - given: One additional target omits a component supported by its recipe
+          - given: One peer target omits a component supported by its recipe
             world:
               omitted_component: signature
               primary_signature_present: true
               additional_signature_present: false
-          - when: The primary and additional targets are published
-          - then: The omission applies only to that additional target
+          - when: Both peer targets are published
+          - then: The omission applies only to that target
             world:
               primary_signature_present: true
               additional_signature_present: false

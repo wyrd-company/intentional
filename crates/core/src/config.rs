@@ -557,25 +557,25 @@ impl ReleaseUnitConfig {
     }
 }
 
-/// npm publication intent; an empty mapping selects the npmjs primary destination.
+/// npm publication intent; every destination is an explicit peer target.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NpmPublisher {
-    /// GitHub secret name holding the bootstrap npm token.
+    /// npmjs destination.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_secret: Option<String>,
-    /// Destinations published in addition to the npmjs primary.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub additional_targets: Option<NpmAdditionalTargets>,
-}
-
-/// npm destinations published alongside the primary.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct NpmAdditionalTargets {
+    pub npmjs: Option<NpmjsTarget>,
     /// GitHub Package Registry destination.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<NpmGithubTarget>,
+}
+
+/// npmjs destination.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct NpmjsTarget {
+    /// GitHub secret name holding the bootstrap npm token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_secret: Option<String>,
 }
 
 /// GitHub Package Registry destination; identity derives from GitHub and package evidence.
@@ -583,10 +583,19 @@ pub struct NpmAdditionalTargets {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NpmGithubTarget {}
 
-/// Cargo publication intent; an empty mapping selects the native primary registry.
+/// Cargo publication intent; the native registry is an explicit target.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct CargoPublisher {
+    /// Registry selected by the native Cargo manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<CargoRegistryTarget>,
+}
+
+/// Cargo registry destination.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CargoRegistryTarget {
     /// GitHub secret name holding the bootstrap registry token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_secret: Option<String>,
@@ -1290,24 +1299,20 @@ fn validate_package_publishers(id: &str, package_id: &str, package: &PackageConf
     let scope =
         |publisher: PublisherKind| format!("release unit {id} package {package_id} {publisher}");
     if let Some(npm) = &package.npm {
-        validate_optional_identifier(
-            npm.token_secret.as_deref(),
-            &format!("{} token-secret", scope(PublisherKind::Npm)),
-        )?;
-        if let Some(targets) = &npm.additional_targets {
-            if targets.github.is_none() {
-                return Err(Error::Validation(format!(
-                    "{} additional-targets must name at least one destination",
-                    scope(PublisherKind::Npm)
-                )));
-            }
+        if let Some(npmjs) = &npm.npmjs {
+            validate_optional_identifier(
+                npmjs.token_secret.as_deref(),
+                &format!("{} npmjs token-secret", scope(PublisherKind::Npm)),
+            )?;
         }
     }
     if let Some(cargo) = &package.cargo {
-        validate_optional_identifier(
-            cargo.token_secret.as_deref(),
-            &format!("{} token-secret", scope(PublisherKind::Cargo)),
-        )?;
+        if let Some(registry) = &cargo.registry {
+            validate_optional_identifier(
+                registry.token_secret.as_deref(),
+                &format!("{} registry token-secret", scope(PublisherKind::Cargo)),
+            )?;
+        }
     }
     if let Some(homebrew) = &package.homebrew {
         validate_repository(
@@ -1780,7 +1785,7 @@ release-units:
     fn requires_github_executor_for_configured_publishers() {
         let without = VALID.replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: {}\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: { npmjs: {} }\n",
         );
         assert!(Config::from_yaml(&without)
             .expect_err("publisher without executor rejected")
@@ -1789,7 +1794,7 @@ release-units:
 
         let with = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: {}\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: { npmjs: {} }\n",
         );
         let config = Config::from_yaml(&with).expect("publisher with executor accepted");
         assert_eq!(
@@ -1856,7 +1861,7 @@ release-units:
             .replace("contract: contract-2", "contract: contract-1")
             .replace(
                 "    path: packages/library\n",
-                "    path: packages/library\n    npm: {}\n",
+                "    path: packages/library\n    npm: { npmjs: {} }\n",
             );
         let error = Config::from_yaml(&legacy).expect_err("contract-1 is migrated forward");
         let message = error.to_string();
@@ -1873,7 +1878,7 @@ release-units:
     fn rejects_publisher_properties_on_a_release_unit() {
         let direct = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    npm: {}\n",
+            "    path: packages/library\n    npm: { npmjs: {} }\n",
         );
         let error = Config::from_yaml(&direct).expect_err("release-unit publisher rejected");
         assert!(error.to_string().contains("unknown field `npm`"), "{error}");
@@ -2028,7 +2033,7 @@ release-units:
     }
 
     #[test]
-    fn rejects_publisher_shapes_that_carry_no_destination() {
+    fn only_publishers_without_discoverable_targets_require_a_destination_at_parse_time() {
         let empty_oci = with_github("").replace(
             "    path: packages/library\n",
             "    path: packages/library\n    packages:\n      library:\n        path: .\n        oci: {}\n",
@@ -2038,21 +2043,19 @@ release-units:
             .to_string()
             .contains("at least one of dockerhub or ghcr"));
 
-        let empty_additional = with_github("").replace(
+        let empty_discoverable = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: { additional-targets: {} }\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        npm: {}\n",
         );
-        assert!(Config::from_yaml(&empty_additional)
-            .expect_err("empty additional targets rejected")
-            .to_string()
-            .contains("at least one destination"));
+        Config::from_yaml(&empty_discoverable)
+            .expect("an empty publisher remains loadable so executor init can report its targets");
     }
 
     #[test]
     fn rejects_secret_names_that_are_not_identifiers() {
         let invalid = with_github("").replace(
             "    path: packages/library\n",
-            "    path: packages/library\n    packages:\n      library:\n        path: .\n        cargo: { token-secret: 'not a name' }\n",
+            "    path: packages/library\n    packages:\n      library:\n        path: .\n        cargo: { registry: { token-secret: 'not a name' } }\n",
         );
         assert!(Config::from_yaml(&invalid)
             .expect_err("non-identifier secret name rejected")

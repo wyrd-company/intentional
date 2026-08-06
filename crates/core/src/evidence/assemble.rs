@@ -1606,7 +1606,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     projections:
       - adapter: json
         file: package.json
@@ -2289,7 +2289,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     projections:
       - adapter: json
         file: package.json
@@ -2302,7 +2302,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     projections:
       - adapter: json
         file: package.json

@@ -2606,7 +2606,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
 "#,
@@ -2767,7 +2767,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     projections:
       - adapter: json
         file: package.json

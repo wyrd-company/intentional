@@ -40,7 +40,7 @@ release-units:
     packages:
       command:
         path: @PACKAGE_PATH@
-        cargo: {}
+        cargo: { registry: {} }
         homebrew: { repository: sample-owner/sample-tap }
     tags:
       staged: { role: primary, template: '{id}@{version}', require-phase: before-publication }

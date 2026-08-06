@@ -17,8 +17,8 @@
             .write(
                 ".intentional/config.yml",
                 &CONFIG.replace(
-                    "    cargo: {}\n",
-                    "    npm: { additional-targets: { github: {} } }\n",
+                    "    cargo: { registry: {} }\n",
+                    "    npm: { npmjs: {}, github: {} }\n",
                 ),
             )
             .write(

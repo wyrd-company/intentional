@@ -405,7 +405,18 @@ pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationS
                 Err(error) => return Err(error),
             };
             let capabilities = capability_set(&derived);
-            for (publisher, target, configured) in configured_targets(package) {
+            let configured_targets = configured_targets(package);
+            for publisher in package.publishers() {
+                if !configured_targets
+                    .iter()
+                    .any(|(configured, _, _)| *configured == publisher)
+                {
+                    selection.diagnostics.push(format!(
+                        "configured publisher {id}/{package_id}/{publisher} names no target"
+                    ));
+                }
+            }
+            for (publisher, target, configured) in configured_targets {
                 let context = SelectionContext {
                     root,
                     id,
@@ -498,19 +509,17 @@ pub fn select_publications(root: &Path, config: &Config) -> Result<Vec<SelectedP
 fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Configured)> {
     let mut targets = Vec::new();
     if let Some(npm) = &package.npm {
-        targets.push((
-            PublisherKind::Npm,
-            PRIMARY_TARGET.to_owned(),
-            Configured {
-                destination: Some("npmjs".to_owned()),
-                ..Configured::default()
-            },
-        ));
-        if npm
-            .additional_targets
-            .as_ref()
-            .is_some_and(|targets| targets.github.is_some())
-        {
+        if npm.npmjs.is_some() {
+            targets.push((
+                PublisherKind::Npm,
+                PRIMARY_TARGET.to_owned(),
+                Configured {
+                    destination: Some("npmjs".to_owned()),
+                    ..Configured::default()
+                },
+            ));
+        }
+        if npm.github.is_some() {
             targets.push((
                 PublisherKind::Npm,
                 "github".to_owned(),
@@ -518,7 +527,11 @@ fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Co
             ));
         }
     }
-    if package.cargo.is_some() {
+    if package
+        .cargo
+        .as_ref()
+        .is_some_and(|cargo| cargo.registry.is_some())
+    {
         targets.push((
             PublisherKind::Cargo,
             PRIMARY_TARGET.to_owned(),
@@ -1346,7 +1359,7 @@ release-units:
                 .replace("  component:\n", "  component/part:\n")
                 .replace(
                     "    path: component\n",
-                    "    path: component\n    packages:\n      package:\n        path: .\n        npm: {}\n",
+                    "    path: component\n    packages:\n      package:\n        path: .\n        npm: { npmjs: {} }\n",
                 ),
             "release unit component/part",
         );
@@ -1357,7 +1370,7 @@ release-units:
         assert_publication_segment_is_refused(
             &GITHUB.replace(
                 "    path: component\n",
-                "    path: component\n    packages:\n      package/part:\n        path: .\n        npm: {}\n",
+                "    path: component\n    packages:\n      package/part:\n        path: .\n        npm: { npmjs: {} }\n",
             ),
             "release unit component package package/part",
         );
@@ -1416,6 +1429,80 @@ release-units:
     }
 
     #[test]
+    fn a_catalog_target_added_to_a_publisher_is_not_implicitly_selected() {
+        let workspace = Workspace::new("publication-target-opt-in");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.0.0"}"#,
+        );
+        let npm_recipes = recipes_for(
+            &BTreeSet::from([Capability::NodePackage]),
+            PublisherKind::Npm,
+        );
+        assert_eq!(
+            npm_recipes
+                .iter()
+                .map(|recipe| recipe.target)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([PRIMARY_TARGET, "github"]),
+            "the publisher catalog has a target the configuration does not name"
+        );
+
+        let selected = select_publications(workspace.root(), &config("    npm: { npmjs: {} }\n"))
+            .expect("the named npmjs target resolves");
+        assert_eq!(
+            selected
+                .iter()
+                .map(|publication| publication.target.as_str())
+                .collect::<Vec<_>>(),
+            vec![PRIMARY_TARGET],
+            "a catalog peer cannot arm itself under an existing publisher declaration"
+        );
+    }
+
+    #[test]
+    fn reports_a_publisher_mapping_that_names_no_target() {
+        let workspace = Workspace::new("publication-without-target");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.0.0"}"#,
+        );
+        let selection = resolve_publications(workspace.root(), &config("    npm: {}\n"))
+            .expect("the underspecified publisher is reported");
+        assert!(selection.selected.is_empty());
+        assert_eq!(
+            selection.diagnostics,
+            vec!["configured publisher component/package/npm names no target"]
+        );
+    }
+
+    #[test]
+    fn a_declined_initialization_offer_does_not_subtract_a_configured_target() {
+        let workspace = Workspace::new("configured-target-after-decline");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.0.0"}"#,
+        );
+        let mut config = config("    npm: { npmjs: {} }\n");
+        config
+            .github
+            .as_mut()
+            .expect("GitHub executor configuration")
+            .declined_publications
+            .insert("component/package/npm/primary".to_owned());
+
+        let selected = select_publications(workspace.root(), &config)
+            .expect("configured publication selection ignores initialization history");
+        assert_eq!(
+            selected
+                .iter()
+                .map(SelectedPublication::identity)
+                .collect::<Vec<_>>(),
+            vec!["component/package/npm/primary"]
+        );
+    }
+
+    #[test]
     fn rejects_two_packages_that_resolve_to_one_native_artifact() {
         let workspace = Workspace::new("duplicate-native-artifact");
         workspace.write(
@@ -1424,7 +1511,7 @@ release-units:
         );
         let text = GITHUB.replace(
             "    path: component\n",
-            "    path: component\n    packages:\n      first:\n        path: .\n        cargo: {}\n      second:\n        path: .\n        cargo: {}\n",
+            "    path: component\n    packages:\n      first:\n        path: .\n        cargo: { registry: {} }\n      second:\n        path: .\n        cargo: { registry: {} }\n",
         );
         let config = Config::from_yaml(&text).expect("package declarations");
         let error = select_publications(workspace.root(), &config)
@@ -1448,7 +1535,7 @@ release-units:
             );
         let text = GITHUB.replace(
             "    path: component\n",
-            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: {}\n      node:\n        path: .\n        npm: {}\n",
+            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: { registry: {} }\n      node:\n        path: .\n        npm: { npmjs: {} }\n",
         );
         let config = Config::from_yaml(&text).expect("package declarations");
         let error = select_publications(workspace.root(), &config)
@@ -1475,7 +1562,7 @@ release-units:
             );
         let text = GITHUB.replace(
             "    path: component\n",
-            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: {}\n      node:\n        path: .\n        npm: {}\n",
+            "    path: component\n    packages:\n      rust:\n        path: .\n        cargo: { registry: {} }\n      node:\n        path: .\n        npm: { npmjs: {} }\n",
         );
         let mut config = Config::from_yaml(&text).expect("package declarations");
         config.discovery.managed_paths.extend([
@@ -1620,7 +1707,7 @@ release-units:
             .write("component/image/Dockerfile", "FROM scratch\n");
         let text = GITHUB.replace(
             "    path: component\n",
-            "    path: component\n    packages:\n      node:\n        path: node\n        npm: { additional-targets: { github: {} } }\n      image:\n        path: image\n        oci:\n          ghcr: { omit: [ signature ] }\n",
+            "    path: component\n    packages:\n      node:\n        path: node\n        npm: { npmjs: {}, github: {} }\n      image:\n        path: image\n        oci:\n          ghcr: { omit: [ signature ] }\n",
         );
         let config = Config::from_yaml(&text).expect("package declarations");
         let selected = select_publications(workspace.root(), &config).expect("publications select");
@@ -1653,7 +1740,7 @@ release-units:
             "component/package.json",
             r#"{"name":"example-component","version":"1.0.0"}"#,
         );
-        let mut suspended = config("    npm: {}\n");
+        let mut suspended = config("    npm: { npmjs: {} }\n");
         suspended
             .release_units
             .get_mut("component")
@@ -1666,7 +1753,7 @@ release-units:
             "a release unit that does not release cannot publish"
         );
 
-        let managed = config("    npm: {}\n");
+        let managed = config("    npm: { npmjs: {} }\n");
         assert_eq!(
             select_publications(workspace.root(), &managed)
                 .expect("managed selection runs")
@@ -1717,7 +1804,7 @@ release-units:
                 r#"{"name":"example-package","version":"1.0.0"}"#,
             )
             .write("component/Dockerfile", "FROM scratch\n");
-        let error = select_publications(workspace.root(), &config("    npm: {}\n"))
+        let error = select_publications(workspace.root(), &config("    npm: { npmjs: {} }\n"))
             .expect_err("one declaration cannot silently choose its publisher's artifact");
         let message = error.to_string();
         assert!(
@@ -1733,7 +1820,7 @@ release-units:
         let workspace = Workspace::new("multiple-refusing-packages");
         let text = GITHUB.replace(
             "    path: component\n",
-            "    path: component\n    packages:\n      first:\n        path: first\n        npm: {}\n      second:\n        path: second\n        cargo: {}\n",
+            "    path: component\n    packages:\n      first:\n        path: first\n        npm: { npmjs: {} }\n      second:\n        path: second\n        cargo: { registry: {} }\n",
         );
         let config = Config::from_yaml(&text).expect("package declarations");
         let selection = resolve_publications(workspace.root(), &config).expect("selection runs");

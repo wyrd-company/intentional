@@ -155,10 +155,13 @@ proposed-design:
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
     native package files. Its Intentional property contains only the explicit
-    opt-in and data that those files cannot express. An empty `npm` or `cargo`
-    mapping enables the adapter's implicit primary destination. npm's primary
-    destination is npmjs, and its `additional-targets.github` member adds GitHub
-    Package Registry without replacing npmjs.
+    opt-in and data that those files cannot express. Every destination is named
+    inside its publisher mapping. `npm.npmjs` selects npmjs, `npm.github`
+    selects GitHub Package Registry, and `cargo.registry` selects the registry
+    identified by native Cargo metadata. An empty `npm` or `cargo` mapping
+    selects nothing and is reported by executor initialization and checking.
+    Adding a maintained target to an adapter therefore cannot create a
+    publication in a repository that has not named that target.
 
     Homebrew configuration contains the tap repository. Intentional derives the
     formula identity and packager from release-unit evidence. AUR configuration
@@ -188,12 +191,9 @@ proposed-design:
     different claims.
 
     Every concrete publisher target supports a target-scoped `omit` list when
-    its maintained recipe defines attached components. An adapter-level `omit`
-    applies to that adapter's primary target. Each entry under
-    `additional-targets` owns its own `omit`, independently of the primary and
-    its peer additional targets. A recipe defines the finite component names
-    valid for each target; an unsupported name is a semantic configuration
-    error.
+    its maintained recipe defines attached components. A recipe defines the
+    finite component names valid for each target; an unsupported name is a
+    semantic configuration error.
 
     OCI has no implicit destination. Its mapping contains at least one explicit
     peer target named `dockerhub` or `ghcr`. Each target owns authentication,
@@ -224,8 +224,9 @@ proposed-design:
     workspace tag.
 
     Three packages sit inside it. `core` at `crates/core` and `cli` at
-    `crates/cli` each declare `cargo`; `launcher` at `npm` declares `npm`; and
-    `cli` also declares a `homebrew` mapping naming the tap. Together they yield
+    `crates/cli` each name `cargo.registry`; `launcher` at `npm` names
+    `npm.npmjs`; and `cli` also declares a `homebrew` mapping naming the tap.
+    Together they yield
     four publications: `intentional/core/cargo/primary`,
     `intentional/cli/cargo/primary`, `intentional/launcher/npm/primary`, and
     `intentional/cli/homebrew/primary`. The two Cargo publications differ in

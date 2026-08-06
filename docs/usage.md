@@ -225,14 +225,14 @@ intentional executor init
 The first run writes `.intentional/executor-init-plan.yml` and exits with code
 `2`. It proposes every publishable package inside each release unit, including
 workspace manifests, image definitions, and Go commands. Set each candidate
-`resolution` to one declared publisher choice or `decline`, then rerun the
+`resolution` to one declared destination choice or `decline`, then rerun the
 command until it reports the `ready` state and updates `.intentional/config.yml`.
-An acceptance writes the package and its publisher opt-in. A decline writes an
-evidence-pinned discovery receipt. Both decisions therefore survive a fresh
-clone even though the plan does not. A later manifest change invalidates a
-decline receipt and reopens the package decision against the new evidence.
-Accepting a package can offer its dependent targets on the next run, so the plan
-converges through explicit decisions rather than inference.
+An acceptance writes the package and chosen destination. Declining a package
+writes an evidence-pinned discovery receipt. Declining a destination writes its
+four-segment identity under `github.declined-publications`, which suppresses the
+same offer without changing configured publications. These decisions survive a
+fresh clone even though the plan does not. A later manifest change invalidates
+a package decline receipt and reopens that decision against new evidence.
 
 Add `--dry-run` to print the plan the command would write, and every file it
 would touch, without changing the workspace.
@@ -444,7 +444,17 @@ so the publisher job can mint a token scoped to that repository alone.
 
 Configuration has two levels. A **publisher** is what you declare on a package.
 A **destination** is where one publication lands. Intentional supports 9
-destinations in total.
+destinations in total. Every destination is explicit. An empty publisher
+mapping publishes nowhere and `executor init` and `executor check` report it.
+For example:
+
+```yaml
+npm:
+  npmjs: {}
+  github: {}
+cargo:
+  registry: {}
+```
 
 Each destination authenticates its own way.
 
@@ -508,8 +518,8 @@ that Action authenticates with is yours to decide.
 
 ### Renaming a credential
 
-The `npm:` and `cargo:` publishers accept `token-secret`. The `dockerhub` target
-**inside** `oci:` accepts `token-secret` and `username-var`.
+The `npm.npmjs:` and `cargo.registry:` targets accept `token-secret`. The
+`dockerhub` target **inside** `oci:` accepts `token-secret` and `username-var`.
 
 The nesting matters. `oci: { token-secret: … }` is refused with *unknown field
 `token-secret`, expected `dockerhub` or `ghcr`* — the override belongs to the

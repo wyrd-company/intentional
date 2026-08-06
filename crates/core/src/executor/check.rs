@@ -294,7 +294,7 @@ release-units:
 
     #[test]
     fn accepts_a_conforming_workspace() {
-        let workspace = workspace("check-conforming", "    npm: {}\n");
+        let workspace = workspace("check-conforming", "    npm: { npmjs: {} }\n");
         let config = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
             .expect("fixture config");
         workspace.write(
@@ -312,6 +312,23 @@ release-units:
             vec!["component/package/npm/primary".to_owned()]
         );
         assert!(result.conforms(), "{:?}", result.findings);
+    }
+
+    #[test]
+    fn reports_a_package_publisher_that_names_no_target() {
+        let workspace = workspace("check-publisher-without-target", "    npm: {}\n");
+        workspace.write(
+            "component/package.json",
+            r#"{"name":"sample-library","version":"1.0.0"}"#,
+        );
+        let result = check_executor(workspace.root()).expect("check runs");
+        assert!(
+            result
+                .findings
+                .contains(&"configured publisher component/package/npm names no target".to_owned()),
+            "executor check reports the exact underspecified publisher: {:?}",
+            result.findings
+        );
     }
 
     #[test]
@@ -529,7 +546,7 @@ aur:
     fn reports_an_unresolved_package_before_its_targets() {
         let workspace = workspace(
             "check-multiple",
-            "    cargo: {}\n    oci:\n      ghcr: {}\n",
+            "    cargo: { registry: {} }\n    oci:\n      ghcr: {}\n",
         );
         let result = check_executor(workspace.root()).expect("check runs");
         assert_eq!(
@@ -546,7 +563,7 @@ aur:
 
     #[test]
     fn reports_unmatched_recipes_and_missing_workflow_gates() {
-        let workspace = workspace("check-findings", "    cargo: {}\n");
+        let workspace = workspace("check-findings", "    cargo: { registry: {} }\n");
         std::fs::remove_file(workspace.root().join(".github/workflows/publish.yml"))
             .expect("remove publish workflow");
         workspace.write(

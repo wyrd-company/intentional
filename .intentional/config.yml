@@ -80,15 +80,15 @@ release-units:
     packages:
       cli:
         path: crates/cli
-        cargo: {}
+        cargo: { registry: {} }
         homebrew:
           repository: wyrd-company/homebrew-tools
       core:
         path: crates/core
-        cargo: {}
+        cargo: { registry: {} }
       launcher:
         path: npm
-        npm: {}
+        npm: { npmjs: {} }
 workspace-tags:
   release:
     template: "{version}"
@@ -98,5 +98,3 @@ github:
       path: .github/workflows/release.yml
     publish:
       path: .github/workflows/publish.yml
-  declined-publications:
-    - intentional/launcher/npm/github

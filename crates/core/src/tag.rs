@@ -1521,7 +1521,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     tags:
       primary: { role: primary, template: '{id}@{version}' }
       staged:
@@ -1892,7 +1892,7 @@ phase-tags: []
                 ".intentional/config.yml",
                 &PHASE_CONFIG.replace(
                     "release-units:\n",
-                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: { npmjs: {} }\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
                 ),
             )
             .write(
@@ -1976,7 +1976,7 @@ phase-tags: []
                 ".intentional/config.yml",
                 &PHASE_CONFIG.replace(
                     "release-units:\n",
-                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: { npmjs: {} }\n    tags:\n      primary: { role: primary, template: '{id}/published@{version}', require-phase: after-publication }\n",
                 ),
             )
             .write(

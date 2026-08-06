@@ -20,7 +20,7 @@
                 ".intentional/config.yml",
                 &GO_CONFIG.replace(
                     "release-units:\n  component:\n",
-                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      staged:\n        role: primary\n        template: 'library/staged@{version}'\n        require-phase: before-publication\n  component:\n",
+                    "release-units:\n  library:\n    path: library\n    packages:\n      package:\n        path: .\n        npm: { npmjs: {} }\n    tags:\n      staged:\n        role: primary\n        template: 'library/staged@{version}'\n        require-phase: before-publication\n  component:\n",
                 ),
             )
             .write(

@@ -243,7 +243,7 @@
         workspace
             .write("component/go.mod", "module example.test/component\n")
             .write("component/main.go", "package main\n\nfunc main() {}\n");
-        let error = select_publications(workspace.root(), &config("    npm: {}\n"))
+        let error = select_publications(workspace.root(), &config("    npm: { npmjs: {} }\n"))
             .expect_err("an unsupported combination is refused");
         assert!(
             error

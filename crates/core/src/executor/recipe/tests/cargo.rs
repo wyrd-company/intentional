@@ -19,7 +19,7 @@
                 capability_set(&derived).is_empty(),
                 "{restriction} withholds the rust-crate capability"
             );
-            let error = select_publications(workspace.root(), &config("    cargo: {}\n"))
+            let error = select_publications(workspace.root(), &config("    cargo: { registry: {} }\n"))
                 .expect_err("unpublishable crate rejected");
             assert!(
                 error
@@ -33,7 +33,7 @@
             "component/Cargo.toml",
             "[package]\nname = \"component\"\npublish = true\n",
         );
-        let selected = select_publications(workspace.root(), &config("    cargo: {}\n"))
+        let selected = select_publications(workspace.root(), &config("    cargo: { registry: {} }\n"))
             .expect("publishable crate selects");
         assert_eq!(selected[0].destination.as_deref(), Some("crates.io"));
     }
@@ -46,7 +46,7 @@
             "component/Cargo.toml",
             "[package]\nname = \"component\"\nversion = \"1.0.0\"\n",
         );
-        let selected = select_publications(workspace.root(), &config("    cargo: {}\n"))
+        let selected = select_publications(workspace.root(), &config("    cargo: { registry: {} }\n"))
             .expect("cargo publication selects");
         assert_eq!(selected[0].destination.as_deref(), Some("crates.io"));
 
@@ -54,7 +54,7 @@
             "component/Cargo.toml",
             "[package]\nname = \"component\"\npublish = [\"example-registry\"]\n",
         );
-        let selected = select_publications(workspace.root(), &config("    cargo: {}\n"))
+        let selected = select_publications(workspace.root(), &config("    cargo: { registry: {} }\n"))
             .expect("configured registry selects");
         assert_eq!(selected[0].destination.as_deref(), Some("example-registry"));
     }

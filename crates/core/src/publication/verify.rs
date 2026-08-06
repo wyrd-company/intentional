@@ -850,7 +850,7 @@ release-units:
     fn npm_workspace(label: &str) -> Workspace {
         workspace(
             label,
-            "    npm: {}\n",
+            "    npm: { npmjs: {} }\n",
             &[(
                 "component/package.json",
                 r#"{"name":"sample-library","version":"1.2.3"}"#,
@@ -899,7 +899,7 @@ release-units:
             ".intentional/config.yml",
             &CONFIG.replace(
                 "    path: component\n",
-                "    path: component\n    packages:\n      first:\n        path: first\n        npm: {}\n      second:\n        path: second\n        cargo: {}\n",
+                "    path: component\n    packages:\n      first:\n        path: first\n        npm: { npmjs: {} }\n      second:\n        path: second\n        cargo: { registry: {} }\n",
             ),
         );
         workspace.write(
@@ -1066,7 +1066,7 @@ destination-aliases:
             "component/Cargo.toml",
             "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\n",
         )];
-        let accepted = workspace("verify-crates-io", "    cargo: {}\n", &files);
+        let accepted = workspace("verify-crates-io", "    cargo: { registry: {} }\n", &files);
         accepted.write(
             "observation.yml",
             &present_document()
@@ -1093,7 +1093,7 @@ destination-aliases:
 
         let custom = workspace(
             "verify-custom-registry",
-            "    cargo: {}\n",
+            "    cargo: { registry: {} }\n",
             &[(
                 "component/Cargo.toml",
                 "[package]\nname = \"sample-library\"\nversion = \"1.2.3\"\npublish = [\"example-registry\"]\n",
@@ -1425,7 +1425,7 @@ destination-aliases:
     fn each_npm_destination_records_the_retrieval_its_own_recipe_fixes() {
         let workspace = workspace(
             "verify-npm-github-retrieval",
-            "    npm: { additional-targets: { github: {} } }\n",
+            "    npm: { npmjs: {}, github: {} }\n",
             &[(
                 "component/package.json",
                 r#"{"name":"sample-library","version":"1.2.3"}"#,
@@ -1601,7 +1601,7 @@ release-units:
     packages:
       package:
         path: .
-        npm: {}
+        npm: { npmjs: {} }
     projections:
       - adapter: json
         file: package.json

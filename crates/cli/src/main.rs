@@ -956,7 +956,7 @@ mod publication_command_tests {
         let workspace = Workspace::new("verify-publication-command");
         workspace.write(
             ".intentional/config.yml",
-            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n  component:\n    path: component\n    packages:\n      package:\n        path: .\n        npm: {}\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\ngithub:\n  workflows:\n    release: { path: .github/workflows/release.yml }\n    publish: { path: .github/workflows/publish.yml }\nrelease-units:\n  component:\n    path: component\n    packages:\n      package:\n        path: .\n        npm: { npmjs: {} }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         );
         workspace.write(
             "component/package.json",

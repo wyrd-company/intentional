@@ -97,6 +97,10 @@ $defs:
                 type: string
                 pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
       declined-publications:
+        description: >-
+          Destination offers declined during executor initialization. These
+          identities suppress future offers and do not subtract from configured
+          publications.
         type: array
         uniqueItems: true
         items:
@@ -225,17 +229,26 @@ $defs:
     type: object
     additionalProperties: false
     properties:
+      npmjs:
+        $ref: "#/$defs/npmjs-target"
+      github:
+        $ref: "#/$defs/npm-github-target"
+  npmjs-target:
+    type: object
+    additionalProperties: false
+    properties:
       token-secret:
         $ref: "#/$defs/secret-name"
-      additional-targets:
-        type: object
-        additionalProperties: false
-        minProperties: 1
-        properties:
-          github:
-            type: object
-            additionalProperties: false
+  npm-github-target:
+    type: object
+    additionalProperties: false
   cargo-publisher:
+    type: object
+    additionalProperties: false
+    properties:
+      registry:
+        $ref: "#/$defs/cargo-registry-target"
+  cargo-registry-target:
     type: object
     additionalProperties: false
     properties:

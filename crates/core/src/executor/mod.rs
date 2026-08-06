@@ -130,7 +130,7 @@ release-units:
     packages:
       package:
         path: .
-        cargo: {}
+        cargo: { registry: {} }
     tags:
       primary: { role: primary, template: '{id}@{version}', require-phase: after-publication }
       staged: { role: projection, template: '{id}/staged@{version}', require-phase: before-publication }
@@ -320,10 +320,9 @@ release-units:
                         "the npm fixture knows every catalog target: {targets:?}"
                     );
                     if targets.contains("github") {
-                        configured
-                            .push_str("    npm:\n      additional-targets:\n        github: {}\n");
+                        configured.push_str("    npm:\n      npmjs: {}\n      github: {}\n");
                     } else {
-                        configured.push_str("    npm: {}\n");
+                        configured.push_str("    npm: { npmjs: {} }\n");
                     }
                 }
                 PublisherKind::Cargo => {
@@ -331,7 +330,7 @@ release-units:
                         targets.len() == 1 && targets.contains(PRIMARY_TARGET),
                         "the cargo fixture knows every catalog target: {targets:?}"
                     );
-                    configured.push_str("    cargo: {}\n");
+                    configured.push_str("    cargo: { registry: {} }\n");
                 }
                 PublisherKind::Homebrew => {
                     assert!(

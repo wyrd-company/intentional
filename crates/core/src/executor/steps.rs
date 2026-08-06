@@ -1238,7 +1238,8 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         context
             .unit
             .npm()
-            .and_then(|npm| npm.token_secret.as_deref())
+            .and_then(|npm| npm.npmjs.as_ref())
+            .and_then(|npmjs| npmjs.token_secret.as_deref())
             .map(|value| SuppliedName {
                 origin: &origin,
                 value,
@@ -1613,7 +1614,8 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         context
             .unit
             .cargo()
-            .and_then(|cargo| cargo.token_secret.as_deref())
+            .and_then(|cargo| cargo.registry.as_ref())
+            .and_then(|registry| registry.token_secret.as_deref())
             .map(|value| SuppliedName {
                 origin: &origin,
                 value,

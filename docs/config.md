@@ -175,7 +175,7 @@ github:
 | `prefix` | No | Reserved job, step, and environment variable namespaces. |
 | `cargo-homebrew.linux-x86-64-cross-image` | No | Digest-pinned Cross image for the Cargo/Homebrew Linux x86-64 archive. |
 | `cargo-homebrew.linux-arm64-cross-image` | No | Digest-pinned Cross image for the Cargo/Homebrew Linux Arm64 archive. |
-| `declined-publications` | No | Publication targets explicitly declined during executor initialization. |
+| `declined-publications` | No | Initialization offers that were explicitly declined and must not be offered again. It does not subtract from configured publications. |
 
 A scalar `prefix` normalizes to lower snake case for jobs and steps and to
 upper snake case for environment variables. A mapping with `job` and `envvar`
@@ -192,8 +192,9 @@ tags are rejected.
 
 Intentional's own configuration keeps its two workspace-versioned crates and
 npm launcher in one release unit. The unit has three packages and four
-publications: `core` at `crates/core` declares `cargo`, `cli` at `crates/cli`
-declares `cargo` and `homebrew`, and `launcher` at `npm` declares `npm`. The
+publications: `core` at `crates/core` and `cli` at `crates/cli` name
+`cargo.registry`, `cli` declares `homebrew`, and `launcher` at `npm` names
+`npm.npmjs`. The
 Homebrew destination is `wyrd-company/homebrew-tools`. The unphased workspace
 tag is `{version}`. The release-unit tag is `intentional@{version}` with
 `require-phase: before-publication`.
@@ -201,8 +202,8 @@ tag is `{version}`. The release-unit tag is `intentional@{version}` with
 `intentional executor init` creates or resumes
 `.intentional/executor-init-plan.yml`. Set each candidate `resolution` to
 `accept` or `decline` and rerun the command; it exits with code `2` while any
-candidate is unresolved. Accepted publishers and declined publication targets
-are written to configuration, so a fresh clone does not reopen the same choice.
+candidate is unresolved. Accepted destinations and declined initialization
+offers are written to configuration, so a fresh clone does not reopen the same choice.
 Initialization also reports the repository settings
 Intentional never mutates, including the requirement that the repository GitHub
 App be a ruleset bypass actor for the default branch and every managed release
@@ -216,7 +217,9 @@ Each release unit may declare named packages. Each package has a
 release-unit-relative path and opts into managed publication through its own
 publisher properties. Publisher properties are invalid directly on a release
 unit and invalid without the top-level `github` property. Native package
-metadata never creates publication intent on its own:
+metadata never creates publication intent on its own. A publisher mapping names
+each destination it enables. An empty npm or Cargo mapping selects nothing and
+is reported by `executor init` and `executor check`:
 
 ```yaml
 release-units:
@@ -226,8 +229,8 @@ release-units:
       library:
         path: .
         npm:
-          additional-targets:
-            github: {}
+          npmjs: {}
+          github: {}
     tags:
       primary:
         role: primary
@@ -250,8 +253,9 @@ release-units:
 
 | Publisher | Destination | Notes |
 | --- | --- | --- |
-| `npm` | npmjs | An empty mapping selects the primary; `additional-targets.github` adds GitHub Packages. |
-| `cargo` | Native registry | Defaults to crates.io unless the manifest names one registry. |
+| `npm.npmjs` | npmjs | The target mapping may name the bootstrap `token-secret`. |
+| `npm.github` | GitHub Package Registry | Independent of npmjs and uses the job token. |
+| `cargo.registry` | Native registry | The manifest selects crates.io or one alternate registry. |
 | `homebrew` | Tap repository | `repository` is required, so this publisher is configured directly. |
 | `aur` | Arch User Repository | Package name comes from native packager configuration; GoReleaser resolves an unnamed entry to the project name and suffixes every name with `-bin`. |
 | `rpm`, `apt` | Native packager | Configuration stays in native packager files. Publication is reported until the managed job that uploads GitHub-hosted deliverables to the draft Release exists. |

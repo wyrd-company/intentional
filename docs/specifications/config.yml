@@ -25,23 +25,23 @@ description: >-
   each configured publisher against derived package capabilities, native
   packager configuration, and compatible primary destinations.
 
-  npm and Cargo use trusted publishing where available and their conventional
-  bootstrap token-secret names otherwise, `NPM_TOKEN` and
-  `CARGO_REGISTRY_TOKEN`. npm's `additional-targets.github` destination needs no
-  secret at all: GitHub Package Registry accepts the repository-scoped workflow
-  token. Each adapter accepts an optional
-  direct `token-secret` override, which names a GitHub secret and is rejected
-  when it is not a name GitHub could resolve.
+  Publication is opt-in at the destination level. `npm.npmjs`, `npm.github`,
+  and `cargo.registry` are independent target declarations. Empty npm and Cargo
+  publisher mappings select no target. npmjs and Cargo use trusted publishing
+  where available and their conventional bootstrap token-secret names
+  otherwise, `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN`. The npmjs and Cargo registry
+  targets accept an optional direct `token-secret` override. GitHub Package
+  Registry accepts the repository-scoped workflow token and exposes no secret
+  setting.
   Docker Hub accepts direct `username-var` and
   `token-secret` overrides. Omitting these fields selects the maintained
   recipe's conventional names and trusted-publishing-first behavior; configuration
   contains identifiers for GitHub variables and secrets, never credential values.
 
   Every concrete publisher target whose maintained recipe defines omittable
-  attached components owns an optional `omit` list. An implicit primary
-  destination uses the publisher mapping's list; each additional or peer target
-  uses its own list. The allowed component names come from that target's
-  maintained recipe. OCI targets currently define `sbom`, `provenance`, and
+  attached components owns an optional `omit` list. Allowed component names
+  come from that target's maintained recipe. OCI targets currently define `sbom`,
+  `provenance`, and
   `signature`; adapters with no omittable components do not expose the property.
   Unknown or recipe-inapplicable names fail validation.
   Release evidence records only components that were produced.
