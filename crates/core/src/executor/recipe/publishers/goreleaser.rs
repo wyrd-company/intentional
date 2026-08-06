@@ -6,6 +6,8 @@
 // GoReleaser-backed publication recipe selection moved from `executor::recipe`
 // so publisher routes can change independently.
 
+use super::*;
+
 /// Arch User Repository package one release unit publishes, from native evidence.
 ///
 /// The destination is whatever the packager wrote and registered, which is not
@@ -13,7 +15,7 @@
 /// project name and then suffixes every name with `-bin` unless it already ends
 /// that way. Reading the declaration verbatim would name a package that does not
 /// exist, so the same rule the packager applies is applied here.
-fn aur_package(
+pub(super) fn aur_package(
     root: &Path,
     release_unit: &ReleaseUnitConfig,
     identity: &str,
@@ -68,7 +70,6 @@ fn aur_package(
         .map(Some)
         .map_err(Error::Validation)
 }
-
 
 /// Every discoverable main-package directory in one Go module.
 pub(crate) fn go_main_package_directories(directory: &Path) -> Result<Vec<PathBuf>> {

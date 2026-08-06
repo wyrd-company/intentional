@@ -50,8 +50,13 @@ use templates::{
 /// derivation module rather than through a second path into the templates.
 pub(super) use templates::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
 
-include!("workflow/publishers.rs");
-include!("workflow/oci.rs");
+#[path = "workflow/oci.rs"]
+mod oci;
+#[path = "workflow/publishers.rs"]
+mod publishers;
+
+use oci::build_environment;
+use publishers::publication_jobs;
 
 /// Step id every managed job carries, independently of the configurable prefix.
 pub const OWNERSHIP_SENTINEL: &str = "intentional_executor_contract";

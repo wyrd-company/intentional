@@ -6,16 +6,18 @@
 // Publisher-job derivation moved from `executor::workflow` so publication
 // routes can change independently from workflow reconciliation.
 
+use super::*;
+
 /// Jobs derived from one resolved publication and its authority boundaries.
-struct PublicationJobs {
+pub(super) struct PublicationJobs {
     /// Destination mutation under the authority publication requires.
-    publisher: Value,
+    pub(super) publisher: Value,
     /// Consumer retrieval under narrower authority, when the destination permits it.
-    retrieval: Option<Value>,
+    pub(super) retrieval: Option<Value>,
 }
 
 /// Publisher job and any separately authorised retrieval job for one publication.
-fn publication_jobs(
+pub(super) fn publication_jobs(
     root: &Path,
     namespaces: &PrefixNamespaces,
     needs: &[String],
@@ -173,7 +175,6 @@ fn publication_jobs(
         retrieval,
     })
 }
-
 
 /// Least privilege one publication's destination requires.
 ///

@@ -19,9 +19,17 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use walkdir::{DirEntry, WalkDir};
 
-include!("recipe/publishers/npm.rs");
-include!("recipe/publishers/cargo.rs");
-include!("recipe/publishers/goreleaser.rs");
+#[path = "recipe/publishers/cargo.rs"]
+mod cargo_publisher;
+#[path = "recipe/publishers/goreleaser.rs"]
+mod goreleaser_publisher;
+#[path = "recipe/publishers/npm.rs"]
+mod npm_publisher;
+
+use cargo_publisher::{cargo_manifest, cargo_registry};
+use goreleaser_publisher::aur_package;
+pub(crate) use goreleaser_publisher::go_main_package_directories;
+use npm_publisher::node_package_is_publishable;
 
 /// Canonical target identity of an adapter's implicit primary destination.
 pub const PRIMARY_TARGET: &str = "primary";

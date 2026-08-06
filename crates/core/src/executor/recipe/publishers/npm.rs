@@ -6,7 +6,9 @@
 // npm publication recipe selection moved from `executor::recipe` so publisher
 // routes can change independently.
 
-fn node_package_is_publishable(root: &Path, relative: &Path) -> Result<bool> {
+use super::*;
+
+pub(super) fn node_package_is_publishable(root: &Path, relative: &Path) -> Result<bool> {
     let path = root.join(relative);
     if !path.is_file() {
         return Ok(false);

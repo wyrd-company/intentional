@@ -6,8 +6,10 @@
 // Cargo publication recipe selection moved from `executor::recipe` so
 // publisher routes can change independently.
 
+use super::*;
+
 /// Publication-relevant contents of one Cargo package manifest.
-struct CargoManifest {
+pub(super) struct CargoManifest {
     /// Registries named by `package.publish`, empty when it selects the default.
     registries: Vec<String>,
     /// Whether `package.publish` permits publication at all.
@@ -15,13 +17,13 @@ struct CargoManifest {
 }
 
 impl CargoManifest {
-    fn publishable(&self) -> bool {
+    pub(super) fn publishable(&self) -> bool {
         self.permitted
     }
 }
 
 /// Read one Cargo package manifest, or `None` when it declares no package.
-fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>> {
+pub(super) fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>> {
     let path = root.join(relative);
     if !path.is_file() {
         return Ok(None);
@@ -64,8 +66,7 @@ fn cargo_manifest(root: &Path, relative: &Path) -> Result<Option<CargoManifest>>
     }))
 }
 
-
-fn cargo_registry(
+pub(super) fn cargo_registry(
     root: &Path,
     release_unit: &ReleaseUnitConfig,
     package: &PackageConfig,
