@@ -26,6 +26,7 @@ mod goreleaser_publisher;
 #[path = "recipe/publishers/npm.rs"]
 mod npm_publisher;
 
+pub(crate) use cargo_publisher::cargo_binary_identity;
 use cargo_publisher::{cargo_manifest, cargo_registry};
 use goreleaser_publisher::aur_package;
 pub(crate) use goreleaser_publisher::go_main_package_directories;

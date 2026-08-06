@@ -86,3 +86,53 @@ pub(super) fn cargo_registry(
         ))),
     }
 }
+
+/// One executable a Cargo package can distribute as a native archive.
+///
+/// An explicit binary target owns its own name. When Cargo's conventional
+/// `src/main.rs` target is the only binary, the package name owns it instead.
+/// Libraries and packages with several binaries need an explicit package
+/// boundary before one publisher can claim a primary executable.
+pub(crate) fn cargo_binary_identity(
+    root: &Path,
+    directory: &Path,
+    identity: &str,
+) -> std::result::Result<String, String> {
+    let absolute_directory = root.join(directory);
+    let manifest = directory.join("Cargo.toml");
+    let document = std::fs::read_to_string(absolute_directory.join("Cargo.toml"))
+        .ok()
+        .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
+    let Some(document) = document else {
+        return Err(format!(
+            "publication {identity} cannot derive a native executable identity from {}",
+            manifest.display()
+        ));
+    };
+    let explicit = document
+        .get("bin")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(|bins| bins.iter())
+        .filter_map(|bin| bin.get("name").and_then(toml_edit::Item::as_str))
+        .collect::<Vec<_>>();
+    let package_name = document
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml_edit::Item::as_str);
+    let name = match explicit.as_slice() {
+        [name] => Some(*name),
+        [] if absolute_directory.join("src/main.rs").is_file() => package_name,
+        _ => None,
+    };
+    let Some(name) = name else {
+        return Err(format!(
+            "publication {identity} cannot derive one native executable identity from {}; declare exactly one [[bin]].name or one package binary",
+            manifest.display()
+        ));
+    };
+    names::cargo_crate(&names::SuppliedName {
+        origin: &format!("{} binary name", manifest.display()),
+        value: name,
+    })
+}

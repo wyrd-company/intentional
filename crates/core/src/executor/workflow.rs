@@ -1298,44 +1298,7 @@ fn subject_identity(
             })
         }
         Packager::CargoArchive => {
-            let manifest = directory.join("Cargo.toml");
-            let document = std::fs::read_to_string(absolute_directory.join("Cargo.toml"))
-                .ok()
-                .and_then(|text| text.parse::<toml_edit::DocumentMut>().ok());
-            let Some(document) = document else {
-                return Err(format!(
-                    "publication {} cannot derive a Homebrew formula identity from {}",
-                    publication.identity(),
-                    manifest.display()
-                ));
-            };
-            let explicit = document
-                .get("bin")
-                .and_then(|bins| bins.as_array_of_tables())
-                .into_iter()
-                .flat_map(|bins| bins.iter())
-                .filter_map(|bin| bin.get("name").and_then(|name| name.as_str()))
-                .collect::<Vec<_>>();
-            let package_name = document
-                .get("package")
-                .and_then(|package| package.get("name"))
-                .and_then(|name| name.as_str());
-            let name = match explicit.as_slice() {
-                [name] => Some(*name),
-                [] if absolute_directory.join("src/main.rs").is_file() => package_name,
-                _ => None,
-            };
-            let Some(name) = name else {
-                return Err(format!(
-                    "publication {} cannot derive one Homebrew formula identity from {}; declare exactly one [[bin]].name or one package binary",
-                    publication.identity(),
-                    manifest.display()
-                ));
-            };
-            names::cargo_crate(&names::SuppliedName {
-                origin: &format!("{} binary name", manifest.display()),
-                value: name,
-            })
+            crate::executor::recipe::cargo_binary_identity(root, directory, &publication.identity())
         }
         // GoReleaser names the Homebrew formula, the system packages, and the
         // Arch package from one project name, so that name is what every
