@@ -192,6 +192,25 @@ release-units:
         let workspace = cargo_system_package_workspace("cargo-system-route");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
+        let produced_archives = [
+            "intentional_build_component_cargo_archive_linux_x86_64",
+            "intentional_build_component_cargo_archive_linux_arm64",
+            "intentional_build_component_cargo_archive_macos_arm64",
+        ]
+        .into_iter()
+        .map(|producer| {
+            let archive = job_steps(&jobs, producer)
+                .into_iter()
+                .find_map(|step| {
+                    step["with"]["path"]
+                        .as_str()
+                        .and_then(|path| path.strip_prefix("${{ runner.temp }}/"))
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| panic!("{producer} uploads beneath runner.temp"));
+            (producer, archive)
+        })
+        .collect::<BTreeMap<_, _>>();
         let routes = crate::executor::recipe::catalog()
             .iter()
             .filter(|recipe| {
@@ -274,12 +293,18 @@ release-units:
             })
             .expect("aggregate build step");
         let body = build["run"].as_str().expect("aggregate build body").to_owned();
+        for (producer, archive) in &produced_archives {
+            assert!(
+                body.contains(&format!("mv \"${{INTENTIONAL_SUBJECT}}/{archive}\"")),
+                "aggregate consumer reads the archive emitted by {producer}: {archive}"
+            );
+        }
         let execution = workspace.root().join("aggregate-execution");
         let subject = execution.join("subject");
         let archive_input = execution.join("archive-input");
         std::fs::create_dir_all(&subject).expect("subject directory");
         std::fs::create_dir_all(&archive_input).expect("archive input directory");
-        for archive in ["linux-x86_64.tar.gz", "linux-arm64.tar.gz", "macos-arm64.tar.gz"] {
+        for (producer, archive) in &produced_archives {
             std::fs::write(
                 archive_input.join("sample-utility"),
                 format!("sealed {archive} executable\n"),
@@ -293,7 +318,7 @@ release-units:
                 .arg("sample-utility")
                 .status()
                 .expect("archive fixture runs");
-            assert!(status.success(), "archive fixture creates {archive}");
+            assert!(status.success(), "archive fixture creates {archive} for {producer}");
         }
         let stub = execution.join("nfpm");
         std::fs::write(
