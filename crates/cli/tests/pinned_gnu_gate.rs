@@ -181,7 +181,7 @@ esac
     let output = Command::new("bash")
         .args(["-c", command])
         .current_dir(root)
-        .env("PATH", path)
+        .env("PATH", &path)
         .env("PINNED_GNU_INVOCATIONS", &invocations)
         .output()
         .expect("execute pinned GNU task body");
@@ -215,4 +215,55 @@ esac
             .any(|line| line.starts_with("GNU_CROSS_DOC_TEST_ARGUMENTS=")),
         "hosted installer environment does not export unread doctest arguments"
     );
+
+    let real_sha256sum = Command::new("sh")
+        .args(["-c", "command -v sha256sum"])
+        .output()
+        .expect("locate real sha256sum");
+    assert!(
+        real_sha256sum.status.success(),
+        "real sha256sum is available"
+    );
+    let real_sha256sum = String::from_utf8(real_sha256sum.stdout)
+        .expect("sha256sum path is UTF-8")
+        .trim()
+        .to_owned();
+    write_executable(
+        &root.join("bin/sha256sum"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+input="$(cat)"
+if [[ "$input" == *"$TAMPERED_WORKFLOW_TOOL_ASSET"* ]]; then
+  printf '%s\n' "$input" | "$REAL_SHA256SUM" "$@"
+fi
+"#,
+    );
+    for tampered_asset in [
+        "actionlint_1.7.7_linux_amd64.tar.gz",
+        "jq-linux-amd64",
+        "cpython-3.12.13+20260805-x86_64-unknown-linux-gnu-install_only.tar.gz",
+        "shellcheck-v0.10.0.linux.x86_64.tar.xz",
+    ] {
+        let destination = root.join("tampered").join(tampered_asset);
+        let output = Command::new("bash")
+            .args([
+                "scripts/ci/install-workflow-test-tools.sh",
+                destination.to_str().expect("tampered destination is UTF-8"),
+            ])
+            .current_dir(root)
+            .env("PATH", &path)
+            .env("REAL_SHA256SUM", &real_sha256sum)
+            .env("TAMPERED_WORKFLOW_TOOL_ASSET", tampered_asset)
+            .output()
+            .expect("execute installer with tampered workflow tool payload");
+        assert!(
+            !output.status.success(),
+            "installer digest guard refuses tampered {tampered_asset} payload"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("{tampered_asset}: FAILED")),
+            "tampered {tampered_asset} payload dies at its sha256sum check:\n{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 }
