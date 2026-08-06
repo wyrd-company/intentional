@@ -280,11 +280,7 @@ aur:
                     .env("FAKE_READBACK_WORK", readback_work)
                     .env("FAKE_READBACK_MISSES", readback_misses.to_string())
                     .env("FAKE_READBACK_COUNT", self.temp.join("readback-count"))
-                    .env("FAKE_SLEEP_LOG", self.temp.join("sleep-log"))
-                    .env("INTENTIONAL_INTERVAL", "2")
-                    .env("INTENTIONAL_BACKOFF", "2")
-                    .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
-                    .env("INTENTIONAL_DEADLINE", "7");
+                    .env("FAKE_SLEEP_LOG", self.temp.join("sleep-log"));
                 let subject = self.temp.join("intentional_subject/bytes");
                 if subject.is_dir() {
                     command.env(
@@ -589,7 +585,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                     .with_destination(destination)
                     .with_distribution();
                 recipe.run_with_readback_misses(1).expect_success();
-                assert_eq!(recipe.waits(), vec![2], "{label} consumes its policy");
+                assert_eq!(recipe.waits(), vec![5], "{label} consumes its policy");
                 assert_eq!(recipe.observation().state, ObservationState::Present);
             }
         }
