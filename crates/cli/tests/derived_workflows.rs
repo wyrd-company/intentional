@@ -424,10 +424,7 @@ fn collect_checkouts(document: &Value) -> Vec<(String, Value)> {
                 .as_str()
                 .is_some_and(|uses| uses.starts_with("actions/checkout@"))
             {
-                checkouts.push((
-                    job.as_str().expect("job id").to_owned(),
-                    step.clone(),
-                ));
+                checkouts.push((job.as_str().expect("job id").to_owned(), step.clone()));
             }
         }
     }
