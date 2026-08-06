@@ -5142,6 +5142,11 @@ release-units:
     const CLOSURE_TAG: &str = "sample@1.2.3";
     const CLOSURE_TAG_OBJECT: &str = "2222222222222222222222222222222222222222";
     const CLOSURE_RELEASE: &str = "1111111111111111111111111111111111111111";
+    const CLOSURE_ATTACHMENTS: [(&str, &str); 3] = [
+        ("sample-a.txt", "fixture a\n"),
+        ("sample-b.txt", "fixture b\n"),
+        ("sample-c.txt", "fixture c\n"),
+    ];
 
     /// A `gh` stand-in that stores uploaded bytes as flat assets and serves them back.
     const GH_CLOSURE_STUB: &str = r#"#!/usr/bin/env bash
@@ -5184,7 +5189,7 @@ esac
 exit 0
 "#;
 
-    /// Stage one assembled evidence fixture carrying a contributed attachment.
+    /// Stage assembled evidence whose attachment vector has distinct edges and middle.
     fn closure_runner(label: &str, observed_tag_object: &str) -> StubRunner {
         let runner = StubRunner::new(label)
             .stub("gh", GH_CLOSURE_STUB)
@@ -5198,13 +5203,19 @@ exit 0
         let assets = runner.scaffold.root().join("closure-assets");
         std::fs::create_dir_all(&attachments).expect("the attachment fixture exists");
         std::fs::create_dir_all(&assets).expect("the flat Release asset store exists");
-        std::fs::write(
-            release.join("intentional-evidence.yml"),
-            "contribution-attachments:\n  - namespace: sample\n    name: supplement.txt\n",
-        )
-        .expect("the evidence fixture exists");
-        std::fs::write(attachments.join("supplement.txt"), "fixture attachment\n")
-            .expect("the contributed attachment exists");
+        let evidence = CLOSURE_ATTACHMENTS.iter().fold(
+            "contribution-attachments:\n".to_owned(),
+            |mut evidence, (name, _)| {
+                evidence.push_str(&format!("  - namespace: sample\n    name: {name}\n"));
+                evidence
+            },
+        );
+        std::fs::write(release.join("intentional-evidence.yml"), evidence)
+            .expect("the evidence fixture exists");
+        for (name, contents) in CLOSURE_ATTACHMENTS {
+            std::fs::write(attachments.join(name), contents)
+                .expect("the contributed attachment exists");
+        }
         runner.setting("GH_STUB_ASSETS", &assets.display().to_string())
     }
 
@@ -5256,13 +5267,17 @@ exit 0
             .expect("the closure uploads the assembled files");
         assert!(
             upload.contains("/intentional-evidence.yml")
-                && upload.contains("/attachments/supplement.txt")
+                && CLOSURE_ATTACHMENTS
+                    .iter()
+                    .all(|(name, _)| upload.contains(&format!("/attachments/{name}")))
                 && !upload
                     .split('\t')
                     .any(|argument| argument.ends_with("/attachments")),
             "each inventoried attachment is a flat asset argument, never its directory: {upload}"
         );
-        for name in ["intentional-evidence.yml", "supplement.txt"] {
+        for name in std::iter::once("intentional-evidence.yml")
+            .chain(CLOSURE_ATTACHMENTS.iter().map(|(name, _)| *name))
+        {
             assert!(
                 executed
                     .invocations
