@@ -113,6 +113,10 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
         "the bootstrap subsection names trusted publishing for npmjs and crates.io"
     );
     assert!(
+        normalize_whitespace(bootstrap_section).contains("Both recipes separate the outcomes"),
+        "the bootstrap subsection names npmjs and crates.io probe separation for both routes"
+    );
+    assert!(
         !bootstrap_section.contains("Two properties hold for these two destinations"),
         "the bootstrap subsection does not restate exhaustive counts the bold paragraphs already carry"
     );
