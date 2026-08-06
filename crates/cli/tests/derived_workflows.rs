@@ -472,11 +472,40 @@ fn the_release_preparation_job_mints_no_repository_token() {
 /// variables and its private key from repository secrets.
 ///
 /// The recipe-derived fixture reaches every maintained publication route. The
-/// selector follows the emitted Action owner rather than a roster of templates,
-/// and the exact population keeps a missing or newly unwitnessed token site from
-/// passing vacuously.
+/// selector follows the emitted Action owner rather than a roster of templates.
+/// The census keys each derivation site on its exact emitted owner identity —
+/// workflow role, job id, and step id — and asserts equality against the
+/// fixture-specific roster below. Those seven identities are independent
+/// template literals in the exhaustive recipe fixture, not a projection from
+/// one production owner.
 #[test]
 fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
+    const EXPECTED_DERIVATION_SITES: &[(&str, &str, &str)] = &[
+        ("release", "intentional_release", "intentional_token"),
+        ("publish", "intentional_close_release", "intentional_token"),
+        ("publish", "intentional_upload_deliverables", "intentional_token"),
+        (
+            "publish",
+            "intentional_tag_before_publication",
+            "intentional_token",
+        ),
+        (
+            "publish",
+            "intentional_tag_after_publication",
+            "intentional_token",
+        ),
+        (
+            "publish",
+            "intentional_publish_go_application_package_homebrew_primary",
+            "intentional_destination_token",
+        ),
+        (
+            "publish",
+            "intentional_publish_rust_crate_package_homebrew_primary",
+            "intentional_destination_token",
+        ),
+    ];
+
     let workflows = derived_recipe_workflows("derived-workflow-app-credentials");
     let mut derivation_sites = BTreeSet::new();
 
@@ -496,13 +525,11 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
             }) {
                 let job = job.as_str().expect("job id");
                 let step = token_step["id"].as_str().expect("token step id");
-                derivation_sites.insert(if step.ends_with("destination_token") {
-                    "publish:destination_token".to_owned()
-                } else if job.starts_with("intentional_tag_") {
-                    "publish:phase_tag".to_owned()
-                } else {
-                    format!("{role}:{job}")
-                });
+                derivation_sites.insert((
+                    role.as_str().to_owned(),
+                    job.to_owned(),
+                    step.to_owned(),
+                ));
                 assert_eq!(
                     token_step["with"]["app-id"].as_str(),
                     Some("${{ vars.INTENTIONAL_GITHUB_APP_ID }}"),
@@ -517,11 +544,13 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
         }
     }
 
+    let expected: BTreeSet<_> = EXPECTED_DERIVATION_SITES
+        .iter()
+        .map(|&(role, job, step)| (role.to_owned(), job.to_owned(), step.to_owned()))
+        .collect();
     assert_eq!(
-        derivation_sites.len(),
-        5,
-        "the exhaustive recipe fixture emits every GitHub App token derivation site: \
-         {derivation_sites:?}"
+        derivation_sites, expected,
+        "the exhaustive recipe fixture emits every GitHub App token derivation site"
     );
 }
 
