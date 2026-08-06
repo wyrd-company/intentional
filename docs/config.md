@@ -282,8 +282,8 @@ A Rust package with one binary may publish a Homebrew formula alongside its
 Cargo publication. The binary identity comes from exactly one `[[bin]].name`,
 or from the package name when `src/main.rs` supplies the package binary. The
 maintained build creates Linux x86-64 and Linux Arm64 archives through the
-pinned Cross baseline and creates macOS Arm64 with Cargo. It generates the
-formula inside the same sealed subject. The publisher copies
+digest-pinned Cross 0.2.5 images and creates macOS Arm64 with Cargo. It
+generates the formula inside the same sealed subject. The publisher copies
 that formula to the configured tap and never invokes Cargo. A library or
 multi-binary package must not declare Homebrew because it does not determine
 one formula identity.
