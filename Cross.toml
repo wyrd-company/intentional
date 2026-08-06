@@ -11,5 +11,5 @@ image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc18
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
 
 [build.env]
-passthrough = ["ACTIONLINT", "JQ", "SHELLCHECK", "RUSTC_WRAPPER", "GNU_BUILD_GIT_VERSION", "GNU_BUILD_BASH_VERSION"]
-volumes = ["ACTIONLINT", "JQ", "SHELLCHECK", "RUSTC_WRAPPER"]
+passthrough = ["ACTIONLINT", "JQ", "PYTHON_HOME", "SHELLCHECK", "RUSTC_WRAPPER", "GNU_BUILD_GIT_VERSION", "GNU_BUILD_BASH_VERSION"]
+volumes = ["ACTIONLINT", "JQ", "PYTHON_HOME", "SHELLCHECK", "RUSTC_WRAPPER"]

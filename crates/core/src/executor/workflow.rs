@@ -2077,12 +2077,24 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     fn test_tool_path(base: &str) -> String {
-        std::env::var_os("JQ")
+        let mut directories = Vec::new();
+        if let Some(directory) = std::env::var_os("PYTHON_HOME") {
+            directories.push(std::path::PathBuf::from(directory).join("bin"));
+        }
+        if let Some(directory) = std::env::var_os("JQ")
             .and_then(|jq| std::path::PathBuf::from(jq).parent().map(Path::to_path_buf))
-            .map_or_else(
-                || base.to_owned(),
-                |directory| format!("{}:{base}", directory.display()),
-            )
+        {
+            directories.push(directory);
+        }
+        let prefix = std::env::join_paths(directories)
+            .expect("test tool paths are valid")
+            .to_string_lossy()
+            .into_owned();
+        if prefix.is_empty() {
+            base.to_owned()
+        } else {
+            format!("{prefix}:{base}")
+        }
     }
 
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
@@ -4078,7 +4090,7 @@ fi
                 format!(
                     "{}:{}",
                     stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("FAKE_SCENARIO", scenario)

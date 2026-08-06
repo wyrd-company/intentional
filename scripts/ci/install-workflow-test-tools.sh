@@ -33,6 +33,8 @@ case "$(uname -m)" in
     actionlint_digest="023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
     jq_arch="amd64"
     jq_digest="5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
+    python_arch="x86_64"
+    python_digest="919043a06d8136147b24077c3bb32ec058e66c586ce5465b0f0eb018f242a655"
     shellcheck_arch="x86_64"
     shellcheck_digest="6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
     ;;
@@ -41,6 +43,8 @@ case "$(uname -m)" in
     actionlint_digest="401942f9c24ed71e4fe71b76c7d638f66d8633575c4016efd2977ce7c28317d0"
     jq_arch="arm64"
     jq_digest="4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5"
+    python_arch="aarch64"
+    python_digest="c2083943c86dbb21ca0211238362fd922de7b0475688f26c135cf5d20a1c2f48"
     shellcheck_arch="aarch64"
     shellcheck_digest="324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb"
     ;;
@@ -67,6 +71,13 @@ curl -fsSL --max-redirs 5 \
 printf '%s  %s\n' "$jq_digest" "$temporary/$jq_asset" | sha256sum --check
 install -m 0755 "$temporary/$jq_asset" "$destination/jq"
 
+python_archive="cpython-3.12.13+20260805-${python_arch}-unknown-linux-gnu-install_only.tar.gz"
+curl -fsSL --max-redirs 5 \
+  "https://github.com/astral-sh/python-build-standalone/releases/download/20260805/${python_archive/+/%2B}" \
+  -o "$temporary/$python_archive"
+printf '%s  %s\n' "$python_digest" "$temporary/$python_archive" | sha256sum --check
+tar -xzf "$temporary/$python_archive" -C "$destination"
+
 shellcheck_archive="shellcheck-v0.10.0.linux.${shellcheck_arch}.tar.xz"
 curl -fsSL --max-redirs 5 \
   "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/$shellcheck_archive" \
@@ -86,6 +97,10 @@ for variable in ACTIONLINT JQ SHELLCHECK; do
     exit 1
   fi
 done
+if [[ -z "${PYTHON_HOME:-}" || ! -x "$PYTHON_HOME/bin/python3" ]]; then
+  echo "pinned GNU workflow-tool mount witness: PYTHON_HOME has no executable python3 at ${PYTHON_HOME:-<unset>}" >&2
+  exit 1
+fi
 
 if [[ "${CARGO_HOME:-}" == /cargo ]]; then
   git_version="$(git --version)"
@@ -106,6 +121,7 @@ chmod 0755 "$destination/pinned-gnu-rustc-wrapper"
 cat > "$destination/workflow-test-tools.env" <<EOF
 ACTIONLINT=$destination/actionlint
 JQ=$destination/jq
+PYTHON_HOME=$destination/python
 SHELLCHECK=$destination/shellcheck
 RUSTC_WRAPPER=$destination/pinned-gnu-rustc-wrapper
 GNU_BUILD_GIT_VERSION=$GNU_BUILD_GIT_VERSION
@@ -124,6 +140,7 @@ write_shell_assignment() {
 {
   write_shell_assignment ACTIONLINT "$destination/actionlint"
   write_shell_assignment JQ "$destination/jq"
+  write_shell_assignment PYTHON_HOME "$destination/python"
   write_shell_assignment SHELLCHECK "$destination/shellcheck"
   write_shell_assignment RUSTC_WRAPPER "$destination/pinned-gnu-rustc-wrapper"
   write_shell_assignment GNU_BUILD_GIT_VERSION "$GNU_BUILD_GIT_VERSION"
@@ -133,4 +150,5 @@ write_shell_assignment() {
 
 "$destination/actionlint" -version
 "$destination/jq" --version
+"$destination/python/bin/python3" --version
 "$destination/shellcheck" --version
