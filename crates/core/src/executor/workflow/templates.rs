@@ -41,6 +41,9 @@ pub(super) const UPLOAD_ARTIFACT_ACTION: &str =
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
 pub(super) const DOWNLOAD_ARTIFACT_ACTION: &str =
     "actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0";
+/// GitHub-native provenance attestation for the evidence bundle closure uploads.
+pub(super) const ATTEST_BUILD_PROVENANCE_ACTION: &str =
+    "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373";
 
 /// Action installing the GoReleaser command a stock runner does not carry.
 pub(super) const GORELEASER_INSTALL_ACTION: &str =
@@ -501,6 +504,7 @@ pub(super) fn job(
         .replace("@CHECKOUT@", CHECKOUT_ACTION)
         .replace("@UPLOAD@", UPLOAD_ARTIFACT_ACTION)
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
+        .replace("@ATTEST_BUILD_PROVENANCE@", ATTEST_BUILD_PROVENANCE_ACTION)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
         .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
         .replace("@CROSS_INSTALL@", CROSS_INSTALL_ACTION)
@@ -663,10 +667,23 @@ steps:
       git remote set-url origin \
         "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
       observed="$(git ls-remote origin "refs/heads/${@ENVVAR@DEFAULT_BRANCH}" | cut -f1)"
-      test "${observed}" = "${@ENVVAR@SOURCE_SHA}"
-      git push --atomic origin \
-        "${@ENVVAR@RELEASE_SHA}:refs/heads/${@ENVVAR@DEFAULT_BRANCH}" \
-        "refs/tags/${@ENVVAR@GLOBAL_TAG}"
+      if test "${observed}" = "${@ENVVAR@SOURCE_SHA}"; then
+        git push --atomic origin \
+          "${@ENVVAR@RELEASE_SHA}:refs/heads/${@ENVVAR@DEFAULT_BRANCH}" \
+          "refs/tags/${@ENVVAR@GLOBAL_TAG}"
+      elif test "${observed}" = "${@ENVVAR@RELEASE_SHA}"; then
+        remote_tag="$(git ls-remote origin "refs/tags/${@ENVVAR@GLOBAL_TAG}" | cut -f1)"
+        local_tag="$(git rev-parse "refs/tags/${@ENVVAR@GLOBAL_TAG}")"
+        if test "${remote_tag}" != "${local_tag}"; then
+          printf 'the release branch already carries %s, but remote tag %s is %s instead of verified object %s\n' \
+            "${@ENVVAR@RELEASE_SHA}" "${@ENVVAR@GLOBAL_TAG}" "${remote_tag}" "${local_tag}" >&2
+          exit 1
+        fi
+      else
+        printf 'the default branch is %s, not accepted source %s or already-published release %s\n' \
+          "${observed}" "${@ENVVAR@SOURCE_SHA}" "${@ENVVAR@RELEASE_SHA}" >&2
+        exit 1
+      fi
   - name: Create the draft GitHub Release for the published tag
     env:
       GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
@@ -1209,6 +1226,8 @@ runs-on: ubuntu-latest
 environment: @ENVIRONMENT@
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 env:
   @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
 steps:
@@ -1233,7 +1252,8 @@ steps:
   - name: Publish the immutable GitHub Release
     env:
       GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
-      @ENVVAR@GLOBAL_TAG: ${{ github.ref_name }}
+      @ENVVAR@GLOBAL_TAG: ${{ needs.@VERIFY@.outputs.global-tag }}
+      @ENVVAR@GLOBAL_TAG_OBJECT: ${{ needs.@VERIFY@.outputs.global-tag-object }}
       @ENVVAR@RELEASE: ${{ runner.temp }}/@JOB@release
     run: |
       set -euo pipefail
@@ -1249,17 +1269,29 @@ steps:
           "${@ENVVAR@GLOBAL_TAG}" "${named}" >&2
         exit 1
       fi
-      targeted="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${@ENVVAR@GLOBAL_TAG}" \
-        --jq '.object.sha' | xargs -I {} gh api "repos/${GITHUB_REPOSITORY}/git/tags/{}" \
+      observed_tag_object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${@ENVVAR@GLOBAL_TAG}" \
+        --jq '.object.sha')"
+      if test "${observed_tag_object}" != "${@ENVVAR@GLOBAL_TAG_OBJECT}"; then
+        printf 'the annotated tag %s is object %s, not verified object %s recorded by this release\n' \
+          "${@ENVVAR@GLOBAL_TAG}" "${observed_tag_object}" "${@ENVVAR@GLOBAL_TAG_OBJECT}" >&2
+        exit 1
+      fi
+      targeted="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${observed_tag_object}" \
         --jq '.object.sha')"
       if test "${targeted}" != "${GITHUB_SHA}"; then
         printf 'the annotated tag %s targets %s, not the released commit %s this run is closing\n' \
           "${@ENVVAR@GLOBAL_TAG}" "${targeted}" "${GITHUB_SHA}" >&2
         exit 1
       fi
-      gh release upload "${@ENVVAR@GLOBAL_TAG}" \
-        "${@ENVVAR@RELEASE}"/* --clobber
-      for asset in "${@ENVVAR@RELEASE}"/*; do
+      assets=("${@ENVVAR@RELEASE}/intentional-evidence.yml")
+      if test -d "${@ENVVAR@RELEASE}/attachments"; then
+        while IFS= read -r -d '' attachment; do
+          assets+=("${attachment}")
+        done < <(find "${@ENVVAR@RELEASE}/attachments" -mindepth 1 -maxdepth 1 \
+          -type f -print0 | sort -z)
+      fi
+      gh release upload "${@ENVVAR@GLOBAL_TAG}" "${assets[@]}" --clobber
+      for asset in "${assets[@]}"; do
         name="$(basename "${asset}")"
         gh release download "${@ENVVAR@GLOBAL_TAG}" --pattern "${name}" \
           --output - > "${RUNNER_TEMP}/@JOB@closure-asset"
@@ -1270,5 +1302,21 @@ steps:
           exit 1
         fi
       done
-      gh release edit "${@ENVVAR@GLOBAL_TAG}" --draft=false
+  - name: Attest the assembled release evidence
+    uses: @ATTEST_BUILD_PROVENANCE@
+    with:
+      subject-path: |
+        ${{ runner.temp }}/@JOB@release/intentional-evidence.yml
+        ${{ runner.temp }}/@JOB@release/attachments/*
+  - name: Freeze the attested GitHub Release
+    env:
+      GH_TOKEN: ${{ steps.@JOB@token.outputs.token }}
+      @ENVVAR@GLOBAL_TAG: ${{ needs.@VERIFY@.outputs.global-tag }}
+    run: |
+      set -euo pipefail
+      if ! gh release edit "${@ENVVAR@GLOBAL_TAG}" --draft=false; then
+        printf 'the attested Release for %s could not be frozen\n' \
+          "${@ENVVAR@GLOBAL_TAG}" >&2
+        exit 1
+      fi
 "#;

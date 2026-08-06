@@ -19,6 +19,10 @@ actions:
     repository: actions/upload-artifact
     tag: v4.6.2
     commit: ea165f8d65b6e75b540449e92b4886f43607fa02
+  - constant: ATTEST_BUILD_PROVENANCE_ACTION
+    repository: actions/attest-build-provenance
+    tag: v4.1.1
+    commit: 0f67c3f4856b2e3261c31976d6725780e5e4c373
   - constant: SETUP_BUILDX_ACTION
     repository: docker/setup-buildx-action
     tag: v4.2.0

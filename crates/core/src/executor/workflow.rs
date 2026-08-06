@@ -1221,7 +1221,7 @@ fn publish_contract(
     assemble_needs.extend(before.iter().cloned());
     assemble_needs.extend(after.iter().cloned());
     assemble_needs.extend(gates.iter().cloned());
-    let mut close_needs = vec![assemble.clone()];
+    let mut close_needs = vec![verify.clone(), assemble.clone()];
     close_needs.extend(gates.iter().cloned());
     jobs.push((
         assemble,
@@ -1236,7 +1236,10 @@ fn publish_contract(
         job(
             PUBLISH_CLOSE_JOB,
             namespaces,
-            &[("@NEEDS@", &render_list(&close_needs))],
+            &[
+                ("@NEEDS@", &render_list(&close_needs)),
+                ("@VERIFY@", &verify),
+            ],
         ),
     ));
 
@@ -1905,9 +1908,9 @@ fn phase_tag_job(
 #[cfg(test)]
 mod tests {
     use super::templates::{
-        ACTION_REPOSITORY, APP_TOKEN_ACTION, CHECKOUT_ACTION, CROSS_INSTALL_ACTION,
-        DOWNLOAD_ARTIFACT_ACTION, GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION,
-        SETUP_QEMU_ACTION, UPLOAD_ARTIFACT_ACTION,
+        ACTION_REPOSITORY, APP_TOKEN_ACTION, ATTEST_BUILD_PROVENANCE_ACTION, CHECKOUT_ACTION,
+        CROSS_INSTALL_ACTION, DOWNLOAD_ARTIFACT_ACTION, GORELEASER_INSTALL_ACTION,
+        SETUP_BUILDX_ACTION, SETUP_QEMU_ACTION, UPLOAD_ARTIFACT_ACTION,
     };
     use super::*;
     use crate::evidence::assemble::CleanClientMode;
@@ -1998,6 +2001,10 @@ release-units:
             ("APP_TOKEN_ACTION", APP_TOKEN_ACTION),
             ("DOWNLOAD_ARTIFACT_ACTION", DOWNLOAD_ARTIFACT_ACTION),
             ("UPLOAD_ARTIFACT_ACTION", UPLOAD_ARTIFACT_ACTION),
+            (
+                "ATTEST_BUILD_PROVENANCE_ACTION",
+                ATTEST_BUILD_PROVENANCE_ACTION,
+            ),
             ("SETUP_BUILDX_ACTION", SETUP_BUILDX_ACTION),
             ("SETUP_QEMU_ACTION", SETUP_QEMU_ACTION),
             ("GORELEASER_INSTALL_ACTION", GORELEASER_INSTALL_ACTION),
@@ -4084,11 +4091,11 @@ exit 0
             }
         }
         assert_eq!(
-            swept, 6,
+            swept, 7,
             "every `gh`-driven step of all three Release writers is swept"
         );
         assert_eq!(
-            paired, 18,
+            paired, 20,
             "every refusal those steps derive is paired, not only the ones a defect happens to reach"
         );
     }
@@ -5132,6 +5139,198 @@ release-units:
         );
     }
 
+    const CLOSURE_TAG: &str = "sample@1.2.3";
+    const CLOSURE_TAG_OBJECT: &str = "2222222222222222222222222222222222222222";
+    const CLOSURE_RELEASE: &str = "1111111111111111111111111111111111111111";
+
+    /// A `gh` stand-in that stores uploaded bytes as flat assets and serves them back.
+    const GH_CLOSURE_STUB: &str = r#"#!/usr/bin/env bash
+printf '%s' "$1" >> "${GH_STUB_LOG}"
+for argument in "${@:2}"; do printf '\t%s' "${argument}" >> "${GH_STUB_LOG}"; done
+printf '\n' >> "${GH_STUB_LOG}"
+case "$1 $2" in
+  "release view")
+    case "$*" in
+      *"--json isDraft"*) printf 'true\n' ;;
+      *"--json tagName"*) printf '%s\n' "${GH_STUB_TAG}" ;;
+    esac
+    ;;
+  "api repos/"*)
+    case "$2" in
+      */git/ref/tags/*) printf '%s\n' "${GH_STUB_TAG_OBJECT}" ;;
+      */git/tags/*) printf '%s\n' "${GH_STUB_RELEASE}" ;;
+    esac
+    ;;
+  "release upload")
+    shift 3
+    for asset in "$@"; do
+      test "${asset}" = "--clobber" && continue
+      if test ! -f "${asset}"; then
+        printf 'upload received non-file %s\n' "${asset}" >&2
+        exit 64
+      fi
+      cp "${asset}" "${GH_STUB_ASSETS}/$(basename "${asset}")"
+    done
+    ;;
+  "release download")
+    pattern=''
+    while test "$#" -gt 0; do
+      if test "$1" = "--pattern"; then pattern="$2"; break; fi
+      shift
+    done
+    cat "${GH_STUB_ASSETS}/${pattern}"
+    ;;
+esac
+exit 0
+"#;
+
+    /// Stage one assembled evidence fixture carrying a contributed attachment.
+    fn closure_runner(label: &str, observed_tag_object: &str) -> StubRunner {
+        let runner = StubRunner::new(label)
+            .stub("gh", GH_CLOSURE_STUB)
+            .setting("GITHUB_REPOSITORY", REPOSITORY_IDENTITY)
+            .setting("GITHUB_SHA", CLOSURE_RELEASE)
+            .setting("GH_STUB_TAG", CLOSURE_TAG)
+            .setting("GH_STUB_TAG_OBJECT", observed_tag_object)
+            .setting("GH_STUB_RELEASE", CLOSURE_RELEASE);
+        let release = runner.temp().join("intentional_release");
+        let attachments = release.join("attachments");
+        let assets = runner.scaffold.root().join("closure-assets");
+        std::fs::create_dir_all(&attachments).expect("the attachment fixture exists");
+        std::fs::create_dir_all(&assets).expect("the flat Release asset store exists");
+        std::fs::write(
+            release.join("intentional-evidence.yml"),
+            "contribution-attachments:\n  - namespace: sample\n    name: supplement.txt\n",
+        )
+        .expect("the evidence fixture exists");
+        std::fs::write(attachments.join("supplement.txt"), "fixture attachment\n")
+            .expect("the contributed attachment exists");
+        runner.setting("GH_STUB_ASSETS", &assets.display().to_string())
+    }
+
+    /// Execute the emitted closure body with its parsed environment bindings.
+    fn run_closure(root: &Path, runner: &StubRunner) -> Executed {
+        let step = privileged_step(
+            root,
+            WorkflowRole::Publish,
+            "intentional_close_release",
+            "gh release upload",
+        );
+        let mut bindings = runner.contexts();
+        bindings.insert(
+            "${{ steps.intentional_token.outputs.token }}".to_owned(),
+            "stub-installation-token".to_owned(),
+        );
+        for (name, value) in [
+            ("global-tag", CLOSURE_TAG),
+            ("global-tag-object", CLOSURE_TAG_OBJECT),
+        ] {
+            bindings.insert(
+                format!("${{{{ needs.intentional_verify_tag.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+        }
+        let environment = resolved_environment(&step, &bindings, "closure");
+        runner.execute(
+            step["run"].as_str().expect("the closure step runs"),
+            &environment,
+        )
+    }
+
+    #[test]
+    fn uploads_contributed_attachments_as_flat_release_assets_and_reads_them_back() {
+        let workspace = workspace("workflow-closure-attachment");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let runner = closure_runner("workflow-closure-attachment-runner", CLOSURE_TAG_OBJECT);
+
+        let executed = run_closure(workspace.root(), &runner);
+        assert!(
+            executed.succeeded,
+            "the assembled attachment closes successfully: {}",
+            executed.diagnostics
+        );
+        let upload = executed
+            .invocations
+            .lines()
+            .find(|line| line.starts_with("release\tupload"))
+            .expect("the closure uploads the assembled files");
+        assert!(
+            upload.contains("/intentional-evidence.yml")
+                && upload.contains("/attachments/supplement.txt")
+                && !upload
+                    .split('\t')
+                    .any(|argument| argument.ends_with("/attachments")),
+            "each inventoried attachment is a flat asset argument, never its directory: {upload}"
+        );
+        for name in ["intentional-evidence.yml", "supplement.txt"] {
+            assert!(
+                executed
+                    .invocations
+                    .lines()
+                    .any(|line| line.starts_with("release\tdownload")
+                        && line.contains(&format!("\t--pattern\t{name}"))),
+                "the closure reads {name} back from the draft: {}",
+                executed.invocations
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_a_retagged_object_even_when_it_targets_the_release_commit() {
+        let workspace = workspace("workflow-closure-retag");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let runner = closure_runner(
+            "workflow-closure-retag-runner",
+            "3333333333333333333333333333333333333333",
+        );
+
+        let executed = run_closure(workspace.root(), &runner);
+        assert!(
+            !executed.succeeded,
+            "a replacement tag object targeting the same commit is refused"
+        );
+        assert!(
+            executed.diagnostics.contains("not verified object")
+                && !executed.invocations.contains("release\tupload"),
+            "the object mismatch stops closure before upload: {:?}\n{}",
+            executed.diagnostics,
+            executed.invocations
+        );
+    }
+
+    #[test]
+    fn attests_every_assembled_file_before_freezing_the_release() {
+        let workspace = workspace("workflow-closure-attestation");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let close = &jobs[&Value::String("intentional_close_release".to_owned())];
+        assert_eq!(close["permissions"]["contents"].as_str(), Some("read"));
+        assert_eq!(close["permissions"]["id-token"].as_str(), Some("write"));
+        assert_eq!(close["permissions"]["attestations"].as_str(), Some("write"));
+
+        let steps = close["steps"].as_sequence().expect("closure steps");
+        let attestation = steps
+            .iter()
+            .position(|step| step["uses"].as_str() == Some(ATTEST_BUILD_PROVENANCE_ACTION))
+            .expect("closure invokes the pinned attestation Action");
+        let freeze = steps
+            .iter()
+            .position(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("--draft=false"))
+            })
+            .expect("closure freezes the Release");
+        assert!(attestation < freeze, "attestation completes before closure");
+        let subjects = steps[attestation]["with"]["subject-path"]
+            .as_str()
+            .expect("the invocation names its subjects");
+        assert!(
+            subjects.contains("intentional-evidence.yml") && subjects.contains("attachments/*"),
+            "the invocation attests the statement and every contributed attachment: {subjects}"
+        );
+    }
+
     /// The shell of the derived authority transition, in runner order.
     fn authority_script(root: &Path) -> String {
         job_script(root, WorkflowRole::Release, "intentional_release")
@@ -5349,6 +5548,74 @@ release-units:
         runner.execute(&script, &environment)
     }
 
+    const AUTHORITY_SOURCE: &str = "0000000000000000000000000000000000000000";
+    const AUTHORITY_RELEASE: &str = "1111111111111111111111111111111111111111";
+    const AUTHORITY_TAG_OBJECT: &str = "2222222222222222222222222222222222222222";
+
+    /// The publish step and parsed environment a runner executes before draft recovery.
+    fn authority_push(root: &Path, runner: &StubRunner) -> (String, BTreeMap<String, String>) {
+        let step = privileged_step(
+            root,
+            WorkflowRole::Release,
+            "intentional_release",
+            "git push --atomic",
+        );
+        let mut bindings = runner.contexts();
+        bindings.insert(
+            "${{ github.event.repository.default_branch }}".to_owned(),
+            "main".to_owned(),
+        );
+        for (name, value) in [
+            ("token", "stub-installation-token"),
+            ("global-tag", CLOSURE_TAG),
+            ("source-sha", AUTHORITY_SOURCE),
+            ("release-sha", AUTHORITY_RELEASE),
+        ] {
+            bindings.insert(
+                format!("${{{{ steps.intentional_handoff.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+            bindings.insert(
+                format!("${{{{ steps.intentional_token.outputs.{name} }}}}"),
+                value.to_owned(),
+            );
+        }
+        let environment = resolved_environment(&step, &bindings, "authority-push");
+        (
+            step["run"]
+                .as_str()
+                .expect("the authority push step runs")
+                .to_owned(),
+            environment,
+        )
+    }
+
+    const GIT_AUTHORITY_RERUN_STUB: &str = r#"#!/usr/bin/env bash
+printf 'git %s\n' "$*" >> "${GH_STUB_LOG}"
+case "$1" in
+  remote) ;;
+  ls-remote)
+    case "$3" in
+      refs/heads/*) printf '%s\t%s\n' "${GIT_STUB_BRANCH}" "$3" ;;
+      refs/tags/*) printf '%s\t%s\n' "${GIT_STUB_REMOTE_TAG}" "$3" ;;
+    esac
+    ;;
+  rev-parse) printf '%s\n' "${GIT_STUB_LOCAL_TAG}" ;;
+  push) printf 'unexpected push on recovery\n' >&2; exit 65 ;;
+esac
+exit 0
+"#;
+
+    fn authority_rerun_runner(label: &str, remote_tag: &str) -> StubRunner {
+        StubRunner::new(label)
+            .stub("git", GIT_AUTHORITY_RERUN_STUB)
+            .stub("gh", &gh_stub("    printf 'true\n'"))
+            .setting("GITHUB_REPOSITORY", REPOSITORY_IDENTITY)
+            .setting("GIT_STUB_BRANCH", AUTHORITY_RELEASE)
+            .setting("GIT_STUB_REMOTE_TAG", remote_tag)
+            .setting("GIT_STUB_LOCAL_TAG", AUTHORITY_TAG_OBJECT)
+    }
+
     /// A `gh` stub that records its arguments and answers `release view` with
     /// `view`, a shell fragment standing in for one state of the Release.
     fn gh_stub(view: &str) -> String {
@@ -5471,6 +5738,64 @@ release-units:
             !rerun.invocations.contains("release create"),
             "a rerun against an existing draft creates nothing: {}",
             rerun.invocations
+        );
+    }
+
+    #[test]
+    fn rerun_after_the_atomic_push_reaches_draft_recovery() {
+        let workspace = workspace("workflow-authority-push-rerun");
+        converge(workspace.root(), WorkflowRole::Release);
+        let runner =
+            authority_rerun_runner("workflow-authority-push-rerun-runner", AUTHORITY_TAG_OBJECT);
+        let (push, push_environment) = authority_push(workspace.root(), &runner);
+
+        let published = runner.execute(&push, &push_environment);
+        assert!(
+            published.succeeded,
+            "the transition accepts the complete atomic-push state: {}",
+            published.diagnostics
+        );
+        assert!(
+            published
+                .invocations
+                .contains("git ls-remote origin refs/heads/main")
+                && published
+                    .invocations
+                    .contains(&format!("git ls-remote origin refs/tags/{CLOSURE_TAG}"))
+                && published
+                    .invocations
+                    .contains(&format!("git rev-parse refs/tags/{CLOSURE_TAG}"))
+                && !published.invocations.contains("git push --atomic"),
+            "the rerun verifies the landed branch and tag without pushing again: {}",
+            published.invocations
+        );
+
+        let (draft, draft_environment) = draft_creation(workspace.root(), &runner, CLOSURE_TAG);
+        let recovered = runner.execute(&draft, &draft_environment);
+        assert!(
+            recovered.succeeded && recovered.invocations.contains("release view"),
+            "the same rerun reaches draft recovery: {}\n{}",
+            recovered.invocations,
+            recovered.diagnostics
+        );
+    }
+
+    #[test]
+    fn refuses_a_partially_published_authority_transition() {
+        let workspace = workspace("workflow-authority-push-partial");
+        converge(workspace.root(), WorkflowRole::Release);
+        let runner = authority_rerun_runner(
+            "workflow-authority-push-partial-runner",
+            "3333333333333333333333333333333333333333",
+        );
+        let (push, environment) = authority_push(workspace.root(), &runner);
+
+        let executed = runner.execute(&push, &environment);
+        assert!(!executed.succeeded, "a mismatched remote tag is refused");
+        assert!(
+            executed.diagnostics.contains("instead of verified object"),
+            "the refusal names the incomplete atomic state: {:?}",
+            executed.diagnostics
         );
     }
 
