@@ -279,9 +279,7 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
                     path.display()
                 );
                 if cross {
-                    let installation = installation["run"]
-                        .as_str()
-                        .expect("installation command");
+                    let installation = installation["run"].as_str().expect("installation command");
                     assert!(
                         installation.contains(
                             "cat .ci-tools/bin/workflow-test-tools.env >> \"$GITHUB_ENV\""
