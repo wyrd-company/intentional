@@ -3972,8 +3972,8 @@ case "${url}" in
   https://packages.invalid/rpm/stable/repodata/repomd.xml)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
-    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="repodata/primary.xml"/></data></repomd>' "${digest}" > "${output}" ;;
-  https://packages.invalid/rpm/stable/repodata/primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="metadata/current-primary.xml"/></data></repomd>' "${digest}" > "${output}" ;;
+  https://packages.invalid/rpm/stable/metadata/current-primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
   https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
 esac
@@ -3985,24 +3985,21 @@ esac
             ("python3", r#"#!/usr/bin/env bash
 set -euo pipefail
 script=$(cat)
-if [ "$#" -eq 2 ]; then
-  [[ "${script}" == *"ET.parse(sys.argv[1])"* ]]
-  [[ "${script}" == *"node.attrib.get('type') == 'primary'"* ]]
-  [[ "${script}" == *"node.tag.endswith('checksum')"* ]]
-  [[ "${script}" == *"node.tag.endswith('location')"* ]]
-  grep -Fq "<checksum>${FAKE_PRIMARY_DIGEST}</checksum>" "$2"
-  grep -Fq '<location href="repodata/primary.xml"/>' "$2"
-  printf '%s repodata/primary.xml\n' "${FAKE_PRIMARY_DIGEST}"
-elif [ "$#" -eq 6 ]; then
-  [[ "${script}" == *"fields['name'].text == sys.argv[2]"* ]]
-  [[ "${script}" == *"version.attrib.get('ver') == sys.argv[3]"* ]]
-  [[ "${script}" == *"fields['arch'].text == sys.argv[4]"* ]]
-  [[ "${script}" == *"checksum.text == sys.argv[5]"* ]]
+test "$#" -eq 2
+if [[ "${script}" == *"ET.parse(sys.argv[1])"* ]]; then
   document=$(cat "$2")
-  [[ "${document}" == *"<name>${3}</name>"* ]]
-  [[ "${document}" == *"<version ver=\"${4}\""* ]]
-  [[ "${document}" == *"<arch>${5}</arch>"* ]]
-  [[ "${document}" == *"<checksum>${6}</checksum>"* ]]
+  checksum=$(printf '%s' "${document}" | sed -n 's|.*<checksum>\([^<]*\)</checksum>.*|\1|p')
+  location=$(printf '%s' "${document}" | sed -n 's|.*<location href="\([^"]*\)"/>.*|\1|p')
+  test -n "${checksum}"
+  test -n "${location}"
+  printf '%s %s\n' "${checksum}" "${location}"
+elif [[ "${script}" == *"ET.fromstring(raw)"* ]]; then
+  document=$(cat "$2")
+  name=$(printf '%s' "${document}" | sed -n 's|.*<name>\([^<]*\)</name>.*|\1|p')
+  version=$(printf '%s' "${document}" | sed -n 's|.*<version ver="\([^"]*\)".*|\1|p')
+  architecture=$(printf '%s' "${document}" | sed -n 's|.*<arch>\([^<]*\)</arch>.*|\1|p')
+  checksum=$(printf '%s' "${document}" | sed -n 's|.*<checksum>\([^<]*\)</checksum>.*|\1|p')
+  printf '%s\t%s\t%s\t%s\n' "${name}" "${version}" "${architecture}" "${checksum}"
 else
   exit 64
 fi

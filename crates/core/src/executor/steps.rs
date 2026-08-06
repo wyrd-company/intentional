@@ -771,7 +771,8 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       primary="${@ENVVAR@WORK}/primary"
       curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" --output "${primary}"
       test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}"
-      python3 - "${primary}" "${package_name}" "${package_version}" "${package_architecture}" "${package_sha256}" <<'PY'
+      entries="${@ENVVAR@WORK}/primary.entries"
+      python3 - "${primary}" > "${entries}" <<'PY'
       import bz2, gzip, lzma, pathlib, sys, xml.etree.ElementTree as ET
       path = pathlib.Path(sys.argv[1])
       raw = path.read_bytes()
@@ -786,13 +787,13 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
           fields = {node.tag.rsplit('}', 1)[-1]: node for node in package}
           checksum = fields.get('checksum')
           version = fields.get('version')
-          if (fields.get('name') is not None and fields['name'].text == sys.argv[2]
-              and version is not None and version.attrib.get('ver') == sys.argv[3]
-              and fields.get('arch') is not None and fields['arch'].text == sys.argv[4]
-              and checksum is not None and checksum.text == sys.argv[5]):
-              sys.exit(0)
-      sys.exit(1)
+          name = fields.get('name')
+          architecture = fields.get('arch')
+          if name is not None and version is not None and architecture is not None and checksum is not None:
+              print(name.text, version.attrib.get('ver'), architecture.text, checksum.text, sep='\t')
       PY
+      indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
+      test "${indexed}" = yes
       printf '[intentional]\nname=Intentional scratch\nbaseurl=%s/%s\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "${@ENVVAR@DESTINATION%/}" "${@ENVVAR@RPM_CHANNEL}" "${@ENVVAR@WORK}/key" > "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo"
       dnf --config /dev/null --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
       retrieved=$(find "${@ENVVAR@WORK}/retrieved" -type f -name '*.rpm' -print -quit)
