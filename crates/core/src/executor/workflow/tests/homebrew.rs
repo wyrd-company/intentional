@@ -8,15 +8,21 @@
     /// A real Cargo package shape that selects both its registry subject and
     /// its native Homebrew archive subject from the open catalog.
     fn rust_homebrew_workspace(label: &str, manifest: &str) -> Workspace {
+        rust_homebrew_workspace_with_package_path(label, manifest, ".")
+    }
+
+    fn rust_homebrew_workspace_with_package_path(
+        label: &str,
+        manifest: &str,
+        package_path: &str,
+    ) -> Workspace {
         let workspace = Workspace::new(label);
-        workspace
-            .write(
-                "Cargo.toml",
-                "[workspace]\nmembers = [\"component\"]\nresolver = \"2\"\n",
-            )
-            .write(
-                ".intentional/config.yml",
-                r#"$schema: https://intentional.foo/schemas/config.yml
+        let package_directory = Path::new("component").join(package_path);
+        let workspace_manifest = format!(
+            "[workspace]\nmembers = [\"{}\"]\nresolver = \"2\"\n",
+            package_directory.display()
+        );
+        let configuration = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
 workspace-tags:
   release: { template: '{version}' }
@@ -29,14 +35,23 @@ release-units:
     path: component
     packages:
       command:
-        path: .
+        path: @PACKAGE_PATH@
         cargo: {}
         homebrew: { repository: sample-owner/sample-tap }
     tags:
       staged: { role: primary, template: '{id}@{version}', require-phase: before-publication }
-"#,
+"#
+        .replace("@PACKAGE_PATH@", package_path);
+        workspace
+            .write("Cargo.toml", &workspace_manifest)
+            .write(".intentional/config.yml", &configuration)
+            .write(
+                package_directory
+                    .join("Cargo.toml")
+                    .to_str()
+                    .expect("UTF-8 package manifest path"),
+                manifest,
             )
-            .write("component/Cargo.toml", manifest)
             .write(
                 ".github/workflows/release.yml",
                 "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
