@@ -1095,9 +1095,14 @@ proposed-design:
     Readback walks the format's published chain from the configured key, so what
     it proves is what a client would prove. For APT the recipe retrieves
     `dists/<suite>/InRelease`, verifies its signature with the configured key,
-    and follows the digest it carries for `<component>/binary-<architecture>/Packages`
-    to the package list, then requires a stanza whose package, version, and
-    SHA-256 are the ones just delivered. For RPM it retrieves
+    and follows the digest it carries for a signed
+    `<component>/binary-<architecture>/Packages.xz`, `Packages.gz`, or
+    `Packages` member. An `Acquire-By-Hash: yes` index is retrieved through its
+    SHA-256 path with canonical-path fallback, and compressed bytes are verified
+    before decoding. Which form a hosted destination serves is unmeasured until
+    readback; the signed index selects it. The decoded list must contain a stanza
+    whose package, version, and SHA-256 are the ones just delivered. For RPM it
+    retrieves
     `repodata/repomd.xml` with its detached signature, verifies that signature,
     follows the checksum `repomd.xml` records for its primary metadata, and
     requires an entry whose name, version, architecture, and checksum agree. An

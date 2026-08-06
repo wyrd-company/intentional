@@ -735,6 +735,12 @@ fn system_package_readback(
     )
 }
 
+/// Read the signed APT package index in the form the destination advertises.
+///
+/// `Packages`, gzip, xz, and Acquire-By-Hash are MEASURED format capabilities
+/// from Debian repository metadata. Which form a configured hosted destination
+/// serves is UNMEASURED until that destination is observed, so the recipe
+/// follows `InRelease` instead of assuming one hosted-product default.
 const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       mkdir -p "${@ENVVAR@WORK}/state/lists/partial" "${@ENVVAR@WORK}/cache/archives/partial" "${@ENVVAR@WORK}/etc/apt"
       package=$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -type f -print -quit)
@@ -745,15 +751,35 @@ const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
       gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
       index="${@ENVVAR@WORK}/InRelease"
-      relative="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}/Packages"
+      package_directory="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}"
+      packages_download="${@ENVVAR@WORK}/Packages.download"
       packages="${@ENVVAR@WORK}/Packages"
       @ENVVAR@apt_probe() {
-        expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
+        index_member=$(awk -v directory="${package_directory}" '
+          $1 == "SHA256:" { section=1; next }
+          section && NF == 3 && ($3 == directory "/Packages.xz" || $3 == directory "/Packages.gz" || $3 == directory "/Packages") { print $3; exit }
+        ' "${index}")
+        test -n "${index_member}" || return 1
+        expected=$(awk -v wanted="${index_member}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
         test -n "${expected}" || return 1
-        curl --fail --silent --show-error --location \
+        relative="${index_member}"
+        if awk '$1 == "Acquire-By-Hash:" && $2 == "yes" { found=1 } END { exit !found }' "${index}"; then
+          relative="${package_directory}/by-hash/SHA256/${expected}"
+        fi
+        if ! curl --fail --silent --show-error --location \
           "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" \
-          --output "${packages}" || return 1
-        test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}" || return 1
+          --output "${packages_download}"; then
+          test "${relative}" != "${index_member}" || return 1
+          curl --fail --silent --show-error --location \
+            "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${index_member}" \
+            --output "${packages_download}" || return 1
+        fi
+        test "$(sha256sum "${packages_download}" | cut -d' ' -f1)" = "${expected}" || return 1
+        case "${index_member}" in
+          *.gz) gzip -dc "${packages_download}" > "${packages}" || return 1 ;;
+          *.xz) xz -dc "${packages_download}" > "${packages}" || return 1 ;;
+          *) cp "${packages_download}" "${packages}" || return 1 ;;
+        esac
         indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
           $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
         ' "${packages}")

@@ -1509,7 +1509,50 @@ release-units:
                 "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
             }
         };
-        let packages_digest = crate::evidence::digest_bytes(packages.as_bytes())
+        let served_packages = temporary.join("served-packages");
+        let served_bytes = match scenario {
+            "packages-gzip" => {
+                let output = std::process::Command::new("gzip")
+                    .args(["-n", "-c"])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        child
+                            .stdin
+                            .take()
+                            .expect("gzip stdin")
+                            .write_all(packages.as_bytes())?;
+                        child.wait_with_output()
+                    })
+                    .expect("gzip fixture");
+                assert!(output.status.success());
+                output.stdout
+            }
+            "packages-xz" | "packages-by-hash" => {
+                let output = std::process::Command::new("xz")
+                    .args(["-c"])
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        child
+                            .stdin
+                            .take()
+                            .expect("xz stdin")
+                            .write_all(packages.as_bytes())?;
+                        child.wait_with_output()
+                    })
+                    .expect("xz fixture");
+                assert!(output.status.success());
+                output.stdout
+            }
+            _ => packages.as_bytes().to_vec(),
+        };
+        std::fs::write(&served_packages, &served_bytes).expect("served Packages fixture");
+        let packages_digest = crate::evidence::digest_bytes(&served_bytes)
             .trim_start_matches("sha256:")
             .to_owned();
         let stubs = temporary.join("stubs");
@@ -1523,11 +1566,18 @@ case "${url}" in
   https://packages.invalid/apt/dists/current/InRelease)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
-    relative=section-a/binary-amd64/Packages; [ "${FAKE_SCENARIO}" != component-absent ] || relative=section-b/binary-amd64/Packages
-    printf 'SHA256:\n %s 1 %s\n' "${digest}" "${relative}" > "${output}" ;;
-  https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages)
+    relative=section-a/binary-amd64/Packages
+    [ "${FAKE_SCENARIO}" != packages-gzip ] || relative=${relative}.gz
+    if [ "${FAKE_SCENARIO}" = packages-xz ] || [ "${FAKE_SCENARIO}" = packages-by-hash ]; then relative=${relative}.xz; fi
+    [ "${FAKE_SCENARIO}" != component-absent ] || relative=section-b/binary-amd64/Packages
+    if [ "${FAKE_SCENARIO}" = packages-by-hash ]; then printf 'Acquire-By-Hash: yes\n'; fi > "${output}"
+    printf 'SHA256:\n %s %s %s\n' "${digest}" "$(wc -c < "${FAKE_PACKAGES_FILE}")" "${relative}" >> "${output}" ;;
+  https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages|\
+  https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages.gz|\
+  https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages.xz|\
+  https://packages.invalid/apt/dists/current/section-a/binary-amd64/by-hash/SHA256/*)
     [ "${FAKE_SCENARIO}" != packages-absent ] || exit 22
-    printf '%s' "${FAKE_PACKAGES}" > "${output}" ;;
+    cp "${FAKE_PACKAGES_FILE}" "${output}" ;;
   https://packages.invalid/apt-key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
 esac
@@ -1582,7 +1632,7 @@ fi
                 ),
             )
             .env("FAKE_SCENARIO", scenario)
-            .env("FAKE_PACKAGES", packages)
+            .env("FAKE_PACKAGES_FILE", &served_packages)
             .env("FAKE_PACKAGES_DIGEST", packages_digest)
             .env("FAKE_SLEEP_LOG", &sleep_log);
         for (key, value) in step["env"].as_mapping().expect("env") {
@@ -1633,6 +1683,30 @@ fi
     #[test]
     fn apt_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
         let run = run_apt_readback("apt-present", "ok");
+        assert!(run.succeeded);
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
+        assert!(run.waits.is_empty());
+    }
+
+    #[test]
+    fn apt_readback_follows_a_gzip_packages_index() {
+        let run = run_apt_readback("apt-packages-gzip", "packages-gzip");
+        assert!(run.succeeded);
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
+        assert!(run.waits.is_empty());
+    }
+
+    #[test]
+    fn apt_readback_follows_an_xz_packages_index() {
+        let run = run_apt_readback("apt-packages-xz", "packages-xz");
+        assert!(run.succeeded);
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
+        assert!(run.waits.is_empty());
+    }
+
+    #[test]
+    fn apt_readback_follows_the_signed_by_hash_index() {
+        let run = run_apt_readback("apt-packages-by-hash", "packages-by-hash");
         assert!(run.succeeded);
         assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
         assert!(run.waits.is_empty());
