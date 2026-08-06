@@ -2192,45 +2192,20 @@ jobs:
         workspace
             .write(
                 ".intentional/config.yml",
-                r#"$schema: https://intentional.foo/schemas/config.yml
-contract: contract-2
-workspace-tags:
-  release: { template: '{version}' }
-github:
-  workflows:
-    release: { path: .github/workflows/release.yml }
-    publish: { path: .github/workflows/publish.yml }
-release-units:
-  sample:
-    path: .
-    packages:
-      tool:
-        path: tool
-        cargo: {}
-        homebrew: { repository: sample-owner/sample-tap }
-      library:
-        path: library
-        cargo: {}
-      launcher:
-        path: launcher
-        npm: {}
-    tags:
-      primary: { role: primary, template: '{id}@{version}', require-phase: before-publication }
-      published: { role: projection, template: '{id}/published@{version}', require-phase: after-publication }
-"#,
+                include_str!("../../../../.intentional/config.yml"),
             )
             .write(
-                "tool/Cargo.toml",
+                "crates/cli/Cargo.toml",
                 "[package]\nname = \"sample-tool\"\nversion = \"1.0.0\"\nauthors = [\"Sample Maintainer <maintainer@example.invalid>\"]\n",
             )
-            .write("tool/src/main.rs", "fn main() {}\n")
+            .write("crates/cli/src/main.rs", "fn main() {}\n")
             .write(
-                "library/Cargo.toml",
+                "crates/core/Cargo.toml",
                 "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
             )
-            .write("library/src/lib.rs", "pub fn sample() {}\n")
+            .write("crates/core/src/lib.rs", "pub fn sample() {}\n")
             .write(
-                "launcher/package.json",
+                "npm/package.json",
                 r#"{"name":"sample-launcher","version":"1.0.0"}"#,
             )
             .write(
@@ -8524,10 +8499,10 @@ release-units:
         let mut config = Config::load(workspace.root()).expect("repository-scale config loads");
         config
             .release_units
-            .get_mut("sample")
+            .get_mut("intentional")
             .expect("release unit")
             .packages
-            .get_mut("tool")
+            .get_mut("cli")
             .expect("Cargo application package")
             .aur = Some(crate::config::SystemPackagePublisher::default());
         assert_eq!(
