@@ -1458,6 +1458,7 @@ release-units:
         succeeded: bool,
         observation: Option<crate::publication::observation::PublicationObservation>,
         waits: Vec<u64>,
+        requests: Vec<String>,
     }
 
     fn run_apt_readback(label: &str, scenario: &str) -> ReadbackRun {
@@ -1557,11 +1558,13 @@ release-units:
             .to_owned();
         let stubs = temporary.join("stubs");
         let sleep_log = temporary.join("sleep.log");
+        let request_log = temporary.join("requests.log");
         std::fs::create_dir_all(&stubs).expect("stubs");
         for (name, body) in [
             ("curl", r#"#!/usr/bin/env bash
 set -euo pipefail
 output=${*: -1}; url=${*: -3:1}
+printf '%s\n' "${url}" >> "${FAKE_REQUEST_LOG}"
 case "${url}" in
   https://packages.invalid/apt/dists/current/InRelease)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
@@ -1634,7 +1637,8 @@ fi
             .env("FAKE_SCENARIO", scenario)
             .env("FAKE_PACKAGES_FILE", &served_packages)
             .env("FAKE_PACKAGES_DIGEST", packages_digest)
-            .env("FAKE_SLEEP_LOG", &sleep_log);
+            .env("FAKE_SLEEP_LOG", &sleep_log)
+            .env("FAKE_REQUEST_LOG", &request_log);
         for (key, value) in step["env"].as_mapping().expect("env") {
             let value = value
                 .as_str()
@@ -1673,10 +1677,16 @@ fi
             .lines()
             .map(|wait| wait.parse().expect("numeric wait"))
             .collect();
+        let requests = std::fs::read_to_string(&request_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect();
         ReadbackRun {
             succeeded,
             observation,
             waits,
+            requests,
         }
     }
 
@@ -1710,6 +1720,13 @@ fi
         assert!(run.succeeded);
         assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
         assert!(run.waits.is_empty());
+        assert!(
+            run.requests
+                .iter()
+                .any(|request| request.contains("/section-a/binary-amd64/by-hash/SHA256/")),
+            "the advertised by-hash object is retrieved: {:?}",
+            run.requests
+        );
     }
 
     #[test]
@@ -1986,6 +2003,7 @@ fi
             succeeded,
             observation,
             waits,
+            requests: Vec::new(),
         }
     }
 

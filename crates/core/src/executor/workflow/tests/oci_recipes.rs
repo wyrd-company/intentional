@@ -504,6 +504,10 @@
           printf 'UNAVAILABLE: transient registry failure\n' >&2
           exit 1
         fi
+        if [ "${FAKE_DRIFT:-}" = "missing-repository" ]; then
+          printf 'NAME_UNKNOWN: repository name not known to registry\n' >&2
+          exit 1
+        fi
         directory="${registry}/tags/$(slug "${2}")"
         if [ -d "${directory}" ]; then ls "${directory}"; fi
         ;;
@@ -1173,6 +1177,20 @@ done
                 outcome.tags(DOCKERHUB_REPOSITORY).get("1.2.3").map(String::as_str),
                 Some(FOREIGN_DIGEST),
                 "recovery after listing cannot overwrite the exact version"
+            );
+        }
+
+        #[test]
+        fn treats_name_unknown_as_an_absent_repository_before_first_publication() {
+            let recipe = Recipe::new("oci-name-unknown", DOCKERHUB_JOB);
+            let outcome = recipe.run_with_drift("1.2.3", "missing-repository");
+            assert!(outcome.status.success(), "{}", outcome.stderr);
+            assert_eq!(
+                outcome
+                    .tags(DOCKERHUB_REPOSITORY)
+                    .get("1.2.3")
+                    .map(String::as_str),
+                Some(outcome.index_digest.as_str())
             );
         }
 
