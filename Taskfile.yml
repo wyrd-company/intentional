@@ -47,6 +47,21 @@ tasks:
     cmds:
       - gh pr checks {{ .PR }}
 
+  pinned-gnu:test:
+    desc: Run all workspace tests through the pinned GNU compatibility baseline
+    cmds:
+      - |
+        set -a
+        . scripts/release/linux-gnu-baseline.env
+        scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+        . .ci-tools/bin/workflow-test-tools.env
+        RUSTUP_TOOLCHAIN="$RUST_VERSION"
+        PATH="/usr/local/cargo/bin:$PATH"
+        set +a
+        cross test \
+        --workspace --locked --all-targets --no-fail-fast \
+        --target x86_64-unknown-linux-gnu
+
   npm:test:
     desc: Test the public npm launcher and its exact package contents
     cmds:

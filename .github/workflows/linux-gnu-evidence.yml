@@ -102,7 +102,9 @@ jobs:
           tool: cross@0.2.5
       - uses: dtolnay/rust-toolchain@1.85.0
       - name: Install workflow test tools
-        run: scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+        run: |
+          scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
+          cat .ci-tools/bin/workflow-test-tools.env >> "$GITHUB_ENV"
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
         with:
@@ -114,11 +116,9 @@ jobs:
             linux-gnu-x86_64-unknown-linux-gnu-${{
             hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
       - name: Run workspace tests through the pinned GNU target
-        env:
-          ACTIONLINT: ${{ github.workspace }}/.ci-tools/bin/actionlint
-          JQ: ${{ github.workspace }}/.ci-tools/bin/jq
-          SHELLCHECK: ${{ github.workspace }}/.ci-tools/bin/shellcheck
-        run: cross test --workspace --locked --target x86_64-unknown-linux-gnu
+        run: >-
+          cross test --workspace --locked --all-targets --no-fail-fast
+          --target x86_64-unknown-linux-gnu
 
   smoke-x86_64:
     name: Smoke x86_64 (${{ matrix.label }})

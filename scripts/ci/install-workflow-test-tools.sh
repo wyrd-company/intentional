@@ -6,8 +6,21 @@
 
 set -euo pipefail
 
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Root is resolved from this script at runtime.
+# shellcheck disable=SC1091
+source "$root/scripts/release/linux-gnu-baseline.env"
+cross_environment='["'"${GNU_WORKFLOW_TEST_TOOL_ENVIRONMENT// /\", \"}"'"]'
+for agreement in passthrough volumes; do
+  if ! grep -Fqx "$agreement = $cross_environment" "$root/Cross.toml"; then
+    echo "pinned GNU Cross $agreement agreement must be $cross_environment" >&2
+    exit 1
+  fi
+done
+
 destination="${1:?destination directory is required}"
 mkdir -p "$destination"
+destination="$(cd "$destination" && pwd)"
 
 case "$(uname -m)" in
   x86_64)
@@ -56,6 +69,29 @@ curl -fsSL --max-redirs 5 \
 printf '%s  %s\n' "$shellcheck_digest" "$temporary/$shellcheck_archive" | sha256sum --check
 tar -xJf "$temporary/$shellcheck_archive" -C "$temporary"
 install -m 0755 "$temporary/shellcheck-v0.10.0/shellcheck" "$destination/shellcheck"
+
+cat > "$destination/pinned-gnu-rustc-wrapper" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+for variable in ACTIONLINT JQ SHELLCHECK; do
+  value="${!variable:-}"
+  if [[ -z "$value" || ! -x "$value" ]]; then
+    echo "pinned GNU workflow-tool mount witness: $variable is not executable at ${value:-<unset>}" >&2
+    exit 1
+  fi
+done
+
+exec "$@"
+EOF
+chmod 0755 "$destination/pinned-gnu-rustc-wrapper"
+
+cat > "$destination/workflow-test-tools.env" <<EOF
+ACTIONLINT=$destination/actionlint
+JQ=$destination/jq
+SHELLCHECK=$destination/shellcheck
+RUSTC_WRAPPER=$destination/pinned-gnu-rustc-wrapper
+EOF
 
 "$destination/actionlint" -version
 "$destination/jq" --version

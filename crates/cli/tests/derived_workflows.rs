@@ -279,18 +279,18 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
                     path.display()
                 );
                 if cross {
-                    assert_eq!(
-                        test["env"]["ACTIONLINT"],
-                        "${{ github.workspace }}/.ci-tools/bin/actionlint"
+                    let installation = installation["run"]
+                        .as_str()
+                        .expect("installation command");
+                    assert!(
+                        installation.contains(
+                            "cat .ci-tools/bin/workflow-test-tools.env >> \"$GITHUB_ENV\""
+                        ),
+                        "{} job {job} exports the installer-derived Cross environment",
+                        path.display()
                     );
-                    assert_eq!(
-                        test["env"]["JQ"],
-                        "${{ github.workspace }}/.ci-tools/bin/jq"
-                    );
-                    assert_eq!(
-                        test["env"]["SHELLCHECK"],
-                        "${{ github.workspace }}/.ci-tools/bin/shellcheck"
-                    );
+                    assert!(command.contains("--all-targets"));
+                    assert!(command.contains("--no-fail-fast"));
                 } else {
                     assert!(
                         installation["run"]
