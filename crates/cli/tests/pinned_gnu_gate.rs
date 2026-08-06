@@ -269,7 +269,7 @@ fi
 }
 
 #[test]
-fn cargo_homebrew_compatibility_task_is_part_of_local_ci() {
+fn cargo_homebrew_compatibility_task_is_part_of_repository_validation() {
     let taskfile = fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
     let taskfile: Value = serde_yaml::from_str(&taskfile).expect("Taskfile parses");
     let dependencies = taskfile["tasks"]["ci"]["deps"]
@@ -281,11 +281,27 @@ fn cargo_homebrew_compatibility_task_is_part_of_local_ci() {
             .any(|dependency| dependency.as_str() == Some("cargo-homebrew:compatibility")),
         "local CI executes the Cargo/Homebrew compatibility gate"
     );
+    let compatibility_command =
+        taskfile["tasks"]["cargo-homebrew:compatibility"]["cmds"][0].as_str();
     assert_eq!(
-        taskfile["tasks"]["cargo-homebrew:compatibility"]["cmds"][0].as_str(),
+        compatibility_command,
         Some(
             "cargo test -p intentional-core cargo_homebrew_platform_contract -- --ignored --nocapture"
         ),
         "the documented gate selects the four product-shaped platform contract tests"
+    );
+
+    let workflow =
+        fs::read_to_string("../../.github/workflows/ci.yml").expect("CI workflow is readable");
+    let workflow: Value = serde_yaml::from_str(&workflow).expect("CI workflow parses");
+    let hosted_steps = workflow["jobs"]["test"]["steps"]
+        .as_sequence()
+        .expect("hosted test steps");
+    assert!(
+        hosted_steps.iter().any(|step| {
+            step["name"].as_str() == Some("Exercise Cargo Homebrew emitted bodies")
+                && step["run"].as_str() == compatibility_command
+        }),
+        "hosted CI executes the documented Cargo/Homebrew compatibility command"
     );
 }

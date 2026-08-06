@@ -6,8 +6,9 @@ verifiable annotated release records.
 
 ## Validation gates
 
-Run `task ci` and `intentional check` as separate local gates. When work is
-based on a branch with an open GitHub pull request, also run
+Run `task ci` and `intentional check` as separate local gates. Docker must be
+available because `task ci` executes the Cargo/Homebrew compatibility gate.
+When work is based on a branch with an open GitHub pull request, also run
 `task hosted:check PR=<pull-request-number>`. A red hosted check must be
 diagnosed and assigned before later work treats that branch as a valid base.
 Run `task pinned-gnu:test` when changing release execution, packaging recipes,

@@ -45,6 +45,10 @@ jobs:
           echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
       - name: Test
         run: cargo test --workspace
+      - name: Exercise Cargo Homebrew emitted bodies
+        run: >-
+          cargo test -p intentional-core cargo_homebrew_platform_contract
+          -- --ignored --nocapture
       - name: Check this repository with intentional
         run: cargo run --bin intentional -- check
 
