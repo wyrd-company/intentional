@@ -1826,6 +1826,11 @@ release-units:
                 "registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "registry.invalid/toolchain/arm:latest",
             ),
+            (
+                "linux-x86-64-cross-image",
+                "registry.invalid/toolchain/x86@sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
         ] {
             let text = with_github(&format!(
                 "  cargo-homebrew:\n    linux-x86-64-cross-image: {x86_image}\n    linux-arm64-cross-image: {arm_image}\n"
