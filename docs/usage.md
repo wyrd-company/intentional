@@ -363,6 +363,7 @@ candidate has been verified:
     permissions:
       contents: read
     steps:
+      - name: Check out the repository without persisted credentials
       - name: Download the release candidate
       - name: Verify the release candidate handoff
       - name: Mint a short-lived repository token
@@ -402,6 +403,12 @@ must guard the authority transition. It is the one place to require a reviewer,
 a wait timer, or a branch restriction, because it is the gate every privileged
 step sits behind.
 
+Both names above are the ones the **default** job prefix derives. If you
+configured a prefix, the environment and the secret names change with it, and
+creating the defaults instead leaves the release to fail after verification has
+already passed. Run `intentional executor init`, which reports the names your
+own configuration derives, and create those.
+
 **Publisher credentials** belong to the destination rather than the repository,
 and Intentional stores names, never values. A tap repository must install the
 release App so the publisher job can mint a token scoped to that repository
@@ -409,30 +416,33 @@ alone.
 
 ## Publish to a registry for the first time
 
-Publisher recipes prefer registry trusted publishing, which needs no stored
-credential. Several registries will not let you configure a trusted identity
-until the package already exists, which leaves the first publication with
-nothing to authenticate. Each affected recipe therefore exposes a bootstrap
-path that uses a conventional token:
+Destinations differ in how they authenticate, and the difference decides
+whether a secret you configure is temporary or permanent. Check which group
+your destination is in before deciding how to store its credential.
+
+### Destinations that bootstrap, then stop using the secret
+
+npm's npmjs primary and Cargo's crates.io primary publish through registry
+trusted publishing, which needs no stored credential. Neither will let you
+configure a trusted identity until the package exists, so the first publication
+has nothing to authenticate. Both recipes therefore expose a bootstrap path
+that uses a conventional token:
 
 | Destination | Bootstrap secret |
 | --- | --- |
 | npm (npmjs) | `NPM_TOKEN` |
 | Cargo (crates.io) | `CARGO_REGISTRY_TOKEN` |
-| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` |
-| GitHub Package Registry | none — the workflow token is accepted |
 
-Configure the secret your first publication needs, publish once, then configure
-the registry's trusted identity. You can leave the secret in place; it stops
-being reachable.
+Configure the secret, publish once, then configure the registry's trusted
+identity. From then on the secret is unreachable on this path.
 
-Two properties are worth knowing before you rely on this.
+Two properties hold for these two destinations.
 
 **The bootstrap path opens only on proof that the destination does not hold the
 package.** A registry client reports a missing package and a failed request the
 same way, and treating them alike would turn any transient registry outage into
-a steady-state publication authenticated by a long-lived credential. Each recipe
-separates the two outcomes and fails the job on an inconclusive probe. A
+a steady-state publication authenticated by a long-lived credential. Both
+recipes separate the two outcomes and fail the job on an inconclusive probe. A
 publication that fails this way is telling you the probe did not complete, not
 that the package is absent.
 
@@ -440,6 +450,27 @@ that the package is absent.
 falls back.** An identity failure fails the publication rather than reaching for
 the bootstrap token, so a misconfigured trusted publisher cannot silently revert
 to a long-lived credential.
+
+### Destinations whose credential is permanent
+
+Docker Hub and GitHub Package Registry implement no trusted-publishing exchange.
+There is no bootstrap and no probe: the configured credential authenticates
+**every** publication, not only the first.
+
+| Destination | Credential | Lifetime |
+| --- | --- | --- |
+| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | every publication |
+| GitHub Package Registry | the job's `GITHUB_TOKEN` | every publication, expires with the job |
+
+Docker Hub is the one to weigh. Its access token is long-lived, is presented on
+every release, and neither of the properties above applies to it — rotate it on
+whatever schedule you would use for any standing publish credential.
+
+GitHub Package Registry needs nothing configured. It accepts the
+repository-scoped workflow token, which expires when the job ends, so there is
+no standing credential to hold.
+
+### Every destination
 
 Override a conventional secret name with `token-secret` on the publisher, or
 `username-var` where the destination uses one. Configuration carries names

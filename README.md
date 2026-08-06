@@ -78,8 +78,8 @@ evidence for recommendations, dependency analysis, and Changesets parity, not
 an inclusion boundary. Discovery always skips version-control metadata,
 Intentional state, ecosystem caches, and tool-owned directories that describe
 how to work on a repository rather than what it releases, currently
-`.devcontainer`; ordinary names such as `build`, `dist`,
-`bin`, and `vendor` are scanned unless the repository ignores them.
+`.devcontainer`; ordinary names such as `build`, `dist`, `bin`, and `vendor`
+are scanned unless the repository ignores them.
 
 Every newly discovered npm, Cargo, Go, Python, MSBuild, Dart, Dev Container
 Feature, Dev Container Template, GitHub Action, Terraform module, Terraform
