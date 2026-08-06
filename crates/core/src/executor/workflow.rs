@@ -3471,6 +3471,20 @@ release-units:
         }));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn refuses_a_windows_drive_relative_delivery_action_path() {
+        let workspace = system_package_workspace("system-package-windows-prefix-action");
+        workspace.write(
+            ".intentional/config.yml",
+            &SYSTEM_PACKAGE_CONFIG.replace(".github/actions/deliver-rpm", "C:actions/deliver-rpm"),
+        );
+        assert!(blocked_diagnostics(&workspace).iter().any(|message| {
+            message.contains("C:actions/deliver-rpm")
+                && message.contains("workspace-relative directory")
+        }));
+    }
+
     #[test]
     fn refuses_a_delivery_action_metadata_file_instead_of_its_directory() {
         let workspace = system_package_workspace("system-package-metadata-action");

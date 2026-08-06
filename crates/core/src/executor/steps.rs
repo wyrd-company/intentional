@@ -554,7 +554,9 @@ fn local_action_uses(action: &std::path::Path) -> Result<String, StepsRefusal> {
         || action.components().any(|component| {
             matches!(
                 component,
-                std::path::Component::ParentDir | std::path::Component::CurDir
+                std::path::Component::Prefix(_)
+                    | std::path::Component::ParentDir
+                    | std::path::Component::CurDir
             )
         })
     {
