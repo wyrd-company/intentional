@@ -11,7 +11,8 @@
 
 use intentional_core::config::WorkflowRole;
 use intentional_core::executor::{
-    fixture::{derived_recipe_workflows, derived_recipes},
+    fixture::{derived_recipe_workflows, derived_recipes, underived_recipes},
+    recipe::catalog,
     OWNERSHIP_SENTINEL,
 };
 use serde_yaml::Value;
@@ -344,6 +345,64 @@ fn hosted_gate_queries_every_check_for_the_selected_pull_request() {
         gate["cmds"][0].as_str(),
         Some("gh pr checks {{ .PR }}"),
         "hosted status reads every check instead of trusting the local gate set"
+    );
+}
+
+/// Catalog entries whose refusal is proved elsewhere rather than derived here.
+///
+/// Each entry names a publication `compare_workflow` blocks with
+/// `maintained-recipe-underived`, proved by
+/// `refuses_a_publication_whose_maintained_recipe_is_not_derived` in the core
+/// crate. The roster exists to be *compared against* the catalog rather than
+/// consulted in place of it: the assertion below extracts the underived set
+/// through the same predicate derivation uses, so a catalog entry that stops
+/// deriving fails here until someone gives it refusal coverage and lists it.
+const REFUSED_RECIPES: &[(&str, &str)] = &[("goreleaser", "rpm"), ("goreleaser", "apt")];
+
+/// No catalog recipe escapes both the reach assertion and the refusal proof.
+///
+/// `derived_workflows_and_their_shell_bodies_parse` asserts the derived shell
+/// reaches exactly `derived_recipes()`. Nothing asserted anything about the
+/// complement, so a recipe excluded from derivation was absent from both sides
+/// of that equality and therefore invisible: it could be added, or silently stop
+/// deriving, and no test would change colour.
+///
+/// This holds the two sets to a partition of the catalog. The reach assertion
+/// covers one side, the refusal proof covers the other, and the equality below
+/// is what makes "one side or the other" exhaustive rather than assumed.
+#[test]
+fn every_catalog_recipe_is_either_derived_or_refused() {
+    let derived = derived_recipes();
+    let underived = underived_recipes();
+
+    assert_eq!(
+        derived.len() + underived.len(),
+        catalog().len(),
+        "the derived and underived sets partition the catalog: {} + {} != {}",
+        derived.len(),
+        underived.len(),
+        catalog().len()
+    );
+
+    let refused = underived
+        .iter()
+        .map(|recipe| {
+            (
+                recipe.packager.as_str().to_owned(),
+                recipe.publisher.as_str().to_owned(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let rostered = REFUSED_RECIPES
+        .iter()
+        .map(|(packager, publisher)| ((*packager).to_owned(), (*publisher).to_owned()))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        refused, rostered,
+        "a catalog recipe changed which side of derivation it falls on. Every underived \
+         recipe needs a refusal proved in \
+         refuses_a_publication_whose_maintained_recipe_is_not_derived and listed in \
+         REFUSED_RECIPES; a recipe that starts deriving must leave both."
     );
 }
 

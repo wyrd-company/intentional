@@ -182,6 +182,22 @@ release-units:
             .collect()
     }
 
+    /// Catalog entries workflow derivation refuses rather than deriving steps for.
+    ///
+    /// The complement of [`derived_recipes`] over the same catalog, extracted
+    /// through the same predicate. A caller comparing the two against
+    /// [`catalog`] proves no entry falls outside both, which is the only way an
+    /// entry can reach neither the reach assertion nor the refusal assertion and
+    /// so be covered by nothing.
+    #[must_use]
+    pub fn underived_recipes() -> Vec<Recipe> {
+        catalog()
+            .iter()
+            .copied()
+            .filter(|recipe| !super::steps::recipe_is_derived(recipe.packager, recipe.publisher))
+            .collect()
+    }
+
     /// Workspace whose release units are generated from the maintained catalog.
     fn recipe_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
