@@ -187,7 +187,11 @@ runs:
         if [[ "$INPUT_COMMAND" == "plan" ]]; then
           PLAN_OUTPUT="$(intentional "${ARGS[@]}")"
           echo "$PLAN_OUTPUT"
-          echo "plan=$PLAN_OUTPUT" >> "$GITHUB_OUTPUT"
+          {
+            echo "plan<<INTENTIONAL_PLAN_JSON"
+            printf '%s\n' "$PLAN_OUTPUT"
+            echo "INTENTIONAL_PLAN_JSON"
+          } >> "$GITHUB_OUTPUT"
           export PLAN_OUTPUT
           CHANGED="$(python3 - <<'PY'
         import json

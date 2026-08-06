@@ -22,9 +22,10 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Repository root, from the crate this test belongs to.
 fn repository_root() -> PathBuf {
@@ -36,10 +37,14 @@ fn repository_root() -> PathBuf {
 
 /// One shipped Action document, parsed.
 fn action_document(action: &str) -> serde_yaml::Value {
-    let path = repository_root()
-        .join("actions")
-        .join(action)
-        .join("action.yml");
+    let path = if action == "root" {
+        repository_root().join("action.yml")
+    } else {
+        repository_root()
+            .join("actions")
+            .join(action)
+            .join("action.yml")
+    };
     let text =
         fs::read_to_string(&path).unwrap_or_else(|_| panic!("{} is readable", path.display()));
     serde_yaml::from_str(&text).expect("the Action document parses")
@@ -90,10 +95,15 @@ fn step_environment(
             let resolved = supplied.get(input).cloned().unwrap_or_else(|| {
                 declared[input]["default"]
                     .as_str()
+                    .map(str::to_owned)
                     .unwrap_or_else(|| {
-                        panic!("input {input} declares no default, so this test must supply it")
+                        assert_ne!(
+                            declared[input]["required"].as_bool(),
+                            Some(true),
+                            "input {input} declares no default, so this test must supply it"
+                        );
+                        String::new()
                     })
-                    .to_owned()
             });
             (key, resolved)
         })
@@ -346,6 +356,179 @@ fn reported_identities(object: &str) -> String {
         "2".repeat(40),
         "4".repeat(64),
     )
+}
+
+/// Project reported values through the shipped boundary script.
+fn project_values(reported: &str, keys: &[&str]) -> Result<BTreeMap<String, String>, String> {
+    let temp = tempfile::tempdir().expect("temporary projection directory");
+    let output = temp.path().join("github-output");
+    let mut child = Command::new("bash")
+        .arg(repository_root().join("scripts/action/project-identities.sh"))
+        .arg(&output)
+        .args(keys)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("projector starts");
+    child
+        .stdin
+        .as_mut()
+        .expect("projector standard input")
+        .write_all(reported.as_bytes())
+        .expect("reported identities are written");
+    let result = child.wait_with_output().expect("projector completes");
+    if !result.status.success() {
+        return Err(String::from_utf8_lossy(&result.stderr).into_owned());
+    }
+    let written = fs::read_to_string(output).expect("projected output is readable");
+    Ok(written
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect())
+}
+
+#[test]
+fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
+    let temp = tempfile::tempdir().expect("identity fixtures");
+    let candidate = temp.path().join("candidate");
+    fs::create_dir(&candidate).expect("candidate directory");
+    let evidence = temp.path().join("evidence.yml");
+    let built = temp.path().join("built.yml");
+    let sealed = temp.path().join("sealed.yml");
+    for path in [&evidence, &built, &sealed] {
+        fs::write(path, "fixture\n").expect("identity file");
+    }
+    let keys = [
+        "source-sha",
+        "release-sha",
+        "global-tag-object",
+        "plan-digest",
+        "digest",
+        "version",
+        "global-tag",
+        "evidence-path",
+        "built-subject-path",
+        "sealed-phase-evidence",
+        "candidate-path",
+    ];
+    let reported = format!(
+        "source-sha: {source}\nrelease-sha: {release}\nglobal-tag-object: {object}\nplan-digest: sha256:{plan}\ndigest: sha256:{digest}\nversion: 1.2.3-rc.1+build.2\nglobal-tag: release/1.2.3\nevidence-path: {}\nbuilt-subject-path: {}\nsealed-phase-evidence: {}\ncandidate-path: {}\n",
+        evidence.display(),
+        built.display(),
+        sealed.display(),
+        candidate.display(),
+        source = "1".repeat(40),
+        release = "2".repeat(40),
+        object = "3".repeat(64),
+        plan = "4".repeat(64),
+        digest = "5".repeat(64),
+    );
+    let projected = project_values(&reported, &keys).expect("every declared shape projects");
+    assert_eq!(
+        projected.len(),
+        keys.len(),
+        "every requested identity projects"
+    );
+    assert!(
+        project_values("unowned-key: value\n", &["unowned-key"]).is_err(),
+        "a key with no declared contract is refused"
+    );
+}
+
+#[test]
+fn refuses_noncanonical_projected_digests_and_versions() {
+    for (key, malformed) in [
+        ("digest", format!("{}", "5".repeat(64))),
+        ("plan-digest", "sha256:ABCDEF".to_owned()),
+        ("version", "01.2.3".to_owned()),
+        ("version", "1.2.3-01".to_owned()),
+    ] {
+        let refused = project_values(&format!("{key}: {malformed}\n"), &[key]);
+        assert!(
+            refused.is_err(),
+            "{key} value {malformed:?} is refused: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn refuses_projected_paths_that_do_not_have_their_declared_kind() {
+    let temp = tempfile::tempdir().expect("missing identity paths");
+    for key in [
+        "evidence-path",
+        "built-subject-path",
+        "sealed-phase-evidence",
+    ] {
+        let directory = temp.path().join(key);
+        fs::create_dir(&directory).expect("wrong-kind directory");
+        assert!(
+            project_values(&format!("{key}: {}\n", directory.display()), &[key]).is_err(),
+            "{key} requires a file rather than any existing path"
+        );
+    }
+    let file = temp.path().join("candidate-path");
+    fs::write(&file, "wrong kind\n").expect("wrong-kind file");
+    assert!(
+        project_values(
+            &format!("candidate-path: {}\n", file.display()),
+            &["candidate-path"]
+        )
+        .is_err(),
+        "candidate-path requires a directory"
+    );
+}
+
+#[test]
+fn writes_multiline_root_action_plan_as_one_delimited_output() {
+    let document = action_document("root");
+    let step = action_step(&document, "run");
+    let body = step["run"].as_str().expect("the root Action run body");
+    let temp = tempfile::tempdir().expect("root Action run directory");
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin).expect("stub directory");
+    let stub = bin.join("intentional");
+    fs::write(
+        &stub,
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$INTENTIONAL_PLAN_FIXTURE\"\n",
+    )
+    .expect("stub written");
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("stub executable");
+
+    let plan = "{\n  \"release_units\": [\n    {\"id\": \"example-unit\"}\n  ]\n}";
+    let output = temp.path().join("github-output");
+    fs::write(&output, "").expect("GitHub output file");
+    let mut supplied = BTreeMap::new();
+    supplied.insert("command", "plan".to_owned());
+    let mut environment = step_environment(&document, &step, &supplied);
+    environment.insert("GITHUB_OUTPUT".to_owned(), output.display().to_string());
+    environment.insert(
+        "GITHUB_WORKSPACE".to_owned(),
+        temp.path().display().to_string(),
+    );
+    environment.insert("INTENTIONAL_PLAN_FIXTURE".to_owned(), plan.to_owned());
+    environment.insert(
+        "PATH".to_owned(),
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    let status = Command::new("bash")
+        .arg("-c")
+        .arg(body)
+        .env_clear()
+        .envs(environment)
+        .status()
+        .expect("root Action body runs");
+    assert!(status.success(), "the multiline plan succeeds");
+    assert_eq!(
+        fs::read_to_string(output).expect("step output is readable"),
+        format!("plan<<INTENTIONAL_PLAN_JSON\n{plan}\nINTENTIONAL_PLAN_JSON\nchanged=true\n"),
+        "every plan line remains inside one output assignment"
+    );
 }
 
 /// The projected tag object is held to the shape a Git object identity has.
