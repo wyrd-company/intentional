@@ -2193,6 +2193,21 @@ release-units:
                 "schema declares the {publisher} publisher"
             );
         }
+        for (publisher, target, reference) in [
+            ("npm-publisher", "npmjs", "#/$defs/npmjs-target"),
+            ("npm-publisher", "github", "#/$defs/npm-github-target"),
+            (
+                "cargo-publisher",
+                "registry",
+                "#/$defs/cargo-registry-target",
+            ),
+        ] {
+            assert_eq!(
+                schema["$defs"][publisher]["properties"][target]["$ref"].as_str(),
+                Some(reference),
+                "schema target {publisher}.{target} agrees with the runtime field"
+            );
+        }
         assert_eq!(
             schema["$defs"]["attached-component"]["enum"]
                 .as_sequence()
