@@ -382,6 +382,11 @@
             &stubs.join("cargo"),
             r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ ${1:-} == metadata ]]; then
+  manifest="$(realpath Cargo.toml)"
+  jq -cn --arg manifest "${manifest}" '{packages: [{name: "sample-package", manifest_path: $manifest, targets: [{name: "sample-tool", kind: ["bin"]}]}]}'
+  exit 0
+fi
 target=""
 binary=""
 while [[ $# -gt 0 ]]; do

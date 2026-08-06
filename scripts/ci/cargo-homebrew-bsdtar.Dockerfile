@@ -35,7 +35,9 @@ FROM debian:11.11-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e814
 COPY --from=bsdgzip /usr/local/bin/gzip /usr/local/bin/gzip
 
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends libarchive-tools=3.4.3-2+deb11u4 \
+    && apt-get install --yes --no-install-recommends \
+        jq=1.6-2.1+deb11u3 \
+        libarchive-tools=3.4.3-2+deb11u4 \
     && test "$(bsdtar --version | sed -n '1s/bsdtar \([^ ]*\).*/\1/p')" = 3.4.3 \
     && test "$(gzip --version 2>&1)" = "FreeBSD gzip 20190107" \
     && rm -rf /var/lib/apt/lists/*
