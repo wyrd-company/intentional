@@ -297,12 +297,20 @@ fn cargo_homebrew_compatibility_task_is_part_of_repository_validation() {
     let hosted_steps = workflow["jobs"]["test"]["steps"]
         .as_sequence()
         .expect("hosted test steps");
-    assert!(
-        hosted_steps.iter().any(|step| {
+    let compatibility_step = hosted_steps
+        .iter()
+        .position(|step| {
             step["name"].as_str() == Some("Exercise Cargo Homebrew emitted bodies")
                 && step["env"]["LC_ALL"].as_str() == Some("C")
                 && step["run"].as_str() == compatibility_command
-        }),
-        "hosted CI executes the documented Cargo/Homebrew compatibility command"
+        })
+        .expect("hosted CI executes the documented Cargo/Homebrew compatibility command");
+    let workspace_test_step = hosted_steps
+        .iter()
+        .position(|step| step["run"].as_str() == Some("cargo test --workspace"))
+        .expect("hosted CI executes aggregate workspace tests");
+    assert!(
+        compatibility_step < workspace_test_step,
+        "hosted Cargo/Homebrew compatibility runs before aggregate workspace tests"
     );
 }

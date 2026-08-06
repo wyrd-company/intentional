@@ -43,14 +43,14 @@ jobs:
         run: |
           scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
           echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
-      - name: Test
-        run: cargo test --workspace
       - name: Exercise Cargo Homebrew emitted bodies
         env:
           LC_ALL: C
         run: >-
           cargo test -p intentional-core cargo_homebrew_platform_contract
           -- --ignored --nocapture
+      - name: Test
+        run: cargo test --workspace
       - name: Check this repository with intentional
         run: cargo run --bin intentional -- check
 
