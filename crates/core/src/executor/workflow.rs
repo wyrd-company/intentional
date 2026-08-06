@@ -50,9 +50,7 @@ use templates::{
 /// derivation module rather than through a second path into the templates.
 pub(super) use templates::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
 
-#[path = "workflow/build.rs"]
 mod build;
-#[path = "workflow/publishers.rs"]
 mod publishers;
 
 use build::{build_environment, cargo_archive_platforms};
