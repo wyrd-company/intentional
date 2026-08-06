@@ -440,7 +440,7 @@ fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
 #[test]
 fn refuses_noncanonical_projected_digests_and_versions() {
     for (key, malformed) in [
-        ("digest", format!("{}", "5".repeat(64))),
+        ("digest", "5".repeat(64)),
         ("plan-digest", "sha256:ABCDEF".to_owned()),
         ("version", "01.2.3".to_owned()),
         ("version", "1.2.3-01".to_owned()),
