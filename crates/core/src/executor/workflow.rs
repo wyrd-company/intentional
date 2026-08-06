@@ -4835,6 +4835,45 @@ release-units:
                 "formula carries {line}:\n{formula}"
             );
         }
+
+        let digit_root = aggregate_root.join("digit-leading-bytes");
+        std::fs::create_dir_all(&digit_root).expect("digit-leading subject directory");
+        for (archive, bytes) in [
+            ("linux-x86_64.tar.gz", linux_x86_64_bytes.as_slice()),
+            ("linux-arm64.tar.gz", linux_arm64_bytes.as_slice()),
+            ("macos-arm64.tar.gz", macos_arm64_bytes.as_slice()),
+        ] {
+            std::fs::write(digit_root.join(archive), bytes).expect("digit-leading archive");
+        }
+        let mut digit_command = std::process::Command::new("bash");
+        digit_command
+            .arg("-c")
+            .arg(aggregate_body)
+            .current_dir(workspace.root().join("component"))
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository");
+        for (key, value) in step_environment(
+            aggregate
+                .iter()
+                .find(|step| step["run"].as_str() == Some(aggregate_body))
+                .expect("aggregate build step"),
+        ) {
+            digit_command.env(key, value);
+        }
+        digit_command
+            .env("INTENTIONAL_SUBJECT", &digit_root)
+            .env("INTENTIONAL_SUBJECT_IDENTITY", "2fast-tool");
+        let output = digit_command
+            .output()
+            .expect("digit-leading formula builds");
+        assert!(output.status.success());
+        let digit_formula =
+            std::fs::read_to_string(digit_root.join("homebrew/Formula/2fast-tool.rb"))
+                .expect("digit-leading formula");
+        assert!(
+            digit_formula.starts_with("class V2fastTool < Formula\n"),
+            "formula class is a Ruby constant: {digit_formula}"
+        );
         let publisher = job_steps(
             &jobs,
             "intentional_publish_component_command_homebrew_primary",
