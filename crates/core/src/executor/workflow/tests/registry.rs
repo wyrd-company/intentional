@@ -65,6 +65,33 @@
             .unwrap_or_default()
     }
 
+    /// The npm client performs the publish while the job carries publication
+    /// authority, so its complete version is part of the emitted recipe rather
+    /// than a lower bound resolved again on every run.
+    #[test]
+    fn pins_the_trusted_publishing_npm_client_to_one_exact_version() {
+        let workspace = npm_workspace("workflow-npm-client-pin");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let step = publisher_steps(workspace.root(), "primary")
+            .into_iter()
+            .find(|step| {
+                step["name"].as_str() == Some("Prepare the npm client for trusted publishing")
+            })
+            .expect("the primary npm recipe prepares its trusted-publishing client");
+        let environment = step_environment(&step);
+        assert_eq!(
+            environment.get("INTENTIONAL_NPM_VERSION").map(String::as_str),
+            Some("11.5.1"),
+            "the publication client resolves no future npm release"
+        );
+        assert!(
+            step["run"]
+                .as_str()
+                .is_some_and(|body| body.contains("npm install --global \"npm@${INTENTIONAL_NPM_VERSION}\"")),
+            "the installer consumes the exact-version environment binding"
+        );
+    }
+
     // A recipe's readback writes the observation and the portable command reads
     // it, and the two agree only by path. Before the recipes existed nothing
     // wrote one at all: `verify publication` was handed a path that never came

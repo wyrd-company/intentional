@@ -632,6 +632,25 @@ if ! run_check "$directory" "$root/github-action-pins.yml"; then
   report "$directory"
 fi
 
+# The verifier workflow bootstraps through checkout before it can read the
+# declaration. That dependency participates in the same census: the workflow
+# must use the complete checkout commit the declaration names.
+case_number=$((case_number + 1))
+declared_checkout="$(awk '$1 == "repository:" && $2 == "actions/checkout" { found = 1 }
+  found && $1 == "commit:" { print $2; exit }' "$root/github-action-pins.yml")"
+workflow_checkouts="$(grep -oE 'uses: actions/checkout@[0-9a-f]{40}' \
+  "$root/.github/workflows/github-action-pins.yml" | cut -d@ -f2 || true)"
+if [[ -z "$declared_checkout" ]]; then
+  echo "the Action-pin declaration does not name checkout" >&2
+  failures=$((failures + 1))
+elif [[ "$(printf '%s\n' "$workflow_checkouts" | grep -c . || true)" -ne 1 ]]; then
+  echo "the verifier workflow must contain exactly one completely pinned checkout" >&2
+  failures=$((failures + 1))
+elif [[ "$workflow_checkouts" != "$declared_checkout" ]]; then
+  echo "the verifier workflow checkout does not match its declared commit" >&2
+  failures=$((failures + 1))
+fi
+
 # ---------------------------------------------------------------------------
 # Resilience
 # ---------------------------------------------------------------------------

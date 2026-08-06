@@ -1648,6 +1648,10 @@ proposed-design:
     `github-action-pins.yml`. Offline conformance compares that authored table
     with the independently enumerated template constants in both directions and
     accepts only declared 40-hexadecimal commit identities in derived workflows.
+    The evidence workflow itself participates in this census: its checkout step
+    uses the complete commit declared for `actions/checkout`, and offline
+    conformance binds that bootstrap use back to the declaration before the
+    network reader runs.
     A network-only evidence workflow resolves each upstream tag on every pull
     request and push. Once merged to the default branch, it also runs every
     Monday. Each run reads the whole declaration before it resolves anything:
@@ -1669,3 +1673,10 @@ proposed-design:
     other side, comparing two hand-maintained halves that one mistake makes
     wrong consistently. Neither boundary is a defect in the declaration, and
     neither is grounds to repin an entry.
+
+  npm-trusted-publishing-client: >-
+    npm 11.5.1 is the exact client installed for npmjs trusted publishing. The
+    client performs publication while the job carries publication authority,
+    so the executor does not resolve an open range to a future client at run
+    time. GitHub Package Registry does not implement trusted publishing and
+    continues to use the runner's installed npm client.

@@ -204,14 +204,14 @@ const GITHUB_PACKAGES_DESTINATION: &str = "npm.pkg.github.com";
 /// Default Cargo registry, which is also the one that implements trusted publishing.
 const CRATES_IO: &str = "crates.io";
 
-/// Lowest npm release that implements registry trusted publishing.
+/// npm release used for registry trusted publishing.
 ///
 /// A stock runner's bundled npm is older than this on the images this executor
 /// targets, and an older client falls back to looking for a token that a
-/// trusted-publishing repository deliberately does not hold. Stating the
-/// requirement as a range makes the failure a resolution error naming the
-/// version rather than an authentication error naming nothing.
-const NPM_TRUSTED_PUBLISHING_RANGE: &str = ">=11.5.1";
+/// trusted-publishing repository deliberately does not hold. The exact version
+/// keeps the client executing with publication authority inside the same
+/// reviewed supply-chain boundary as the executor's other dependencies.
+const NPM_TRUSTED_PUBLISHING_VERSION: &str = "11.5.1";
 
 /// Why one publication derives no maintained recipe steps.
 ///
@@ -1140,8 +1140,8 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     // its recipe stays on the runner's own client.
     if primary {
         steps.push_str(&format!(
-            "  - name: Prepare the npm client for trusted publishing\n    env:\n      @ENVVAR@NPM_RANGE: {}\n    run: |\n{}      npm install --global \"npm@${{@ENVVAR@NPM_RANGE}}\"\n      npm --version\n",
-            scalar(NPM_TRUSTED_PUBLISHING_RANGE),
+            "  - name: Prepare the npm client for trusted publishing\n    env:\n      @ENVVAR@NPM_VERSION: {}\n    run: |\n{}      npm install --global \"npm@${{@ENVVAR@NPM_VERSION}}\"\n      npm --version\n",
+            scalar(NPM_TRUSTED_PUBLISHING_VERSION),
             STRICT_MODE,
         ));
     }
