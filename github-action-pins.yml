@@ -33,7 +33,7 @@ actions:
     commit: f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
   - constant: CROSS_INSTALL_ACTION
     repository: taiki-e/install-action
-    tag: v2
+    tag: v2.85.8
     commit: cb33e69fad06166ca28a42b2575e4dadabf62ee8
   - constant: SETUP_CRANE_ACTION
     repository: imjasonh/setup-crane
