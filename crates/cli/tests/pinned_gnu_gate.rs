@@ -267,3 +267,25 @@ fi
         );
     }
 }
+
+#[test]
+fn cargo_homebrew_compatibility_task_is_part_of_local_ci() {
+    let taskfile = fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
+    let taskfile: Value = serde_yaml::from_str(&taskfile).expect("Taskfile parses");
+    let dependencies = taskfile["tasks"]["ci"]["deps"]
+        .as_sequence()
+        .expect("local CI dependencies");
+    assert!(
+        dependencies
+            .iter()
+            .any(|dependency| dependency.as_str() == Some("cargo-homebrew:compatibility")),
+        "local CI executes the Cargo/Homebrew compatibility gate"
+    );
+    assert_eq!(
+        taskfile["tasks"]["cargo-homebrew:compatibility"]["cmds"][0].as_str(),
+        Some(
+            "cargo test -p intentional-core cargo_homebrew_platform_contract -- --ignored --nocapture"
+        ),
+        "the documented gate selects the four product-shaped platform contract tests"
+    );
+}

@@ -37,7 +37,26 @@ tasks:
 
   ci:
     desc: Run all continuous-integration checks locally
-    deps: [ docs:check, fmt-check, lint, npm:test, release:check, self-check, test ]
+    deps:
+      [
+        cargo-homebrew:compatibility,
+        docs:check,
+        fmt-check,
+        lint,
+        npm:test,
+        release:check,
+        self-check,
+        test,
+      ]
+
+  cargo-homebrew:compatibility:
+    desc: >-
+      Execute emitted Cargo/Homebrew bodies against workspace and older-bsdtar
+      contracts
+    cmds:
+      - >-
+        cargo test -p intentional-core cargo_homebrew_platform_contract
+        -- --ignored --nocapture
 
   hosted:check:
     desc: >-

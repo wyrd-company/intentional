@@ -1791,6 +1791,7 @@ mod tests {
 
     include!("workflow/tests/goreleaser.rs");
     include!("workflow/tests/homebrew.rs");
+    include!("workflow/tests/homebrew_platform_contracts.rs");
     include!("workflow/tests/system_packages.rs");
     include!("workflow/tests/aur.rs");
     include!("workflow/tests/registry.rs");

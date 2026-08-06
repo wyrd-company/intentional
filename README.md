@@ -604,6 +604,7 @@ task build
 task fmt-check
 task lint
 task test
+task cargo-homebrew:compatibility
 task ci
 ```
 
@@ -617,3 +618,9 @@ task hosted:check PR=<pull-request-number>
 
 Every repository check must pass at the integration head. A red check is
 work to diagnose or assign before the next change treats that head as its base.
+
+`task cargo-homebrew:compatibility` needs Docker. It executes the derived
+Cargo/Homebrew archive body from a real Cargo workspace member and executes the
+derived macOS archive command with bsdtar 3.4.3. That older libarchive run proves
+the command, archive content, executable mode, and timestamp contract. It does
+not reproduce every property of the hosted macOS 14 runner.
