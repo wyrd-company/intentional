@@ -475,9 +475,11 @@ fn the_release_preparation_job_mints_no_repository_token() {
 /// selector follows the emitted Action owner rather than a roster of templates.
 /// The census keys each derivation site on its exact emitted owner identity —
 /// workflow role, job id, and step id — and asserts equality against the
-/// fixture-specific roster below. Those seven identities are independent
-/// template literals in the exhaustive recipe fixture, not a projection from
-/// one production owner.
+/// fixture-specific roster below. Those seven identities originate in five
+/// token-step template sites: three instantiate once, while
+/// `PUBLISH_PHASE_TAG_JOB` and `DESTINATION_TOKEN_STEPS` each fan out twice in
+/// the exhaustive recipe fixture. The roster records every emitted owner
+/// instead of projecting from one production owner.
 #[test]
 fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
     const EXPECTED_DERIVATION_SITES: &[(&str, &str, &str)] = &[
