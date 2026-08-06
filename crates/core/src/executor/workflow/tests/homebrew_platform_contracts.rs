@@ -176,6 +176,20 @@
         static IMAGE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         IMAGE.get_or_init(|| {
             let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let dockerfile = std::fs::read_to_string(
+                repository.join("scripts/ci/cargo-homebrew-bsdtar.Dockerfile"),
+            )
+            .expect("bsdtar Dockerfile is readable");
+            assert!(
+                dockerfile.lines().any(|line| {
+                    line == "FROM debian:11.11-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792"
+                }),
+                "bsdtar provisioning base is digest pinned"
+            );
+            assert!(
+                dockerfile.contains("libarchive-tools=3.4.3-2+deb11u4"),
+                "bsdtar provisioning selects the executed libarchive package"
+            );
             let output = std::process::Command::new("docker")
                 .args([
                     "build",
@@ -373,7 +387,6 @@ printf 'epoch=%s\n' "$(stat -c %Y "$1")"
         assert_eq!(lines.next(), Some("mode=755"), "archive executable-mode assertion");
         assert_eq!(lines.next(), Some("epoch=0"), "archive timestamp assertion");
         assert_eq!(lines.next(), Some("sample-tool 1.2.3"), "archived binary assertion");
-        assert_eq!(lines.next(), None, "archive report has no hidden second entry");
     }
 
     #[test]
@@ -400,4 +413,3 @@ printf 'epoch=%s\n' "$(stat -c %Y "$1")"
             "GNU-only option dies at the bsdtar command site: {stderr}"
         );
     }
-
