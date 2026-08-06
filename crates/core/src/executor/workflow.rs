@@ -3440,6 +3440,54 @@ release-units:
     }
 
     #[test]
+    fn refuses_an_absolute_delivery_action_path() {
+        let workspace = system_package_workspace("system-package-absolute-action");
+        workspace.write(
+            ".intentional/config.yml",
+            &SYSTEM_PACKAGE_CONFIG.replace(
+                ".github/actions/deliver-rpm",
+                "/workspace/actions/deliver-rpm",
+            ),
+        );
+        assert!(blocked_diagnostics(&workspace).iter().any(|message| {
+            message.contains("/workspace/actions/deliver-rpm")
+                && message.contains("workspace-relative directory")
+        }));
+    }
+
+    #[test]
+    fn refuses_a_delivery_action_path_that_escapes_the_workspace() {
+        let workspace = system_package_workspace("system-package-parent-action");
+        workspace.write(
+            ".intentional/config.yml",
+            &SYSTEM_PACKAGE_CONFIG.replace(
+                ".github/actions/deliver-rpm",
+                ".github/actions/../deliver-rpm",
+            ),
+        );
+        assert!(blocked_diagnostics(&workspace).iter().any(|message| {
+            message.contains(".github/actions/../deliver-rpm")
+                && message.contains("workspace-relative directory")
+        }));
+    }
+
+    #[test]
+    fn refuses_a_delivery_action_metadata_file_instead_of_its_directory() {
+        let workspace = system_package_workspace("system-package-metadata-action");
+        workspace.write(
+            ".intentional/config.yml",
+            &SYSTEM_PACKAGE_CONFIG.replace(
+                ".github/actions/deliver-rpm",
+                ".github/actions/deliver-rpm/action.yml",
+            ),
+        );
+        assert!(blocked_diagnostics(&workspace).iter().any(|message| {
+            message.contains(".github/actions/deliver-rpm/action.yml")
+                && message.contains("workspace-relative directory")
+        }));
+    }
+
+    #[test]
     fn comparison_revalidates_delivery_metadata_without_workflow_drift() {
         for (label, mutate, expected) in [
             (
@@ -3482,6 +3530,7 @@ release-units:
         name: &str,
         version: &str,
         architecture: &str,
+        sealed_bytes: &[u8],
     ) -> (bool, String) {
         let workspace = system_package_workspace(label);
         converge(workspace.root(), WorkflowRole::Publish);
@@ -3513,7 +3562,7 @@ release-units:
         std::fs::create_dir_all(&subject).expect("subject");
         let package = subject.join("sample-command_1.2.3.deb");
         std::fs::write(&package, "sealed package bytes").expect("package");
-        let digest = crate::evidence::digest_bytes(b"sealed package bytes");
+        let digest = crate::evidence::digest_bytes(sealed_bytes);
         let stubs = temporary.join("stubs");
         std::fs::create_dir_all(&stubs).expect("stubs");
         let dpkg = stubs.join("dpkg-deb");
@@ -3570,13 +3619,43 @@ release-units:
 
     #[test]
     fn refuses_a_package_whose_declared_name_disagrees_with_the_release() {
-        assert!(!run_apt_establishment("system-package-name", "other-command", "1.2.3", "amd64").0);
+        assert!(
+            !run_apt_establishment(
+                "system-package-name",
+                "other-command",
+                "1.2.3",
+                "amd64",
+                b"sealed package bytes"
+            )
+            .0
+        );
     }
 
     #[test]
     fn refuses_a_package_whose_declared_version_disagrees_with_the_release() {
         assert!(
-            !run_apt_establishment("system-package-version", "example-tool", "1.2.2", "amd64").0
+            !run_apt_establishment(
+                "system-package-version",
+                "example-tool",
+                "1.2.2",
+                "amd64",
+                b"sealed package bytes"
+            )
+            .0
+        );
+    }
+
+    #[test]
+    fn refuses_a_package_whose_bytes_disagree_with_the_sealed_digest() {
+        assert!(
+            !run_apt_establishment(
+                "system-package-digest",
+                "example-tool",
+                "1.2.3",
+                "amd64",
+                b"different sealed bytes",
+            )
+            .0
         );
     }
 
@@ -3588,6 +3667,7 @@ release-units:
                 "example-tool",
                 "1.2.3",
                 architecture,
+                b"sealed package bytes",
             );
             assert!(success, "{architecture} establishes: {outputs}");
             assert!(outputs
@@ -3714,7 +3794,11 @@ release-units:
         std::fs::write(subject.join("sample-command.deb"), "sealed package bytes")
             .expect("package");
         let digest = crate::evidence::digest_bytes(b"sealed package bytes");
-        let packages = "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n";
+        let packages = if scenario == "package-absent" {
+            "Package: another\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: deadbeef\n\n"
+        } else {
+            "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
+        };
         let packages_digest = crate::evidence::digest_bytes(packages.as_bytes())
             .trim_start_matches("sha256:")
             .to_owned();
@@ -3725,13 +3809,14 @@ release-units:
 set -euo pipefail
 output=${*: -1}; url=${*: -3:1}
 case "${url}" in
-  *InRelease)
+  https://packages.invalid/apt/dists/current/InRelease)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
     printf 'SHA256:\n %s 1 main/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
-  *Packages)
-    if [ "${FAKE_SCENARIO}" = package-absent ]; then printf 'Package: another\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: deadbeef\n\n' > "${output}"; else printf '%s' "${FAKE_PACKAGES}" > "${output}"; fi ;;
-  *) printf 'key served today' > "${output}" ;;
+  https://packages.invalid/apt/dists/current/main/binary-amd64/Packages)
+    printf '%s' "${FAKE_PACKAGES}" > "${output}" ;;
+  https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
+  *) exit 64 ;;
 esac
 "#),
             ("gpg", "#!/usr/bin/env bash\nset -euo pipefail\nout=\"$5\"; in=\"$6\"; cp \"${in}\" \"${out}\"\n"),
@@ -3739,7 +3824,29 @@ esac
             ("dpkg-deb", "#!/usr/bin/env bash\nprintf 'amd64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
             ("apt", "#!/usr/bin/env bash\nprintf 'apt 2.0\\n'\n"),
-            ("apt-get", "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \" $* \" == *' download '* ]]; then printf 'sealed package bytes' > retrieved.deb; fi\n"),
+            ("apt-get", r#"#!/usr/bin/env bash
+set -euo pipefail
+etc= state= cache=
+for argument in "$@"; do
+  case "${argument}" in
+    Dir::Etc=*) etc=${argument#Dir::Etc=} ;;
+    Dir::State=*) state=${argument#Dir::State=} ;;
+    Dir::Cache=*) cache=${argument#Dir::Cache=} ;;
+  esac
+done
+test "${etc}" = "${RELEASE_AUTOMATION_WORK}/etc/apt"
+test "${state}" = "${RELEASE_AUTOMATION_WORK}/state"
+test "${cache}" = "${RELEASE_AUTOMATION_WORK}/cache"
+source_line=$(cat "${etc}/sources.list")
+test "${source_line}" = "deb [signed-by=${RELEASE_AUTOMATION_WORK}/keyring.gpg] https://packages.invalid/apt current main"
+if [[ " $* " == *' download '* ]]; then
+  if [ "${FAKE_SCENARIO}" = retrieved-mismatch ]; then
+    printf 'different retrieved bytes' > retrieved.deb
+  else
+    printf 'sealed package bytes' > retrieved.deb
+  fi
+fi
+"#),
         ] {
             let path = stubs.join(name);
             std::fs::write(&path, body).expect("stub");
@@ -3806,6 +3913,14 @@ esac
         assert!(!run_apt_readback("apt-package-absent", "package-absent"));
     }
 
+    #[test]
+    fn apt_readback_refuses_retrieved_bytes_that_disagree_with_the_sealed_subject() {
+        assert!(!run_apt_readback(
+            "apt-retrieved-mismatch",
+            "retrieved-mismatch"
+        ));
+    }
+
     fn run_rpm_readback(label: &str, scenario: &str) -> bool {
         let workspace = system_package_workspace(label);
         converge(workspace.root(), WorkflowRole::Publish);
@@ -3853,27 +3968,72 @@ esac
 set -euo pipefail
 output=${*: -1}; url=${*: -3:1}
 case "${url}" in
-  *repomd.xml.asc) printf 'signature' > "${output}" ;;
-  *repomd.xml)
+  https://packages.invalid/rpm/stable/repodata/repomd.xml.asc) printf 'signature' > "${output}" ;;
+  https://packages.invalid/rpm/stable/repodata/repomd.xml)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
     printf '<repomd><data type="primary"><checksum>%s</checksum><location href="repodata/primary.xml"/></data></repomd>' "${digest}" > "${output}" ;;
-  *primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
-  *) printf 'key served today' > "${output}" ;;
+  https://packages.invalid/rpm/stable/repodata/primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+  https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
+  *) exit 64 ;;
 esac
 "#),
             ("gpg", "#!/usr/bin/env bash\nset -euo pipefail\nout=\"$5\"; in=\"$6\"; cp \"${in}\" \"${out}\"\n"),
             ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
             ("rpm", "#!/usr/bin/env bash\nprintf 'arm64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
+            ("python3", r#"#!/usr/bin/env bash
+set -euo pipefail
+script=$(cat)
+if [ "$#" -eq 2 ]; then
+  [[ "${script}" == *"ET.parse(sys.argv[1])"* ]]
+  [[ "${script}" == *"node.attrib.get('type') == 'primary'"* ]]
+  [[ "${script}" == *"node.tag.endswith('checksum')"* ]]
+  [[ "${script}" == *"node.tag.endswith('location')"* ]]
+  grep -Fq "<checksum>${FAKE_PRIMARY_DIGEST}</checksum>" "$2"
+  grep -Fq '<location href="repodata/primary.xml"/>' "$2"
+  printf '%s repodata/primary.xml\n' "${FAKE_PRIMARY_DIGEST}"
+elif [ "$#" -eq 6 ]; then
+  [[ "${script}" == *"fields['name'].text == sys.argv[2]"* ]]
+  [[ "${script}" == *"version.attrib.get('ver') == sys.argv[3]"* ]]
+  [[ "${script}" == *"fields['arch'].text == sys.argv[4]"* ]]
+  [[ "${script}" == *"checksum.text == sys.argv[5]"* ]]
+  document=$(cat "$2")
+  [[ "${document}" == *"<name>${3}</name>"* ]]
+  [[ "${document}" == *"<version ver=\"${4}\""* ]]
+  [[ "${document}" == *"<arch>${5}</arch>"* ]]
+  [[ "${document}" == *"<checksum>${6}</checksum>"* ]]
+else
+  exit 64
+fi
+"#),
             ("dnf", r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = --version ]; then printf 'dnf 4.0\n'; exit 0; fi
 test "${1}" = --config
 test "${2}" = /dev/null
-[[ " $* " == *' --setopt=reposdir='* ]]
+reposdir= cache= state=
+for argument in "$@"; do
+  case "${argument}" in
+    --setopt=reposdir=*) reposdir=${argument#--setopt=reposdir=} ;;
+    --setopt=cachedir=*) cache=${argument#--setopt=cachedir=} ;;
+    --setopt=persistdir=*) state=${argument#--setopt=persistdir=} ;;
+  esac
+done
+test "${reposdir}" = "${RELEASE_AUTOMATION_WORK}/etc/yum.repos.d"
+test "${cache}" = "${RELEASE_AUTOMATION_WORK}/cache"
+test "${state}" = "${RELEASE_AUTOMATION_WORK}/state"
+repo=${reposdir}/intentional.repo
+test "$(grep -c '^gpgcheck=1$' "${repo}")" -eq 1
+test "$(grep -c '^repo_gpgcheck=1$' "${repo}")" -eq 1
+grep -Fxq 'baseurl=https://packages.invalid/rpm/stable' "${repo}"
+grep -Fxq "gpgkey=file://${RELEASE_AUTOMATION_WORK}/key" "${repo}"
 [[ " $* " == *' install example-tool-1.2.3.arm64 '* ]]
-printf 'sealed package bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+if [ "${FAKE_SCENARIO}" = retrieved-mismatch ]; then
+  printf 'different retrieved bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+else
+  printf 'sealed package bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+fi
 "#),
         ] {
             let path = stubs.join(name);
@@ -3942,6 +4102,14 @@ printf 'sealed package bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-to
     #[test]
     fn rpm_readback_refuses_a_package_absent_from_the_signed_index() {
         assert!(!run_rpm_readback("rpm-package-absent", "package-absent"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_retrieved_bytes_that_disagree_with_the_sealed_subject() {
+        assert!(!run_rpm_readback(
+            "rpm-retrieved-mismatch",
+            "retrieved-mismatch"
+        ));
     }
 
     // The sealed subject identity is what a publisher fragment is compared
