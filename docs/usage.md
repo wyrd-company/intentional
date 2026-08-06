@@ -462,8 +462,6 @@ credential — and neither registry will let you configure a trusted identity
 until the package exists. So the first publication uses the token above, and
 after you configure the trusted identity that token is unreachable on this path.
 
-Two properties hold for these two destinations.
-
 **The bootstrap path opens only on proof that the destination does not hold the
 package.** A registry client reports a missing package and a failed request the
 same way, and treating them alike would turn a transient registry outage into a

@@ -221,6 +221,25 @@ release-units:
         super::recipe::configured_target_identities(package)
     }
 
+    /// Stored credentials the authority transition reads before minting repository-write tokens.
+    #[must_use]
+    pub fn long_lived_repository_write_credentials(
+    ) -> Vec<(super::recipe::StoredCredentialKind, String)> {
+        super::recipe::long_lived_repository_write_credentials()
+    }
+
+    /// Publication routes whose maintained recipes implement registry trusted publishing.
+    #[must_use]
+    pub fn trusted_publishing_bootstrap_destinations() -> Vec<(PublisherKind, String)> {
+        super::recipe::trusted_publishing_bootstrap_destinations()
+    }
+
+    /// Destinations whose maintained recipes read a stored credential on every publication.
+    #[must_use]
+    pub fn standing_credential_destinations() -> Vec<super::recipe::StandingCredentialDestination> {
+        super::recipe::standing_credential_destinations()
+    }
+
     /// Workspace whose release units are generated from the maintained catalog.
     fn recipe_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
