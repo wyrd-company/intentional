@@ -161,9 +161,10 @@ proposed-design:
     Package Registry without replacing npmjs.
 
     Homebrew configuration contains the tap repository. Intentional derives the
-    formula identity and packager from release-unit evidence. AUR uses its
-    native package configuration together with its explicit empty or
-    target-specific adapter mapping.
+    formula identity and packager from release-unit evidence. AUR configuration
+    is an explicit opt-in. Its package repository is derived from the native
+    packager identity: GoReleaser's Arch package name for a Go application, or
+    the one Cargo binary name with the `-bin` suffix for a Rust command.
 
     RPM and APT read the package they distribute from native packager
     configuration and everything about where it goes from their own mapping,
@@ -318,15 +319,16 @@ proposed-design:
     capability for each declared package; publisher properties and target
     mappings express intent and destination data. The catalog can carry several
     routes to one publisher when their capability and packager differ. Homebrew,
-    RPM, APT, and AUR therefore admit maintained routes for each native packager
+    RPM, APT, and AUR therefore admit maintained routes for native packagers
     that can produce their required distribution input instead of inheriting a
     GoReleaser-only entry point. A Rust crate with one binary selects the Cargo
-    archive packager for Homebrew. That packager builds Linux x86-64 and Linux
-    Arm64 through digest-pinned Cross 0.2.5 images and builds macOS Arm64 with
-    Cargo. GitHub executor configuration may override each Linux Cross image
-    independently; omission uses Intentional's repository baseline for that
-    target. It generates the formula from their digests,
-    and seals all four together before promotion. A Go application selects GoReleaser, a
+    archive packager for those four publishers. That packager builds Linux
+    x86-64 and Linux Arm64 through digest-pinned Cross 0.2.5 images and builds
+    macOS Arm64 with Cargo. GitHub executor configuration may override each
+    Linux Cross image independently; omission uses Intentional's repository
+    baseline for that target. Its aggregate build creates only the configured
+    descriptors and native packages, and seals them with the three archives
+    before promotion. A Go application selects GoReleaser, a
     Dockerfile-backed runnable image selects its supported
     Buildx recipe, and a Dev Container Feature selects the Dev Container CLI.
     Exactly one maintained recipe must match every configured publication.
@@ -354,13 +356,16 @@ proposed-design:
     member of the packager's own configuration; none of them becomes a value
     Intentional configuration supplies.
 
-    A Rust Homebrew package derives its formula identity from exactly one
-    explicit Cargo binary, or from the package name when `src/main.rs` declares
-    the package binary. The Cargo archive packager builds Linux x86-64 and Linux
-    Arm64 through digest-pinned Cross 0.2.5 images and builds macOS Arm64 with
-    Cargo in separate unprivileged jobs. One aggregate build
-    generates the formula from those archives and seals the combined subject.
-    The publisher promotes that sealed formula and never rebuilds an archive.
+    A Rust native-distribution package derives its subject identity from exactly
+    one explicit Cargo binary, or from the package name when `src/main.rs`
+    declares the package binary. The Cargo archive packager builds Linux x86-64
+    and Linux Arm64 through digest-pinned Cross 0.2.5 images and builds macOS
+    Arm64 with Cargo in separate unprivileged jobs. One aggregate build creates
+    the configured outputs from those archives and seals the combined subject.
+    Homebrew and AUR receive descriptors that resolve the sealed archives. RPM
+    and APT receive packages produced from the sealed Linux x86-64 executable by
+    digest-pinned nFPM. Publisher jobs promote or deliver those outputs and
+    never rebuild an archive.
 
     Capability derivation consumes the same detector evidence produced by
     `intentional init`. It filters that lossless evidence to the declared package

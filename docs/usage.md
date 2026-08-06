@@ -255,17 +255,30 @@ reports missing workflows, gate jobs, and managed workflow drift. It uses the
 same comparison engine as the diff below, so what the check reports is exactly
 what a diff would change.
 
-To publish a Rust command through Homebrew, declare `homebrew.repository` on
-the package that owns its Cargo manifest. The package must expose exactly one
-`[[bin]].name`, or a package binary at `src/main.rs`. Intentional derives that
-binary as the formula identity. The binary's `--version` output must contain the
-release version so the generated formula's installation test can verify it.
-Separate jobs build Linux x86-64 and Linux Arm64 through digest-pinned Cross
-0.2.5 images and build macOS Arm64 with Cargo. An aggregate job seals all three
-archives with the generated formula. Intentional uploads the archives to the
-draft GitHub Release and promotes the sealed
-formula into the configured tap. The tap repository must install the release
-GitHub App so the publisher job can mint a token scoped to that repository alone.
+A Rust command can publish through Homebrew, RPM, APT, or the Arch User
+Repository (AUR). The package must expose exactly one `[[bin]].name`, or a
+package binary at `src/main.rs`. Intentional builds Linux x86-64 and Linux Arm64
+through digest-pinned Cross 0.2.5 images and builds macOS Arm64 with Cargo. The
+aggregate job creates the configured distribution outputs from those archives
+and seals them together. Publisher jobs do not invoke Cargo.
+
+For Homebrew, declare `homebrew.repository` as the tap's `owner/name`. The
+binary's `--version` output must contain the release version for the generated
+formula's installation test. The tap must install the release GitHub App so the
+publisher job can mint a token scoped to that repository.
+
+For RPM or APT, provide the repository-owned composite delivery Action, public
+repository base URL, public index-signing-key URL, observation deadline, and
+index coordinates. RPM requires a channel. APT requires a suite and component.
+The optional `with` mapping supplies the delivery Action's remaining inputs.
+The Action receives the sealed package path, format, name, version,
+architecture, digest, and coordinates under the configured executor prefix.
+
+For AUR, declare `aur: {}` and provide `INTENTIONAL_AUR_KEY` as a repository
+secret. Intentional derives `<binary>-bin` as the package repository, generates
+`PKGBUILD` and `.SRCINFO` from the two Linux archive digests, pins the AUR host
+key, and pushes only those sealed descriptors. A new package is created by its
+initial push.
 
 ## Reconcile the managed workflow slices
 

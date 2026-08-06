@@ -289,15 +289,15 @@ reported by `intentional executor diff` and `intentional executor check` rather
 than deriving a publisher job that would publish nothing. Homebrew and AUR
 publish descriptors into their own repositories and are derived today.
 
-A Rust package with one binary may publish a Homebrew formula alongside its
-Cargo publication. The binary identity comes from exactly one `[[bin]].name`,
-or from the package name when `src/main.rs` supplies the package binary. The
-maintained build creates Linux x86-64 and Linux Arm64 archives through the
-digest-pinned Cross 0.2.5 images and creates macOS Arm64 with Cargo. It
-generates the formula inside the same sealed subject. The publisher copies
-that formula to the configured tap and never invokes Cargo. A library or
-multi-binary package must not declare Homebrew because it does not determine
-one formula identity.
+A Rust package with one binary may publish Homebrew, RPM, APT, or AUR outputs
+alongside its Cargo publication. The binary identity comes from exactly one
+`[[bin]].name`, or from the package name when `src/main.rs` supplies the package
+binary. The maintained build creates Linux x86-64 and Linux Arm64 archives
+through the digest-pinned Cross 0.2.5 images and creates macOS Arm64 with Cargo.
+Its aggregate job creates only the configured descriptors and native packages
+inside the same sealed subject. Publisher jobs never invoke Cargo. A library or
+multi-binary package must not declare these native-distribution publishers
+because it does not determine one binary identity.
 
 A Go release unit publishes through GoReleaser, and its native
 `.goreleaser.yaml` is where the rest of the contract lives. `intentional
