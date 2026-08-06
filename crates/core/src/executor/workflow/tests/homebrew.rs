@@ -70,11 +70,12 @@ release-units:
                 "the Rust Homebrew route derives {id}"
             );
         }
+        let mut produced_archives = BTreeMap::new();
         for (id, artifact, archive, build_tool, target, image) in [
             (
                 "intentional_build_component_cargo_archive_linux_x86_64",
                 "intentional_archive-component_cargo_archive-linux_x86_64",
-                "${{ runner.temp }}/linux-x86-64.tar.gz",
+                "${{ runner.temp }}/linux-x86_64.tar.gz",
                 "cross",
                 "x86_64-unknown-linux-gnu",
                 Some("ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f"),
@@ -143,6 +144,11 @@ release-units:
                 .find(|step| step["with"]["name"].as_str() == Some(artifact))
                 .unwrap_or_else(|| panic!("{id} uploads artifact {artifact}"));
             assert_eq!(upload["with"]["path"].as_str(), Some(archive));
+            let produced_archive = upload["with"]["path"]
+                .as_str()
+                .and_then(|path| path.strip_prefix("${{ runner.temp }}/"))
+                .unwrap_or_else(|| panic!("{id} uploads beneath runner.temp"));
+            produced_archives.insert(id, produced_archive.to_owned());
         }
         let platform = job_steps(
             &jobs,
@@ -157,9 +163,6 @@ release-units:
             "linux_x86_64_digest=\"$(sha256sum",
             "linux_arm64_digest=\"$(sha256sum",
             "macos_arm64_digest=\"$(sha256sum",
-            "mv \"${INTENTIONAL_SUBJECT}/linux-x86_64.tar.gz\"",
-            "mv \"${INTENTIONAL_SUBJECT}/linux-arm64.tar.gz\"",
-            "mv \"${INTENTIONAL_SUBJECT}/macos-arm64.tar.gz\"",
             "homebrew/Formula/${binary}.rb",
             "${linux_x86_64_digest}",
             "${linux_arm64_digest}",
@@ -168,6 +171,13 @@ release-units:
             assert!(
                 aggregate_body.contains(agreement),
                 "aggregate body carries {agreement}:\n{aggregate_body}"
+            );
+        }
+        for (producer, archive) in &produced_archives {
+            let agreement = format!("mv \"${{INTENTIONAL_SUBJECT}}/{archive}\"");
+            assert!(
+                aggregate_body.contains(&agreement),
+                "aggregate consumer reads the archive emitted by {producer}: {archive}\n{aggregate_body}"
             );
         }
         let needs = jobs["intentional_build_component_cargo_archive"]["needs"]
@@ -211,12 +221,26 @@ release-units:
         let linux_x86_64_bytes = b"sealed x86-64 Linux archive";
         let linux_arm64_bytes = b"sealed Arm64 Linux archive";
         let macos_arm64_bytes = b"sealed Arm64 macOS archive";
-        std::fs::write(subject_root.join("linux-x86_64.tar.gz"), linux_x86_64_bytes)
-            .expect("x86-64 Linux archive");
-        std::fs::write(subject_root.join("linux-arm64.tar.gz"), linux_arm64_bytes)
-            .expect("Arm64 Linux archive");
-        std::fs::write(subject_root.join("macos-arm64.tar.gz"), macos_arm64_bytes)
-            .expect("Arm64 macOS archive");
+        // Populate the consumer boundary from producer answers. Hand-writing
+        // these names would let the fixture ratify a producer/consumer split,
+        // just as byte-identical fixtures can ratify a checksum swap.
+        for (producer, bytes) in [
+            (
+                "intentional_build_component_cargo_archive_linux_x86_64",
+                linux_x86_64_bytes.as_slice(),
+            ),
+            (
+                "intentional_build_component_cargo_archive_linux_arm64",
+                linux_arm64_bytes.as_slice(),
+            ),
+            (
+                "intentional_build_component_cargo_archive_macos_arm64",
+                macos_arm64_bytes.as_slice(),
+            ),
+        ] {
+            std::fs::write(subject_root.join(&produced_archives[producer]), bytes)
+                .unwrap_or_else(|error| panic!("write {producer} archive: {error}"));
+        }
         let mut aggregate_command = std::process::Command::new("bash");
         aggregate_command
             .arg("-c")
@@ -275,12 +299,22 @@ release-units:
 
         let digit_root = aggregate_root.join("digit-leading-bytes");
         std::fs::create_dir_all(&digit_root).expect("digit-leading subject directory");
-        for (archive, bytes) in [
-            ("linux-x86_64.tar.gz", linux_x86_64_bytes.as_slice()),
-            ("linux-arm64.tar.gz", linux_arm64_bytes.as_slice()),
-            ("macos-arm64.tar.gz", macos_arm64_bytes.as_slice()),
+        for (producer, bytes) in [
+            (
+                "intentional_build_component_cargo_archive_linux_x86_64",
+                linux_x86_64_bytes.as_slice(),
+            ),
+            (
+                "intentional_build_component_cargo_archive_linux_arm64",
+                linux_arm64_bytes.as_slice(),
+            ),
+            (
+                "intentional_build_component_cargo_archive_macos_arm64",
+                macos_arm64_bytes.as_slice(),
+            ),
         ] {
-            std::fs::write(digit_root.join(archive), bytes).expect("digit-leading archive");
+            std::fs::write(digit_root.join(&produced_archives[producer]), bytes)
+                .unwrap_or_else(|error| panic!("write digit-leading {producer} archive: {error}"));
         }
         let mut digit_command = std::process::Command::new("bash");
         digit_command
@@ -391,7 +425,10 @@ release-units:
             "generated platform build failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let archive = temporary.join("linux-x86-64.tar.gz");
+        let archive = temporary.join(
+            &produced_archives
+                ["intentional_build_component_cargo_archive_linux_x86_64"],
+        );
         let listing = std::process::Command::new("tar")
             .args([
                 "--full-time",
@@ -478,6 +515,67 @@ release-units:
                 body.contains(&format!("'[target.%s]\\nimage = \\\"%s\\\"\\n' {target}")),
                 "{target} writes its configured image to CROSS_CONFIG:\n{body}"
             );
+        }
+    }
+
+    #[test]
+    fn rust_homebrew_defaults_each_omitted_cross_image_independently() {
+        let configured_x86 = "registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let configured_arm = "registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let default_x86 = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f";
+        let default_arm = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c";
+        for (label, setting, expected_x86, expected_arm) in [
+            (
+                "rust-homebrew-only-x86-image",
+                format!("    linux-x86-64-cross-image: {configured_x86}\n"),
+                configured_x86,
+                default_arm,
+            ),
+            (
+                "rust-homebrew-only-arm-image",
+                format!("    linux-arm64-cross-image: {configured_arm}\n"),
+                default_x86,
+                configured_arm,
+            ),
+        ] {
+            let workspace = rust_homebrew_workspace(
+                label,
+                "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\ndescription = \"Sample command line tool\"\nlicense = \"MIT\"\n",
+            );
+            workspace.write("component/src/main.rs", "fn main() {}\n");
+            let config_path = workspace.root().join(".intentional/config.yml");
+            let config = std::fs::read_to_string(&config_path).expect("fixture config");
+            std::fs::write(
+                &config_path,
+                config.replace(
+                    "github:\n",
+                    &format!("github:\n  cargo-homebrew:\n{setting}"),
+                ),
+            )
+            .expect("configure one Cross image");
+
+            converge(workspace.root(), WorkflowRole::Publish);
+            let jobs = publish_jobs(workspace.root());
+            for (job, expected) in [
+                (
+                    "intentional_build_component_cargo_archive_linux_x86_64",
+                    expected_x86,
+                ),
+                (
+                    "intentional_build_component_cargo_archive_linux_arm64",
+                    expected_arm,
+                ),
+            ] {
+                let build = job_steps(&jobs, job)
+                    .into_iter()
+                    .find(|step| step["run"].is_string())
+                    .expect("platform build body");
+                assert_eq!(
+                    build["env"]["INTENTIONAL_CROSS_IMAGE"].as_str(),
+                    Some(expected),
+                    "{label} derives {job} independently"
+                );
+            }
         }
     }
 

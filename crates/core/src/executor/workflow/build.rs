@@ -8,6 +8,13 @@
 use super::*;
 use crate::config::CargoHomebrewConfig;
 
+/// Archive name shared by the Linux x86-64 producer and aggregate consumer.
+pub(super) const CARGO_ARCHIVE_LINUX_X86_64: &str = "linux-x86_64.tar.gz";
+/// Archive name shared by the Linux Arm64 producer and aggregate consumer.
+pub(super) const CARGO_ARCHIVE_LINUX_ARM64: &str = "linux-arm64.tar.gz";
+/// Archive name shared by the macOS Arm64 producer and aggregate consumer.
+pub(super) const CARGO_ARCHIVE_MACOS_ARM64: &str = "macos-arm64.tar.gz";
+
 /// Values one packager's build command reads from its step environment.
 ///
 /// Buildx annotates the index it seals. Cargo archive names the formula and
@@ -47,7 +54,7 @@ pub(super) fn cargo_archive_platforms(
         (
             "linux_x86_64",
             "ubuntu-latest",
-            "linux-x86-64.tar.gz",
+            CARGO_ARCHIVE_LINUX_X86_64,
             "x86_64-unknown-linux-gnu",
             "cross",
             "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
@@ -57,7 +64,7 @@ pub(super) fn cargo_archive_platforms(
         (
             "linux_arm64",
             "ubuntu-latest",
-            "linux-arm64.tar.gz",
+            CARGO_ARCHIVE_LINUX_ARM64,
             "aarch64-unknown-linux-gnu",
             "cross",
             "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
@@ -67,7 +74,7 @@ pub(super) fn cargo_archive_platforms(
         (
             "macos_arm64",
             "macos-14",
-            "macos-arm64.tar.gz",
+            CARGO_ARCHIVE_MACOS_ARM64,
             "aarch64-apple-darwin",
             "cargo",
             "",

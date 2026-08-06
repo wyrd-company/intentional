@@ -741,7 +741,7 @@ fn derive_contract(
     let gates = github.workflow(role).gates.clone();
     match role {
         WorkflowRole::Release => release_contract(&namespaces, &gates),
-        WorkflowRole::Publish => publish_contract(root, config, &namespaces, &gates),
+        WorkflowRole::Publish => publish_contract(root, config, github, &namespaces, &gates),
     }
 }
 
@@ -792,6 +792,7 @@ fn rendered_jobs(
 fn publish_contract(
     root: &Path,
     config: &Config,
+    github: &GithubConfig,
     namespaces: &PrefixNamespaces,
     gates: &[String],
 ) -> std::result::Result<WorkflowContract, Vec<WorkflowDiagnostic>> {
@@ -881,12 +882,9 @@ fn publish_contract(
         build_jobs.push(id.clone());
         let mut needs = vec![verify.clone()];
         if subject.packager == Packager::CargoArchive {
-            let cargo_homebrew = &config
-                .github
-                .as_ref()
-                .expect("validated publish configuration has GitHub settings")
-                .cargo_homebrew;
-            for platform in cargo_archive_platforms(subject, namespaces, &verify, cargo_homebrew) {
+            for platform in
+                cargo_archive_platforms(subject, namespaces, &verify, &github.cargo_homebrew)
+            {
                 needs.push(platform.0.clone());
                 jobs.push(platform);
             }

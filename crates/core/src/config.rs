@@ -1223,7 +1223,7 @@ impl Config {
 }
 
 fn validate_digest_pinned_image(value: &str, description: &str) -> Result<()> {
-    let Some((repository, digest)) = value.split_once("@sha256:") else {
+    let Some((repository, digest)) = value.rsplit_once("@sha256:") else {
         return Err(Error::Validation(format!(
             "{description} must be pinned by sha256 digest"
         )));
@@ -1833,6 +1833,16 @@ release-units:
             let error = Config::from_yaml(&text).expect_err("mutable image tag rejected");
             assert!(error.to_string().contains(field), "{error}");
         }
+    }
+
+    #[test]
+    fn cargo_homebrew_digest_validation_agrees_with_the_published_suffix_pattern() {
+        let digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let text = with_github(&format!(
+            "  cargo-homebrew:\n    linux-x86-64-cross-image: registry.invalid/toolchain/x86@sha256:{digest}@sha256:{digest}\n"
+        ));
+        Config::from_yaml(&text)
+            .expect("runtime accepts the same final digest suffix as the published schema");
     }
 
     #[test]

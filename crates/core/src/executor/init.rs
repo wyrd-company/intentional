@@ -8,7 +8,9 @@
 use crate::config::{
     CargoHomebrewConfig, Config, ExcludedPathReceipt, GithubConfig, GithubWorkflow,
     GithubWorkflows, ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher,
-    OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW,
+    OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH,
+    DEFAULT_CARGO_HOMEBREW_LINUX_ARM64_CROSS_IMAGE,
+    DEFAULT_CARGO_HOMEBREW_LINUX_X86_64_CROSS_IMAGE, DEFAULT_PUBLISH_WORKFLOW,
     DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
@@ -1569,6 +1571,16 @@ release-units:
 
         let result = run(&workspace);
         assert_eq!(result.state, ExecutorInitState::Ready);
+        let written = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+            .expect("initialized configuration is readable");
+        assert!(
+            written.contains(&format!(
+                "  cargo-homebrew:\n    linux-x86-64-cross-image: {}\n    linux-arm64-cross-image: {}\n",
+                DEFAULT_CARGO_HOMEBREW_LINUX_X86_64_CROSS_IMAGE,
+                DEFAULT_CARGO_HOMEBREW_LINUX_ARM64_CROSS_IMAGE,
+            )),
+            "initialization writes both Cargo/Homebrew image defaults:\n{written}"
+        );
         let config = Config::load(workspace.root()).expect("config loads");
         let github = config.github.expect("executor configured");
         assert_eq!(

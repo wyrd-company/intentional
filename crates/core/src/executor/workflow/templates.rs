@@ -146,9 +146,9 @@ pub(super) fn build_command(packager: Packager) -> String {
       linux_x86_64_archive="${{binary}}-${{version}}-linux-x86_64.tar.gz"
       linux_arm64_archive="${{binary}}-${{version}}-linux-arm64.tar.gz"
       macos_arm64_archive="${{binary}}-${{version}}-macos-arm64.tar.gz"
-      mv "${{@ENVVAR@SUBJECT}}/linux-x86_64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}"
-      mv "${{@ENVVAR@SUBJECT}}/linux-arm64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}"
-      mv "${{@ENVVAR@SUBJECT}}/macos-arm64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/{linux_x86_64_input}" "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/{linux_arm64_input}" "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/{macos_arm64_input}" "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}"
       linux_x86_64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}" | cut -d' ' -f1)"
       linux_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}" | cut -d' ' -f1)"
       macos_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}" | cut -d' ' -f1)"
@@ -191,7 +191,10 @@ pub(super) fn build_command(packager: Packager) -> String {
         "  test do" \
         "    assert_match version.to_s, shell_output((bin/\"${{binary}}\").to_s + \" --version\")" \
         "  end" \
-        "end" > "${{formula}}""#
+        "end" > "${{formula}}""#,
+            linux_x86_64_input = super::build::CARGO_ARCHIVE_LINUX_X86_64,
+            linux_arm64_input = super::build::CARGO_ARCHIVE_LINUX_ARM64,
+            macos_arm64_input = super::build::CARGO_ARCHIVE_MACOS_ARM64,
         ),
         Packager::GoReleaser => {
             "      goreleaser release --clean --skip=publish,announce\n      cp -R dist/. \"${@ENVVAR@SUBJECT}/\"".to_owned()
