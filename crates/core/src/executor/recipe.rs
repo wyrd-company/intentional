@@ -1900,6 +1900,22 @@ release-units:
         });
     }
 
+    #[test]
+    fn a_probed_file_hook_is_cleared_when_its_scope_panics_before_the_read() {
+        let panic = std::panic::catch_unwind(|| {
+            let _hook = ProbedFileBeforeReadHook::install(|| {});
+            panic!("forced probe failure");
+        });
+
+        assert!(panic.is_err(), "the probe scope must have unwound");
+        PROBED_FILE_BEFORE_READ.with(|slot| {
+            assert!(
+                slot.borrow().is_none(),
+                "an uncalled hook must be cleared while its scope unwinds"
+            );
+        });
+    }
+
     /// Run one raced probe after proving it can see a held publication.
     ///
     /// The probing thread commands each publication and withdrawal. The raced
