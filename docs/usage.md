@@ -394,9 +394,14 @@ pushes the release commit and the annotated global tag in one atomic update; a
 ruleset that blocks either makes the authority transition fail after the
 candidate has already been verified.
 
-**App credentials.** The repository must define `INTENTIONAL_GITHUB_APP_ID` and
-`INTENTIONAL_GITHUB_APP_PRIVATE_KEY` as secrets. These mint the short-lived
-token and are the only long-lived repository-write credentials involved.
+**App credentials, and they are not both secrets.** The repository must define
+`INTENTIONAL_GITHUB_APP_ID` as a repository **variable** and
+`INTENTIONAL_GITHUB_APP_PRIVATE_KEY` as a repository **secret**. The derived
+jobs read them as `vars.INTENTIONAL_GITHUB_APP_ID` and
+`secrets.INTENTIONAL_GITHUB_APP_PRIVATE_KEY`. Creating the App ID as a secret
+instead leaves `vars.INTENTIONAL_GITHUB_APP_ID` empty and fails token minting in
+the privileged job, after the candidate has already been verified. Together they
+are the only long-lived repository-write credentials involved.
 
 **Protected environment.** The `intentional-release` environment must exist and
 must guard the authority transition. It is the one place to require a reviewer,
@@ -453,22 +458,28 @@ to a long-lived credential.
 
 ### Destinations whose credential is permanent
 
-Docker Hub and GitHub Package Registry implement no trusted-publishing exchange.
-There is no bootstrap and no probe: the configured credential authenticates
-**every** publication, not only the first.
+Every other destination implements no trusted-publishing exchange. There is no
+bootstrap and no probe: the configured credential authenticates **every**
+publication, not only the first.
 
 | Destination | Credential | Lifetime |
 | --- | --- | --- |
-| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | every publication |
-| GitHub Package Registry | the job's `GITHUB_TOKEN` | every publication, expires with the job |
+| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | standing, every publication |
+| AUR | `INTENTIONAL_AUR_KEY` — an SSH private key | standing, every publication |
+| Homebrew tap | a token the job mints from the release App | short-lived, per job |
+| GitHub Container Registry | the job's `GITHUB_TOKEN` and actor | expires with the job |
+| GitHub Package Registry | the job's `GITHUB_TOKEN` | expires with the job |
 
-Docker Hub is the one to weigh. Its access token is long-lived, is presented on
-every release, and neither of the properties above applies to it — rotate it on
-whatever schedule you would use for any standing publish credential.
+**Docker Hub and AUR are the two to weigh.** Both hold a standing credential
+that is presented on every release and that neither property above protects.
+AUR's is an SSH private key, which is the strongest credential in this table.
+Rotate both on whatever schedule you use for any standing publish credential.
 
-GitHub Package Registry needs nothing configured. It accepts the
-repository-scoped workflow token, which expires when the job ends, so there is
-no standing credential to hold.
+The rest hold nothing standing. GHCR and GitHub Package Registry accept the
+repository-scoped workflow token, which expires when the job ends, so neither
+needs anything configured. The Homebrew publisher mints a short-lived token
+scoped to the tap repository alone, which is why the tap must install the
+release App.
 
 ### Every destination
 
