@@ -2830,6 +2830,7 @@ jobs:
     #[test]
     fn resolves_every_intentional_action_before_any_credential_is_minted() {
         let workspace = repository_scale_workspace("workflow-credential-order");
+        let mut minting_publishers = 0_usize;
         for role in WorkflowRole::ALL {
             converge(workspace.root(), role);
             for (id, steps) in managed_steps(workspace.root(), role) {
@@ -2839,6 +2840,9 @@ jobs:
                         .is_some_and(|uses| uses == APP_TOKEN_ACTION)
                 });
                 let Some(mint) = mint else { continue };
+                if id.starts_with("intentional_publish_") {
+                    minting_publishers += 1;
+                }
                 for (index, step) in steps.iter().enumerate() {
                     assert!(
                         intentional_action(step).is_none() || index < mint,
@@ -2847,6 +2851,10 @@ jobs:
                 }
             }
         }
+        assert!(
+            minting_publishers > 0,
+            "the ordering population includes a publisher that mints a credential"
+        );
     }
 
     // The authority transition pushes to the protected default branch using
