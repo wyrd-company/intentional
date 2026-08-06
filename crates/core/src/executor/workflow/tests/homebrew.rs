@@ -49,6 +49,72 @@ release-units:
     }
 
     #[test]
+    fn scopes_cargo_archive_build_environment_away_from_buildx() {
+        fn build_environment(jobs: &serde_yaml::Mapping, id: &str) -> BTreeSet<String> {
+            jobs[id]["steps"]
+                .as_sequence()
+                .expect("build steps")
+                .iter()
+                .find(|step| step["env"]["INTENTIONAL_SUBJECT_IDENTITY"].is_string())
+                .expect("subject build step")["env"]
+                .as_mapping()
+                .expect("build environment")
+                .keys()
+                .map(|name| name.as_str().expect("environment name").to_owned())
+                .collect()
+        }
+
+        let cargo = rust_homebrew_workspace(
+            "workflow-cargo-archive-environment",
+            "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\n",
+        );
+        cargo.write("component/src/main.rs", "fn main() {}\n");
+        converge(cargo.root(), WorkflowRole::Publish);
+        let cargo_environment = build_environment(
+            &publish_jobs(cargo.root()),
+            "intentional_build_component_cargo_archive",
+        );
+        let buildx = two_destination_workspace("workflow-buildx-environment");
+        converge(buildx.root(), WorkflowRole::Publish);
+        let buildx_environment = build_environment(
+            &publish_jobs(buildx.root()),
+            "intentional_build_component_buildx",
+        );
+
+        let shared = [
+            "INTENTIONAL_SUBJECT_IDENTITY",
+            "INTENTIONAL_TAG_PREFIX",
+            "INTENTIONAL_TAG_SUFFIX",
+        ];
+        let cargo_only = [
+            "INTENTIONAL_HOMEBREW",
+            "INTENTIONAL_RPM",
+            "INTENTIONAL_APT",
+            "INTENTIONAL_AUR",
+            "INTENTIONAL_AUR_DESTINATION",
+            "INTENTIONAL_NFPM",
+        ];
+        for name in shared {
+            assert!(
+                cargo_environment.contains(name) && buildx_environment.contains(name),
+                "Cargo archive and Buildx build jobs share {name}: cargo={cargo_environment:?}, buildx={buildx_environment:?}"
+            );
+        }
+        for name in cargo_only.iter().copied() {
+            assert!(
+                cargo_environment.contains(name),
+                "the derived Cargo archive build job carries {name}: {cargo_environment:?}"
+            );
+        }
+        for name in cargo_only {
+            assert!(
+                !buildx_environment.contains(name),
+                "the unrelated Buildx build job omits Cargo archive entry {name}: {buildx_environment:?}"
+            );
+        }
+    }
+
+    #[test]
     fn rust_homebrew_builds_platform_archives_once_and_promotes_the_sealed_formula() {
         let workspace = rust_homebrew_workspace(
             "rust-homebrew-route",
