@@ -66,11 +66,12 @@ pub const WORKFLOW_CONTRACT: &str = "github-workflow-1";
 /// Published workflow-diff schema identifier.
 pub const WORKFLOW_DIFF_SCHEMA: &str = "https://intentional.foo/schemas/workflow-diff/v1";
 
-/// Largest workflow the comparison will read.
+/// Largest workflow the comparison will read or propose.
 ///
 /// `--workflow` accepts an arbitrary file and the patch is computed from a
-/// quadratic line comparison, so the input is bounded rather than trusted. A
-/// GitHub workflow is orders of magnitude smaller than this.
+/// quadratic line comparison, so the input is bounded rather than trusted.
+/// Reconciliation applies the same bound to its output so every workflow it
+/// writes remains readable by the next comparison.
 const MAX_WORKFLOW_LINES: usize = 2_000;
 
 /// Outcome of comparing a workflow with its derived contract.
@@ -302,10 +303,6 @@ pub fn compare_configured_workflow(
         );
         return Ok(blocked(role, relative, file, text, vec![diagnostic]));
     }
-    let contract = match derive_contract(root, config, github, role) {
-        Ok(contract) => contract,
-        Err(diagnostics) => return Ok(blocked(role, relative, file, text, diagnostics)),
-    };
     let document = match Document::parse(&text) {
         Ok(document) => document,
         Err(error) => {
@@ -316,11 +313,32 @@ pub fn compare_configured_workflow(
             return Ok(blocked(role, relative, file, text, vec![diagnostic]));
         }
     };
+    let parsed = document.value()?;
+    let gate_diagnostics = configured_gate_diagnostics(github, role, &parsed);
+    if !gate_diagnostics.is_empty() {
+        return Ok(blocked(role, relative, file, text, gate_diagnostics));
+    }
+    let contract = match derive_contract(root, config, github, role) {
+        Ok(contract) => contract,
+        Err(diagnostics) => return Ok(blocked(role, relative, file, text, diagnostics)),
+    };
 
     let (output, diagnostics) = match reconcile(document, &contract) {
         Ok(result) => result,
         Err(diagnostic) => return Ok(blocked(role, relative, file, text, vec![diagnostic])),
     };
+    let output_lines = output.lines().count();
+    if output_lines > MAX_WORKFLOW_LINES {
+        let diagnostic = WorkflowDiagnostic::at(
+            "workflow-too-large",
+            format!(
+                "the derived transformation for {} has {output_lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}",
+                relative.display()
+            ),
+            &relative.display().to_string(),
+        );
+        return Ok(blocked(role, relative, file, text, vec![diagnostic]));
+    }
     let patch = textdiff::unified(&relative.display().to_string(), &text, &output);
     let status = if output == text {
         ComparisonStatus::Conformant
@@ -376,6 +394,38 @@ fn digest(text: &str) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
+/// Configured gates are repository jobs, so derivation may only depend on
+/// identifiers the compared document actually declares.
+fn configured_gate_diagnostics(
+    github: &GithubConfig,
+    role: WorkflowRole,
+    document: &Value,
+) -> Vec<WorkflowDiagnostic> {
+    let workflow = github.workflow(role);
+    let jobs = document
+        .get("jobs")
+        .and_then(Value::as_mapping)
+        .into_iter()
+        .flat_map(|jobs| jobs.keys())
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    workflow
+        .gates
+        .iter()
+        .filter(|gate| !jobs.contains(gate.as_str()))
+        .map(|gate| {
+            WorkflowDiagnostic::at(
+                "configured-gate-missing",
+                format!(
+                    "gate {gate} is not a job in the configured {role} workflow {}",
+                    workflow.path.display()
+                ),
+                &format!("jobs.{gate}"),
+            )
+        })
+        .collect()
+}
+
 /// Top-level entries and managed jobs Intentional owns in one workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkflowContract {
@@ -401,7 +451,7 @@ fn reconcile(
     // Expanding them first means adding a required trigger never discards the
     // repository's own.
     if let Some(current) = document.get(&["on"]).map_err(unparsable)? {
-        if let Some(expanded) = expanded_triggers(&current) {
+        if let Some(expanded) = expanded_triggers(&current, contract) {
             document.set(&["on"], &expanded).map_err(unparsable)?;
         }
     }
@@ -652,7 +702,7 @@ fn unparsable(error: Error) -> WorkflowDiagnostic {
 }
 
 /// Expand shorthand trigger syntax into the equivalent mapping.
-fn expanded_triggers(current: &Value) -> Option<Value> {
+fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Value> {
     let names = match current {
         Value::String(name) => vec![name.clone()],
         Value::Sequence(names) => names
@@ -663,7 +713,26 @@ fn expanded_triggers(current: &Value) -> Option<Value> {
     };
     let mut mapping = serde_yaml::Mapping::new();
     for name in names {
-        mapping.insert(Value::String(name), Value::Null);
+        let value = if name == "push"
+            && contract
+                .triggers
+                .iter()
+                .any(|(path, _)| path.as_slice() == ["on", "push", "tags"])
+        {
+            // `on: push` means every branch and tag push. Adding a `tags`
+            // filter alone would silently remove every branch push, so spell
+            // the shorthand's branch half explicitly before adding the owned
+            // release-tag patterns.
+            let mut push = serde_yaml::Mapping::new();
+            push.insert(
+                Value::String("branches".to_owned()),
+                Value::Sequence(vec![Value::String("**".to_owned())]),
+            );
+            Value::Mapping(push)
+        } else {
+            Value::Null
+        };
+        mapping.insert(Value::String(name), value);
     }
     Some(Value::Mapping(mapping))
 }
@@ -2068,6 +2137,26 @@ jobs:
             comparison.diagnostics
         );
         comparison.apply().expect("transformation applies")
+    }
+
+    /// Materialize a deliberately broad contract used only by structural
+    /// sweeps. Its all-recipe fixture exceeds the supported workflow size by
+    /// construction, so it cannot exercise the public comparison/apply path.
+    fn materialize_contract_for_structural_sweep(root: &Path, role: WorkflowRole) {
+        let config = Config::load(root).expect("config loads");
+        let github = config.github.as_ref().expect("github config");
+        let workflow = github.workflow(role);
+        let path = root.join(&workflow.path);
+        let text = std::fs::read_to_string(&path).expect("workflow reads");
+        let document = Document::parse(&text).expect("workflow parses");
+        let parsed = document.value().expect("workflow value");
+        assert!(
+            configured_gate_diagnostics(github, role, &parsed).is_empty(),
+            "the structural fixture declares its configured gates"
+        );
+        let contract = derive_contract(root, &config, github, role).expect("contract derives");
+        let (output, _) = reconcile(document, &contract).expect("contract reconciles");
+        std::fs::write(path, output).expect("structural contract writes");
     }
 
     fn workflow(root: &Path, role: WorkflowRole) -> String {
@@ -5505,6 +5594,54 @@ release-units:
     }
 
     #[test]
+    fn preserves_branch_pushes_when_publish_derivation_adds_tag_filters() {
+        let workspace = workspace("workflow-publish-push-shorthand");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non: push\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+
+        assert_eq!(
+            document["on"]["push"]["branches"].as_sequence(),
+            Some(&vec![Value::String("**".to_owned())]),
+            "the shorthand's every-branch meaning survives the tag filter"
+        );
+        assert!(
+            document["on"]["push"]["tags"]
+                .as_sequence()
+                .is_some_and(|tags| !tags.is_empty()),
+            "the derived release-tag filter is still present"
+        );
+    }
+
+    #[test]
+    fn refuses_to_derive_dependencies_on_missing_configured_gates() {
+        let workspace = workspace("workflow-missing-gate");
+        workspace.write(
+            ".github/workflows/release.yml",
+            "name: release\non: { workflow_dispatch: {} }\njobs:\n  another_check:\n    runs-on: ubuntu-latest\n    steps: [ { run: 'true' } ]\n",
+        );
+
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Release, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        let diagnostic = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "configured-gate-missing")
+            .expect("the missing gate is reported by comparison");
+        assert_eq!(diagnostic.path.as_deref(), Some("jobs.candidate_check"));
+        assert!(
+            comparison.apply().is_err(),
+            "a transformation with an unknown needs target cannot be applied"
+        );
+    }
+
+    #[test]
     fn states_the_release_tag_requirement_in_every_managed_checkout() {
         let workspace = workspace("workflow-fetch-tags");
         for role in WorkflowRole::ALL {
@@ -5528,6 +5665,11 @@ release-units:
                             step["with"]["fetch-tags"].as_bool(),
                             Some(true),
                             "{id} states its release-tag requirement rather than inheriting it"
+                        );
+                        assert_eq!(
+                            step["with"]["fetch-depth"].as_u64(),
+                            Some(0),
+                            "{id} carries the history the release-tag requirement depends on"
                         );
                     }
                 }
@@ -5946,7 +6088,12 @@ release-units:
             )
             .write("vkjmtd/src/main.rs", "fn main() {}\n")
             .write(".github/workflows/release.yml", REPOSITORY_RELEASE_WORKFLOW)
-            .write(".github/workflows/publish.yml", REPOSITORY_PUBLISH_WORKFLOW);
+            .write(
+                ".github/workflows/publish.yml",
+                &format!(
+                    "{REPOSITORY_PUBLISH_WORKFLOW}  wzrjkd:\n    runs-on: ubuntu-latest\n    steps: [ {{ run: 'true' }} ]\n"
+                ),
+            );
         workspace
     }
 
@@ -7202,7 +7349,7 @@ release-units:
     #[test]
     fn inherits_exactly_the_process_variables_the_recipe_names() {
         let workspace = sentinel_workspace("workflow-allowlist-membership", None);
-        converge(workspace.root(), WorkflowRole::Publish);
+        materialize_contract_for_structural_sweep(workspace.root(), WorkflowRole::Publish);
 
         let mut allowlists = 0;
         let mut appended = 0;
@@ -7332,7 +7479,7 @@ release-units:
     #[test]
     fn resolves_through_a_probe_that_inherits_no_repository_configuration() {
         let workspace = sentinel_workspace("workflow-probe-isolation", None);
-        converge(workspace.root(), WorkflowRole::Publish);
+        materialize_contract_for_structural_sweep(workspace.root(), WorkflowRole::Publish);
         let temporary = workspace.root().join("runner");
         std::fs::create_dir_all(&temporary).expect("runner directory");
 
@@ -7559,7 +7706,7 @@ release-units:
         let mut seen = 0usize;
         let mut conditions = 0usize;
         for role in WorkflowRole::ALL {
-            converge(workspace.root(), role);
+            materialize_contract_for_structural_sweep(workspace.root(), role);
             conditions += managed_conditions(workspace.root(), role).len();
             for (job, expression) in managed_expressions(workspace.root(), role) {
                 seen += 1;
@@ -7749,7 +7896,7 @@ release-units:
             let mut counts = Vec::new();
             let mut swept_shell: Vec<(WorkflowRole, String, String)> = Vec::new();
             for (role, expected) in SENTINEL_JOBS {
-                converge(workspace.root(), role);
+                materialize_contract_for_structural_sweep(workspace.root(), role);
                 let swept = sentinel_jobs(workspace.root(), role)
                     .into_iter()
                     .map(|(id, _)| {
@@ -8182,6 +8329,59 @@ release-units:
         .expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert_eq!(comparison.diagnostics[0].code, "workflow-too-large");
+    }
+
+    #[test]
+    fn refuses_to_propose_a_workflow_too_large_to_read_back() {
+        let workspace = workspace("workflow-derived-too-large");
+        let base_lines = REPOSITORY_RELEASE_WORKFLOW.lines().count();
+        let padding = (0..(MAX_WORKFLOW_LINES - base_lines - 1))
+            .map(|line| format!("# repository content {line}\n"))
+            .collect::<String>();
+        workspace.write(
+            ".github/workflows/release.yml",
+            &format!("{padding}{REPOSITORY_RELEASE_WORKFLOW}"),
+        );
+
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Release, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        let diagnostic = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "workflow-too-large")
+            .expect("the derived size is refused before apply");
+        assert!(
+            diagnostic.message.contains("derived transformation"),
+            "the diagnostic distinguishes unsafe output from untrusted input: {diagnostic:?}"
+        );
+    }
+
+    #[test]
+    fn intentional_publish_contract_fits_the_readback_bound() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("core crate is inside the repository");
+        let config = Config::load(repository).expect("repository config loads");
+        let candidate = Workspace::new("workflow-repository-scale");
+        let path = candidate.root().join("publish.yml");
+        candidate.write("publish.yml", "name: publish\non: push\njobs: {}\n");
+
+        let comparison =
+            compare_configured_workflow(repository, &config, WorkflowRole::Publish, Some(&path))
+                .expect("repository-scale contract derives");
+        assert_eq!(
+            comparison.status,
+            ComparisonStatus::Different,
+            "{:?}",
+            comparison.diagnostics
+        );
+        let output = comparison.output.expect("different comparison has output");
+        assert!(
+            output.lines().count() <= MAX_WORKFLOW_LINES,
+            "Intentional's own publication shape must remain readable after apply"
+        );
     }
 
     #[test]

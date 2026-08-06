@@ -11,7 +11,6 @@ use crate::executor::goreleaser;
 use crate::executor::recipe::{resolve_publications, Packager, SelectedPublication};
 use crate::executor::workflow::{compare_configured_workflow, ComparisonStatus};
 use crate::model::PublisherKind;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Result of validating the locally observable executor contract.
@@ -209,42 +208,8 @@ fn workflow_findings(root: &Path, config: &Config, github: &GithubConfig) -> Res
                     .map(|diagnostic| format!("configured {role} workflow: {}", diagnostic.message)),
             ),
         }
-        findings.extend(gate_findings(root, github, role)?);
     }
     Ok(findings)
-}
-
-/// Configured gates must name jobs the repository actually declares.
-fn gate_findings(root: &Path, github: &GithubConfig, role: WorkflowRole) -> Result<Vec<String>> {
-    let workflow = github.workflow(role);
-    if workflow.gates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let Ok(text) = std::fs::read_to_string(root.join(&workflow.path)) else {
-        return Ok(Vec::new());
-    };
-    let jobs = serde_yaml::from_str::<serde_yaml::Value>(&text)
-        .ok()
-        .and_then(|document| document.get("jobs").cloned())
-        .and_then(|jobs| jobs.as_mapping().cloned())
-        .map(|jobs| {
-            jobs.keys()
-                .filter_map(serde_yaml::Value::as_str)
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    Ok(workflow
-        .gates
-        .iter()
-        .filter(|gate| !jobs.contains(*gate))
-        .map(|gate| {
-            format!(
-                "configured {role} workflow gate {gate} is not a job in {}",
-                workflow.path.display()
-            )
-        })
-        .collect())
 }
 
 #[cfg(test)]
@@ -604,8 +569,8 @@ aur:
             "{findings}"
         );
         assert!(
-            findings.contains("Reserved workflow slice differs from the derived contract"),
-            "check reports managed drift through the comparison engine: {findings}"
+            findings.contains("configured release workflow: gate candidate_check is not a job"),
+            "check and apply report the same comparison refusal: {findings}"
         );
         assert!(
             findings.contains("publish workflow: .github/workflows/publish.yml does not exist"),
