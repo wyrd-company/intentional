@@ -2,8 +2,8 @@
 # relationships:
 #   implements: github-release-executor
 # ---
-name: "intentional verify publication"
-description: "Verify one destination publication and expose its affirmative evidence fragment"
+name: "intentional observe and verify publication"
+description: "Read back one destination publication and expose its affirmative evidence fragment"
 author: "wyrd-company"
 branding:
   icon: "shield"
@@ -24,7 +24,7 @@ inputs:
     required: false
     default: ""
   observation:
-    description: "Publication-observation document the recipe's readback steps produced"
+    description: "Publication-observation document this Action writes and verifies"
     required: true
   output:
     description: "File the schema-backed publisher evidence fragment is written to"
@@ -37,6 +37,100 @@ inputs:
     description: "Repository directory holding the released commit and its tags"
     required: false
     default: "."
+  subject:
+    description: "Built subject bytes to read back from the destination"
+    required: true
+  subject-kind:
+    description: "Publication-observation subject kind"
+    required: true
+  subject-identity:
+    description: "Identity a consumer resolves at the destination"
+    required: true
+  subject-version:
+    description: "Version sealed by the built-subject document"
+    required: true
+  subject-digest:
+    description: "Digest sealed by the built-subject document"
+    required: true
+  packager:
+    description: "Packager whose sealed output was published"
+    required: true
+  destination:
+    description: "Destination identity the selected publication resolves"
+    required: true
+  retrieval-mode:
+    description: "Consumer retrieval mode fixed by the selected recipe"
+    required: true
+  retrieval-client:
+    description: "Client that retrieves the published subject"
+    required: true
+  work:
+    description: "Scratch directory for destination readback"
+    required: true
+  interval:
+    description: "Initial destination-observation retry interval in seconds"
+    required: true
+  backoff:
+    description: "Destination-observation retry multiplier"
+    required: true
+  maximum-interval:
+    description: "Maximum destination-observation retry interval in seconds"
+    required: true
+  deadline:
+    description: "Destination-observation deadline in seconds"
+    required: true
+  registry:
+    description: "Registry endpoint or Cargo registry identity"
+    required: false
+    default: ""
+  scope:
+    description: "npm package scope, including the leading at sign"
+    required: false
+    default: ""
+  registry-token:
+    description: "Short-lived read credential required by an authenticated consumer path"
+    required: false
+    default: ""
+  registry-user:
+    description: "Registry user paired with the short-lived read credential"
+    required: false
+    default: ""
+  registry-name:
+    description: "Cargo alternate-registry name"
+    required: false
+    default: ""
+  registry-index-variable:
+    description: "Cargo environment key naming an alternate registry index"
+    required: false
+    default: ""
+  registry-index-url:
+    description: "Cargo alternate-registry index URL"
+    required: false
+    default: ""
+  carried-token:
+    description: "Cargo environment key naming an authenticated retrieval token"
+    required: false
+    default: ""
+  public-key-url:
+    description: "System-package repository signing-key URL"
+    required: false
+    default: ""
+  apt-suite:
+    description: "APT suite containing the publication"
+    required: false
+    default: ""
+  apt-component:
+    description: "APT component containing the publication"
+    required: false
+    default: ""
+  rpm-channel:
+    description: "RPM channel containing the publication"
+    required: false
+    default: ""
+  components:
+    description: "Space-separated attached OCI components selected for this destination"
+    required: false
+    default: ""
   intentional-version:
     description: "Released intentional version without a v prefix, or latest"
     required: false
@@ -57,6 +151,46 @@ runs:
       run: |
         set -euo pipefail
         "$GITHUB_ACTION_PATH/../../scripts/action/install-intentional.sh" "$REQUESTED_VERSION"
+
+    - name: Observe the publication
+      id: observe
+      shell: bash
+      env:
+        INPUT_RELEASE_UNIT: ${{ inputs.release-unit }}
+        INPUT_PACKAGE: ${{ inputs.package }}
+        INPUT_PUBLISHER: ${{ inputs.publisher }}
+        INPUT_TARGET: ${{ inputs.target }}
+        INPUT_OBSERVATION: ${{ inputs.observation }}
+        INPUT_SUBJECT: ${{ inputs.subject }}
+        INPUT_SUBJECT_KIND: ${{ inputs.subject-kind }}
+        INPUT_SUBJECT_IDENTITY: ${{ inputs.subject-identity }}
+        INPUT_SUBJECT_VERSION: ${{ inputs.subject-version }}
+        INPUT_SUBJECT_DIGEST: ${{ inputs.subject-digest }}
+        INPUT_PACKAGER: ${{ inputs.packager }}
+        INPUT_DESTINATION: ${{ inputs.destination }}
+        INPUT_RETRIEVAL_MODE: ${{ inputs.retrieval-mode }}
+        INPUT_RETRIEVAL_CLIENT: ${{ inputs.retrieval-client }}
+        INPUT_WORK: ${{ inputs.work }}
+        INPUT_INTERVAL: ${{ inputs.interval }}
+        INPUT_BACKOFF: ${{ inputs.backoff }}
+        INPUT_MAXIMUM_INTERVAL: ${{ inputs.maximum-interval }}
+        INPUT_DEADLINE: ${{ inputs.deadline }}
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_REGISTRY_TOKEN: ${{ inputs.registry-token }}
+        INPUT_REGISTRY_USER: ${{ inputs.registry-user }}
+        INPUT_REGISTRY_NAME: ${{ inputs.registry-name }}
+        INPUT_REGISTRY_INDEX_VARIABLE: ${{ inputs.registry-index-variable }}
+        INPUT_REGISTRY_INDEX_URL: ${{ inputs.registry-index-url }}
+        INPUT_CARRIED_TOKEN: ${{ inputs.carried-token }}
+        INPUT_PUBLIC_KEY_URL: ${{ inputs.public-key-url }}
+        INPUT_APT_SUITE: ${{ inputs.apt-suite }}
+        INPUT_APT_COMPONENT: ${{ inputs.apt-component }}
+        INPUT_RPM_CHANNEL: ${{ inputs.rpm-channel }}
+        INPUT_COMPONENTS: ${{ inputs.components }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../../scripts/action/observe-publication.sh"
 
     - name: Verify the publication
       id: verify

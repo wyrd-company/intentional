@@ -398,7 +398,7 @@ aur:
                         .is_some_and(|name| name.starts_with("Publish "))
                 })
                 .unwrap_or_else(|| panic!("{job} has a publish step"));
-            let env = step["env"]
+            let mut env = step["env"]
                 .as_mapping()
                 .expect("the publish step routes its values through env")
                 .iter()
@@ -408,9 +408,34 @@ aur:
                         expression(value.as_str().expect("env value"), temp),
                     )
                 })
-                .collect();
+                .collect::<BTreeMap<_, _>>();
+            let verify = steps
+                .iter()
+                .find(|candidate| {
+                    candidate["uses"]
+                        .as_str()
+                        .is_some_and(|uses| uses.contains("/verify-publication@"))
+                })
+                .expect("the publication is verified");
+            let observer = portable_observer_step(verify).expect("the Action carries an observer");
+            env.extend(
+                observer["env"]
+                    .as_mapping()
+                    .expect("observer environment")
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.as_str().expect("env name").to_owned(),
+                            expression(value.as_str().expect("env value"), temp),
+                        )
+                    }),
+            );
             PublishStep {
-                run: step["run"].as_str().expect("publish body").to_owned(),
+                run: format!(
+                    "{}\n{}",
+                    step["run"].as_str().expect("publish body"),
+                    observer["run"].as_str().expect("observer body")
+                ),
                 env,
             }
         }
@@ -442,6 +467,10 @@ aur:
                 ("ssh-keyscan", SSH_KEYSCAN_STUB.to_owned()),
                 ("ssh-keygen", SSH_KEYGEN_STUB.to_owned()),
                 ("sleep", SLEEP_STUB.to_owned()),
+                (
+                    "goreleaser",
+                    "#!/usr/bin/env bash\nprintf '2.17.1\\n'\n".to_owned(),
+                ),
             ] {
                 let path = directory.join(name);
                 std::fs::write(&path, body).expect("stub written");

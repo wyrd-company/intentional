@@ -514,8 +514,10 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured four-publication mix fits. A fifth Cargo-shaped publication is
-    the first count that exceeds the limit with this repository and recipe mix.
+    configured four-publication mix is 1,562 lines. Adding its Cargo-shaped AUR
+    publication produces a five-publication mix of 1,748 lines. Both fit. The
+    five-publication fixture plus 252 repository-owned lines lands exactly on
+    the bound, and one more repository-owned line is refused.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
 
@@ -766,22 +768,28 @@ proposed-design:
     publication reaches assembly with the evidence the release carries.
 
     Between receiving the subject and verifying the publication, managed jobs
-    run the repository-local steps their maintained recipe derives: registry
-    authentication, promotion, destination readback, and the pre-closure
-    consumer retrieval. GitHub Package Registry separates the last two steps
+    run the steps their maintained recipe derives. Registry authentication,
+    publication, signing, and repository mutation are inline workflow shell so
+    their authority-bearing commands stay visible at the point that grants
+    authority. The first-party `verify-publication` Action runs portable,
+    non-mutating destination readback and pre-closure consumer retrieval, writes
+    the publication observation, and invokes the binary that adjudicates it. A
+    destination client receives a read credential through an Action input when
+    anonymous readback cannot witness the configured retrieval contract. The
+    Action contains no publication or destination-mutation command.
+
+    GitHub Package Registry separates publication and retrieval
     into a downstream retrieval job. Its job-scoped `GITHUB_TOKEN` has
     `packages: read`, while the publisher job retains `packages: write`, so the
     client that reads the package cannot publish one. The retrieval job depends
     directly on both the publisher and build jobs, and consumes the version and
-    digest the build projected. Other recipes keep their steps in one publisher
-    job when no separate authority boundary is required. These steps are `run:`
-    bodies rather than Intentional-owned Actions, and every value they read
-    arrives through `env:` because an expression expanded inside a script is
-    substitution into shell source. A name a repository supplies is
+    digest the build projected. Other recipes keep readback in the publisher job
+    when no separate authority boundary is required. Every value an inline body
+    reads arrives through `env:` because an expression expanded inside a script
+    is substitution into shell source. A name a repository supplies is
     substitution into shell source for the same reason, so a configured registry
     or secret identifier is validated at derivation and reaches its command as a
-    quoted variable. Their one output is the schema-backed publication
-    observation.
+    quoted variable.
 
     A recipe's consumer retrieval is performed under the identity its recorded
     mode names. A retrieval that claims the public consumer path runs under a
@@ -824,8 +832,9 @@ proposed-design:
     `intentional evidence assemble`.
 
   privileged-execution-boundary: >-
-    Intentional-owned reusable Actions perform credential-free plumbing and
-    preparation. Repository-mutating, secret-bearing, and OpenID
+    Intentional-owned reusable Actions perform portable non-mutating plumbing,
+    preparation, and destination observation. Repository-mutating, publishing,
+    signing, and OpenID
     Connect-enabled commands are materialized in repository-local reserved
     jobs. Checkout disables persisted credentials and states its release-tag
     requirement explicitly rather than inheriting tags from an unrelated fetch
@@ -851,8 +860,9 @@ proposed-design:
     network inside the job that later mints repository-write authority. The
     install is required wherever the command runs, so it is the placement rather
     than the network dependency that is chosen here. Three properties bound it.
-    The Action receives no credentials and the job mints none until after the
-    Action has finished, so no token exists on the runner while Intentional's
+    An Action that precedes a repository-authority transition receives no
+    repository credential and the job mints none until after the Action has
+    finished, so no repository token exists on the runner while Intentional's
     own code is first fetched and executed. The installed archive is verified
     against its published checksum before use. The mutating step is a
     repository-local `run:` body that the Action never sees. What remains is

@@ -335,7 +335,7 @@
                         .is_some_and(|name| name.starts_with("Publish "))
                 })
                 .unwrap_or_else(|| panic!("{job} has a publish step"));
-            let env = step["env"]
+            let mut env = step["env"]
                 .as_mapping()
                 .expect("the publish step routes its values through env")
                 .iter()
@@ -345,7 +345,7 @@
                         expression(value.as_str().expect("env value"), temp, version, digest),
                     )
                 })
-                .collect();
+                .collect::<BTreeMap<_, _>>();
             let verify = steps
                 .iter()
                 .find(|step| {
@@ -354,6 +354,24 @@
                         .is_some_and(|uses| uses.contains("/verify-publication@"))
                 })
                 .unwrap_or_else(|| panic!("{job} verifies its own publication"));
+            let observer = portable_observer_step(verify).expect("the Action carries an observer");
+            env.extend(
+                observer["env"]
+                    .as_mapping()
+                    .expect("observer environment")
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.as_str().expect("env name").to_owned(),
+                            expression(
+                                value.as_str().expect("env value"),
+                                temp,
+                                version,
+                                digest,
+                            ),
+                        )
+                    }),
+            );
             let verified = verify["with"]
                 .as_mapping()
                 .expect("the verification step is given inputs")
@@ -366,7 +384,11 @@
                 })
                 .collect();
             PublishStep {
-                run: step["run"].as_str().expect("publish body").to_owned(),
+                run: format!(
+                    "{}\n{}",
+                    step["run"].as_str().expect("publish body"),
+                    observer["run"].as_str().expect("observer body")
+                ),
                 env,
                 verified,
             }
@@ -1012,7 +1034,7 @@ fi
                 .as_sequence()
                 .expect("steps")
                 .iter()
-                .filter_map(|step| step["env"]["INTENTIONAL_COMPONENTS"].as_str())
+                .filter_map(|step| step["with"]["components"].as_str())
                 .collect::<Vec<_>>();
             assert_eq!(
                 components,
@@ -1128,9 +1150,10 @@ fi
         fn refuses_a_destination_indexing_manifests_the_release_did_not_seal() {
             let recipe = Recipe::new("oci-content-drift", DOCKERHUB_JOB);
             let outcome = recipe.run_with_drift("1.2.3", "content");
-            assert!(
-                !outcome.status.success(),
-                "an index referencing other manifests is not the sealed subject"
+            assert_eq!(
+                outcome.observation().state,
+                ObservationState::Conflict,
+                "an index referencing other manifests is recorded as a conflict"
             );
         }
 
@@ -1676,9 +1699,10 @@ fi
         fn refuses_a_feature_whose_published_bytes_are_not_the_ones_the_build_sealed() {
             let recipe = Recipe::feature("oci-feature-repackaged");
             let outcome = recipe.run_with_drift("1.2.3", "repackage");
-            assert!(
-                !outcome.status.success(),
-                "a destination holding bytes the build job did not produce fails the publication"
+            assert_eq!(
+                outcome.observation().state,
+                ObservationState::Conflict,
+                "a destination holding bytes the build job did not produce is recorded as a conflict"
             );
         }
 

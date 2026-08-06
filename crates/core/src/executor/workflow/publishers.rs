@@ -63,7 +63,6 @@ pub(super) fn publication_jobs(
         subject_identity: &subject.identity,
         build_job: &format!("{}build_{}", namespaces.job, subject.slug),
         working_directory: &subject.working_directory,
-        observation: &observation,
         root,
         work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
         delivery_namespace: &delivery_namespace,
@@ -74,6 +73,7 @@ pub(super) fn publication_jobs(
             .unwrap_or_else(|| format!("release-units.{}", publication.release_unit));
         WorkflowDiagnostic::at(refusal.code, refusal.message, &path)
     })?;
+    let observation_inputs = recipe.observation_inputs.clone();
     let verification = |handoff: &str| {
         PUBLISH_VERIFY_STEPS
             .replace(
@@ -91,6 +91,7 @@ pub(super) fn publication_jobs(
             .replace("@OBSERVATION@", &scalar(&observation))
             .replace("@OUTPUT@", &scalar(&evidence))
             .replace("@HANDOFF@", &scalar(handoff))
+            .replace("@OBSERVATION_INPUTS@", &observation_inputs)
             .replace("@SLUG@", &slug)
     };
     let subject_name = scalar(&format!("Download the built {} subject", subject.identity));

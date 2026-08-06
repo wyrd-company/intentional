@@ -951,7 +951,7 @@ pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@
       observation: @OBSERVATION@
       output: @OUTPUT@
       draft-handoff: @HANDOFF@
-      intentional-version: @VERSION@
+@OBSERVATION_INPUTS@      intentional-version: @VERSION@
   - name: @FRAGMENT_NAME@
     uses: @UPLOAD@
     with:

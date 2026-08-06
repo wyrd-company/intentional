@@ -160,22 +160,12 @@
                     .expect("the publisher verifies its publication");
                 let writers = steps
                     .iter()
+                    .filter_map(portable_observer_step)
                     .filter(|step| {
-                        step_environment(step)
-                            .iter()
-                            .find(|(name, path)| {
-                                name.ends_with("_OBSERVATION") && *path == &verified
-                            })
-                            .is_some_and(|(name, _)| {
-                                let invocation = format!(
-                                    "{}observe_present",
-                                    name.strip_suffix("OBSERVATION")
-                                        .expect("observation environment name")
-                                );
-                                step.get("run").and_then(Value::as_str).is_some_and(|body| {
-                                    body.lines().any(|line| line.trim() == invocation)
-                                })
-                            })
+                        step["env"]["INPUT_OBSERVATION"].as_str() == Some(verified.as_str())
+                            && step["run"]
+                                .as_str()
+                                .is_some_and(|body| body.contains("observe-publication.sh"))
                     })
                     .count();
                 assert_eq!(
@@ -211,8 +201,12 @@
                 .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
                 .expect("the recipe writes an observation");
             let environment = step_environment(&readback);
-            let body = readback["run"].as_str().expect("a script");
-            let helpers = observation_helpers(body);
+            let body = std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/action/observe-publication.sh"),
+            )
+            .expect("portable observer script");
+            let helpers = observation_helpers(&body);
 
             let temporary = workspace.root().join("runner");
             std::fs::create_dir_all(&temporary).expect("runner directory");
@@ -223,6 +217,8 @@
             // document can be driven without reaching a registry. These stand
             // in for exactly those values.
             let computed = [
+                ("INTENTIONAL_TARGET", PRIMARY_TARGET),
+                ("INTENTIONAL_PACKAGER_ID", publisher),
                 ("INTENTIONAL_VERSION", "1.0.0"),
                 (
                     "INTENTIONAL_SUBJECT_DIGEST",
@@ -237,13 +233,13 @@
             for (state, call) in [
                 (
                     ObservationState::Pending,
-                    "INTENTIONAL_observe_state pending",
+                    "observe_state pending",
                 ),
                 (
                     ObservationState::Conflict,
-                    "INTENTIONAL_observe_state conflict \"another release holds this version\"",
+                    "observe_state conflict \"another release holds this version\"",
                 ),
-                (ObservationState::Present, "INTENTIONAL_observe_present"),
+                (ObservationState::Present, "observe_present"),
             ] {
                 let mut command = std::process::Command::new("bash");
                 command.arg("-c").arg(format!("{helpers}\n{call}"));
@@ -322,13 +318,16 @@
     /// in the first column; slicing at the first one instead would stop after
     /// the header helper and cover neither state.
     fn observation_helpers(body: &str) -> &str {
+        let start = body
+            .find("observe_header() {")
+            .expect("the observer defines its header helper");
         let present = body
-            .find("INTENTIONAL_observe_present() {")
+            .find("observe_present() {")
             .expect("the recipe defines the present-observation helper");
         let end = body[present..]
             .find("\n}\n")
             .expect("the present-observation helper is a shell function");
-        &body[..present + end + "\n}\n".len()]
+        &body[start..present + end + "\n}\n".len()]
     }
 
     // Everything the observation says about the release comes from the build
@@ -720,6 +719,11 @@
     fn retrieves_under_the_identity_the_recorded_mode_names() {
         let workspace = npm_workspace("workflow-clean-client-identity");
         converge(workspace.root(), WorkflowRole::Publish);
+        let body = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/action/observe-publication/npm.sh"),
+        )
+        .expect("npm observer script");
         for (target, credentialed) in [(PRIMARY_TARGET, false), ("github", true)] {
             let readback = publisher_steps(workspace.root(), target)
                 .into_iter()
@@ -731,25 +735,28 @@
                 credentialed,
                 "the {target} destination records the identity it retrieves under"
             );
-            let body = readback["run"].as_str().expect("a script");
-
             // Everything between preparing the scratch directory and the
             // retrieval is how the retrieval's identity is decided.
             let (_, prepared) = body
-                .split_once("mkdir -p \"${INTENTIONAL_WORK}/clean\"")
+                .split_once("mkdir -p \"$INTENTIONAL_WORK/clean\"")
                 .expect("the step prepares a scratch directory for its retrieval");
             let (prepared, invocation) = prepared
                 .split_once("npm pack")
                 .expect("the recipe retrieves through the client's own path");
 
             assert!(
-                prepared.contains("> \"${INTENTIONAL_WORK}/clean/npmrc\""),
+                prepared.contains("> \"$INTENTIONAL_WORK/clean/npmrc\""),
                 "the {target} step writes the configuration its retrieval reads"
             );
             assert_eq!(
-                prepared.contains("_authToken"),
+                !environment["INPUT_REGISTRY_TOKEN"].is_empty(),
                 credentialed,
-                "the {target} scratch configuration holds a credential only where the recorded mode says one was used"
+                "the {target} observer receives a credential only where the recorded mode says one was used"
+            );
+            assert!(
+                prepared.contains("if [[ \"$INTENTIONAL_RETRIEVAL_MODE\" == public ]]")
+                    && prepared.contains("_authToken"),
+                "the portable observer writes the credential only when the recorded mode requires one"
             );
             assert!(
                 invocation
@@ -758,7 +765,7 @@
                     .into_iter()
                     .chain(prepared.rsplit('\n').take(3))
                     .any(|line| line
-                        .contains("npm_config_userconfig=\"${INTENTIONAL_WORK}/clean/npmrc\"")),
+                        .contains("npm_config_userconfig=\"$INTENTIONAL_WORK/clean/npmrc\"")),
                 "the {target} retrieval runs under that configuration rather than the job's"
             );
         }
@@ -835,7 +842,7 @@
         let environment = step_environment(readback);
         assert_eq!(
             environment
-                .get("INTENTIONAL_GITHUB_PACKAGES_TOKEN")
+                .get("INPUT_REGISTRY_TOKEN")
                 .map(String::as_str),
             Some("${{ secrets.GITHUB_TOKEN }}")
         );
@@ -885,7 +892,7 @@
             &stubs,
             &temporary,
             &[
-                ("INTENTIONAL_GITHUB_PACKAGES_TOKEN", "read-job-token"),
+                ("INPUT_REGISTRY_TOKEN", "read-job-token"),
                 ("INTENTIONAL_VERSION", "1.0.0"),
                 ("INTENTIONAL_SUBJECT_DIGEST", "unused-build-digest"),
                 ("INTENTIONAL_DEADLINE", "0"),
@@ -1037,18 +1044,18 @@
     fn answers_only_with_what_the_registry_answered() {
         let workspace = npm_workspace("workflow-probe-streams");
         converge(workspace.root(), WorkflowRole::Publish);
-        let readback = publisher_steps(workspace.root(), PRIMARY_TARGET)
-            .into_iter()
-            .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
-            .expect("the recipe reads its destination back");
-        let body = readback["run"].as_str().expect("a script");
+        let body = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/action/observe-publication/npm.sh"),
+        )
+        .expect("npm observer script");
         let start = body
-            .find("INTENTIONAL_npm_holds() {")
+            .find("npm_holds() {")
             .expect("the recipe defines an existence probe");
         let end = body[start..]
             .find("\n}\n")
             .expect("the probe is a shell function");
-        let helper = &body[..start + end + "\n}\n".len()];
+        let helper = &body[start..start + end + "\n}\n".len()];
 
         let temporary = workspace.root().join("runner");
         std::fs::create_dir_all(&temporary).expect("runner directory");
@@ -1080,7 +1087,7 @@
             command
                 .arg("-c")
                 .arg(format!(
-                    "{helper}\nINTENTIONAL_npm_holds example > \"{}\"; exit $?",
+                    "ALLOWED=(\"PATH=$PATH\")\nSCOPE_ARGUMENTS=()\n{helper}\nnpm_holds example > \"{}\"; exit $?",
                     answer.display()
                 ))
                 .env(
@@ -1091,7 +1098,7 @@
                         test_tool_path(&std::env::var("PATH").unwrap_or_default())
                     ),
                 )
-                .env("RUNNER_TEMP", &temporary)
+                .env("INTENTIONAL_WORK", &temporary)
                 .env("INTENTIONAL_REGISTRY", "https://registry.example");
             let output = command.output().expect("the probe runs");
             assert_eq!(

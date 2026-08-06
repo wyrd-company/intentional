@@ -324,7 +324,14 @@ printf 'conflicts=%s\n' "${conflicts[@]}"
                 "intentional_publish_component_utility_{}_primary",
                 route.publisher.as_str()
             );
-            let steps = job_steps(&jobs, &job);
+            let steps = job_steps(&jobs, &job)
+                .into_iter()
+                .flat_map(|step| {
+                    [Some(step.clone()), portable_observer_step(&step)]
+                        .into_iter()
+                        .flatten()
+                })
+                .collect::<Vec<_>>();
             let publisher_body = job_run_bodies(&jobs, &job);
             assert!(!steps.is_empty(), "the {} route derives {job}", route.publisher);
             if matches!(route.publisher, PublisherKind::Rpm | PublisherKind::Apt) {
@@ -838,6 +845,7 @@ release-units:
                 .as_sequence()
                 .expect("steps")
                 .iter()
+                .filter_map(portable_observer_step)
                 .find(|step| {
                     step["name"]
                         .as_str()
@@ -845,12 +853,12 @@ release-units:
                 })
                 .expect("readback step");
             assert_eq!(
-                readback["env"]["RELEASE_AUTOMATION_DESTINATION"].as_str(),
+                readback["env"]["INPUT_DESTINATION"].as_str(),
                 Some(base_url),
                 "the product-shaped base URL reaches the readback unchanged"
             );
             assert_eq!(
-                readback["env"]["RELEASE_AUTOMATION_PUBLIC_KEY_URL"].as_str(),
+                readback["env"]["INPUT_PUBLIC_KEY_URL"].as_str(),
                 Some(key_url)
             );
         }
@@ -859,6 +867,7 @@ release-units:
             .as_sequence()
             .expect("steps")
             .iter()
+            .filter_map(portable_observer_step)
             .find(|step| {
                 step["name"]
                     .as_str()
@@ -866,7 +875,7 @@ release-units:
             })
             .expect("readback step");
         assert_eq!(
-            apt_readback["env"]["RELEASE_AUTOMATION_APT_COMPONENT"].as_str(),
+            apt_readback["env"]["INPUT_APT_COMPONENT"].as_str(),
             Some("section-a"),
             "the product-shaped APT component reaches its readback consumer"
         );
@@ -1473,6 +1482,7 @@ release-units:
             .as_sequence()
             .expect("steps")
             .iter()
+            .filter_map(portable_observer_step)
             .find(|step| {
                 step["name"]
                     .as_str()
@@ -1603,11 +1613,11 @@ for argument in "$@"; do
     Dir::Cache=*) cache=${argument#Dir::Cache=} ;;
   esac
 done
-test "${etc}" = "${RELEASE_AUTOMATION_WORK}/etc/apt"
-test "${state}" = "${RELEASE_AUTOMATION_WORK}/state"
-test "${cache}" = "${RELEASE_AUTOMATION_WORK}/cache"
+test "${etc}" = "${INTENTIONAL_WORK}/etc/apt"
+test "${state}" = "${INTENTIONAL_WORK}/state"
+test "${cache}" = "${INTENTIONAL_WORK}/cache"
 source_line=$(cat "${etc}/sources.list")
-test "${source_line}" = "deb [signed-by=${RELEASE_AUTOMATION_WORK}/keyring.gpg] https://packages.invalid/apt current section-a"
+test "${source_line}" = "deb [signed-by=${INTENTIONAL_WORK}/keyring.gpg] https://packages.invalid/apt current section-a"
 if [[ " $* " == *' download '* ]]; then
   if [ "${FAKE_SCENARIO}" = retrieved-mismatch ]; then
     printf 'different retrieved bytes' > retrieved.deb
@@ -1657,10 +1667,10 @@ fi
             command.env(key.as_str().expect("key"), value);
         }
         command
-            .env("RELEASE_AUTOMATION_INTERVAL", "2")
-            .env("RELEASE_AUTOMATION_BACKOFF", "2")
-            .env("RELEASE_AUTOMATION_MAXIMUM_INTERVAL", "3")
-            .env("RELEASE_AUTOMATION_DEADLINE", "7");
+            .env("INTENTIONAL_INTERVAL", "2")
+            .env("INTENTIONAL_BACKOFF", "2")
+            .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
+            .env("INTENTIONAL_DEADLINE", "7");
         let output = command.output().expect("readback runs");
         let succeeded = output.status.success();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -1833,6 +1843,7 @@ fi
             .as_sequence()
             .expect("steps")
             .iter()
+            .filter_map(portable_observer_step)
             .find(|step| {
                 step["name"]
                     .as_str()
@@ -1936,19 +1947,19 @@ for argument in "$@"; do
     --setopt=persistdir=*) state=${argument#--setopt=persistdir=} ;;
   esac
 done
-test "${reposdir}" = "${RELEASE_AUTOMATION_WORK}/etc/yum.repos.d"
-test "${cache}" = "${RELEASE_AUTOMATION_WORK}/cache"
-test "${state}" = "${RELEASE_AUTOMATION_WORK}/state"
+test "${reposdir}" = "${INTENTIONAL_WORK}/etc/yum.repos.d"
+test "${cache}" = "${INTENTIONAL_WORK}/cache"
+test "${state}" = "${INTENTIONAL_WORK}/state"
 repo=${reposdir}/intentional.repo
 test "$(grep -c '^gpgcheck=1$' "${repo}")" -eq 1
 test "$(grep -c '^repo_gpgcheck=1$' "${repo}")" -eq 1
 grep -Fxq 'baseurl=https://packages.invalid/rpm/stable' "${repo}"
-grep -Fxq "gpgkey=file://${RELEASE_AUTOMATION_WORK}/key" "${repo}"
+grep -Fxq "gpgkey=file://${INTENTIONAL_WORK}/key" "${repo}"
 [[ " $* " == *' install example-tool-1.2.3.arm64 '* ]]
 if [ "${FAKE_SCENARIO}" = retrieved-mismatch ]; then
-  printf 'different retrieved bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+  printf 'different retrieved bytes' > "${INTENTIONAL_WORK}/retrieved/example-tool.rpm"
 else
-  printf 'sealed package bytes' > "${RELEASE_AUTOMATION_WORK}/retrieved/example-tool.rpm"
+  printf 'sealed package bytes' > "${INTENTIONAL_WORK}/retrieved/example-tool.rpm"
 fi
 "#),
         ] {
@@ -1994,10 +2005,10 @@ fi
             command.env(key.as_str().expect("key"), value);
         }
         command
-            .env("RELEASE_AUTOMATION_INTERVAL", "2")
-            .env("RELEASE_AUTOMATION_BACKOFF", "2")
-            .env("RELEASE_AUTOMATION_MAXIMUM_INTERVAL", "3")
-            .env("RELEASE_AUTOMATION_DEADLINE", "7");
+            .env("INTENTIONAL_INTERVAL", "2")
+            .env("INTENTIONAL_BACKOFF", "2")
+            .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
+            .env("INTENTIONAL_DEADLINE", "7");
         let succeeded = command.status().expect("readback runs").success();
         let observation = step["env"]
             .as_mapping()

@@ -60,12 +60,6 @@ pub(super) struct RecipeContext<'a> {
     pub build_job: &'a str,
     /// Workspace-relative directory that owns the packager invocation.
     pub working_directory: &'a str,
-    /// Observation path the recipe writes and the portable command reads.
-    ///
-    /// Both spell it as a `runner.temp` expression rather than as the runner's
-    /// `RUNNER_TEMP` variable, because a workflow `env:` value is a literal
-    /// string: only a `${{ }}` expression is resolved before the shell sees it.
-    pub observation: &'a str,
     /// Scratch directory the readback and retrieval work in.
     pub work: &'a str,
     /// Configured job prefix converted to kebab case for delivery inputs.
@@ -80,6 +74,11 @@ pub(super) struct RecipeSteps {
     pub publisher: String,
     /// Consumer retrieval isolated from publish authority when required.
     pub retrieval: Option<String>,
+    /// Inputs the portable verification Action needs to perform readback.
+    ///
+    /// An empty block means the repository-local recipe still writes the
+    /// observation itself while adapter families move independently.
+    pub observation_inputs: String,
 }
 
 /// Every process variable a maintained recipe's probe inherits.
@@ -270,6 +269,7 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
         retrieval: steps
             .retrieval
             .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
+        observation_inputs: steps.observation_inputs,
     })
 }
 
@@ -304,26 +304,41 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let underivable = |message: String| StepsRefusal::underivable(&identity, &message);
     match context.publication.packager {
         Packager::Npm => npm_steps(context).map_err(underivable),
-        Packager::Cargo => cargo_steps(context)
-            .map(RecipeSteps::together)
-            .map_err(underivable),
-        Packager::CargoArchive | Packager::GoReleaser => {
-            descriptor_promotion_steps(context).map(RecipeSteps::together)
-        }
-        Packager::Buildx | Packager::DevContainerCli => {
-            oci_steps(context).map(RecipeSteps::together)
-        }
+        Packager::Cargo => cargo_steps(context).map_err(underivable),
+        Packager::CargoArchive | Packager::GoReleaser => descriptor_promotion_steps(context),
+        Packager::Buildx | Packager::DevContainerCli => oci_steps(context),
     }
 }
 
-impl RecipeSteps {
-    /// Keep a recipe in one job when publication and retrieval share authority.
-    fn together(publisher: String) -> Self {
-        Self {
-            publisher,
-            retrieval: None,
-        }
-    }
+/// Inputs shared by every portable publication observer.
+fn portable_observation_inputs(
+    context: &RecipeContext<'_>,
+    kind: &str,
+    packager: &str,
+    client: &str,
+    destination: &str,
+) -> String {
+    let maintained = ConsistencyPolicy::maintained(context.publication.publisher);
+    let policy = context
+        .publication
+        .observation_deadline
+        .map_or(maintained, |seconds| maintained.with_deadline(seconds));
+    format!(
+        "      subject: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n      subject-kind: {}\n      subject-identity: {}\n      subject-version: ${{{{ needs.{}.outputs.version }}}}\n      subject-digest: ${{{{ needs.{}.outputs.digest }}}}\n      packager: {}\n      destination: {}\n      retrieval-mode: {}\n      retrieval-client: {}\n      work: {}\n      interval: {}\n      backoff: {}\n      maximum-interval: {}\n      deadline: {}\n",
+        scalar(kind),
+        scalar(context.subject_identity),
+        context.build_job,
+        context.build_job,
+        scalar(packager),
+        scalar(destination),
+        scalar(context.publication.retrieval.as_str()),
+        scalar(client),
+        scalar(context.work),
+        scalar(&policy.interval.as_secs().to_string()),
+        scalar(&policy.backoff.to_string()),
+        scalar(&policy.maximum_interval.as_secs().to_string()),
+        scalar(&policy.deadline.as_secs().to_string()),
+    )
 }
 
 /// Promote a sealed descriptor into its configured repository destination.
@@ -331,7 +346,7 @@ impl RecipeSteps {
 /// GoReleaser and Cargo archive builds seal their repository descriptors before
 /// publication. Promotion copies those files into the configured destination;
 /// it does not invoke either packager and cannot change the sealed subject.
-fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let identity = context.publication.identity();
     // RPM and APT distribute the deliverable itself rather than a descriptor
     // that points at one, so the managed upload job places it on the draft
@@ -389,28 +404,35 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, Ste
         }
         publisher => unreachable!("{publisher} is refused above"),
     };
-    let (kind, readback) = match context.publication.publisher {
-        PublisherKind::Homebrew => ("homebrew-formula", HOMEBREW_READBACK_COMMAND),
-        PublisherKind::Aur => ("aur-package", AUR_READBACK_COMMAND),
+    let kind = match context.publication.publisher {
+        PublisherKind::Homebrew => "homebrew-formula",
+        PublisherKind::Aur => "aur-package",
         publisher => unreachable!("{publisher} is refused above"),
     };
-    let packager_version = match context.publication.packager {
-        Packager::GoReleaser => "@GORELEASER_VERSION@",
-        Packager::CargoArchive => "@VERSION@",
-        packager => unreachable!("{packager} does not produce repository descriptors"),
-    };
-    Ok(format!(
-        "{credential}  - name: {}\n    env:\n{}{}{}      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{observe}{digest_subject}{command}\n      @ENVVAR@SEALED_DIGEST=$(@ENVVAR@digest_subject \"${{@ENVVAR@SUBJECT}}\")\n      test \"${{@ENVVAR@SEALED_DIGEST}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n{readback}      @ENVVAR@ELAPSED=0\n      until @ENVVAR@readback_destination; do\n        if [ \"${{@ENVVAR@ELAPSED}}\" -ge \"${{@ENVVAR@DEADLINE}}\" ]; then\n          @ENVVAR@observe_state pending\n          exit 0\n        fi\n        @ENVVAR@WAIT=${{@ENVVAR@INTERVAL}}\n        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))\n        if [ \"${{@ENVVAR@WAIT}}\" -gt \"${{@ENVVAR@REMAINING}}\" ]; then @ENVVAR@WAIT=${{@ENVVAR@REMAINING}}; fi\n        sleep \"${{@ENVVAR@WAIT}}\"\n        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))\n        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))\n        if [ \"${{@ENVVAR@INTERVAL}}\" -gt \"${{@ENVVAR@MAXIMUM_INTERVAL}}\" ]; then\n          @ENVVAR@INTERVAL=${{@ENVVAR@MAXIMUM_INTERVAL}}\n        fi\n      done\n      @ENVVAR@PACKAGER_VERSION={packager_version}\n      @ENVVAR@RETRIEVAL_VERSION=$(git --version | head -n1)\n      @ENVVAR@observe_present\n",
+    let publisher = format!(
+        "{credential}  - name: {}\n    env:\n{}      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{command}\n",
         scalar(&format!("Publish {identity}")),
         subject_environment(context),
-        observation_environment(context, kind, context.publication.packager.as_str(), "git"),
-        policy_environment(
-            context.publication.publisher,
-            context.publication.observation_deadline,
-        ),
-        observe = OBSERVE,
-        digest_subject = DIGEST_SUBJECT,
-    ))
+    );
+    let mut observation_inputs = portable_observation_inputs(
+        context,
+        kind,
+        context.publication.packager.as_str(),
+        "git",
+        &destination,
+    );
+    observation_inputs.push_str(match context.publication.publisher {
+        PublisherKind::Homebrew => {
+            "      registry-token: ${{ steps.@JOB@destination_token.outputs.token }}\n"
+        }
+        PublisherKind::Aur => "      registry-token: ${{ secrets.@ENVVAR@AUR_KEY }}\n",
+        publisher => unreachable!("{publisher} is refused above"),
+    });
+    Ok(RecipeSteps {
+        publisher,
+        retrieval: None,
+        observation_inputs,
+    })
 }
 
 pub(super) fn underived_recipe_refusal(identity: &str, publisher: PublisherKind) -> StepsRefusal {
@@ -455,7 +477,7 @@ fn delivery_input_names(context: &RecipeContext<'_>, publisher: PublisherKind) -
         .collect()
 }
 
-fn system_package_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let package = &context.unit.packages[&context.publication.package];
     let configured = match context.publication.publisher {
         PublisherKind::Rpm => {
@@ -560,14 +582,37 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefu
     } else {
         "name=$(rpm -qp --qf '%{NAME}' \"${package}\")\n      version=$(rpm -qp --qf '%{VERSION}' \"${package}\")\n      architecture=$(rpm -qp --qf '%{ARCH}' \"${package}\")"
     };
-    let readback = system_package_readback(context, &configured);
-    Ok(format!(
-        "  - id: intentional_establish\n    name: {}\n    env:\n{}    run: |\n      set -euo pipefail\n      mapfile -t packages < <(find \"${{@ENVVAR@SUBJECT}}\" -maxdepth 1 -type f -print)\n      test \"${{#packages[@]}}\" -eq 1\n      package=${{packages[0]}}\n      digest=sha256:$(sha256sum \"${{package}}\" | cut -d' ' -f1)\n      test \"${{digest}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n      {metadata}\n      test \"${{name}}\" = \"${{@ENVVAR@SUBJECT_IDENTITY}}\"\n      test \"${{version}}\" = \"${{@ENVVAR@VERSION}}\"\n      printf 'path=%s\\nname=%s\\nversion=%s\\narchitecture=%s\\ndigest=%s\\n' \"${{package}}\" \"${{name}}\" \"${{version}}\" \"${{architecture}}\" \"${{digest}}\" >> \"${{GITHUB_OUTPUT}}\"\n  - name: {}\n    uses: {}\n    with:\n{with}{readback}",
+    let publisher = format!(
+        "  - id: intentional_establish\n    name: {}\n    env:\n{}    run: |\n      set -euo pipefail\n      mapfile -t packages < <(find \"${{@ENVVAR@SUBJECT}}\" -maxdepth 1 -type f -print)\n      test \"${{#packages[@]}}\" -eq 1\n      package=${{packages[0]}}\n      digest=sha256:$(sha256sum \"${{package}}\" | cut -d' ' -f1)\n      test \"${{digest}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n      {metadata}\n      test \"${{name}}\" = \"${{@ENVVAR@SUBJECT_IDENTITY}}\"\n      test \"${{version}}\" = \"${{@ENVVAR@VERSION}}\"\n      printf 'path=%s\\nname=%s\\nversion=%s\\narchitecture=%s\\ndigest=%s\\n' \"${{package}}\" \"${{name}}\" \"${{version}}\" \"${{architecture}}\" \"${{digest}}\" >> \"${{GITHUB_OUTPUT}}\"\n  - name: {}\n    uses: {}\n    with:\n{with}",
         scalar(&format!("Establish the {} package", format.to_uppercase())),
         subject_environment(context),
         scalar(&format!("Deliver {}", context.publication.identity())),
         scalar(&local_action_uses(configured.action)?),
-    ))
+    );
+    let client = if context.publication.publisher == PublisherKind::Apt {
+        "apt"
+    } else {
+        "dnf"
+    };
+    let mut observation_inputs = portable_observation_inputs(
+        context,
+        "package",
+        "goreleaser",
+        client,
+        configured.base_url,
+    );
+    observation_inputs.push_str(&format!(
+        "      public-key-url: {}\n",
+        scalar(configured.public_key_url)
+    ));
+    for (name, value) in configured.coordinates {
+        observation_inputs.push_str(&format!("      {name}: {}\n", scalar(value)));
+    }
+    Ok(RecipeSteps {
+        publisher,
+        retrieval: None,
+        observation_inputs,
+    })
 }
 
 fn local_action_uses(action: &std::path::Path) -> Result<String, StepsRefusal> {
@@ -698,218 +743,6 @@ fn validate_delivery_action(
     Ok(declared)
 }
 
-fn system_package_readback(
-    context: &RecipeContext<'_>,
-    configured: &DeliveryConfiguration<'_>,
-) -> String {
-    let client = if context.publication.publisher == PublisherKind::Apt {
-        "apt"
-    } else {
-        "dnf"
-    };
-    let coordinate = configured
-        .coordinates
-        .iter()
-        .map(|(name, value)| {
-            format!(
-                "      @ENVVAR@{}: {}\n",
-                name.replace('-', "_").to_uppercase(),
-                scalar(value)
-            )
-        })
-        .collect::<String>();
-    let probe = if context.publication.publisher == PublisherKind::Apt {
-        APT_READBACK
-    } else {
-        RPM_READBACK
-    };
-    format!("  - name: {}\n    env:\n{}{}{}      @ENVVAR@DESTINATION: {}\n      @ENVVAR@PUBLIC_KEY_URL: {}\n{}    run: |\n      set -euo pipefail\n{}      @ENVVAR@PACKAGER_VERSION=$(goreleaser --version | head -n1)\n      @ENVVAR@RETRIEVAL_VERSION=$({client} --version 2>&1 | head -n1)\n{probe}      @ENVVAR@observe_present\n",
-        scalar(&format!("Read back and retrieve {}", context.publication.identity())),
-        subject_environment(context),
-        observation_environment(context, "package", "goreleaser", client),
-        coordinate,
-        scalar(configured.base_url),
-        scalar(configured.public_key_url),
-        policy_environment(context.publication.publisher, context.publication.observation_deadline),
-        OBSERVE,
-    )
-}
-
-/// Read the signed APT package index in the form the destination advertises.
-///
-/// `Packages`, gzip, xz, and Acquire-By-Hash are MEASURED format capabilities
-/// from Debian repository metadata. Which form a configured hosted destination
-/// serves is UNMEASURED until that destination is observed, so the recipe
-/// follows `InRelease` instead of assuming one hosted-product default.
-const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
-      mkdir -p "${@ENVVAR@WORK}/state/lists/partial" "${@ENVVAR@WORK}/cache/archives/partial" "${@ENVVAR@WORK}/etc/apt"
-      package=$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -type f -print -quit)
-      package_name=${@ENVVAR@SUBJECT_IDENTITY}
-      package_version=${@ENVVAR@VERSION}
-      package_architecture=$(dpkg-deb -f "${package}" Architecture)
-      package_sha256=${@ENVVAR@SUBJECT_DIGEST#sha256:}
-      curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
-      gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
-      index="${@ENVVAR@WORK}/InRelease"
-      package_directory="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}"
-      packages_download="${@ENVVAR@WORK}/Packages.download"
-      packages="${@ENVVAR@WORK}/Packages"
-      @ENVVAR@apt_probe() {
-        advertised_members=$(awk -v directory="${package_directory}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 ~ ("^" directory "/Packages\\.") { print $3 }' "${index}")
-        index_member=$(awk -v directory="${package_directory}" '
-          $1 == "SHA256:" { section=1; next }
-          section && NF == 3 && ($3 == directory "/Packages.xz" || $3 == directory "/Packages.gz" || $3 == directory "/Packages") { print $3; exit }
-        ' "${index}")
-        if [ -z "${index_member}" ]; then
-          if [ -n "${advertised_members}" ]; then printf 'APT index advertises unsupported package index form(s): %s\n' "$(printf '%s' "${advertised_members}" | tr '\n' ' ')" >&2; exit 1; fi
-          return 1
-        fi
-        expected=$(awk -v wanted="${index_member}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
-        test -n "${expected}" || return 1
-        relative="${index_member}"
-        if awk '$1 == "Acquire-By-Hash:" && $2 == "yes" { found=1 } END { exit !found }' "${index}"; then
-          relative="${package_directory}/by-hash/SHA256/${expected}"
-        fi
-        if ! curl --fail --silent --show-error --location \
-          "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" \
-          --output "${packages_download}"; then
-          test "${relative}" != "${index_member}" || return 1
-          curl --fail --silent --show-error --location \
-            "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${index_member}" \
-            --output "${packages_download}" || return 1
-        fi
-        test "$(sha256sum "${packages_download}" | cut -d' ' -f1)" = "${expected}" || return 1
-        case "${index_member}" in
-          *.gz) gzip -dc "${packages_download}" > "${packages}" || return 1 ;;
-          *.xz) xz -dc "${packages_download}" > "${packages}" || return 1 ;;
-          *) cp "${packages_download}" "${packages}" || return 1 ;;
-        esac
-        indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
-          $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
-        ' "${packages}")
-        named=$(awk -v RS='' -v name="${package_name}" '$0 ~ "(^|\\n)Package: " name "(\\n|$)" { print "yes"; exit }' "${packages}")
-      }
-      @ENVVAR@ELAPSED=0
-      while : ; do
-        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/InRelease" --output "${index}"; then
-          gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}"
-          if @ENVVAR@apt_probe; then
-            if [ "${indexed}" = yes ]; then break; fi
-            if [ "${named}" = yes ]; then
-              echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
-              exit 1
-            fi
-          fi
-        fi
-        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
-          @ENVVAR@observe_state pending
-          exit 0
-        fi
-        @ENVVAR@WAIT=${@ENVVAR@INTERVAL}
-        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))
-        if [ "${@ENVVAR@WAIT}" -gt "${@ENVVAR@REMAINING}" ]; then @ENVVAR@WAIT=${@ENVVAR@REMAINING}; fi
-        sleep "${@ENVVAR@WAIT}"
-        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))
-        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
-        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
-          @ENVVAR@INTERVAL=${@ENVVAR@MAXIMUM_INTERVAL}
-        fi
-      done
-      printf 'deb [signed-by=%s] %s %s %s\n' "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@DESTINATION}" "${@ENVVAR@APT_SUITE}" "${@ENVVAR@APT_COMPONENT}" > "${@ENVVAR@WORK}/etc/apt/sources.list"
-      apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" -o APT::Get::List-Cleanup=0 update
-      (cd "${@ENVVAR@WORK}" && apt-get -o Dir::Etc="${@ENVVAR@WORK}/etc/apt" -o Dir::State="${@ENVVAR@WORK}/state" -o Dir::Cache="${@ENVVAR@WORK}/cache" download "${package_name}=${package_version}")
-      retrieved=$(find "${@ENVVAR@WORK}" -maxdepth 1 -type f -name '*.deb' -print -quit)
-      @ENVVAR@DESTINATION_DIGEST="${@ENVVAR@SUBJECT_DIGEST}"
-      @ENVVAR@RETRIEVED_DIGEST=sha256:$(sha256sum "${retrieved}" | cut -d' ' -f1)
-      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@SUBJECT_DIGEST}"
-"#;
-
-const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
-      mkdir -p "${@ENVVAR@WORK}/state" "${@ENVVAR@WORK}/cache" "${@ENVVAR@WORK}/etc/yum.repos.d" "${@ENVVAR@WORK}/retrieved"
-      package=$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -type f -print -quit)
-      package_name=${@ENVVAR@SUBJECT_IDENTITY}
-      package_version=${@ENVVAR@VERSION}
-      package_architecture=$(rpm -qp --qf '%{ARCH}' "${package}")
-      package_sha256=${@ENVVAR@SUBJECT_DIGEST#sha256:}
-      curl --fail --silent --show-error --location "${@ENVVAR@PUBLIC_KEY_URL}" --output "${@ENVVAR@WORK}/key"
-      gpg --batch --yes --dearmor --output "${@ENVVAR@WORK}/keyring.gpg" "${@ENVVAR@WORK}/key"
-      index="${@ENVVAR@WORK}/repomd.xml"
-      primary="${@ENVVAR@WORK}/primary"
-      entries="${@ENVVAR@WORK}/primary.entries"
-      @ENVVAR@rpm_probe() {
-        read -r expected relative < <(python3 - "${index}" 2>/dev/null <<'PY'
-      import sys, xml.etree.ElementTree as ET
-      root = ET.parse(sys.argv[1]).getroot()
-      data = next(node for node in root if node.tag.endswith('data') and node.attrib.get('type') == 'primary')
-      checksum = next(node.text for node in data if node.tag.endswith('checksum'))
-      location = next(node.attrib['href'] for node in data if node.tag.endswith('location'))
-      print(checksum, location)
-      PY
-        ) || return 1
-        test -n "${expected}" && test -n "${relative}" || return 1
-        curl --fail --silent --show-error --location \
-          "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" \
-          --output "${primary}" || return 1
-        test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}" || return 1
-        python3 - "${primary}" > "${entries}" 2>/dev/null <<'PY' || return 1
-      import bz2, gzip, lzma, pathlib, sys, xml.etree.ElementTree as ET
-      path = pathlib.Path(sys.argv[1])
-      raw = path.read_bytes()
-      for opener in (gzip.decompress, bz2.decompress, lzma.decompress):
-          try:
-              raw = opener(raw)
-              break
-          except Exception:
-              pass
-      root = ET.fromstring(raw)
-      for package in root:
-          fields = {node.tag.rsplit('}', 1)[-1]: node for node in package}
-          checksum = fields.get('checksum')
-          version = fields.get('version')
-          name = fields.get('name')
-          architecture = fields.get('arch')
-          if name is not None and version is not None and architecture is not None and checksum is not None:
-              print(name.text, version.attrib.get('ver'), architecture.text, checksum.text, sep='\t')
-      PY
-        indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
-        named=$(awk -F '\t' -v name="${package_name}" '$1 == name { print "yes"; exit }' "${entries}")
-      }
-      @ENVVAR@ELAPSED=0
-      while : ; do
-        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
-          if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"; then
-            gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
-            if @ENVVAR@rpm_probe; then
-              if [ "${indexed}" = yes ]; then break; fi
-              if [ "${named}" = yes ]; then
-                echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
-                exit 1
-              fi
-            fi
-          fi
-        fi
-        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
-          @ENVVAR@observe_state pending
-          exit 0
-        fi
-        @ENVVAR@WAIT=${@ENVVAR@INTERVAL}
-        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))
-        if [ "${@ENVVAR@WAIT}" -gt "${@ENVVAR@REMAINING}" ]; then @ENVVAR@WAIT=${@ENVVAR@REMAINING}; fi
-        sleep "${@ENVVAR@WAIT}"
-        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))
-        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
-        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
-          @ENVVAR@INTERVAL=${@ENVVAR@MAXIMUM_INTERVAL}
-        fi
-      done
-      printf '[intentional]\nname=Intentional scratch\nbaseurl=%s/%s\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "${@ENVVAR@DESTINATION%/}" "${@ENVVAR@RPM_CHANNEL}" "${@ENVVAR@WORK}/key" > "${@ENVVAR@WORK}/etc/yum.repos.d/intentional.repo"
-      dnf --config /dev/null --setopt=reposdir="${@ENVVAR@WORK}/etc/yum.repos.d" --setopt=cachedir="${@ENVVAR@WORK}/cache" --setopt=persistdir="${@ENVVAR@WORK}/state" --assumeyes --downloadonly --downloaddir="${@ENVVAR@WORK}/retrieved" install "${package_name}-${package_version}.${package_architecture}"
-      retrieved=$(find "${@ENVVAR@WORK}/retrieved" -type f -name '*.rpm' -print -quit)
-      @ENVVAR@DESTINATION_DIGEST="${@ENVVAR@SUBJECT_DIGEST}"
-      @ENVVAR@RETRIEVED_DIGEST=sha256:$(sha256sum "${retrieved}" | cut -d' ' -f1)
-      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@SUBJECT_DIGEST}"
-"#;
-
 /// Published ED25519 host key fingerprint of the Arch User Repository.
 ///
 /// Pinned rather than accepted on first use. The recipe scopes its SSH authority
@@ -975,22 +808,6 @@ const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/ho
         git -C "${RUNNER_TEMP}/@JOB@tap" push --quiet origin HEAD
       fi"#;
 
-/// Fresh clone and byte-for-byte readback of every promoted formula.
-const HOMEBREW_READBACK_COMMAND: &str = r#"      @ENVVAR@readback_destination() {
-      rm -rf "${@ENVVAR@WORK}"
-      git clone --quiet --depth 1 \
-        "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
-        "${@ENVVAR@WORK}" || return 1
-      for formula in "${formulas[@]}"; do
-        relative=${formula#"${generated}/"}
-        cmp --silent "${formula}" "${@ENVVAR@WORK}/${relative}" || return 1
-      done
-      rm -rf "${@ENVVAR@WORK}/.git"
-      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}") || return 1
-      @ENVVAR@RETRIEVED_DIGEST=${@ENVVAR@DESTINATION_DIGEST}
-      }
-"#;
-
 /// Promote the generated Arch package sources into the Arch User Repository.
 ///
 /// The Arch User Repository is a Git host of its own rather than a GitHub
@@ -1045,19 +862,6 @@ const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@E
         git -C "${RUNNER_TEMP}/@JOB@aur" push --quiet origin HEAD:master
       fi"#;
 
-/// Fresh clone and byte-for-byte readback of both promoted AUR descriptors.
-const AUR_READBACK_COMMAND: &str = r#"      @ENVVAR@readback_destination() {
-      rm -rf "${@ENVVAR@WORK}"
-      git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
-        "${@ENVVAR@WORK}" || return 1
-      cmp --silent "${pkgbuild}" "${@ENVVAR@WORK}/PKGBUILD" || return 1
-      cmp --silent "${srcinfo}" "${@ENVVAR@WORK}/.SRCINFO" || return 1
-      rm -rf "${@ENVVAR@WORK}/.git"
-      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}") || return 1
-      @ENVVAR@RETRIEVED_DIGEST=${@ENVVAR@DESTINATION_DIGEST}
-      }
-"#;
-
 /// Index one alternate Cargo registry is declared with, if the workspace declares one.
 ///
 /// Read at derivation rather than inherited by the probe: the probe copying the
@@ -1088,26 +892,6 @@ fn environment_fragment(registry: &str) -> String {
         .collect()
 }
 
-/// Bounded eventual-consistency values one adapter's policy states, in seconds.
-///
-/// The recipe waits for its own destination to become observable, so the bound
-/// it waits under has to be the same one `intentional verify publication`
-/// applies to what it reports. Rendering it from the maintained policy is what
-/// keeps the two from drifting into a recipe that gives up before the command
-/// would, or one that outlives the job.
-fn policy_environment(publisher: PublisherKind, configured_deadline: Option<u64>) -> String {
-    let maintained = ConsistencyPolicy::maintained(publisher);
-    let policy =
-        configured_deadline.map_or(maintained, |seconds| maintained.with_deadline(seconds));
-    format!(
-        "      @ENVVAR@INTERVAL: {}\n      @ENVVAR@BACKOFF: {}\n      @ENVVAR@MAXIMUM_INTERVAL: {}\n      @ENVVAR@DEADLINE: {}\n",
-        scalar(&policy.interval.as_secs().to_string()),
-        scalar(&policy.backoff.to_string()),
-        scalar(&policy.maximum_interval.as_secs().to_string()),
-        scalar(&policy.deadline.as_secs().to_string()),
-    )
-}
-
 /// Shell that resolves the release the graph proved, for a step's `env:` block.
 ///
 /// Every one of these is a value some earlier job established: the subject's
@@ -1122,115 +906,6 @@ fn subject_environment(context: &RecipeContext<'_>) -> String {
     )
 }
 
-/// Observation members every recipe writes identically, for a step's `env:`.
-///
-/// The retrieval mode among them is the one the selected recipe fixes, not a
-/// spelling the script chose: `intentional verify publication` refuses any
-/// other, and a recipe that named its own would be discovered by that refusal
-/// on a release runner rather than by derivation here.
-/// The retrieval client is routed separately from the packager because the two
-/// are the same program for a language registry and are not for an OCI
-/// destination: a Buildx subject is retrieved by the registry client, not by
-/// the builder that produced it. Naming one and printing it twice would record
-/// a retrieval that did not happen the way it says it did.
-fn observation_environment(
-    context: &RecipeContext<'_>,
-    kind: &str,
-    packager: &str,
-    client: &str,
-) -> String {
-    format!(
-        "      @ENVVAR@OBSERVATION: {}\n      @ENVVAR@RELEASE_UNIT: {}\n      @ENVVAR@PACKAGE: {}\n      @ENVVAR@PUBLISHER: {}\n      @ENVVAR@TARGET: {}\n      @ENVVAR@WORK: {}\n      @ENVVAR@SUBJECT_KIND: {}\n      @ENVVAR@PACKAGER_ID: {}\n      @ENVVAR@RETRIEVAL_MODE: {}\n      @ENVVAR@RETRIEVAL_CLIENT: {}\n",
-        scalar(context.observation),
-        scalar(&context.publication.release_unit),
-        scalar(&context.publication.package),
-        scalar(context.publication.publisher.as_str()),
-        scalar(&context.publication.target),
-        scalar(context.work),
-        scalar(kind),
-        scalar(packager),
-        scalar(context.publication.retrieval.as_str()),
-        scalar(client),
-    )
-}
-
-/// Shell writing any one of the three observation documents a recipe produces.
-///
-/// Every literal the schema fixes appears once. Three copies of a schema
-/// identity is three chances for one of them to be edited alone, and a document
-/// that names the wrong schema or misspells a member is rejected by the loader
-/// three jobs downstream, as a verification failure naming the destination
-/// rather than the recipe. The helpers are also the reason those documents can
-/// be executed by a test at all: everything the adapter computes reaches them
-/// as a variable, so the writing can be driven without reaching a registry.
-const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
-        # $schema is a literal YAML key, not a shell expansion.
-        # shellcheck disable=SC2016
-        printf '$schema: https://intentional.foo/schemas/publication-observation/v1\n'
-        printf 'contract: publication-observation-1\n'
-        printf 'release-unit: "%s"\n' "${@ENVVAR@RELEASE_UNIT}"
-        printf 'package: "%s"\n' "${@ENVVAR@PACKAGE}"
-        printf 'publisher: "%s"\n' "${@ENVVAR@PUBLISHER}"
-        printf 'target: "%s"\n' "${@ENVVAR@TARGET}"
-      }
-      @ENVVAR@observe_state() {
-        mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
-        {
-          @ENVVAR@observe_header
-          printf 'state: %s\n' "$1"
-          if [ "$1" = conflict ]; then printf 'conflict: "%s"\n' "$2"; fi
-        } > "${@ENVVAR@OBSERVATION}"
-      }
-      @ENVVAR@observe_present() {
-        mkdir -p "$(dirname "${@ENVVAR@OBSERVATION}")"
-        {
-          @ENVVAR@observe_header
-          printf 'state: present\n'
-          printf 'subject:\n'
-          printf '  kind: "%s"\n' "${@ENVVAR@SUBJECT_KIND}"
-          printf '  identity: "%s"\n' "${@ENVVAR@SUBJECT_IDENTITY}"
-          printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-          printf '  digest: "%s"\n' "${@ENVVAR@SUBJECT_DIGEST}"
-          printf 'packager:\n'
-          printf '  id: "%s"\n' "${@ENVVAR@PACKAGER_ID}"
-          printf '  version: "%s"\n' "${@ENVVAR@PACKAGER_VERSION}"
-          printf 'destination:\n'
-          printf '  identity: "%s"\n' "${@ENVVAR@DESTINATION}"
-          printf '  version: "%s"\n' "${@ENVVAR@VERSION}"
-          printf '  digest: "%s"\n' "${@ENVVAR@DESTINATION_DIGEST}"
-          printf 'retrieval:\n'
-          printf '  mode: %s\n' "${@ENVVAR@RETRIEVAL_MODE}"
-          printf '  client: "%s"\n' "${@ENVVAR@RETRIEVAL_CLIENT}"
-          printf '  version: "%s"\n' "${@ENVVAR@RETRIEVAL_VERSION}"
-          printf '  digest: "%s"\n' "${@ENVVAR@RETRIEVED_DIGEST}"
-        } > "${@ENVVAR@OBSERVATION}"
-      }
-"#;
-
-/// Shell digesting a file tree under the canonical built-subject ordering.
-const DIGEST_SUBJECT: &str = r#"      @ENVVAR@digest_subject() {
-        python3 - "$1" <<'PY'
-      import hashlib, os, stat, sys
-      root = os.fsencode(sys.argv[1])
-      members = []
-      for directory, _, names in os.walk(root, followlinks=False):
-          for name in names:
-              member = os.path.join(directory, name)
-              if stat.S_ISREG(os.stat(member, follow_symlinks=False).st_mode):
-                  members.append(member)
-      members.sort(key=lambda member: os.path.relpath(member, root).split(os.sep.encode()))
-      if not members:
-          raise SystemExit(1)
-      manifest = bytearray()
-      for member in members:
-          relative = os.path.relpath(member, root).decode(errors='replace').encode()
-          digest = hashlib.sha256(open(member, 'rb').read()).hexdigest().encode()
-          manifest.extend(relative + b'\0sha256:' + digest + b'\n')
-      print('sha256:' + hashlib.sha256(manifest).hexdigest())
-      PY
-      }
-"#;
-
 /// npm recipe: trusted publishing, promotion of the built tarball, and readback.
 fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let primary = context.publication.target == PRIMARY_TARGET;
@@ -1240,14 +915,6 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     } else {
         GITHUB_PACKAGES_REGISTRY
     };
-    // Selection resolves the primary's destination identity, and verification
-    // compares the observed one against it, so the recipe reports the identity
-    // configuration settled rather than a second spelling of the same registry.
-    let destination = context
-        .publication
-        .destination
-        .as_deref()
-        .unwrap_or(GITHUB_PACKAGES_DESTINATION);
     // GitHub Package Registry resolves a package under the owning account's
     // scope and rejects a package name that carries none. The name is the one
     // the npmjs primary publishes, so a repository that adds this destination to
@@ -1337,42 +1004,33 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         },
     ));
 
-    let readback = format!(
-        "  - name: {}\n    env:\n      @ENVVAR@REGISTRY: {}\n      @ENVVAR@DESTINATION: {}\n{scope_environment}{}{}{}{}    run: |\n{}{}{}{}{}",
-        scalar(&format!("Read {identity} back and retrieve it")),
+    let observed_destination = context
+        .publication
+        .destination
+        .as_deref()
+        .unwrap_or(if primary {
+            "npmjs"
+        } else {
+            GITHUB_PACKAGES_DESTINATION
+        });
+    let mut observation_inputs =
+        portable_observation_inputs(context, "npm-package", "npm", "npm", observed_destination);
+    observation_inputs.push_str(&format!(
+        "      registry: {}\n      scope: {}\n",
         scalar(registry),
-        scalar(destination),
-        if primary {
-            String::new()
-        } else {
-            "      @ENVVAR@GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n".to_owned()
-        },
-        subject_environment(context),
-        observation_environment(context, "npm-package", "npm", "npm"),
-        policy_environment(context.publication.publisher, context.publication.observation_deadline),
-        STRICT_MODE,
-        if primary {
-            ""
-        } else {
-            NPM_GITHUB_AUTHENTICATION
-        },
-        OBSERVE,
-        const_probe(),
-        npm_readback(if primary {
-            NPM_RETRIEVE_PUBLIC
-        } else {
-            NPM_RETRIEVE_AUTHENTICATED
-        }),
-    );
-    if primary {
-        steps.push_str(&readback);
-        Ok(RecipeSteps::together(steps))
-    } else {
-        Ok(RecipeSteps {
-            publisher: steps,
-            retrieval: Some(readback),
-        })
+        scalar(scope),
+    ));
+    if !primary {
+        observation_inputs.push_str("      registry-token: ${{ secrets.GITHUB_TOKEN }}\n");
     }
+    Ok(RecipeSteps {
+        publisher: steps,
+        // GitHub Package Registry retrieval keeps its read token out of the
+        // publisher job. The portable Action performs the retrieval itself,
+        // so an empty body still selects the narrower retrieval-job template.
+        retrieval: (!primary).then(String::new),
+        observation_inputs,
+    })
 }
 
 /// Shell every recipe step opens with.
@@ -1548,88 +1206,8 @@ const NPM_PUBLISH_GITHUB: &str = r#"      @ENVVAR@TARBALL="$(find "${@ENVVAR@SUB
       npm publish "${@ENVVAR@TARBALL}" --registry "${@ENVVAR@REGISTRY}"
 "#;
 
-/// Destination readback and the bounded wait it runs under.
-///
-/// The chain this establishes is what lets the observation say the retrieved
-/// bytes are the published subject: the tarball the build produced, the
-/// integrity the registry publishes, and the bytes a client with an empty cache
-/// receives are compared as one value. A registry that has not indexed the
-/// release yet is `pending` and one holding different bytes is `conflict`;
-/// neither is decided here.
-const NPM_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
-      @ENVVAR@TARBALL="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.tgz' -print -quit)"
-      test -n "${@ENVVAR@TARBALL}"
-      @ENVVAR@LOCAL="sha512-$(openssl dgst -sha512 -binary "${@ENVVAR@TARBALL}" | base64 -w0)"
-      @ENVVAR@DESTINATION_DIGEST=""
-      @ENVVAR@ELAPSED=0
-      while : ; do
-        @ENVVAR@DESTINATION_DIGEST="$(@ENVVAR@npm_holds \
-          "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" || true)"
-        if [ -n "${@ENVVAR@DESTINATION_DIGEST}" ]; then break; fi
-        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then break; fi
-        sleep "${@ENVVAR@INTERVAL}"
-        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@INTERVAL ))
-        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
-        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
-          @ENVVAR@INTERVAL="${@ENVVAR@MAXIMUM_INTERVAL}"
-        fi
-      done
-      if [ -z "${@ENVVAR@DESTINATION_DIGEST}" ]; then
-        @ENVVAR@observe_state pending
-        exit 0
-      fi
-      if [ "${@ENVVAR@DESTINATION_DIGEST}" != "${@ENVVAR@LOCAL}" ]; then
-        @ENVVAR@observe_state conflict \
-          "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION} publishes integrity ${@ENVVAR@DESTINATION_DIGEST}, not the promoted ${@ENVVAR@LOCAL}"
-        exit 0
-      fi
-      rm -rf "${@ENVVAR@WORK}/clean"
-      mkdir -p "${@ENVVAR@WORK}/clean"
-"#;
-
-/// Clean-client retrieval and the observation it completes.
-///
-/// The retrieval runs under a scratch npm configuration rather than the job's
-/// own. The bootstrap path writes an auth token into the user configuration and
-/// it persists for the rest of the job, so a retrieval reading that file would
-/// send a credential while the observation recorded a public retrieval. The
-/// mode field states what happened, so the retrieval is made to be what the
-/// field says.
-const NPM_RETRIEVE_PUBLIC: &str = r#"      : > "${@ENVVAR@WORK}/clean/npmrc"
-"#;
-
-/// The scratch configuration a destination without anonymous read retrieves under.
-///
-/// The credential is the one the destination always requires of every consumer,
-/// which is what `authenticated-registry` records. Writing it into the scratch
-/// file rather than inheriting the job's keeps the retrieval's identity the one
-/// this step chose.
-const NPM_RETRIEVE_AUTHENTICATED: &str = r#"      @ENVVAR@HOST="${@ENVVAR@REGISTRY#https://}"
-      printf '//%s/:_authToken=%s\n' "${@ENVVAR@HOST%/}" "${@ENVVAR@GITHUB_PACKAGES_TOKEN}" \
-        > "${@ENVVAR@WORK}/clean/npmrc"
-"#;
-
-/// Retrieval, comparison, and the present observation the recipe writes.
-const NPM_RETRIEVE: &str = r#"      ( cd "${@ENVVAR@WORK}/clean" \
-        && npm_config_userconfig="${@ENVVAR@WORK}/clean/npmrc" \
-          npm pack "${@ENVVAR@SUBJECT_IDENTITY}@${@ENVVAR@VERSION}" \
-          --registry "${@ENVVAR@REGISTRY}" --cache "${@ENVVAR@WORK}/clean/cache" >/dev/null )
-      @ENVVAR@RETRIEVED="$(find "${@ENVVAR@WORK}/clean" -maxdepth 1 -name '*.tgz' -print -quit)"
-      test -n "${@ENVVAR@RETRIEVED}"
-      @ENVVAR@RETRIEVED_DIGEST="sha512-$(openssl dgst -sha512 -binary "${@ENVVAR@RETRIEVED}" | base64 -w0)"
-      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@LOCAL}"
-      @ENVVAR@PACKAGER_VERSION="$(npm --version)"
-      @ENVVAR@RETRIEVAL_VERSION="${@ENVVAR@PACKAGER_VERSION}"
-      @ENVVAR@observe_present
-"#;
-
-/// One npm readback, with the retrieval identity its destination admits.
-fn npm_readback(identity: &str) -> String {
-    format!("{NPM_READBACK}{identity}{NPM_RETRIEVE}")
-}
-
 /// Cargo recipe: trusted publishing, a promotion gate, and cargo's own retrieval.
-fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let identity = context.publication.identity();
     let registry = context
         .publication
@@ -1746,19 +1324,28 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<String, String> {
         CARGO_PUBLISH,
     ));
 
-    steps.push_str(&format!(
-        "  - name: {}\n    env:\n{registry_environment}      @ENVVAR@DESTINATION: {}\n{}{}{}    run: |\n{}{}{}{}",
-        scalar(&format!("Read {identity} back and retrieve it")),
+    let mut observation_inputs =
+        portable_observation_inputs(context, "cargo-crate", "cargo", "cargo", registry);
+    observation_inputs.push_str(&format!(
+        "      registry: {}\n      registry-name: {}\n      registry-index-variable: {}\n      registry-index-url: {}\n      carried-token: {}\n",
         scalar(registry),
-        subject_environment(context),
-        observation_environment(context, "cargo-crate", "cargo", "cargo"),
-        policy_environment(context.publication.publisher, context.publication.observation_deadline),
-        STRICT_MODE,
-        OBSERVE,
-        CARGO_RESOLVE,
-        CARGO_READBACK,
+        scalar(&registry_name),
+        scalar(&if crates_io {
+            String::new()
+        } else {
+            format!(
+                "CARGO_REGISTRIES_{}_INDEX",
+                environment_fragment(&registry_name)
+            )
+        }),
+        scalar(&index),
+        scalar(&carried),
     ));
-    Ok(steps)
+    Ok(RecipeSteps {
+        publisher: steps,
+        retrieval: None,
+        observation_inputs,
+    })
 }
 
 /// Shell that resolves one exact crate release through cargo's own index.
@@ -1917,52 +1504,6 @@ const CARGO_PUBLISH: &str = r#"      @ENVVAR@CRATE="$(find "${@ENVVAR@SUBJECT}" 
       cargo publish --locked --no-verify ${@ENVVAR@REGISTRY_ARGUMENTS[@]+"${@ENVVAR@REGISTRY_ARGUMENTS[@]}"}
 "#;
 
-/// Destination readback, clean-client retrieval, and the observation they produce.
-///
-/// One cargo resolution is both: the registry index resolving the exact version
-/// is the readback, and the `.crate` that resolution fetches into an empty
-/// `CARGO_HOME` is the retrieval. The checksum cargo records in the scratch
-/// lock file is the destination's own claim about those bytes, and comparing it
-/// with the bytes on disk is what establishes that the release a consumer
-/// receives is the crate this job promoted.
-const CARGO_READBACK: &str = r#"      mkdir -p "${@ENVVAR@WORK}"
-      @ENVVAR@CRATE="$(find "${@ENVVAR@SUBJECT}" -maxdepth 1 -name '*.crate' -print -quit)"
-      test -n "${@ENVVAR@CRATE}"
-      @ENVVAR@LOCAL="$(sha256sum < "${@ENVVAR@CRATE}" | cut -d' ' -f1)"
-      @ENVVAR@ELAPSED=0
-      @ENVVAR@RESOLVED=no
-      while : ; do
-        if @ENVVAR@resolve "${@ENVVAR@WORK}/clean"; then @ENVVAR@RESOLVED=yes; break; fi
-        if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then break; fi
-        sleep "${@ENVVAR@INTERVAL}"
-        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@INTERVAL ))
-        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))
-        if [ "${@ENVVAR@INTERVAL}" -gt "${@ENVVAR@MAXIMUM_INTERVAL}" ]; then
-          @ENVVAR@INTERVAL="${@ENVVAR@MAXIMUM_INTERVAL}"
-        fi
-      done
-      if [ "${@ENVVAR@RESOLVED}" != yes ]; then
-        @ENVVAR@observe_state pending
-        exit 0
-      fi
-      @ENVVAR@DESTINATION_DIGEST="$(sed -n "/^name = \"${@ENVVAR@SUBJECT_IDENTITY}\"$/,/^$/p" \
-        "${@ENVVAR@WORK}/clean/probe/Cargo.lock" | sed -n 's/^checksum = "\(.*\)"$/\1/p')"
-      test -n "${@ENVVAR@DESTINATION_DIGEST}"
-      @ENVVAR@RETRIEVED="$(find "${@ENVVAR@WORK}/clean/home/registry/cache" -type f \
-        -name "${@ENVVAR@SUBJECT_IDENTITY}-${@ENVVAR@VERSION}.crate" -print -quit)"
-      test -n "${@ENVVAR@RETRIEVED}"
-      @ENVVAR@RETRIEVED_DIGEST="$(sha256sum < "${@ENVVAR@RETRIEVED}" | cut -d' ' -f1)"
-      if [ "${@ENVVAR@DESTINATION_DIGEST}" != "${@ENVVAR@LOCAL}" ]; then
-        @ENVVAR@observe_state conflict \
-          "${@ENVVAR@SUBJECT_IDENTITY} ${@ENVVAR@VERSION} publishes checksum ${@ENVVAR@DESTINATION_DIGEST}, not the promoted ${@ENVVAR@LOCAL}"
-        exit 0
-      fi
-      test "${@ENVVAR@RETRIEVED_DIGEST}" = "${@ENVVAR@LOCAL}"
-      @ENVVAR@PACKAGER_VERSION="$(cargo --version | cut -d' ' -f2)"
-      @ENVVAR@RETRIEVAL_VERSION="${@ENVVAR@PACKAGER_VERSION}"
-      @ENVVAR@observe_present
-"#;
-
 /// Repository variable naming the Docker Hub account a recipe authenticates as.
 const DOCKERHUB_USERNAME_VAR: &str = "DOCKERHUB_USERNAME";
 /// Conventional GitHub secret holding the Docker Hub access token.
@@ -1982,7 +1523,7 @@ const DEV_CONTAINER_CLI: &str = "@devcontainers/cli@0.88.0";
 /// resolved it: the Buildx recipe pushes the sealed layout itself, and the Dev
 /// Container recipe drives a native client that publishes from source and is
 /// therefore held to the packaged bytes afterwards.
-fn oci_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+fn oci_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     let publication = context.publication;
     let identity = publication.identity();
     // A Dev Container Feature is namespaced by the repository that publishes
@@ -2006,7 +1547,7 @@ fn oci_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
     oci_destination_steps(context).map_err(|message| StepsRefusal::underivable(&identity, &message))
 }
 
-fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> {
+fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let publication = context.publication;
     let identity = publication.identity();
     let feature = publication.packager == Packager::DevContainerCli;
@@ -2045,10 +1586,10 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
     } else {
         String::new()
     };
-    let (kind, packager_version_command) = if feature {
-        ("dev-container-feature", "devcontainer")
+    let kind = if feature {
+        "dev-container-feature"
     } else {
-        ("oci-image", "docker buildx")
+        "oci-image"
     };
     let promote = if feature {
         [
@@ -2056,7 +1597,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
             DEV_CONTAINER_CONFLICT_GATE,
             OCI_CONFLICT_REPORT,
             DEV_CONTAINER_CONFLICT_TAIL,
-            DEV_CONTAINER_PUBLISH,
+            "      if [ \"${INTENTIONAL_PUBLISH}\" = yes ]; then\n        devcontainer features publish --namespace \"${@ENVVAR@FEATURE_NAMESPACE}\" .\n",
         ]
         .concat()
     } else {
@@ -2065,39 +1606,80 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
             OCI_EXISTING,
             OCI_IMAGE_CONFLICT_GATE,
             OCI_CONFLICT_REPORT,
-            OCI_IMAGE_PROMOTE_TAIL,
+            "      fi\n      if [ \"${INTENTIONAL_PUBLISH}\" = yes ]; then\n        crane push --index \"${layout}\" \"${repository}:${version}\"\n",
         ]
         .concat()
     };
+    let signature = if signed {
+        "      published=\"$(crane digest \"${repository}:${version}\")\"\n      cosign sign --yes \"${repository}@${published}\"\n"
+    } else {
+        ""
+    };
     steps.push_str(&format!(
-        "  - name: {}\n    working-directory: {}\n    env:\n{}{}{}{}      @ENVVAR@COMPONENTS: {}\n{namespace}    run: |\n{}{}{}{}{}{}{}{}{}",
+        "  - name: {}\n    working-directory: {}\n    env:\n{}      @ENVVAR@WORK: {}\n{}{namespace}    run: |\n{}{}{}{}{}{}{}",
         scalar(&format!("Publish {identity}")),
         scalar(context.working_directory),
         subject_environment(context),
-        observation_environment(
-            context,
-            kind,
-            publication.packager.as_str(),
-            "crane",
-        ),
-        policy_environment(publication.publisher, publication.observation_deadline),
+        scalar(context.work),
         destination,
-        scalar(&components),
         STRICT_MODE,
-        OBSERVE,
         OCI_PROLOGUE,
         promote,
         if feature { "" } else { OCI_ALIAS_ENTITLEMENT },
         if feature { "" } else { OCI_ALIAS_PROMOTE },
-        if feature {
-            DEV_CONTAINER_ALIAS_READBACK
-        } else {
-            OCI_ALIAS_READBACK
-        },
-        oci_attached_components(publication),
-        oci_observation(publication, packager_version_command),
+        signature,
+        "      fi\n",
     ));
-    Ok(steps)
+    let observed_destination = publication.destination.clone().unwrap_or_else(|| {
+        if feature {
+            format!("${{{{ github.repository }}}}/{}", context.subject_identity)
+        } else {
+            format!(
+                "${{{{ github.repository_owner }}}}/{}",
+                context.subject_identity
+            )
+        }
+    });
+    let mut observation_inputs = portable_observation_inputs(
+        context,
+        kind,
+        publication.packager.as_str(),
+        "crane",
+        &observed_destination,
+    );
+    let (registry, user, token) = match publication.target.as_str() {
+        "dockerhub" => {
+            let target = context.unit.oci().and_then(|oci| oci.dockerhub.as_ref());
+            let username = target
+                .and_then(|target| target.username_var.as_deref())
+                .unwrap_or(DOCKERHUB_USERNAME_VAR);
+            let secret = target
+                .and_then(|target| target.token_secret.as_deref())
+                .unwrap_or(DOCKERHUB_TOKEN_SECRET);
+            (
+                "docker.io".to_owned(),
+                format!("${{{{ vars.{username} }}}}"),
+                format!("${{{{ secrets.{secret} }}}}"),
+            )
+        }
+        _ => (
+            "ghcr.io".to_owned(),
+            "${{ github.actor }}".to_owned(),
+            "${{ secrets.GITHUB_TOKEN }}".to_owned(),
+        ),
+    };
+    observation_inputs.push_str(&format!(
+        "      registry: {}\n      registry-user: {}\n      registry-token: {}\n      components: {}\n",
+        scalar(&registry),
+        scalar(&user),
+        scalar(&token),
+        scalar(&components),
+    ));
+    Ok(RecipeSteps {
+        publisher: steps,
+        retrieval: None,
+        observation_inputs,
+    })
 }
 
 /// Destination-specific values one OCI recipe body reads from its environment.
@@ -2197,6 +1779,7 @@ const OCI_PROLOGUE: &str = r#"      version="${@ENVVAR@VERSION}"
       : > "${aliases_file}"
       : > "${metadata_file}"
       : > "${provenance_file}"
+      INTENTIONAL_PUBLISH=yes
       printf '%s' "${@ENVVAR@REGISTRY_TOKEN}" | crane auth login "${@ENVVAR@REGISTRY}" \
         --username "${@ENVVAR@REGISTRY_USER}" --password-stdin
 "#;
@@ -2225,9 +1808,9 @@ const OCI_EXISTING: &str = r#"      listing_error="${@ENVVAR@WORK}/listing-error
 "#;
 
 /// Report a destination holding another subject, without touching it.
-const OCI_CONFLICT_REPORT: &str = r#"        @ENVVAR@observe_state conflict "$(printf '%s already holds %s under version %s, which is not the subject this release built' \
-          "${repository}" "${conflicting}" "${version}")"
-        exit 0
+const OCI_CONFLICT_REPORT: &str = r#"        printf '%s already holds %s under version %s, which is not the subject this release built\n' \
+          "${repository}" "${conflicting}" "${version}" >&2
+        INTENTIONAL_PUBLISH=no
 "#;
 
 /// Push the sealed layout and prove the destination holds what it sealed.
@@ -2263,20 +1846,6 @@ const OCI_IMAGE_CONFLICT_GATE: &str = r#"      existing_manifests=""
         conflicting="${existing}"
 "#;
 
-const OCI_IMAGE_PROMOTE_TAIL: &str = r#"      fi
-      crane push --index "${layout}" "${repository}:${version}"
-      published="$(crane digest "${repository}:${version}")"
-      index="$(crane manifest "${repository}@${published}")"
-      test "$(printf '%s' "${index}" | jq -S -r '[.manifests[].digest] | sort | .[]')" \
-        = "${sealed_manifests}"
-      annotated="$(printf '%s' "${index}" \
-        | jq -r '.annotations["org.opencontainers.image.version"] // ""')"
-      test "${annotated}" = "${version}"
-      named="$(printf '%s' "${index}" \
-        | jq -r '.annotations["org.opencontainers.image.title"] // ""')"
-      test "${named}" = "${@ENVVAR@SUBJECT_IDENTITY}"
-"#;
-
 /// Refuse to hand a destination holding another Feature to the native client.
 ///
 /// The client publishes from source and would overwrite the tag, and the layer
@@ -2296,13 +1865,6 @@ const DEV_CONTAINER_CONFLICT_GATE: &str = r#"      packaged="sha256:$(sha256sum 
 "#;
 
 const DEV_CONTAINER_CONFLICT_TAIL: &str = r#"      fi
-"#;
-
-/// Publish a Feature through its native client and prove it promoted the seal.
-const DEV_CONTAINER_PUBLISH: &str = r#"      devcontainer features publish --namespace "${@ENVVAR@FEATURE_NAMESPACE}" .
-      published="$(crane digest "${repository}:${version}")"
-      layer="$(crane manifest "${repository}@${published}" | jq -r '.layers[0].digest')"
-      test "${layer}" = "${packaged}"
 "#;
 
 /// Decide which stable aliases the released version is entitled to.
@@ -2347,218 +1909,3 @@ const OCI_ALIAS_PROMOTE: &str = r#"      for alias in ${aliases}; do
         crane tag "${repository}:${version}" "${alias}"
       done
 "#;
-
-/// Compare every mutable alias the destination now resolves with entitlement.
-///
-/// Both directions are checked, and that is the point. An entitled alias that
-/// does not resolve the published subject means the promotion did not take. An
-/// alias that does resolve it without being entitled means something moved a
-/// stable alias this release had no right to -- which is the only way to hold a
-/// native client that maintains its own tags to the same rule, rather than
-/// predicting what it will do and recording the prediction as an observation.
-const OCI_ALIAS_READBACK: &str = r#"      for alias in latest "${minor}" "${major}"; do
-        alias_digest="$(crane digest "${repository}:${alias}" 2>/dev/null || true)"
-        entitled=""
-        case " ${aliases} " in
-          *" ${alias} "*) entitled="yes" ;;
-        esac
-        if [ "${alias_digest}" = "${published}" ]; then
-          test -n "${entitled}"
-          printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
-            >> "${aliases_file}"
-        else
-          test -z "${entitled}"
-        fi
-      done
-"#;
-
-/// Read back aliases the Dev Container client owns itself.
-///
-/// Stable Feature publication requires every mutable alias the native client
-/// owns, including major zero. Prereleases require only their exact version;
-/// if a client nevertheless moves a stable alias, the observation records it
-/// instead of silently claiming nothing moved.
-const DEV_CONTAINER_ALIAS_READBACK: &str = r#"      core="${version%%-*}"
-      major="${core%%.*}"
-      minor="${core%.*}"
-      stable=""; alias_error="${@ENVVAR@WORK}/feature-alias-error"
-      case "${version}" in *-*) ;; *) stable="yes" ;; esac
-      for alias in latest "${minor}" "${major}"; do
-        if alias_digest="$(crane digest "${repository}:${alias}" 2>"${alias_error}")"; then
-          if [ "${alias_digest}" = "${published}" ]; then
-            printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
-              >> "${aliases_file}"
-          elif [ -n "${stable}" ]; then printf 'Required stable Feature alias %s resolves %s instead of %s\n' "${alias}" "${alias_digest}" "${published}" >&2; exit 1
-          fi
-        elif grep -Eq '(^|[^A-Z_])MANIFEST_UNKNOWN([^A-Z_]|$)' "${alias_error}"; then
-          if [ -n "${stable}" ]; then printf 'Required stable Feature alias %s is missing after publication\n' "${alias}" >&2; exit 1; fi
-        else
-          printf 'Could not read Feature alias %s after publication: ' "${alias}" >&2; cat "${alias_error}" >&2; exit 1
-        fi
-      done
-"#;
-
-/// Attach and read back exactly the components this target did not omit.
-///
-/// The body carries an arm only for a component this target still selects, so
-/// an omitted component leaves no trace in the recipe at all: nothing attaches
-/// it, nothing looks for it, and nothing records that it was left out. A
-/// selected component that the destination does not hold fails the publication
-/// instead of quietly dropping out of affirmative evidence.
-fn oci_attached_components(publication: &SelectedPublication) -> String {
-    if publication.components.is_empty() {
-        return String::new();
-    }
-    let mut body = String::new();
-    let reads_attestation = publication.components.iter().any(|component| {
-        matches!(
-            component,
-            AttachedComponent::Sbom | AttachedComponent::Provenance
-        )
-    });
-    if reads_attestation {
-        body.push_str(OCI_ATTESTATION_READ);
-    }
-    body.push_str(
-        "      for component in ${@ENVVAR@COMPONENTS}; do\n        component_recorded=\"\"\n        case \"${component}\" in\n",
-    );
-    for component in &publication.components {
-        body.push_str(match component {
-            AttachedComponent::Sbom => OCI_SBOM_ARM,
-            AttachedComponent::Provenance => OCI_PROVENANCE_ARM,
-            AttachedComponent::Signature => OCI_SIGNATURE_ARM,
-        });
-    }
-    body.push_str(OCI_COMPONENT_RECORD);
-    body
-}
-
-/// Locate and inspect the attestation manifest for every indexed platform.
-const OCI_ATTESTATION_READ: &str = r#"      attestations_file="${@ENVVAR@WORK}/attestations.jsonl"
-      : > "${attestations_file}"
-      while IFS= read -r platform_entry; do
-        platform_digest="$(jq -r '.digest' <<<"${platform_entry}")"
-        platform="$(jq -r '.platform' <<<"${platform_entry}")"
-        attestation="$(jq -r --arg digest "${platform_digest}" 'first(.manifests[]? | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest" and .annotations["vnd.docker.reference.digest"] == $digest) | .digest) // ""' <<<"${index}")"
-        test -n "${attestation}"
-        predicates="$(crane manifest "${repository}@${attestation}")"
-        sbom_digest="$(jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("spdx")) | .digest) // ""' <<<"${predicates}")"
-        provenance_digest="$(jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("slsa|provenance")) | .digest) // ""' <<<"${predicates}")"
-        jq -cn --arg platform "${platform}" --arg attestation "${attestation}" \
-          --arg sbom "${sbom_digest}" --arg provenance "${provenance_digest}" \
-          '{platform: $platform, attestation: $attestation, sbom: $sbom, provenance: $provenance}' \
-          >> "${attestations_file}"
-      done < <(jq -c '.manifests[] | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest") | {digest, platform: (.platform.os + "/" + .platform.architecture)}' <<<"${index}")
-      test -s "${attestations_file}"
-"#;
-
-const OCI_SBOM_ARM: &str = r#"          sbom)
-            while IFS= read -r attestation_entry; do
-              component_digest="$(jq -r '.sbom' <<<"${attestation_entry}")"
-              component_reference="${repository}@$(jq -r '.attestation' <<<"${attestation_entry}")"
-              test -n "${component_digest}"
-              printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
-                "${component}" "${component_digest}" "${component_reference}" >> "${metadata_file}"
-              component_recorded="yes"
-            done < "${attestations_file}"
-            ;;
-"#;
-
-const OCI_PROVENANCE_ARM: &str = r#"          provenance)
-            while IFS= read -r attestation_entry; do
-              component_digest="$(jq -r '.provenance' <<<"${attestation_entry}")"
-              component_reference="${repository}@$(jq -r '.attestation' <<<"${attestation_entry}")"
-              test -n "${component_digest}"
-              printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
-                "${component}" "${component_digest}" "${component_reference}" >> "${metadata_file}"
-              printf -- '  - kind: "oci-attestation"\n    digest: "%s"\n    reference: "%s"\n' \
-                "${component_digest}" "${component_reference}" >> "${provenance_file}"
-              component_recorded="yes"
-            done < "${attestations_file}"
-            ;;
-"#;
-
-const OCI_SIGNATURE_ARM: &str = r#"          signature)
-            cosign sign --yes "${repository}@${published}"
-            component_digest="$(crane digest "$(cosign triangulate "${repository}@${published}")")"
-            ;;
-"#;
-
-const OCI_COMPONENT_RECORD: &str = r#"          *)
-            component_digest=""
-            ;;
-        esac
-        test -n "${component_digest}"
-        if [ -z "${component_recorded}" ]; then
-          printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
-            "${component}" "${component_digest}" "${repository}@${published}" >> "${metadata_file}"
-        fi
-      done
-"#;
-
-/// Retrieve the release the way an ordinary public consumer would.
-///
-/// The client is given an empty credential store, so it resolves the release
-/// with no authority this job holds. It then retrieves the subject's own bytes
-/// and checks that they hash to the digest the destination published, which is
-/// what discharges the recipe's obligation to prove the retrieved bytes are the
-/// published subject. Resolution alone would leave a destination that serves a
-/// tag publicly but refuses its content indistinguishable from one that does
-/// not -- a real state at GHCR while a package's visibility is changing.
-///
-/// A destination no public client can reach is reported rather than crashed
-/// into. The publication was accepted; what has not happened is the
-/// destination becoming observable, which is exactly the `pending` state the
-/// protocol already has a bounded policy for. Dying with the client's own
-/// error would leave `verify publication` with nothing to read about a
-/// destination that had in fact been fully written, on what is the most likely
-/// first-run outcome: a GHCR package is private until someone makes it public.
-const OCI_CLEAN_CLIENT: &str = r#"      clean_client="${@ENVVAR@WORK}/clean"
-      rm -rf "${clean_client}"
-      mkdir -p "${clean_client}"
-      if ! retrieved="$(DOCKER_CONFIG="${clean_client}" crane digest "${repository}:${version}" \
-        2>/dev/null)" \
-        || ! DOCKER_CONFIG="${clean_client}" crane manifest "${repository}@${retrieved}" \
-          > "${clean_client}/subject.json" 2>/dev/null; then
-        printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
-          "${repository}" "${version}" >&2
-        @ENVVAR@observe_state pending
-        exit 0
-      fi
-      test "${retrieved}" = "${published}"
-      test "sha256:$(sha256sum < "${clean_client}/subject.json" | cut -d ' ' -f 1)" = "${retrieved}"
-      client_version="$(crane version)"
-"#;
-
-/// Compose the observation the verification command reads.
-///
-/// Everything the schema fixes is written by the shared `observe_present`
-/// helper, so this adds only what an OCI publication has beyond a publication:
-/// the components it attached, the aliases it moved, and the native build
-/// provenance the packager produced.
-fn oci_observation(publication: &SelectedPublication, packager_version_command: &str) -> String {
-    let provenance = if publication
-        .components
-        .contains(&AttachedComponent::Provenance)
-    {
-        "      if [ -s \"${provenance_file}\" ]; then\n        printf 'build-provenance:\\n' >> \"${@ENVVAR@OBSERVATION}\"\n        cat \"${provenance_file}\" >> \"${@ENVVAR@OBSERVATION}\"\n      fi\n"
-    } else {
-        ""
-    };
-    format!(
-        r#"{OCI_CLEAN_CLIENT}      @ENVVAR@PACKAGER_VERSION="$({packager_version_command} version | head -n 1)"
-      @ENVVAR@DESTINATION_DIGEST="${{published}}"
-      @ENVVAR@RETRIEVAL_VERSION="${{client_version}}"
-      @ENVVAR@RETRIEVED_DIGEST="${{retrieved}}"
-      @ENVVAR@observe_present
-      if [ -s "${{metadata_file}}" ]; then
-        printf 'attached-metadata:\n' >> "${{@ENVVAR@OBSERVATION}}"
-        cat "${{metadata_file}}" >> "${{@ENVVAR@OBSERVATION}}"
-      fi
-      if [ -s "${{aliases_file}}" ]; then
-        printf 'destination-aliases:\n' >> "${{@ENVVAR@OBSERVATION}}"
-        cat "${{aliases_file}}" >> "${{@ENVVAR@OBSERVATION}}"
-      fi
-{provenance}"#
-    )
-}

@@ -770,20 +770,18 @@ fn every_managed_checkout_states_the_options_the_release_protocol_depends_on() {
     );
 }
 
-/// Recipe identity carried by a derived publisher's shell environment.
+/// Recipe identity carried by a derived publisher's observer Action.
 fn recipe_identity(step: &Value) -> Option<(String, String, String)> {
-    let environment = step["env"].as_mapping()?;
-    let value = |suffix: &str| {
-        environment.iter().find_map(|(key, value)| {
-            key.as_str()?
-                .ends_with(suffix)
-                .then(|| value.as_str().map(str::to_owned))?
-        })
-    };
+    step["uses"]
+        .as_str()
+        .is_some_and(|action| action.contains("/verify-publication@"))
+        .then_some(())?;
+    let inputs = step["with"].as_mapping()?;
+    let target = inputs[Value::from("target")].as_str()?;
     Some((
-        value("RELEASE_UNIT")?,
-        value("PUBLISHER")?,
-        value("TARGET")?,
+        inputs[Value::from("release-unit")].as_str()?.to_owned(),
+        inputs[Value::from("publisher")].as_str()?.to_owned(),
+        if target.is_empty() { "primary" } else { target }.to_owned(),
     ))
 }
 
@@ -846,7 +844,7 @@ fn derived_workflows_and_their_shell_bodies_parse() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         reached_recipes, expected_recipes,
-        "derived managed shell reaches every maintained recipe"
+        "derived managed workflow reaches every maintained recipe"
     );
     assert!(
         managed_jobs.iter().any(|(role, job, bodies)| {

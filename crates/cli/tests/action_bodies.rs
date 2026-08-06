@@ -217,6 +217,83 @@ fn required() -> BTreeMap<&'static str, String> {
     ])
 }
 
+#[test]
+fn observes_a_pending_registry_publication_through_the_shipped_action_body() {
+    let document = action_document("verify-publication");
+    let step = action_step(&document, "observe");
+    let body = step["run"].as_str().expect("the observer declares a body");
+    let temp = tempfile::tempdir().expect("temporary observer directory");
+    let bin = temp.path().join("bin");
+    let subject = temp.path().join("subject");
+    fs::create_dir_all(&bin).expect("stub directory");
+    fs::create_dir_all(&subject).expect("subject directory");
+    fs::write(subject.join("subject.tgz"), "sealed package bytes").expect("sealed subject");
+    let npm = bin.join("npm");
+    fs::write(
+        &npm,
+        "#!/usr/bin/env bash\ncase \"$1\" in view) echo 'npm error code E404' >&2; exit 1 ;; esac\n",
+    )
+    .expect("npm stub written");
+    fs::set_permissions(&npm, fs::Permissions::from_mode(0o755)).expect("npm stub executable");
+
+    let observation = temp.path().join("observation.yml");
+    let supplied = BTreeMap::from([
+        ("release-unit", "sample-unit".to_owned()),
+        ("package", "sample-package".to_owned()),
+        ("publisher", "npm".to_owned()),
+        ("target", "primary".to_owned()),
+        ("observation", observation.display().to_string()),
+        ("subject", subject.display().to_string()),
+        ("subject-kind", "npm-package".to_owned()),
+        ("subject-identity", "sample-package".to_owned()),
+        ("subject-version", "1.2.3".to_owned()),
+        ("subject-digest", format!("sha256:{}", "1".repeat(64))),
+        ("packager", "npm".to_owned()),
+        ("destination", "https://registry.example.invalid".to_owned()),
+        ("retrieval-mode", "public".to_owned()),
+        ("retrieval-client", "npm".to_owned()),
+        ("work", temp.path().join("work").display().to_string()),
+        ("interval", "1".to_owned()),
+        ("backoff", "2".to_owned()),
+        ("maximum-interval", "2".to_owned()),
+        ("deadline", "0".to_owned()),
+        ("registry", "https://registry.example.invalid".to_owned()),
+    ]);
+    let mut environment = step_environment(&document, &step, &supplied);
+    environment.insert(
+        "GITHUB_ACTION_PATH".to_owned(),
+        repository_root()
+            .join("actions/verify-publication")
+            .display()
+            .to_string(),
+    );
+    environment.insert(
+        "PATH".to_owned(),
+        format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    );
+    environment.insert("HOME".to_owned(), temp.path().display().to_string());
+
+    let status = Command::new("bash")
+        .arg("-c")
+        .arg(body)
+        .env_clear()
+        .envs(environment)
+        .status()
+        .expect("the observer Action body runs");
+    assert!(status.success(), "pending observation is not adjudication");
+    let written = fs::read_to_string(observation).expect("observer writes its document");
+    assert!(
+        written.contains("contract: publication-observation-1\n")
+            && written.contains("publisher: \"npm\"\n")
+            && written.contains("state: pending\n"),
+        "the shipped Action body records the pending publication: {written}"
+    );
+}
+
 /// The pair `option value`, when the command carries that option.
 fn option_value<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
     arguments

@@ -2494,13 +2494,94 @@ jobs:
             .filter_map(|(id, body)| {
                 let id = id.as_str()?;
                 id.starts_with("intentional_").then(|| {
-                    (
-                        id.to_owned(),
-                        body["steps"].as_sequence().expect("steps").clone(),
-                    )
+                    let steps = body["steps"].as_sequence().expect("steps");
+                    let expanded = steps
+                        .iter()
+                        .flat_map(|step| {
+                            [Some(step.clone()), portable_observer_step(step)]
+                                .into_iter()
+                                .flatten()
+                        })
+                        .collect();
+                    (id.to_owned(), expanded)
                 })
             })
             .collect()
+    }
+
+    /// Executable observer behind one derived verify-publication Action call.
+    ///
+    /// Workflow tests execute managed shell against stub clients. Readback now
+    /// lives behind a composite Action, so the harness expands that Action from
+    /// its parsed declaration rather than teaching every adapter test a second
+    /// runner. Inputs resolve from the caller's `with:` mapping and the Action's
+    /// defaults, which keeps producer/consumer spelling in the execution path.
+    fn portable_observer_step(step: &Value) -> Option<Value> {
+        let (name, _) = intentional_action(step)?;
+        if name != "verify-publication" {
+            return None;
+        }
+        let path = action_document(&name);
+        let document: Value = serde_yaml::from_str(
+            &std::fs::read_to_string(&path).expect("verification Action readable"),
+        )
+        .expect("verification Action parses");
+        let observer = document["runs"]["steps"]
+            .as_sequence()
+            .expect("Action steps")
+            .iter()
+            .find(|candidate| candidate["id"].as_str() == Some("observe"))
+            .expect("verification Action observes before it verifies");
+        let supplied = step
+            .get("with")
+            .and_then(Value::as_mapping)
+            .cloned()
+            .unwrap_or_default();
+        let declared = document["inputs"].as_mapping().expect("Action inputs");
+        let mut environment = serde_yaml::Mapping::new();
+        for (key, value) in observer["env"].as_mapping().expect("observer environment") {
+            let expression = value.as_str().expect("input expression");
+            let input = expression
+                .trim()
+                .strip_prefix("${{")
+                .and_then(|rest| rest.strip_suffix("}}"))
+                .map(str::trim)
+                .and_then(|reference| reference.strip_prefix("inputs."))
+                .expect("observer environment reads an input");
+            let input_key = Value::String(input.to_owned());
+            let resolved = supplied
+                .get(&input_key)
+                .cloned()
+                .or_else(|| declared.get(&input_key)?.get("default").cloned())
+                .unwrap_or_else(|| Value::String(String::new()));
+            environment.insert(key.clone(), resolved.clone());
+            let input_name = key.as_str().expect("environment key");
+            if let Some(suffix) = input_name.strip_prefix("INPUT_") {
+                let legacy = if suffix == "SUBJECT_VERSION" {
+                    "INTENTIONAL_VERSION".to_owned()
+                } else {
+                    format!("INTENTIONAL_{suffix}")
+                };
+                environment.insert(Value::String(legacy), resolved);
+            }
+        }
+        environment.insert(
+            Value::String("GITHUB_ACTION_PATH".to_owned()),
+            Value::String(
+                path.parent()
+                    .expect("Action directory")
+                    .display()
+                    .to_string(),
+            ),
+        );
+        let mut expanded = serde_yaml::Mapping::new();
+        expanded.insert(
+            Value::String("name".to_owned()),
+            Value::String("Read back and retrieve the publication".to_owned()),
+        );
+        expanded.insert(Value::String("env".to_owned()), Value::Mapping(environment));
+        expanded.insert(Value::String("run".to_owned()), observer["run"].clone());
+        Some(Value::Mapping(expanded))
     }
 
     /// Remainder beneath `wyrd-company/intentional/actions/` when the reference is first-party.
@@ -4152,7 +4233,6 @@ exit 0
             subject_identity: "example-tool",
             build_job: "intentional_build_component_goreleaser",
             working_directory: "component",
-            observation: "observation.yml",
             work: "readback",
             delivery_namespace: "intentional",
             root: workspace.root(),
@@ -7989,11 +8069,11 @@ release-units:
             }
         }
         assert!(allowlists > 0, "the publisher jobs build an allowlist");
-        // Two Cargo publisher jobs render two conditional appends each. This
+        // Two Cargo publisher jobs render one conditional append each. This
         // says the recipes still add to the list at all -- completeness is the
         // per-body equality above, not this floor.
         assert!(
-            appended >= 4 && governed >= 4,
+            appended >= 2 && governed >= 2,
             "the sweep read the appends the recipes render: \
              {appended} appends under {governed} conditions"
         );
@@ -8429,12 +8509,8 @@ release-units:
             let steps = document["jobs"][job]["steps"].as_sequence().expect("steps");
             let readback = steps
                 .iter()
-                .find(|step| {
-                    step["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("Read back "))
-                })
-                .expect("readback step");
+                .find_map(portable_observer_step)
+                .expect("portable readback step");
             let environment =
                 serde_yaml::to_string(&readback["env"]).expect("readback environment renders");
             let body = readback["run"].as_str().expect("readback body");
@@ -8458,8 +8534,8 @@ release-units:
             }
         }
         assert_eq!(
-            system_package_bodies, 4,
-            "the sweep reads establishment and readback bodies for both system-package jobs"
+            system_package_bodies, 2,
+            "the sweep reads each inline system-package establishment body"
         );
 
         // How much the gate inspected is established before any rule is
@@ -8995,6 +9071,11 @@ release-units:
             output.lines().count() <= MAX_WORKFLOW_LINES,
             "Intentional's own publication shape must remain readable after apply"
         );
+        assert_eq!(
+            output.lines().count(),
+            1_562,
+            "the real four-publication fixture pins the measured line count"
+        );
         assert!(
             oversized_workflow_line(&output).is_none(),
             "Intentional's own publication shape must fit the per-line byte bound"
@@ -9002,7 +9083,7 @@ release-units:
     }
 
     #[test]
-    fn a_fifth_cargo_shaped_publication_exceeds_the_readback_bound() {
+    fn a_fifth_cargo_shaped_publication_brackets_the_readback_bound() {
         let workspace = repository_scale_workspace("workflow-fifth-cargo-publication");
         let mut config = Config::load(workspace.root()).expect("repository-scale config loads");
         config
@@ -9024,14 +9105,56 @@ release-units:
         let comparison =
             compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
                 .expect("expanded contract compares");
-        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert_eq!(comparison.status, ComparisonStatus::Different);
+        let output = comparison.output.expect("expanded comparison has output");
+        assert_eq!(
+            output.lines().count(),
+            1_748,
+            "the five-publication fixture pins the measured line count"
+        );
+
+        let workflow_path = ".github/workflows/publish.yml";
+        let repository_workflow = std::fs::read_to_string(workspace.root().join(workflow_path))
+            .expect("repository workflow");
+        let padding = |lines: usize| {
+            (0..lines)
+                .map(|line| format!("# repository capacity {line}\n"))
+                .collect::<String>()
+        };
+        let remaining = MAX_WORKFLOW_LINES - output.lines().count();
+        workspace.write(
+            workflow_path,
+            &format!("{}{repository_workflow}", padding(remaining)),
+        );
+        let fitting =
+            compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
+                .expect("capacity-safe expanded contract compares");
+        assert_eq!(fitting.status, ComparisonStatus::Different);
+        assert_eq!(
+            fitting
+                .output
+                .expect("capacity-safe output")
+                .lines()
+                .count(),
+            MAX_WORKFLOW_LINES,
+            "the safe side lands exactly on the settled bound"
+        );
+
+        workspace.write(
+            workflow_path,
+            &format!("{}{repository_workflow}", padding(remaining + 1)),
+        );
+        let exceeding =
+            compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
+                .expect("capacity-unsafe expanded contract compares");
+        assert_eq!(exceeding.status, ComparisonStatus::Blocked);
         assert!(
-            comparison
+            exceeding
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "workflow-too-large"),
-            "the fifth Cargo-shaped publication crosses the documented bound: {:?}",
-            comparison.diagnostics
+            "one repository-owned line beyond the settled bound is refused: {:?}",
+            exceeding.diagnostics
         );
     }
 
