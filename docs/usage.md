@@ -326,3 +326,121 @@ formatting are preserved. Every managed job carries the reserved step id
 slices after you change the configured prefix: sentinel-bearing jobs under the
 old prefix are replaced, and a job that merely happens to share the old prefix
 stays yours.
+
+## Read the authority split in the maintained slice
+
+The release workflow derives two managed jobs, and the boundary between them is
+the point where a release gains the authority to write to your repository.
+Preparation holds none of it:
+
+```yaml
+  intentional_prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - id: intentional_executor_contract
+        name: Check out the accepted source commit
+        uses: actions/checkout@<pinned>
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+```
+
+It builds the release candidate and uploads it as an artifact. It runs in no
+environment, mints no token, and checks out without persisting credentials, so
+nothing it does can reach the repository.
+
+The second job is where authority appears, and it appears only after the
+candidate has been verified:
+
+```yaml
+  intentional_release:
+    needs:
+      - intentional_prepare
+    environment: intentional-release
+    permissions:
+      contents: read
+    steps:
+      - name: Download the release candidate
+      - name: Verify the release candidate handoff
+      - name: Mint a short-lived repository token
+      - name: Publish the release commit and the global release tag
+      - name: Create the draft GitHub Release for the published tag
+```
+
+The order is the design. Verification precedes the token, so a candidate that
+fails verification never reaches a step that can write. The `contents: read`
+permission is the workflow token's, not the App token's: the job writes with the
+short-lived token it mints, which is why the declared permission stays read-only
+even in the job that publishes.
+
+Every managed checkout requests `fetch-depth: 0` and `fetch-tags: true`.
+Verification rebuilds the candidate from the accepted source commit and derives
+versions from annotated tags, so a shallow or tagless checkout fails
+verification rather than producing a wrong release.
+
+## Prepare the repository
+
+Intentional never mutates repository settings. `intentional executor init`
+reports what you must configure, and `intentional executor check` reports it
+again for as long as it is missing.
+
+**Ruleset bypass.** The release GitHub App must be a bypass actor for the
+default branch and for every managed release tag namespace. The release job
+pushes the release commit and the annotated global tag in one atomic update; a
+ruleset that blocks either makes the authority transition fail after the
+candidate has already been verified.
+
+**App credentials.** The repository must define `INTENTIONAL_GITHUB_APP_ID` and
+`INTENTIONAL_GITHUB_APP_PRIVATE_KEY` as secrets. These mint the short-lived
+token and are the only long-lived repository-write credentials involved.
+
+**Protected environment.** The `intentional-release` environment must exist and
+must guard the authority transition. It is the one place to require a reviewer,
+a wait timer, or a branch restriction, because it is the gate every privileged
+step sits behind.
+
+**Publisher credentials** belong to the destination rather than the repository,
+and Intentional stores names, never values. A tap repository must install the
+release App so the publisher job can mint a token scoped to that repository
+alone.
+
+## Publish to a registry for the first time
+
+Publisher recipes prefer registry trusted publishing, which needs no stored
+credential. Several registries will not let you configure a trusted identity
+until the package already exists, which leaves the first publication with
+nothing to authenticate. Each affected recipe therefore exposes a bootstrap
+path that uses a conventional token:
+
+| Destination | Bootstrap secret |
+| --- | --- |
+| npm (npmjs) | `NPM_TOKEN` |
+| Cargo (crates.io) | `CARGO_REGISTRY_TOKEN` |
+| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` |
+| GitHub Package Registry | none — the workflow token is accepted |
+
+Configure the secret your first publication needs, publish once, then configure
+the registry's trusted identity. You can leave the secret in place; it stops
+being reachable.
+
+Two properties are worth knowing before you rely on this.
+
+**The bootstrap path opens only on proof that the destination does not hold the
+package.** A registry client reports a missing package and a failed request the
+same way, and treating them alike would turn any transient registry outage into
+a steady-state publication authenticated by a long-lived credential. Each recipe
+separates the two outcomes and fails the job on an inconclusive probe. A
+publication that fails this way is telling you the probe did not complete, not
+that the package is absent.
+
+**Once the package exists, publication requires the trusted identity and never
+falls back.** An identity failure fails the publication rather than reaching for
+the bootstrap token, so a misconfigured trusted publisher cannot silently revert
+to a long-lived credential.
+
+Override a conventional secret name with `token-secret` on the publisher, or
+`username-var` where the destination uses one. Configuration carries names
+only.
