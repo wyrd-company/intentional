@@ -1579,27 +1579,30 @@ fn cargo_archive_platforms(
     namespaces: &PrefixNamespaces,
     verify: &str,
 ) -> Vec<(String, std::result::Result<Value, WorkflowDiagnostic>)> {
-    [("linux", "ubuntu-latest"), ("macos", "macos-14")]
-        .into_iter()
-        .map(|(platform, runner)| {
-            let id = format!("{}build_{}_{}", namespaces.job, subject.slug, platform);
-            let archive = format!("{platform}.tar.gz");
-            let rendered = job(
-                templates::PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB,
-                namespaces,
-                &[
-                    ("@NEEDS@", &render_list(&[verify.to_owned()])),
-                    ("@RUNNER@", runner),
-                    ("@PLATFORM@", platform),
-                    ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
-                    ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
-                    ("@ARCHIVE@", &archive),
-                    ("@SLUG@", &subject.slug),
-                ],
-            );
-            (id, rendered)
-        })
-        .collect()
+    [
+        ("linux_x86_64", "ubuntu-latest", "linux-x86_64.tar.gz"),
+        ("linux_arm64", "ubuntu-24.04-arm", "linux-arm64.tar.gz"),
+        ("macos_arm64", "macos-14", "macos-arm64.tar.gz"),
+    ]
+    .into_iter()
+    .map(|(platform, runner, archive)| {
+        let id = format!("{}build_{}_{}", namespaces.job, subject.slug, platform);
+        let rendered = job(
+            templates::PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB,
+            namespaces,
+            &[
+                ("@NEEDS@", &render_list(&[verify.to_owned()])),
+                ("@RUNNER@", runner),
+                ("@PLATFORM@", platform),
+                ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
+                ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
+                ("@ARCHIVE@", archive),
+                ("@SLUG@", &subject.slug),
+            ],
+        );
+        (id, rendered)
+    })
+    .collect()
 }
 
 /// One draft-dependent publication and the subject whose assets it consumes.
@@ -4698,15 +4701,16 @@ release-units:
     fn rust_homebrew_builds_platform_archives_once_and_promotes_the_sealed_formula() {
         let workspace = rust_homebrew_workspace(
             "rust-homebrew-route",
-            "[package]\nname = \"sample-cli\"\nversion = \"1.2.3\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+            "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\ndescription = \"Sample command line tool\"\nlicense = \"MIT\"\n",
         );
         workspace.write("component/src/main.rs", "fn main() {}\n");
         converge(workspace.root(), WorkflowRole::Publish);
         let jobs = publish_jobs(workspace.root());
 
         for id in [
-            "intentional_build_component_cargo_archive_linux",
-            "intentional_build_component_cargo_archive_macos",
+            "intentional_build_component_cargo_archive_linux_x86_64",
+            "intentional_build_component_cargo_archive_linux_arm64",
+            "intentional_build_component_cargo_archive_macos_arm64",
             "intentional_build_component_cargo_archive",
             "intentional_publish_component_command_homebrew_primary",
         ] {
@@ -4715,7 +4719,10 @@ release-units:
                 "the Rust Homebrew route derives {id}"
             );
         }
-        let platform = job_steps(&jobs, "intentional_build_component_cargo_archive_linux");
+        let platform = job_steps(
+            &jobs,
+            "intentional_build_component_cargo_archive_linux_x86_64",
+        );
         assert!(platform.iter().any(|step| {
             step["run"]
                 .as_str()
@@ -4727,13 +4734,16 @@ release-units:
             .find_map(|step| step["run"].as_str())
             .expect("aggregate build body");
         for agreement in [
-            "linux_digest=\"$(sha256sum",
-            "macos_digest=\"$(sha256sum",
-            "mv \"${INTENTIONAL_SUBJECT}/linux.tar.gz\"",
-            "mv \"${INTENTIONAL_SUBJECT}/macos.tar.gz\"",
+            "linux_x86_64_digest=\"$(sha256sum",
+            "linux_arm64_digest=\"$(sha256sum",
+            "macos_arm64_digest=\"$(sha256sum",
+            "mv \"${INTENTIONAL_SUBJECT}/linux-x86_64.tar.gz\"",
+            "mv \"${INTENTIONAL_SUBJECT}/linux-arm64.tar.gz\"",
+            "mv \"${INTENTIONAL_SUBJECT}/macos-arm64.tar.gz\"",
             "homebrew/Formula/${binary}.rb",
-            "${linux_digest}",
-            "${macos_digest}",
+            "${linux_x86_64_digest}",
+            "${linux_arm64_digest}",
+            "${macos_arm64_digest}",
         ] {
             assert!(
                 aggregate_body.contains(agreement),
@@ -4744,8 +4754,9 @@ release-units:
             .as_sequence()
             .expect("aggregate needs");
         for producer in [
-            "intentional_build_component_cargo_archive_linux",
-            "intentional_build_component_cargo_archive_macos",
+            "intentional_build_component_cargo_archive_linux_x86_64",
+            "intentional_build_component_cargo_archive_linux_arm64",
+            "intentional_build_component_cargo_archive_macos_arm64",
         ] {
             assert!(
                 needs.iter().any(|need| need.as_str() == Some(producer)),
@@ -4764,21 +4775,32 @@ release-units:
         let aggregate_root = workspace.root().join("aggregate-execution");
         let subject_root = aggregate_root.join("bytes");
         std::fs::create_dir_all(&subject_root).expect("aggregate subject directory");
-        let linux_bytes = b"sealed linux archive";
-        let macos_bytes = b"sealed macOS archive";
-        std::fs::write(subject_root.join("linux.tar.gz"), linux_bytes).expect("Linux archive");
-        std::fs::write(subject_root.join("macos.tar.gz"), macos_bytes).expect("macOS archive");
-        let output = std::process::Command::new("bash")
+        let linux_x86_64_bytes = b"sealed x86-64 Linux archive";
+        let linux_arm64_bytes = b"sealed Arm64 Linux archive";
+        let macos_arm64_bytes = b"sealed Arm64 macOS archive";
+        std::fs::write(subject_root.join("linux-x86_64.tar.gz"), linux_x86_64_bytes)
+            .expect("x86-64 Linux archive");
+        std::fs::write(subject_root.join("linux-arm64.tar.gz"), linux_arm64_bytes)
+            .expect("Arm64 Linux archive");
+        std::fs::write(subject_root.join("macos-arm64.tar.gz"), macos_arm64_bytes)
+            .expect("Arm64 macOS archive");
+        let mut aggregate_command = std::process::Command::new("bash");
+        aggregate_command
             .arg("-c")
             .arg(aggregate_body)
-            .env("INTENTIONAL_SUBJECT", &subject_root)
-            .env("INTENTIONAL_SUBJECT_IDENTITY", "sample-tool")
-            .env("INTENTIONAL_TAG_PREFIX", "release-")
-            .env("INTENTIONAL_TAG_SUFFIX", "")
-            .env("GITHUB_REF_NAME", "release-1.2.3")
-            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
-            .output()
-            .expect("aggregate build runs");
+            .current_dir(workspace.root().join("component"))
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository");
+        for (key, value) in step_environment(
+            aggregate
+                .iter()
+                .find(|step| step["run"].as_str() == Some(aggregate_body))
+                .expect("aggregate build step"),
+        ) {
+            aggregate_command.env(key, value);
+        }
+        aggregate_command.env("INTENTIONAL_SUBJECT", &subject_root);
+        let output = aggregate_command.output().expect("aggregate build runs");
         assert!(
             output.status.success(),
             "aggregate build failed: {}",
@@ -4789,16 +4811,24 @@ release-units:
         let sha256 = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
         for line in [
             "class SampleTool < Formula".to_owned(),
+            "desc \"Sample command line tool\"".to_owned(),
+            "license \"MIT\"".to_owned(),
             "version \"1.2.3\"".to_owned(),
             format!(
-                "on_linux do\n    url \"https://github.com/sample-owner/sample-repository/releases/download/release-1.2.3/sample-tool-1.2.3-linux-x86_64.tar.gz\"\n    sha256 \"{}\"",
-                sha256(linux_bytes)
+                "on_linux do\n    on_arm do\n      url \"https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-tool-1.2.3-linux-arm64.tar.gz\"\n      sha256 \"{}\"",
+                sha256(linux_arm64_bytes)
             ),
             format!(
-                "on_macos do\n    url \"https://github.com/sample-owner/sample-repository/releases/download/release-1.2.3/sample-tool-1.2.3-macos-arm64.tar.gz\"\n    sha256 \"{}\"",
-                sha256(macos_bytes)
+                "on_intel do\n      url \"https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-tool-1.2.3-linux-x86_64.tar.gz\"\n      sha256 \"{}\"",
+                sha256(linux_x86_64_bytes)
+            ),
+            format!(
+                "on_macos do\n    on_arm do\n      url \"https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-tool-1.2.3-macos-arm64.tar.gz\"\n      sha256 \"{}\"",
+                sha256(macos_arm64_bytes)
             ),
             "bin.install \"sample-tool\"".to_owned(),
+            "prefix.install_metafiles".to_owned(),
+            "test do".to_owned(),
         ] {
             assert!(
                 formula.contains(&line),
@@ -4865,7 +4895,7 @@ release-units:
             "generated platform build failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let archive = temporary.join("linux.tar.gz");
+        let archive = temporary.join("linux-x86_64.tar.gz");
         let listing = std::process::Command::new("tar")
             .args([
                 "--full-time",
@@ -7859,8 +7889,9 @@ release-units:
                 "build_jdmcvx_buildx",
                 "build_qhwzru_cargo",
                 "build_qhwzru_cargo_archive",
-                "build_qhwzru_cargo_archive_linux",
-                "build_qhwzru_cargo_archive_macos",
+                "build_qhwzru_cargo_archive_linux_x86_64",
+                "build_qhwzru_cargo_archive_linux_arm64",
+                "build_qhwzru_cargo_archive_macos_arm64",
                 "build_qhwzru_npm",
                 "build_rtwzlf_devcontainer_cli",
                 "build_wpdklc_goreleaser",

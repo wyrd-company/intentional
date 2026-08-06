@@ -306,7 +306,12 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
 /// build whose digest could not agree with the seal.
 fn cargo_archive_homebrew_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
     debug_assert_eq!(context.publication.publisher, PublisherKind::Homebrew);
-    goreleaser_steps(context).map(RecipeSteps::together)
+    homebrew_formula_steps(context).map(RecipeSteps::together)
+}
+
+/// Promote a sealed formula into its configured Homebrew tap.
+fn homebrew_formula_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+    goreleaser_steps(context)
 }
 
 impl RecipeSteps {

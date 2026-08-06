@@ -140,32 +140,53 @@ pub(super) fn build_command(packager: Packager) -> String {
         }
         Packager::CargoArchive => format!(
             r#"{RELEASE_VERSION_COMMAND}      binary="${{@ENVVAR@SUBJECT_IDENTITY}}"
-      linux_archive="${{binary}}-${{version}}-linux-x86_64.tar.gz"
-      macos_archive="${{binary}}-${{version}}-macos-arm64.tar.gz"
-      mv "${{@ENVVAR@SUBJECT}}/linux.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_archive}}"
-      mv "${{@ENVVAR@SUBJECT}}/macos.tar.gz" "${{@ENVVAR@SUBJECT}}/${{macos_archive}}"
-      test -f "${{@ENVVAR@SUBJECT}}/${{linux_archive}}"
-      test -f "${{@ENVVAR@SUBJECT}}/${{macos_archive}}"
-      linux_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_archive}}" | cut -d' ' -f1)"
-      macos_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_archive}}" | cut -d' ' -f1)"
+      linux_x86_64_archive="${{binary}}-${{version}}-linux-x86_64.tar.gz"
+      linux_arm64_archive="${{binary}}-${{version}}-linux-arm64.tar.gz"
+      macos_arm64_archive="${{binary}}-${{version}}-macos-arm64.tar.gz"
+      mv "${{@ENVVAR@SUBJECT}}/linux-x86_64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/linux-arm64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}"
+      mv "${{@ENVVAR@SUBJECT}}/macos-arm64.tar.gz" "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}"
+      linux_x86_64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}" | cut -d' ' -f1)"
+      linux_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}" | cut -d' ' -f1)"
+      macos_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}" | cut -d' ' -f1)"
+      metadata="$(cargo metadata --no-deps --format-version 1)"
+      description="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .description // "Native executable"' <<<"${{metadata}}")"
+      license="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .license // empty' <<<"${{metadata}}")"
+      description_literal="$(jq -Rn --arg value "${{description}}" '$value')"
+      license_literal="$(jq -Rn --arg value "${{license}}" '$value')"
+      test_match_literal="$(jq -Rn --arg value "${{description%% *}}" '$value')"
       formula_class="$(printf '%s' "${{binary}}" | awk -F '[-_]' '{{ for (i=1; i<=NF; i++) printf toupper(substr($i,1,1)) substr($i,2) }}')"
+      if [[ "${{formula_class}}" == [0-9]* ]]; then formula_class="V${{formula_class}}"; fi
       formula="${{@ENVVAR@SUBJECT}}/homebrew/Formula/${{binary}}.rb"
       install -d "$(dirname "${{formula}}")"
       printf '%s\n' \
         "class ${{formula_class}} < Formula" \
-        "  desc \"Native executable published by ${{GITHUB_REPOSITORY}}\"" \
+        "  desc ${{description_literal}}" \
         "  homepage \"https://github.com/${{GITHUB_REPOSITORY}}\"" \
+        "  license ${{license_literal}}" \
         "  version \"${{version}}\"" \
         "  on_linux do" \
-        "    url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_archive}}\"" \
-        "    sha256 \"${{linux_digest}}\"" \
+        "    on_arm do" \
+        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_arm64_archive}}\"" \
+        "      sha256 \"${{linux_arm64_digest}}\"" \
+        "    end" \
+        "    on_intel do" \
+        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_x86_64_archive}}\"" \
+        "      sha256 \"${{linux_x86_64_digest}}\"" \
+        "    end" \
         "  end" \
         "  on_macos do" \
-        "    url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{macos_archive}}\"" \
-        "    sha256 \"${{macos_digest}}\"" \
+        "    on_arm do" \
+        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{macos_arm64_archive}}\"" \
+        "      sha256 \"${{macos_arm64_digest}}\"" \
+        "    end" \
         "  end" \
         "  def install" \
         "    bin.install \"${{binary}}\"" \
+        "    prefix.install_metafiles" \
+        "  end" \
+        "  test do" \
+        "    assert_match ${{test_match_literal}}, shell_output((bin/\"${{binary}}\").to_s + \" --help\")" \
         "  end" \
         "end" > "${{formula}}""#
         ),
