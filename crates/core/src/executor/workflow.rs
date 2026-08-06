@@ -3088,6 +3088,7 @@ release-units:
             "release-automation-version",
             "release-automation-architecture",
             "release-automation-digest",
+            "release-automation-future",
         ];
         let mut rpm = common.to_vec();
         rpm.extend([
@@ -5396,13 +5397,38 @@ exit 0
     // generic refusal observable without withholding a real recipe.
     #[test]
     fn refuses_a_publication_whose_maintained_recipe_is_not_derived() {
-        let refusal = crate::executor::steps::underived_recipe_refusal(
-            "component/future/primary",
-            PublisherKind::Rpm,
-        );
+        let workspace = system_package_workspace("workflow-underived-future-pair");
+        let config = Config::load(workspace.root()).expect("configuration loads");
+        let publication = SelectedPublication {
+            release_unit: "component".to_owned(),
+            package: "package".to_owned(),
+            publisher: PublisherKind::Oci,
+            target: "future".to_owned(),
+            destination: None,
+            capability: Capability::GoApplication,
+            packager: Packager::GoReleaser,
+            components: Vec::new(),
+            retrieval: CleanClientMode::Public,
+            observation_deadline: None,
+        };
+        let result = crate::executor::steps::recipe_steps(&crate::executor::steps::RecipeContext {
+            publication: &publication,
+            unit: &config.release_units["component"],
+            subject_identity: "example-tool",
+            build_job: "intentional_build_component_goreleaser",
+            working_directory: "component",
+            observation: "observation.yml",
+            work: "readback",
+            delivery_namespace: "intentional",
+            root: workspace.root(),
+        });
+        let refusal = match result {
+            Ok(_) => panic!("a newly added pair without a recipe was derived"),
+            Err(refusal) => refusal,
+        };
         assert_eq!(refusal.code, "maintained-recipe-underived");
-        assert!(refusal.message.contains("component/future/primary"));
-        assert!(refusal.message.contains("no maintained rpm recipe"));
+        assert!(refusal.message.contains("component/package/oci/future"));
+        assert!(refusal.message.contains("no maintained oci recipe"));
     }
 
     /// Id the Dev Container Feature fixture names itself by.
