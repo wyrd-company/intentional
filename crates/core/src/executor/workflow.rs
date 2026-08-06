@@ -8364,6 +8364,14 @@ release-units:
             .and_then(Path::parent)
             .expect("core crate is inside the repository");
         let config = Config::load(repository).expect("repository config loads");
+        assert_eq!(
+            resolve_publications(repository, &config)
+                .expect("repository publications resolve")
+                .selected
+                .len(),
+            4,
+            "the capacity measurement covers every configured publication"
+        );
         let candidate = Workspace::new("workflow-repository-scale");
         let path = candidate.root().join("publish.yml");
         candidate.write("publish.yml", "name: publish\non: push\njobs: {}\n");
@@ -8381,6 +8389,47 @@ release-units:
         assert!(
             output.lines().count() <= MAX_WORKFLOW_LINES,
             "Intentional's own publication shape must remain readable after apply"
+        );
+    }
+
+    #[test]
+    fn a_fifth_cargo_shaped_publication_exceeds_the_readback_bound() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("core crate is inside the repository");
+        let mut config = Config::load(repository).expect("repository config loads");
+        config
+            .release_units
+            .get_mut("intentional")
+            .expect("release unit")
+            .packages
+            .get_mut("cli")
+            .expect("Cargo application package")
+            .aur = Some(crate::config::SystemPackagePublisher::default());
+        assert_eq!(
+            resolve_publications(repository, &config)
+                .expect("expanded publications resolve")
+                .selected
+                .len(),
+            5,
+            "the expanded shape adds one Cargo publication"
+        );
+        let candidate = Workspace::new("workflow-fifth-cargo-publication");
+        let path = candidate.root().join("publish.yml");
+        candidate.write("publish.yml", "name: publish\non: push\njobs: {}\n");
+
+        let comparison =
+            compare_configured_workflow(repository, &config, WorkflowRole::Publish, Some(&path))
+                .expect("expanded contract compares");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        assert!(
+            comparison
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "workflow-too-large"),
+            "the fifth Cargo-shaped publication crosses the documented bound: {:?}",
+            comparison.diagnostics
         );
     }
 
