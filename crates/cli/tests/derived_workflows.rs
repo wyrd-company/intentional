@@ -468,6 +468,63 @@ fn the_release_preparation_job_mints_no_repository_token() {
     );
 }
 
+/// Every GitHub App token step consumes its identifier from repository
+/// variables and its private key from repository secrets.
+///
+/// The recipe-derived fixture reaches every maintained publication route. The
+/// selector follows the emitted Action owner rather than a roster of templates,
+/// and the exact population keeps a missing or newly unwitnessed token site from
+/// passing vacuously.
+#[test]
+fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
+    let workflows = derived_recipe_workflows("derived-workflow-app-credentials");
+    let mut derivation_sites = BTreeSet::new();
+
+    for (role, workflow) in &workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived workflow jobs");
+        for (job, body) in jobs {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            for token_step in steps.iter().filter(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))
+            }) {
+                let job = job.as_str().expect("job id");
+                let step = token_step["id"].as_str().expect("token step id");
+                derivation_sites.insert(if step.ends_with("destination_token") {
+                    "publish:destination_token".to_owned()
+                } else if job.starts_with("intentional_tag_") {
+                    "publish:phase_tag".to_owned()
+                } else {
+                    format!("{role}:{job}")
+                });
+                assert_eq!(
+                    token_step["with"]["app-id"].as_str(),
+                    Some("${{ vars.INTENTIONAL_GITHUB_APP_ID }}"),
+                    "{role} job {job} token step {step} reads its App ID from repository variables"
+                );
+                assert_eq!(
+                    token_step["with"]["private-key"].as_str(),
+                    Some("${{ secrets.INTENTIONAL_GITHUB_APP_PRIVATE_KEY }}"),
+                    "{role} job {job} token step {step} reads its private key from repository secrets"
+                );
+            }
+        }
+    }
+
+    assert_eq!(
+        derivation_sites.len(),
+        5,
+        "the exhaustive recipe fixture emits every GitHub App token derivation site: \
+         {derivation_sites:?}"
+    );
+}
+
 /// Hold the unprivileged job out of the protected environment.
 ///
 /// The usage documentation says the preparation job "runs in no environment,
