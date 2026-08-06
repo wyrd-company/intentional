@@ -3,7 +3,7 @@
 //   implements: github-release-executor
 // ---
 
-// Open Container Initiative build derivation moved from `executor::workflow`.
+// Packager-specific build environment derivation moved from `executor::workflow`.
 
 use super::*;
 
