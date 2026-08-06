@@ -1618,6 +1618,20 @@ release-units:
     }
 
     #[test]
+    fn repository_config_preserves_the_declined_github_publication_offer() {
+        let config = Config::from_yaml(include_str!("../../../.intentional/config.yml"))
+            .expect("repository configuration loads");
+        assert!(
+            config
+                .github
+                .expect("repository configures the GitHub executor")
+                .declined_publications
+                .contains("intentional/launcher/npm/github"),
+            "the explicit-target migration retains the durable initialization decision"
+        );
+    }
+
+    #[test]
     fn validates_managed_and_exact_excluded_discovery_receipts() {
         let receipts = VALID.replace(
             "release-units:\n",
