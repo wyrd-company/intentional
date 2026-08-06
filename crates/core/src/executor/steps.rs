@@ -551,14 +551,12 @@ fn local_action_uses(action: &std::path::Path) -> Result<String, StepsRefusal> {
         || action
             .extension()
             .is_some_and(|extension| extension == "yml" || extension == "yaml")
-        || action
-            .components()
-            .any(|component| {
-                matches!(
-                    component,
-                    std::path::Component::ParentDir | std::path::Component::CurDir
-                )
-            })
+        || action.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
     {
         return Err(StepsRefusal {
             code: "delivery-action-invalid",
