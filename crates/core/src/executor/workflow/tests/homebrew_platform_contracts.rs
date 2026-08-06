@@ -92,18 +92,27 @@
             packages.next().is_none(),
             "platform contract release unit selects one package"
         );
-        let configured_directory = workspace
+        let configured_unit_directory = workspace
             .root()
             .join(
                 release_unit["path"]
                     .as_str()
                     .expect("platform contract release unit declares its path"),
-            )
-            .join(
-                package["path"]
-                    .as_str()
-                    .expect("platform contract package declares its path"),
             );
+        let configured_directory = configured_unit_directory.join(
+            package["path"]
+                .as_str()
+                .expect("platform contract package declares its path"),
+        );
+        assert_ne!(
+            configured_unit_directory
+                .canonicalize()
+                .expect("configured release-unit working directory resolves"),
+            configured_directory
+                .canonicalize()
+                .expect("configured package working directory resolves"),
+            "configured package path makes unit-plus-package composition observable"
+        );
         let working_directory = step["working-directory"]
             .as_str()
             .expect("parsed job declares its working directory");
