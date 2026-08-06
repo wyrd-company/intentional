@@ -1742,7 +1742,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
     };
     observation_inputs.push_str(&format!(
         "      registry: {}\n      components: {}\n",
-        scalar(&registry),
+        scalar(registry),
         scalar(&components),
     ));
     Ok(RecipeSteps {
