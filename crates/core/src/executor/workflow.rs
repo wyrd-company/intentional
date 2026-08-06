@@ -5299,6 +5299,30 @@ exit 0
     }
 
     #[test]
+    fn refuses_a_verified_tag_object_that_targets_another_commit() {
+        let workspace = workspace("workflow-closure-retarget");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let runner = closure_runner("workflow-closure-retarget-runner", CLOSURE_TAG_OBJECT)
+            .setting(
+                "GH_STUB_RELEASE",
+                "3333333333333333333333333333333333333333",
+            );
+
+        let executed = run_closure(workspace.root(), &runner);
+        assert!(
+            !executed.succeeded,
+            "a tag targeting another commit is refused"
+        );
+        assert!(
+            executed.diagnostics.contains("not the released commit")
+                && !executed.invocations.contains("release\tupload"),
+            "the target mismatch stops closure before upload: {:?}\n{}",
+            executed.diagnostics,
+            executed.invocations
+        );
+    }
+
+    #[test]
     fn refuses_to_close_when_contributed_attachments_cannot_be_enumerated() {
         let workspace = workspace("workflow-closure-attachment-enumeration");
         converge(workspace.root(), WorkflowRole::Publish);
@@ -5820,6 +5844,31 @@ exit 0
             executed.diagnostics.contains("instead of verified object"),
             "the refusal names the incomplete atomic state: {:?}",
             executed.diagnostics
+        );
+    }
+
+    #[test]
+    fn refuses_an_authority_transition_from_an_unrelated_branch_head() {
+        let workspace = workspace("workflow-authority-push-unrelated");
+        converge(workspace.root(), WorkflowRole::Release);
+        let runner = authority_rerun_runner(
+            "workflow-authority-push-unrelated-runner",
+            AUTHORITY_TAG_OBJECT,
+        )
+        .setting(
+            "GIT_STUB_BRANCH",
+            "3333333333333333333333333333333333333333",
+        );
+        let (push, environment) = authority_push(workspace.root(), &runner);
+
+        let executed = runner.execute(&push, &environment);
+        assert!(!executed.succeeded, "an unrelated branch head is refused");
+        assert!(
+            executed.diagnostics.contains("not accepted source")
+                && !executed.invocations.contains("git push --atomic"),
+            "the branch mismatch stops before push: {:?}\n{}",
+            executed.diagnostics,
+            executed.invocations
         );
     }
 
