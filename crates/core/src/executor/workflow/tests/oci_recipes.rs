@@ -35,23 +35,28 @@
         }
 
         fn index_manifest(annotated_version: &str, attested: bool) -> String {
-            let attestation = if attested {
+            let attestations = if attested {
                 format!(
-                    r#",{{"digest":"{}","annotations":{{"vnd.docker.reference.type":"attestation-manifest"}}}}"#,
-                    manifest_digest(ATTESTATION_MANIFEST)
+                    r#",{{"digest":"{}","annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"sha256:aaaa"}},"platform":{{"os":"unknown","architecture":"unknown"}}}},{{"digest":"sha256:bbbb","platform":{{"os":"linux","architecture":"arm64"}}}},{{"digest":"{}","annotations":{{"vnd.docker.reference.type":"attestation-manifest","vnd.docker.reference.digest":"sha256:bbbb"}},"platform":{{"os":"unknown","architecture":"unknown"}}}}"#,
+                    manifest_digest(AMD64_ATTESTATION_MANIFEST),
+                    manifest_digest(ARM64_ATTESTATION_MANIFEST),
                 )
             } else {
-                String::new()
+                r#",{"digest":"sha256:bbbb","platform":{"os":"linux","architecture":"arm64"}}"#.to_owned()
             };
             format!(
-                r#"{{"schemaVersion":2,"annotations":{{"org.opencontainers.image.version":"{annotated_version}","org.opencontainers.image.title":"example-image"}},"manifests":[{{"digest":"sha256:aaaa","platform":{{"os":"linux","architecture":"amd64"}}}}{attestation}]}}"#
+                r#"{{"schemaVersion":2,"annotations":{{"org.opencontainers.image.version":"{annotated_version}","org.opencontainers.image.title":"example-image"}},"manifests":[{{"digest":"sha256:aaaa","platform":{{"os":"linux","architecture":"amd64"}}}}{attestations}]}}"#
             )
         }
 
-        /// The attestation manifest a Buildx build attaches to its index.
-        const ATTESTATION_MANIFEST: &str = concat!(
+        /// Per-platform attestation manifests a Buildx build attaches.
+        const AMD64_ATTESTATION_MANIFEST: &str = concat!(
             r#"{"schemaVersion":2,"layers":[{"digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","annotations":{"in-toto.io/predicate-type":"https://spdx.dev/Document"}},"#,
             r#"{"digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v0.2"}}]}"#
+        );
+        const ARM64_ATTESTATION_MANIFEST: &str = concat!(
+            r#"{"schemaVersion":2,"layers":[{"digest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","annotations":{"in-toto.io/predicate-type":"https://spdx.dev/Document"}},"#,
+            r#"{"digest":"sha256:9999999999999999999999999999999999999999999999999999999999999999","annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v0.2"}}]}"#
         );
         /// Digest the built-subject document records over the built bytes.
         const SUBJECT_DIGEST: &str =
@@ -60,6 +65,10 @@
             "sha256:4444444444444444444444444444444444444444444444444444444444444444";
         const PROVENANCE_DIGEST: &str =
             "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+        const ARM64_SBOM_DIGEST: &str =
+            "sha256:8888888888888888888888888888888888888888888888888888888888888888";
+        const ARM64_PROVENANCE_DIGEST: &str =
+            "sha256:9999999999999999999999999999999999999999999999999999999999999999";
         /// A digest a destination might already hold under the released version.
         const FOREIGN_DIGEST: &str =
             "sha256:6666666666666666666666666666666666666666666666666666666666666666";
@@ -236,7 +245,7 @@
                     )
                     .expect("packaged feature");
                 } else {
-                    write_layout(&bytes, annotated, attested);
+                    write_layout(&bytes, annotated, attested, drift);
                 }
 
                 let step = publish_step(root, &self.job, &temp, version, digest);
@@ -413,7 +422,7 @@
         }
 
         /// The sealed OCI layout a build job would have produced.
-        fn write_layout(bytes: &Path, annotated_version: &str, attested: bool) {
+        fn write_layout(bytes: &Path, annotated_version: &str, attested: bool, drift: &str) {
             let layout = bytes.join("layout");
             let blobs = layout.join("blobs/sha256");
             std::fs::create_dir_all(&blobs).expect("layout directory");
@@ -429,11 +438,18 @@
                 &index,
             )
             .expect("index manifest");
-            std::fs::write(
-                blobs.join(manifest_digest(ATTESTATION_MANIFEST).trim_start_matches("sha256:")),
-                ATTESTATION_MANIFEST,
-            )
-            .expect("attestation manifest");
+            for manifest in [AMD64_ATTESTATION_MANIFEST, ARM64_ATTESTATION_MANIFEST] {
+                let contents = if drift == "arm64-attestation" && manifest == ARM64_ATTESTATION_MANIFEST {
+                    r#"{"schemaVersion":2,"layers":[{"digest":"sha256:9999999999999999999999999999999999999999999999999999999999999999","annotations":{"in-toto.io/predicate-type":"https://slsa.dev/provenance/v0.2"}}]}"#
+                } else {
+                    manifest
+                };
+                std::fs::write(
+                    blobs.join(manifest_digest(manifest).trim_start_matches("sha256:")),
+                    contents,
+                )
+                .expect("attestation manifest");
+            }
             let status = std::process::Command::new("tar")
                 .arg("-cf")
                 .arg(bytes.join("subject.oci.tar"))
@@ -484,6 +500,10 @@
       auth) cat > /dev/null; printf '%s\n' "$*" >> "${registry}/auth.log" ;;
       version) printf '0.20.2\n' ;;
       ls)
+        if [ "${FAKE_DRIFT:-}" = "listing" ]; then
+          printf 'UNAVAILABLE: transient registry failure\n' >&2
+          exit 1
+        fi
         directory="${registry}/tags/$(slug "${2}")"
         if [ -d "${directory}" ]; then ls "${directory}"; fi
         ;;
@@ -894,16 +914,28 @@ done
                 .observation()
                 .attached_metadata
                 .iter()
-                .map(|component| (component.kind.to_string(), component.digest.clone()))
-                .collect::<BTreeMap<_, _>>();
+                .fold(BTreeMap::<String, BTreeSet<String>>::new(), |mut by_kind, component| {
+                    by_kind
+                        .entry(component.kind.to_string())
+                        .or_default()
+                        .insert(component.digest.clone());
+                    by_kind
+                });
             assert_eq!(
-                attached.get("sbom").map(String::as_str),
-                Some(SBOM_DIGEST),
-                "the SBOM the packager generated is bound to the published subject"
+                attached.get("sbom"),
+                Some(&BTreeSet::from([
+                    SBOM_DIGEST.to_owned(),
+                    ARM64_SBOM_DIGEST.to_owned()
+                ])),
+                "each platform SBOM is bound to its attestation manifest"
             );
             assert_eq!(
-                attached.get("provenance").map(String::as_str),
-                Some(PROVENANCE_DIGEST)
+                attached.get("provenance"),
+                Some(&BTreeSet::from([
+                    PROVENANCE_DIGEST.to_owned(),
+                    ARM64_PROVENANCE_DIGEST.to_owned()
+                ])),
+                "each platform provenance predicate is recorded"
             );
             assert!(attached.contains_key("signature"), "{attached:?}");
             let signed =
@@ -1117,6 +1149,30 @@ done
             assert!(
                 !outcome.status.success(),
                 "a component this target still selects cannot quietly leave the evidence"
+            );
+        }
+
+        #[test]
+        fn refuses_an_index_whose_second_platform_attestation_is_incomplete() {
+            let recipe = Recipe::new("oci-incomplete-arm64-attestation", DOCKERHUB_JOB);
+            let outcome = recipe.run_with_drift("1.2.3", "arm64-attestation");
+            assert!(
+                !outcome.status.success(),
+                "valid amd64 metadata cannot stand in for malformed arm64 metadata"
+            );
+        }
+
+        #[test]
+        fn refuses_a_transient_tag_listing_failure_before_promotion() {
+            let recipe = Recipe::new("oci-listing-transient", DOCKERHUB_JOB)
+                .seeded(DOCKERHUB_REPOSITORY, &[("1.2.3", FOREIGN_DIGEST)]);
+            let outcome = recipe.run_with_drift("1.2.3", "listing");
+            assert!(!outcome.status.success());
+            assert!(outcome.stderr.contains("UNAVAILABLE"), "{}", outcome.stderr);
+            assert_eq!(
+                outcome.tags(DOCKERHUB_REPOSITORY).get("1.2.3").map(String::as_str),
+                Some(FOREIGN_DIGEST),
+                "recovery after listing cannot overwrite the exact version"
             );
         }
 
@@ -1371,14 +1427,16 @@ done
             );
         }
 
-        /// A native client that moved a stable alias it should not have fails.
+        /// Native Feature aliases are the native client's contract, not
+        /// Intentional's newest-version entitlement policy.
         #[test]
-        fn refuses_a_feature_whose_client_advanced_a_stable_alias_for_a_prerelease() {
+        fn accepts_the_feature_clients_own_prerelease_aliases() {
             let recipe = Recipe::feature("oci-feature-prerelease");
             let outcome = recipe.run_with_drift("2.0.0-rc.1", "prerelease-aliases");
             assert!(
-                !outcome.status.success(),
-                "an alias resolving a prerelease is a publication failure, not an empty alias list"
+                outcome.status.success(),
+                "the recipe verifies rather than overrides the native alias policy: {}",
+                outcome.stderr
             );
         }
 
@@ -1415,12 +1473,41 @@ done
                 outcome.stderr
             );
             assert!(
-                outcome.observation().destination_aliases.is_empty(),
-                "and it advanced no stable alias"
+                outcome
+                    .observation()
+                    .destination_aliases
+                    .iter()
+                    .any(|alias| alias.name == "2.0.0-rc"),
+                "the native client's prerelease truncation is read back"
             );
             assert!(
                 outcome.tags(FEATURE_REPOSITORY).contains_key("2.0.0-rc"),
                 "the client's own truncation of a prerelease is not an alias the rules govern"
+            );
+        }
+
+        #[test]
+        fn publishes_and_reads_back_a_major_zero_feature() {
+            let recipe = Recipe::feature("oci-feature-major-zero");
+            let outcome = recipe.run("0.1.6");
+            assert!(outcome.status.success(), "{}", outcome.stderr);
+            let tags = outcome.tags(FEATURE_REPOSITORY);
+            let published = tags.get("0.1.6").expect("exact Feature version");
+            for alias in ["latest", "0.1", "0"] {
+                assert_eq!(
+                    tags.get(alias),
+                    Some(published),
+                    "the Feature client owns and the recipe verifies {alias}"
+                );
+            }
+            assert_eq!(
+                outcome
+                    .observation()
+                    .destination_aliases
+                    .iter()
+                    .map(|alias| alias.name.as_str())
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from(["latest", "0.1", "0"])
             );
         }
 

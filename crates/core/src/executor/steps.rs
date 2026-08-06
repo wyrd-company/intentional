@@ -2057,9 +2057,13 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<String, String> 
         OBSERVE,
         OCI_PROLOGUE,
         promote,
-        OCI_ALIAS_ENTITLEMENT,
+        if feature { "" } else { OCI_ALIAS_ENTITLEMENT },
         if feature { "" } else { OCI_ALIAS_PROMOTE },
-        OCI_ALIAS_READBACK,
+        if feature {
+            DEV_CONTAINER_ALIAS_READBACK
+        } else {
+            OCI_ALIAS_READBACK
+        },
         oci_attached_components(publication),
         oci_observation(publication, packager_version_command),
     ));
@@ -2159,21 +2163,32 @@ const OCI_PROLOGUE: &str = r#"      version="${@ENVVAR@VERSION}"
       mkdir -p "${@ENVVAR@WORK}"
       aliases_file="${@ENVVAR@WORK}/aliases.yml"
       metadata_file="${@ENVVAR@WORK}/metadata.yml"
+      provenance_file="${@ENVVAR@WORK}/provenance.yml"
       : > "${aliases_file}"
       : > "${metadata_file}"
+      : > "${provenance_file}"
       printf '%s' "${@ENVVAR@REGISTRY_TOKEN}" | crane auth login "${@ENVVAR@REGISTRY}" \
         --username "${@ENVVAR@REGISTRY_USER}" --password-stdin
 "#;
 
 /// Read what the destination already holds under the released version.
 ///
-/// Existence is decided from the destination's tag listing rather than from a
-/// swallowed digest read, so an authentication or registry failure at the
-/// digest read itself is no longer indistinguishable from an absent tag. What
-/// remains swallowed is the listing of a repository that does not exist yet,
-/// which is the same reading as a repository carrying no versions; a genuine
-/// outage there fails loudly at the promotion immediately after.
-const OCI_EXISTING: &str = r#"      known_tags="$(crane ls "${repository}" 2>/dev/null || true)"
+/// Existence is decided from the destination's tag listing. The Open Container
+/// Initiative Distribution API defines `NAME_UNKNOWN` for a repository name the
+/// registry does not know, and crane preserves that code in its diagnostic;
+/// this premise is MEASURED by reading the protocol and client behavior. Only
+/// that not-yet-created case reads as an empty repository. Authentication,
+/// transport, and transient registry failures remain non-zero, so recovery
+/// before promotion cannot bypass the immutable-version conflict gate.
+const OCI_EXISTING: &str = r#"      listing_error="${@ENVVAR@WORK}/listing-error"
+      if ! known_tags="$(crane ls "${repository}" 2>"${listing_error}")"; then
+        if grep -Eq '(^|[^A-Z_])NAME_UNKNOWN([^A-Z_]|$)' "${listing_error}"; then
+          known_tags=""
+        else
+          cat "${listing_error}" >&2
+          exit 1
+        fi
+      fi
       existing=""
       if printf '%s\n' "${known_tags}" | grep -Fxq "${version}"; then
         existing="$(crane digest "${repository}:${version}")"
@@ -2328,6 +2343,29 @@ const OCI_ALIAS_READBACK: &str = r#"      for alias in latest "${minor}" "${majo
       done
 "#;
 
+/// Read back aliases the Dev Container client owns itself.
+///
+/// Feature publication does not use Intentional's newest-version entitlement:
+/// the native client creates its exact, minor, major, and latest tags in one
+/// operation. This readback verifies that client contract without treating its
+/// major-zero or backport behavior as an unauthorized Intentional alias move.
+const DEV_CONTAINER_ALIAS_READBACK: &str = r#"      core="${version%%-*}"
+      major="${core%%.*}"
+      minor="${core%.*}"
+      feature_minor="${version%.*}"
+      feature_aliases="${feature_minor}"
+      case "${version}" in
+        *-*) ;;
+        *) feature_aliases="latest ${minor} ${major}" ;;
+      esac
+      for alias in ${feature_aliases}; do
+        alias_digest="$(crane digest "${repository}:${alias}")"
+        test "${alias_digest}" = "${published}"
+        printf -- '  - name: "%s"\n    digest: "%s"\n' "${alias}" "${alias_digest}" \
+          >> "${aliases_file}"
+      done
+"#;
+
 /// Attach and read back exactly the components this target did not omit.
 ///
 /// The body carries an arm only for a component this target still selects, so
@@ -2349,14 +2387,8 @@ fn oci_attached_components(publication: &SelectedPublication) -> String {
     if reads_attestation {
         body.push_str(OCI_ATTESTATION_READ);
     }
-    if publication
-        .components
-        .contains(&AttachedComponent::Provenance)
-    {
-        body.push_str("      provenance_digest=\"\"\n");
-    }
     body.push_str(
-        "      for component in ${@ENVVAR@COMPONENTS}; do\n        case \"${component}\" in\n",
+        "      for component in ${@ENVVAR@COMPONENTS}; do\n        component_recorded=\"\"\n        case \"${component}\" in\n",
     );
     for component in &publication.components {
         body.push_str(match component {
@@ -2369,25 +2401,48 @@ fn oci_attached_components(publication: &SelectedPublication) -> String {
     body
 }
 
-/// Locate the attestation manifest the packager attached to the subject.
-const OCI_ATTESTATION_READ: &str = r#"      attestation="$(crane manifest "${repository}@${published}" \
-        | jq -r 'first(.manifests[]? | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest") | .digest) // ""')"
-      predicates=""
-      if [ -n "${attestation}" ]; then
+/// Locate and inspect the attestation manifest for every indexed platform.
+const OCI_ATTESTATION_READ: &str = r#"      attestations_file="${@ENVVAR@WORK}/attestations.jsonl"
+      : > "${attestations_file}"
+      while IFS= read -r platform_entry; do
+        platform_digest="$(jq -r '.digest' <<<"${platform_entry}")"
+        platform="$(jq -r '.platform' <<<"${platform_entry}")"
+        attestation="$(jq -r --arg digest "${platform_digest}" 'first(.manifests[]? | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest" and .annotations["vnd.docker.reference.digest"] == $digest) | .digest) // ""' <<<"${index}")"
+        test -n "${attestation}"
         predicates="$(crane manifest "${repository}@${attestation}")"
-      fi
+        sbom_digest="$(jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("spdx")) | .digest) // ""' <<<"${predicates}")"
+        provenance_digest="$(jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("slsa|provenance")) | .digest) // ""' <<<"${predicates}")"
+        jq -cn --arg platform "${platform}" --arg attestation "${attestation}" \
+          --arg sbom "${sbom_digest}" --arg provenance "${provenance_digest}" \
+          '{platform: $platform, attestation: $attestation, sbom: $sbom, provenance: $provenance}' \
+          >> "${attestations_file}"
+      done < <(jq -c '.manifests[] | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest") | {digest, platform: (.platform.os + "/" + .platform.architecture)}' <<<"${index}")
+      test -s "${attestations_file}"
 "#;
 
 const OCI_SBOM_ARM: &str = r#"          sbom)
-            component_digest="$(printf '%s' "${predicates}" \
-              | jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("spdx")) | .digest) // ""')"
+            while IFS= read -r attestation_entry; do
+              component_digest="$(jq -r '.sbom' <<<"${attestation_entry}")"
+              component_reference="${repository}@$(jq -r '.attestation' <<<"${attestation_entry}")"
+              test -n "${component_digest}"
+              printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
+                "${component}" "${component_digest}" "${component_reference}" >> "${metadata_file}"
+              component_recorded="yes"
+            done < "${attestations_file}"
             ;;
 "#;
 
 const OCI_PROVENANCE_ARM: &str = r#"          provenance)
-            component_digest="$(printf '%s' "${predicates}" \
-              | jq -r 'first(.layers[]? | select(.annotations["in-toto.io/predicate-type"] | test("slsa|provenance")) | .digest) // ""')"
-            provenance_digest="${component_digest}"
+            while IFS= read -r attestation_entry; do
+              component_digest="$(jq -r '.provenance' <<<"${attestation_entry}")"
+              component_reference="${repository}@$(jq -r '.attestation' <<<"${attestation_entry}")"
+              test -n "${component_digest}"
+              printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
+                "${component}" "${component_digest}" "${component_reference}" >> "${metadata_file}"
+              printf -- '  - kind: "oci-attestation"\n    digest: "%s"\n    reference: "%s"\n' \
+                "${component_digest}" "${component_reference}" >> "${provenance_file}"
+              component_recorded="yes"
+            done < "${attestations_file}"
             ;;
 "#;
 
@@ -2402,8 +2457,10 @@ const OCI_COMPONENT_RECORD: &str = r#"          *)
             ;;
         esac
         test -n "${component_digest}"
-        printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
-          "${component}" "${component_digest}" "${repository}@${published}" >> "${metadata_file}"
+        if [ -z "${component_recorded}" ]; then
+          printf -- '  - kind: "%s"\n    digest: "%s"\n    reference: "%s"\n' \
+            "${component}" "${component_digest}" "${repository}@${published}" >> "${metadata_file}"
+        fi
       done
 "#;
 
@@ -2452,7 +2509,7 @@ fn oci_observation(publication: &SelectedPublication, packager_version_command: 
         .components
         .contains(&AttachedComponent::Provenance)
     {
-        "      {\n        printf 'build-provenance:\\n'\n        printf -- '  - kind: \"%s\"\\n    digest: \"%s\"\\n    reference: \"%s\"\\n' \\\n          'oci-attestation' \"${provenance_digest}\" \"${repository}@${published}\"\n      } >> \"${@ENVVAR@OBSERVATION}\"\n"
+        "      if [ -s \"${provenance_file}\" ]; then\n        printf 'build-provenance:\\n' >> \"${@ENVVAR@OBSERVATION}\"\n        cat \"${provenance_file}\" >> \"${@ENVVAR@OBSERVATION}\"\n      fi\n"
     } else {
         ""
     };

@@ -1268,10 +1268,14 @@ proposed-design:
     requirements. OCI recipes attach source, revision, version, and created
     annotations where the format permits. Revision is R, and created derives
     from R's commit timestamp. OCI packagers generate an SBOM through their
-    native supported mechanism and bind it to the subject digest. OCI
-    destinations receive a keyless signature bound to their published subject
-    by default. The recipe verifies generated provenance, attached metadata,
-    annotations, and signatures and records their positive results. An explicit
+    native supported mechanism and bind it to the subject digest. For a
+    multi-platform index, every platform manifest has its own attestation
+    manifest. The recipe verifies and records the SBOM and provenance predicate
+    from each one rather than treating the first platform as evidence for the
+    index. OCI destinations receive a keyless signature bound to their
+    published subject by default. The recipe verifies generated provenance,
+    attached metadata, annotations, and signatures and records their positive
+    results. An explicit
     target omission suppresses the corresponding component for that target
     without producing a warning or waiver record. Release evidence remains
     affirmative and records only attached components that were produced.
@@ -1290,6 +1294,11 @@ proposed-design:
     is read back and recorded. Platform matrices derive from the packager
     recipe and native packager configuration; platform-independent OCI
     artifacts have no artificial image platforms.
+
+    Exact-version conflict detection lists the destination before promotion.
+    The Distribution API's `NAME_UNKNOWN` response is the only failed listing
+    treated as a repository with no tags; authentication, transport, and
+    registry failures stop before any write.
 
     An OCI subject names itself in its own source. A Dev Container Feature
     carries its id, and a Dockerfile-backed image carries the last
@@ -1344,12 +1353,12 @@ proposed-design:
     bytes, notably the Dev Container CLI, is held to the same rules rather than
     trusted to follow them. The conflict decision is taken before it runs,
     because afterwards it would compare against bytes that client just pushed.
-    Its aliases are read back and compared against the same entitlement every
-    other OCI destination is held to, so a client that advances a stable alias
-    the release was not entitled to fails the publication instead of being
-    recorded as having moved nothing. And what it published is compared against
-    the packaged bytes, so a repackage that produced something else fails
-    instead of passing as a promotion.
+    Its native client owns exact, minor, major, and `latest` alias mutation, so
+    the recipe reads back the aliases that operation defines rather than
+    applying Intentional's runnable-image entitlement policy to a client that
+    does not implement it. What it published is compared against the packaged
+    bytes, so a repackage that produced something else fails instead of passing
+    as a promotion.
 
     An OCI destination's consumer path is public, so its clean-client retrieval
     runs with a scratch `DOCKER_CONFIG` whose credential store is empty: it
