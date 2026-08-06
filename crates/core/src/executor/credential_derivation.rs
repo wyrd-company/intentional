@@ -20,8 +20,6 @@ use std::collections::BTreeSet;
 #[cfg(any(test, feature = "test-support"))]
 const APP_TOKEN_ACTION_PREFIX: &str = "actions/create-github-app-token@";
 #[cfg(any(test, feature = "test-support"))]
-const DOCKERHUB_TOKEN_SECRET: &str = "DOCKERHUB_TOKEN";
-#[cfg(any(test, feature = "test-support"))]
 const TRUSTED_PUBLISHING_TOKENS: &str = "trusted_publishing/tokens";
 #[cfg(any(test, feature = "test-support"))]
 const NPM_TRUSTED_PREP_STEP: &str = "Prepare the npm client for trusted publishing";
@@ -31,6 +29,8 @@ const LABEL_DOCKER_HUB: &str = "Docker Hub";
 const LABEL_AUR: &str = "the AUR";
 #[cfg(any(test, feature = "test-support"))]
 const LABEL_CARGO_ALTERNATE: &str = "a non-crates.io Cargo registry";
+#[cfg(any(test, feature = "test-support"))]
+const LABEL_HOMEBREW_TAP: &str = "your tap";
 #[cfg(any(test, feature = "test-support"))]
 const NPM_TOKEN_SECRET: &str = "NPM_TOKEN";
 #[cfg(any(test, feature = "test-support"))]
@@ -153,18 +153,60 @@ fn is_app_mint_credential(secret_name: &str) -> bool {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn is_dockerhub_token(secret_name: &str) -> bool {
-    secret_name == DOCKERHUB_TOKEN_SECRET || secret_name.ends_with("_DOCKERHUB_TOKEN")
-}
-
-#[cfg(any(test, feature = "test-support"))]
-fn is_aur_key(secret_name: &str) -> bool {
-    secret_name.ends_with("AUR_KEY")
-}
-
-#[cfg(any(test, feature = "test-support"))]
 fn is_cargo_registry_token(secret_name: &str) -> bool {
     secret_name == "CARGO_REGISTRY_TOKEN" || secret_name.ends_with("_CARGO_REGISTRY_TOKEN")
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn is_excluded_standing_secret_read(
+    secret_name: &str,
+    step: &Value,
+    step_text: &str,
+    job_text: &str,
+) -> bool {
+    if secret_name == "GITHUB_TOKEN" {
+        return true;
+    }
+    if is_app_mint_credential(secret_name) {
+        return true;
+    }
+    if is_destination_token_mint_step(step) {
+        return true;
+    }
+    if is_app_token_step(step) && is_app_mint_credential(secret_name) {
+        return true;
+    }
+    if trusted_publishing_bootstrap_emission(step_text) && is_cargo_registry_token(secret_name) {
+        return true;
+    }
+    if (secret_name == NPM_TOKEN_SECRET || secret_name.ends_with("_NPM_TOKEN"))
+        && (trusted_publishing_bootstrap_emission(step_text)
+            || job_text.contains(TRUSTED_PUBLISHING_TOKENS)
+            || job_text.contains(NPM_TRUSTED_PREP_STEP))
+    {
+        return true;
+    }
+    if is_cargo_registry_token(secret_name) && job_text.contains(TRUSTED_PUBLISHING_TOKENS) {
+        return true;
+    }
+    false
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn standing_route_label(job_id: &str, job_text: &str) -> Option<&'static str> {
+    if job_id.ends_with("_oci_dockerhub") {
+        return Some(LABEL_DOCKER_HUB);
+    }
+    if job_id.ends_with("_aur_primary") {
+        return Some(LABEL_AUR);
+    }
+    if job_id.ends_with("_cargo_primary") && !job_text.contains(TRUSTED_PUBLISHING_TOKENS) {
+        return Some(LABEL_CARGO_ALTERNATE);
+    }
+    if job_id.ends_with("_homebrew_primary") {
+        return Some(LABEL_HOMEBREW_TAP);
+    }
+    None
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -173,46 +215,19 @@ fn classify_standing_secret_read(
     step: &Value,
     step_text: &str,
     job_text: &str,
+    job_id: &str,
 ) -> StandingSecretClass {
-    if secret_name == "GITHUB_TOKEN" {
+    if is_excluded_standing_secret_read(secret_name, step, step_text, job_text) {
         return StandingSecretClass::Excluded;
     }
-    if is_app_mint_credential(secret_name) {
-        return StandingSecretClass::Excluded;
+    match standing_route_label(job_id, job_text) {
+        Some(label) => StandingSecretClass::Label(label.to_owned()),
+        None => StandingSecretClass::Unrecognized,
     }
-    if is_destination_token_mint_step(step) {
-        return StandingSecretClass::Excluded;
-    }
-    if is_app_token_step(step) && is_app_mint_credential(secret_name) {
-        return StandingSecretClass::Excluded;
-    }
-    if trusted_publishing_bootstrap_emission(step_text) && is_cargo_registry_token(secret_name) {
-        return StandingSecretClass::Excluded;
-    }
-    if (secret_name == NPM_TOKEN_SECRET || secret_name.ends_with("_NPM_TOKEN"))
-        && (trusted_publishing_bootstrap_emission(step_text)
-            || job_text.contains(TRUSTED_PUBLISHING_TOKENS)
-            || job_text.contains(NPM_TRUSTED_PREP_STEP))
-    {
-        return StandingSecretClass::Excluded;
-    }
-    if is_dockerhub_token(secret_name) {
-        return StandingSecretClass::Label(LABEL_DOCKER_HUB.to_owned());
-    }
-    if is_aur_key(secret_name) {
-        return StandingSecretClass::Label(LABEL_AUR.to_owned());
-    }
-    if is_cargo_registry_token(secret_name) {
-        if job_text.contains(TRUSTED_PUBLISHING_TOKENS) {
-            return StandingSecretClass::Excluded;
-        }
-        return StandingSecretClass::Label(LABEL_CARGO_ALTERNATE.to_owned());
-    }
-    StandingSecretClass::Unrecognized
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn standing_labels_from_job(body: &Value) -> (BTreeSet<String>, BTreeSet<String>) {
+fn standing_labels_from_job(job_id: &str, body: &Value) -> (BTreeSet<String>, BTreeSet<String>) {
     let mut labels = BTreeSet::new();
     let mut unrecognized = BTreeSet::new();
     let job_text = emission_text(body);
@@ -222,7 +237,7 @@ fn standing_labels_from_job(body: &Value) -> (BTreeSet<String>, BTreeSet<String>
     for step in steps {
         let step_text = step_emission_text(step);
         for secret_name in secret_reads_in_step(step) {
-            match classify_standing_secret_read(&secret_name, step, &step_text, &job_text) {
+            match classify_standing_secret_read(&secret_name, step, &step_text, &job_text, job_id) {
                 StandingSecretClass::Excluded => {}
                 StandingSecretClass::Label(label) => {
                     labels.insert(label);
@@ -326,7 +341,7 @@ pub fn standing_credential_usage_labels(workflows: &[(WorkflowRole, String)]) ->
         if !job_id.starts_with("intentional_publish_") {
             continue;
         }
-        let (job_labels, job_unrecognized) = standing_labels_from_job(body);
+        let (job_labels, job_unrecognized) = standing_labels_from_job(job_id, body);
         labels.extend(job_labels);
         unrecognized.extend(job_unrecognized);
     }
