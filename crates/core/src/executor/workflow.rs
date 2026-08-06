@@ -39,9 +39,9 @@ mod templates;
 use templates::{
     build_command, job, nfpm_toolchain_steps, render_list, toolchain_steps, OCI_TITLE_LABEL,
     PUBLISH_ASSEMBLE_JOB, PUBLISH_BUILD_JOB, PUBLISH_CLOSE_JOB, PUBLISH_HANDOFF_STEP,
-    PUBLISH_PHASE_TAG_JOB, PUBLISH_PUBLISHER_JOB, PUBLISH_RETRIEVAL_JOB, PUBLISH_UPLOAD_JOB,
-    PUBLISH_UPLOAD_STEP, PUBLISH_VERIFY_JOB, PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB,
-    RELEASE_PREPARE_JOB,
+    PUBLISH_PHASE_TAG_JOB, PUBLISH_PUBLICATIONS_VERIFY_JOB, PUBLISH_PUBLISHER_JOB,
+    PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP, PUBLISH_VERIFICATION_JOB, PUBLISH_VERIFY_JOB,
+    PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB, RELEASE_PREPARE_JOB,
 };
 
 /// Pinned identities and the scalar renderer the recipe modules share.
@@ -55,7 +55,7 @@ mod build;
 mod publishers;
 
 use build::{build_environment, cargo_archive_platforms};
-use publishers::publication_jobs;
+use publishers::{publication_jobs, PublicationVerification};
 
 /// Step id every managed job carries, independently of the configurable prefix.
 pub const OWNERSHIP_SENTINEL: &str = "intentional_executor_contract";
@@ -1152,6 +1152,8 @@ fn publish_contract(
 
     let publisher_upstream = before.clone().unwrap_or_else(|| verify.clone());
     let mut publication_completion_jobs = Vec::new();
+    let mut shared_verification_needs = Vec::new();
+    let mut shared_verification_steps = String::new();
     let mut identities = BTreeSet::new();
     for publication in &selection.selected {
         let id = publication_job_id(namespaces, publication);
@@ -1206,23 +1208,44 @@ fn publish_contract(
             handoff.as_deref(),
         )
         .map_err(|diagnostic| vec![diagnostic])?;
-        publication_completion_jobs.push(id.clone());
         jobs.push((id.clone(), Ok(derived.publisher)));
-        if let Some(retrieval) = derived.retrieval {
-            let retrieval_id = retrieval_job_id(namespaces, publication);
-            if !identities.insert(retrieval_id.clone()) {
-                return Err(vec![WorkflowDiagnostic::at(
-                    "job-identifier-collision",
-                    format!(
-                        "publication {} derives managed job {retrieval_id}, which another publication already claims",
-                        publication.identity()
-                    ),
-                    &format!("jobs.{retrieval_id}"),
-                )]);
+        match derived.verification {
+            PublicationVerification::Shared(steps) => {
+                shared_verification_needs.push(id);
+                shared_verification_steps.push_str(&steps);
             }
-            publication_completion_jobs.push(retrieval_id.clone());
-            jobs.push((retrieval_id, Ok(retrieval)));
+            PublicationVerification::Retrieval(retrieval) => {
+                let retrieval_id = retrieval_job_id(namespaces, publication);
+                if !identities.insert(retrieval_id.clone()) {
+                    return Err(vec![WorkflowDiagnostic::at(
+                        "job-identifier-collision",
+                        format!(
+                            "publication {} derives managed job {retrieval_id}, which another publication already claims",
+                            publication.identity()
+                        ),
+                        &format!("jobs.{retrieval_id}"),
+                    )]);
+                }
+                publication_completion_jobs.push(retrieval_id.clone());
+                jobs.push((retrieval_id, Ok(retrieval)));
+            }
         }
+    }
+
+    if !shared_verification_steps.is_empty() {
+        let id = format!("{}verify_publications", namespaces.job);
+        publication_completion_jobs.push(id.clone());
+        jobs.push((
+            id,
+            job(
+                PUBLISH_PUBLICATIONS_VERIFY_JOB,
+                namespaces,
+                &[
+                    ("@NEEDS@", &render_list(&shared_verification_needs)),
+                    ("@VERIFY_STEPS@", &shared_verification_steps),
+                ],
+            ),
+        ));
     }
 
     // The after-publication tag seals the completed fragments, so it follows
@@ -2857,6 +2880,83 @@ jobs:
         );
     }
 
+    // A repository-local recipe can read a destination secret, persist client
+    // authentication, or receive a workflow identity. Once that happens, an
+    // Intentional-owned Action in the same job can reach publication authority
+    // even when no input passes it the credential. The boundary is reachability:
+    // an Action runs before every step that reads a non-workflow secret, and it
+    // never shares a job with an identity that can be exchanged or written with.
+    #[test]
+    fn isolates_every_intentional_action_from_publisher_credentials() {
+        fn secret_names(value: &Value) -> BTreeSet<String> {
+            let mut names = BTreeSet::new();
+            fn visit(value: &Value, names: &mut BTreeSet<String>) {
+                match value {
+                    Value::Mapping(mapping) => {
+                        for child in mapping.values() {
+                            visit(child, names);
+                        }
+                    }
+                    Value::Sequence(sequence) => {
+                        for child in sequence {
+                            visit(child, names);
+                        }
+                    }
+                    Value::String(text) => {
+                        for tail in text.split("secrets.").skip(1) {
+                            let name = tail
+                                .chars()
+                                .take_while(|character| {
+                                    character.is_ascii_alphanumeric() || *character == '_'
+                                })
+                                .collect::<String>();
+                            if !name.is_empty() && name != "GITHUB_TOKEN" {
+                                names.insert(name);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            visit(value, &mut names);
+            names
+        }
+
+        let workspace = repository_scale_workspace("workflow-credential-reachability");
+        for role in WorkflowRole::ALL {
+            converge(workspace.root(), role);
+            let document: Value =
+                serde_yaml::from_str(&workflow(workspace.root(), role)).expect("result parses");
+            for (id, body) in document["jobs"].as_mapping().expect("jobs") {
+                let Some(id) = id.as_str().filter(|id| id.starts_with("intentional_")) else {
+                    continue;
+                };
+                let steps = body["steps"].as_sequence().expect("steps");
+                for (index, step) in steps.iter().enumerate() {
+                    if intentional_action(step).is_none() {
+                        continue;
+                    }
+                    let prior = Value::Sequence(steps[..index].to_vec());
+                    assert!(
+                        secret_names(&prior).is_empty(),
+                        "{id} resolves an Intentional Action after a destination secret became reachable: {:?}",
+                        secret_names(&prior)
+                    );
+                    assert_ne!(
+                        body["permissions"]["id-token"].as_str(),
+                        Some("write"),
+                        "{id} resolves an Intentional Action while OIDC mint authority is reachable"
+                    );
+                    assert_ne!(
+                        body["permissions"]["packages"].as_str(),
+                        Some("write"),
+                        "{id} resolves an Intentional Action while package-write authority is reachable"
+                    );
+                }
+            }
+        }
+    }
+
     // The authority transition pushes to the protected default branch using
     // identities the previous step verified. Before this binding existed the
     // step it read produced no outputs at all, so the guard compared the remote
@@ -3113,6 +3213,22 @@ release-units:
         );
     }
 
+    #[test]
+    fn places_every_irreversible_publisher_inside_the_protected_environment() {
+        let workspace = repository_scale_workspace("workflow-publisher-environment");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let publishers = job_ids(&jobs, "intentional_publish_");
+        assert!(!publishers.is_empty(), "the fixture derives publisher jobs");
+        for publisher in publishers {
+            assert_eq!(
+                jobs[&Value::String(publisher.clone())]["environment"].as_str(),
+                Some("intentional-release"),
+                "{publisher} performs irreversible external publication behind the configured environment"
+            );
+        }
+    }
+
     // The authority the upload job takes is the authority every publisher job is
     // denied. `withholds_the_workflow_identity_scope_from_repository_destinations`
     // proves no publisher requests the scope; this proves none of them reaches
@@ -3175,20 +3291,20 @@ release-units:
 
         let mut joined = 0_usize;
         for publisher in job_ids(&jobs, "intentional_publish_") {
-            let retrieval = publisher.replacen("intentional_publish_", "intentional_retrieve_", 1);
-            let steps = if jobs.contains_key(Value::String(retrieval.clone())) {
-                job_steps(&jobs, &retrieval)
-            } else {
-                job_steps(&jobs, &publisher)
-            };
-            let verified = steps
-                .iter()
-                .find_map(|step| step["with"]["draft-handoff"].as_str())
-                .unwrap_or_else(|| panic!("{publisher} verifies its publication"));
+            let (_, steps, verifier) = publication_verification(&jobs, &publisher);
+            let verified = verifier["with"]["draft-handoff"]
+                .as_str()
+                .expect("the verifier states whether it reads a handoff");
+            let expected_artifact = format!(
+                "intentional_handoff-{}",
+                publisher
+                    .strip_prefix("intentional_publish_")
+                    .expect("publisher identity suffix")
+            );
             let downloaded = steps.iter().find(|step| {
                 step["with"]["name"]
                     .as_str()
-                    .is_some_and(|name| name.starts_with("intentional_handoff-"))
+                    .is_some_and(|name| name == expected_artifact)
             });
             let Some(downloaded) = downloaded else {
                 assert!(
@@ -3206,7 +3322,7 @@ release-units:
                     "{directory}/{}",
                     crate::publication::draft::DRAFT_HANDOFF_FILE
                 ),
-                "{publisher} verifies the document the artifact it downloaded contains"
+                "{publisher} verifies the document its downstream verifier downloaded"
             );
 
             let produced = upload
@@ -3216,7 +3332,7 @@ release-units:
             assert_eq!(
                 produced["with"]["path"].as_str(),
                 Some(directory),
-                "{artifact} is packed from the directory {publisher} unpacks it into"
+                "{artifact} is packed from the directory the verifier unpacks it into"
             );
             let written = upload
                 .iter()
@@ -3224,7 +3340,7 @@ release-units:
                 .find(|path| *path == verified);
             assert!(
                 written.is_some(),
-                "a step writes {verified}, which {publisher} verifies"
+                "a step writes {verified}, which the downstream verifier checks"
             );
         }
         assert_eq!(
@@ -4593,6 +4709,36 @@ release-units:
             .collect()
     }
 
+    /// Job and step verifying one publisher's observation after publication.
+    fn publication_verification(
+        jobs: &serde_yaml::Mapping,
+        publisher: &str,
+    ) -> (String, Vec<Value>, Value) {
+        let suffix = publisher
+            .strip_prefix("intentional_publish_")
+            .expect("publisher job identity");
+        for (id, body) in jobs {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            if let Some(step) = steps.iter().find(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.contains("/verify-publication@"))
+                    && step["with"]["observation"]
+                        .as_str()
+                        .is_some_and(|path| path.ends_with(&format!("/{suffix}.yml")))
+            }) {
+                return (
+                    id.as_str().expect("job id").to_owned(),
+                    steps.clone(),
+                    step.clone(),
+                );
+            }
+        }
+        panic!("{publisher} has a downstream publication verifier")
+    }
+
     /// Every unrendered `@PLACEHOLDER@` a derived workflow still carries.
     ///
     /// A placeholder is an uppercase-and-underscore run between two `@`, which
@@ -4951,15 +5097,20 @@ release-units:
                     {
                         evidence_owner.as_str()
                     } else {
-                        publisher.as_str()
+                        "intentional_verify_publications"
                     };
-                    uploads
-                        .iter()
-                        .find(|(_, producer)| *producer == evidence_owner)
-                        .map(|(name, _)| name.clone())
-                        .unwrap_or_else(|| {
-                            panic!("{evidence_owner} uploads the publication evidence fragment")
-                        })
+                    let fragment = format!(
+                        "intentional_evidence-{}",
+                        publisher
+                            .strip_prefix("intentional_publish_")
+                            .expect("the publisher carries its identity suffix")
+                    );
+                    assert_eq!(
+                        uploads.get(&fragment).map(String::as_str),
+                        Some(evidence_owner),
+                        "{evidence_owner} uploads {fragment}"
+                    );
+                    fragment
                 })
                 .collect::<BTreeSet<_>>();
 
@@ -5089,7 +5240,7 @@ release-units:
                 "{publisher} publishes only after the before-publication tag is sealed"
             );
             assert!(
-                job_needs(&jobs, after).contains(&publisher),
+                transitive_needs(&jobs, after).contains(&publisher),
                 "the after-publication tag seals after {publisher}"
             );
         }
@@ -7273,6 +7424,7 @@ release-units:
                 // managed job joins the swept set the moment it is derived and
                 // fails this enumeration until it is written down.
                 "upload_deliverables",
+                "verify_publications",
                 "verify_tag",
             ],
         ),
@@ -9086,7 +9238,7 @@ release-units:
         );
         assert_eq!(
             output.lines().count(),
-            1_583,
+            1_626,
             "the real four-publication fixture pins the measured line count"
         );
         assert!(
@@ -9122,7 +9274,7 @@ release-units:
         let output = comparison.output.expect("expanded comparison has output");
         assert_eq!(
             output.lines().count(),
-            1_768,
+            1_818,
             "the five-publication fixture pins the measured line count"
         );
 

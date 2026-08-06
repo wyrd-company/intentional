@@ -514,9 +514,9 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured four-publication mix is 1,583 lines. Adding its Cargo-shaped AUR
-    publication produces a five-publication mix of 1,768 lines. Both fit. The
-    five-publication fixture plus 232 repository-owned lines lands exactly on
+    configured four-publication mix is 1,626 lines. Adding its Cargo-shaped AUR
+    publication produces a five-publication mix of 1,818 lines. Both fit. The
+    five-publication fixture plus 182 repository-owned lines lands exactly on
     the bound, and one more repository-owned line is refused.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
@@ -826,25 +826,45 @@ proposed-design:
     third packaging fails the release rather than shipping quietly — is the
     honest ceiling for a packager with no upload-only path.
 
-    The last managed job for each publication then runs `intentional verify
-    publication` with explicit release-unit, package, and publisher identity and the
-    target selector required by the adapter. The command produces the
+    A later managed consumer job then runs `intentional verify publication`
+    with explicit release-unit, package, and publisher identity and the target
+    selector required by the adapter. The command produces the
     schema-backed publisher evidence fragment consumed by
     `intentional evidence assemble`.
 
   privileged-execution-boundary: >-
-    Intentional-owned reusable Actions perform credential-free plumbing,
-    preparation, and destination observation. Repository-mutating,
-    secret-bearing, and OpenID
-    Connect-enabled commands are materialized in repository-local reserved
-    jobs. Checkout disables persisted credentials and states its release-tag
-    requirement explicitly rather than inheriting tags from an unrelated fetch
-    depth, because the commands these jobs run derive version authority and
-    resolve the global release tag from the repository's tags. Permissions are
+    Intentional-owned reusable Actions perform credential-free plumbing and
+    preparation, including destination observation where the destination
+    permits credential-free retrieval. Credential-free means that the Action cannot reach a
+    destination secret, destination-write workflow token, OpenID Connect
+    identity, or minted repository token; it does not mean a GitHub runner has
+    no read-only runtime or artifact credential. Repository-mutating,
+    secret-bearing, and OpenID Connect-enabled commands are materialized in
+    repository-local reserved jobs. A publisher writes its schema-backed
+    observation to a short-lived artifact after the repository-local recipe
+    finishes. Intentional verifies those observations in a later job that has
+    read-only contents permission and no protected environment, destination
+    secret, package-write scope, or identity-mint scope. A destination whose
+    consumer read requires narrower read authority performs that retrieval and
+    verification in its separate read-scoped job. Checkout disables persisted
+    credentials and states its release-tag requirement explicitly rather than
+    inheriting tags from an unrelated fetch depth, because the commands these
+    jobs run derive version authority and resolve the global release tag from
+    the repository's tags. Permissions are
     set per job and default to read-only. Reconciliation reports the
     workflow-level scopes its safe default withdraws, so a repository declares
     them per job deliberately. Write authority is minted only after validation,
-    configured gates, and protected-environment approval. External Actions are
+    configured gates, and protected-environment approval. Every publisher job
+    also declares the configured protected environment. The environment is the
+    boundary for irreversible external publication as well as repository and
+    Release mutation: its reviewers, wait timer, and branch rules govern the
+    step that spends each destination credential. Destination secrets and
+    variables belong to that environment. A repository migrating an existing
+    managed workflow copies each destination credential under the same name to
+    the environment, applies the derived workflow, proves one protected
+    publication, and then removes the repository-level copy. Repository-level
+    fallback during that sequence keeps the workflow runnable, but retains the
+    broader read surface until removal. External Actions are
     pinned to complete commit identities. Intentional's own Actions are pinned
     to the released version that derived the workflow, because derivation must
     name a revision carrying the release this build belongs to and that commit
@@ -862,8 +882,8 @@ proposed-design:
     install is required wherever the command runs, so it is the placement rather
     than the network dependency that is chosen here. Three properties bound it.
     The Action receives no credentials and the job mints none until after the
-    Action has finished, so no token exists on the runner while Intentional's
-    own code is first fetched and executed. The installed archive is verified
+    Action has finished, so no write token exists on the runner while
+    Intentional's own code is first fetched and executed. The installed archive is verified
     against its published checksum before use. The mutating step is a
     repository-local `run:` body that the Action never sees. What remains is
     that runner state persists across steps within a job, so an install that was

@@ -346,15 +346,10 @@
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            let verify = steps
-                .iter()
-                .find(|step| {
-                    step["uses"]
-                        .as_str()
-                        .is_some_and(|uses| uses.contains("/verify-publication@"))
-                })
-                .unwrap_or_else(|| panic!("{job} verifies its own publication"));
-            let observer = portable_observer_step(verify).expect("the Action carries an observer");
+            let jobs = document["jobs"].as_mapping().expect("jobs");
+            let (_, _, verify) = publication_verification(jobs, job);
+            let observer =
+                portable_observer_step(&verify).expect("the Action carries an observer");
             env.extend(
                 observer["env"]
                     .as_mapping()
@@ -1047,6 +1042,10 @@ fi
                 "a target that omits its signature installs no signing client: {omitting}"
             );
             assert!(
+                document["jobs"][GHCR_JOB]["permissions"]["id-token"].is_null(),
+                "a target that presents no signature receives no workflow identity: {omitting}"
+            );
+            assert!(
                 !omitting.contains("omit") && !omitting.contains("waiv"),
                 "nothing in the omitting target's job records that a component was omitted"
             );
@@ -1055,6 +1054,11 @@ fi
             assert!(
                 peer.contains("cosign"),
                 "the omission applies to its own target and to no peer"
+            );
+            assert_eq!(
+                document["jobs"][DOCKERHUB_JOB]["permissions"]["id-token"].as_str(),
+                Some("write"),
+                "the signing peer retains the identity its recipe presents"
             );
         }
 

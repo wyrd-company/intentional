@@ -310,8 +310,8 @@ Use `--workflow PATH` to compare a candidate file instead of the configured one.
 
 The comparison reads workflows of at most 2000 lines, for configured and
 `--workflow` inputs alike, and refuses anything larger with a
-`workflow-too-large` diagnostic. A GitHub workflow is far smaller than that; a
-file that reaches this size is almost certainly not a workflow.
+`workflow-too-large` diagnostic. The bound admits the complete managed release
+graph while refusing inputs large enough to make quadratic comparison costly.
 
 A comparison can also report advisories you should read before applying it. The
 safe top-level permission default withdraws workflow-level scopes such as
@@ -409,16 +409,20 @@ the privileged job, after the candidate has already been verified. Together they
 are the only long-lived repository-write credentials involved.
 
 **Protected environment.** The `intentional-release` environment must exist and
-must guard the **authority transition** — the jobs that write to this
-repository. Requiring a reviewer, a wait timer or a branch restriction there
-gates those jobs.
+must guard every irreversible authority transition. This includes jobs that
+write to the repository or Release and every job that publishes to an external
+destination. Requiring a reviewer, a wait timer or a branch restriction there
+gates the step that spends each credential.
 
-It does not gate every job that holds a credential, and it is worth knowing
-which ones it misses. Publisher jobs run **outside** the environment and carry
-their destination's own credential: the npm and Cargo publishers read their
-registry tokens there, and the Homebrew publisher mints a tap-scoped token from
-the release App private key. A reviewer requirement on `intentional-release`
-does not stand between a release and any of those.
+Store destination credentials as environment secrets and variables. For an
+existing repository, copy each destination credential under the same name from
+repository settings to `intentional-release`. Apply the regenerated workflow.
+Prove one protected publication. Then remove the repository-level copy. The
+repository-level value remains a working fallback during the migration, but any
+workflow in the repository can still read it until it is removed. Intentional's
+own repository migration set is `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN`; its
+Homebrew publisher continues to mint a tap-scoped token from the release App
+credentials.
 
 Verify it against your own derived slice rather than against this paragraph:
 
@@ -435,10 +439,11 @@ passed. `intentional executor init` reports the names your configuration
 derives — create those rather than the ones written here.
 
 **Publisher credentials** vary by destination, and Intentional stores names,
-never values. Some destinations need a secret you create; others authenticate
-with the job's own token or with one the job mints from the release App. The
-next section has the full table. A tap repository must install the release App
-so the publisher job can mint a token scoped to that repository alone.
+never values. Put stored destination values in the protected environment. Some
+destinations authenticate with the job's own token or with one the job mints
+from the release App. The next section has the full table. A tap repository
+must install the release App so the publisher job can mint a token scoped to
+that repository alone.
 
 ## Publish to a registry for the first time
 

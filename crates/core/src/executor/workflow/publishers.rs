@@ -12,11 +12,19 @@ use super::*;
 pub(super) struct PublicationJobs {
     /// Destination mutation under the authority publication requires.
     pub(super) publisher: Value,
-    /// Consumer retrieval under narrower authority, when the destination permits it.
-    pub(super) retrieval: Option<Value>,
+    /// Evidence verification after destination authority has left the runner.
+    pub(super) verification: PublicationVerification,
 }
 
-/// Publisher job and any separately authorised retrieval job for one publication.
+/// Verification shape one publication's consumer path requires.
+pub(super) enum PublicationVerification {
+    /// Steps collected into the shared credential-free verification job.
+    Shared(String),
+    /// A dedicated retrieval job under its narrower consumer authority.
+    Retrieval(Value),
+}
+
+/// Publisher job and credential-separated verification for one publication.
 pub(super) fn publication_jobs(
     root: &Path,
     namespaces: &PrefixNamespaces,
@@ -112,11 +120,6 @@ pub(super) fn publication_jobs(
     // empty input into an absent option rather than an empty path.
     let handoff = handoff_slug.map_or_else(String::new, |slug| handoff_file(namespaces, slug));
     let split_retrieval = retrieval_steps.is_some();
-    let publisher_verification = if split_retrieval {
-        String::new()
-    } else {
-        verification(&handoff)
-    };
     let handoff_step = handoff_slug.map_or_else(String::new, |slug| {
         format!(
             "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
@@ -125,13 +128,18 @@ pub(super) fn publication_jobs(
             handoff_directory(namespaces, slug),
         )
     });
-    let publisher_handoff_step = if split_retrieval {
+    let observation_artifact = format!("{}observation-{slug}", namespaces.job);
+    let observation_upload_step = if split_retrieval {
         String::new()
     } else {
-        handoff_step.clone()
+        format!(
+            "  - name: {}\n    uses: @UPLOAD@\n    with:\n      name: {}\n      path: {}\n      retention-days: 1\n",
+            scalar(&format!("Upload the {identity} publication observation")),
+            observation_artifact,
+            scalar(&observation),
+        )
     };
     substitutions.extend([
-        ("@HANDOFF_STEP@", publisher_handoff_step),
         // Recipe-emitted steps are repository-derived text and are substituted
         // in the middle of this list, so their position would matter if they
         // could name another entry's placeholder. They cannot: the renderer
@@ -140,7 +148,7 @@ pub(super) fn publication_jobs(
         ("@RECIPE_STEPS@", publisher_steps),
         ("@SUBJECT_NAME@", subject_name.clone()),
         ("@PERMISSIONS@", publisher_permissions(publication)),
-        ("@VERIFY_STEPS@", publisher_verification),
+        ("@OBSERVATION_UPLOAD_STEP@", observation_upload_step),
     ]);
     let publisher = job(
         PUBLISH_PUBLISHER_JOB,
@@ -150,31 +158,40 @@ pub(super) fn publication_jobs(
             .map(|(placeholder, value)| (*placeholder, value.as_str()))
             .collect::<Vec<_>>(),
     )?;
-    let retrieval = retrieval_steps
-        .map(|retrieval| {
-            let retrieval_needs = vec![
-                publication_job_id(namespaces, publication),
-                format!("{}build_{}", namespaces.job, subject.slug),
-            ];
-            let retrieval_needs = render_list(&retrieval_needs);
-            let retrieval_verification = verification(&handoff);
-            job(
-                PUBLISH_RETRIEVAL_JOB,
-                namespaces,
-                &[
-                    ("@NEEDS@", retrieval_needs.as_str()),
-                    ("@SUBJECT_SLUG@", subject.slug.as_str()),
-                    ("@SUBJECT_NAME@", subject_name.as_str()),
-                    ("@HANDOFF_STEP@", handoff_step.as_str()),
-                    ("@RETRIEVAL_STEPS@", retrieval.as_str()),
-                    ("@VERIFY_STEPS@", retrieval_verification.as_str()),
-                ],
+    let verifier_needs = vec![
+        publication_job_id(namespaces, publication),
+        format!("{}build_{}", namespaces.job, subject.slug),
+    ];
+    let verifier_needs = render_list(&verifier_needs);
+    let verifier_verification = verification(&handoff);
+    let verification = if let Some(retrieval_steps) = retrieval_steps {
+        PublicationVerification::Retrieval(job(
+            PUBLISH_VERIFICATION_JOB,
+            namespaces,
+            &[
+                ("@NEEDS@", verifier_needs.as_str()),
+                ("@SUBJECT_SLUG@", subject.slug.as_str()),
+                ("@SUBJECT_NAME@", subject_name.as_str()),
+                ("@HANDOFF_STEP@", handoff_step.as_str()),
+                ("@OBSERVATION_STEP@", ""),
+                ("@RETRIEVAL_STEPS@", retrieval_steps.as_str()),
+                ("@VERIFY_STEPS@", verifier_verification.as_str()),
+            ],
+        )?)
+    } else {
+        let shared_handoff_step = handoff_slug.map_or_else(String::new, |slug| {
+            format!(
+                "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
+                scalar(&format!("Download the {identity} draft-asset handoff")),
+                handoff_artifact(namespaces, slug),
+                handoff_directory(namespaces, slug),
             )
-        })
-        .transpose()?;
+        });
+        PublicationVerification::Shared(format!("{shared_handoff_step}{verifier_verification}"))
+    };
     Ok(PublicationJobs {
         publisher,
-        retrieval,
+        verification,
     })
 }
 
@@ -225,6 +242,8 @@ fn presents_a_workflow_identity(publication: &SelectedPublication) -> bool {
         (PublisherKind::Rpm, _) => false,
         (PublisherKind::Apt, _) => false,
         (PublisherKind::Aur, _) => false,
-        (PublisherKind::Oci, _) => true,
+        (PublisherKind::Oci, _) => publication
+            .components
+            .contains(&crate::model::AttachedComponent::Signature),
     }
 }

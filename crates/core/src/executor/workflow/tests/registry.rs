@@ -168,6 +168,13 @@
                         .then_some((job, steps))
                 })
                 .collect::<Vec<_>>();
+            let all_steps = document["jobs"]
+                .as_mapping()
+                .expect("jobs")
+                .values()
+                .filter_map(|body| body["steps"].as_sequence())
+                .flatten()
+                .collect::<Vec<_>>();
             assert!(
                 !publications.is_empty(),
                 "the exhaustive fixture emits a {publisher} publisher"
@@ -185,10 +192,11 @@
                         })
                     })
                     .expect("the publisher verifies its publication");
-                let writers = steps
+                let writers = all_steps
                     .iter()
                     .filter(|step| {
-                        let candidate = portable_observer_step(step).unwrap_or_else(|| (*step).clone());
+                        let candidate =
+                            portable_observer_step(step).unwrap_or_else(|| (**step).clone());
                         candidate["env"]["INPUT_OBSERVATION"].as_str()
                             == Some(verified.as_str())
                             && candidate["env"]["INPUT_PUBLISHER"].as_str()
@@ -201,7 +209,7 @@
                     .count();
                 assert_eq!(
                     writers, 1,
-                    "exactly one step of {job} writes the observation {verified} that its verification reads"
+                    "exactly one recipe step writes the observation {verified} that {job} verifies"
                 );
             }
         }
@@ -827,24 +835,18 @@
                 "retrieval reads only after {dependency} completes"
             );
         }
-        let after = &jobs[Value::String("intentional_tag_after_publication".to_owned())];
-        let after_needs = after["needs"]
-            .as_sequence()
-            .expect("after-publication tag names its direct dependencies");
+        let after_needs = transitive_needs(&jobs, "intentional_tag_after_publication");
         for completed in [publisher, retrieval] {
             assert!(
-                after_needs.contains(&Value::String(completed.to_owned())),
-                "after-publication tag directly follows {completed}"
+                after_needs.contains(completed),
+                "after-publication tag follows {completed}"
             );
         }
-        let assembly_needs = jobs[Value::String("intentional_assemble_evidence".to_owned())]
-            ["needs"]
-            .as_sequence()
-            .expect("evidence assembly names its direct dependencies");
+        let assembly_needs = transitive_needs(&jobs, "intentional_assemble_evidence");
         for completed in [publisher, retrieval] {
             assert!(
-                assembly_needs.contains(&Value::String(completed.to_owned())),
-                "evidence assembly directly follows {completed}"
+                assembly_needs.contains(completed),
+                "evidence assembly follows {completed}"
             );
         }
 

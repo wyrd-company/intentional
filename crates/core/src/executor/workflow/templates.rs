@@ -896,6 +896,7 @@ pub(super) const PUBLISH_PUBLISHER_JOB: &str = r#"
 needs:
 @NEEDS@
 runs-on: ubuntu-latest
+environment: @ENVIRONMENT@
 permissions:
 @PERMISSIONS@
 env:
@@ -913,10 +914,10 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@HANDOFF_STEP@@RECIPE_STEPS@@VERIFY_STEPS@"#;
+@RECIPE_STEPS@@OBSERVATION_UPLOAD_STEP@"#;
 
-/// Retrieval job whose workflow token can read GitHub Packages but cannot publish.
-pub(super) const PUBLISH_RETRIEVAL_JOB: &str = r#"
+/// Credential-separated consumer verification, with retrieval where required.
+pub(super) const PUBLISH_VERIFICATION_JOB: &str = r#"
 needs:
 @NEEDS@
 runs-on: ubuntu-latest
@@ -938,7 +939,32 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@HANDOFF_STEP@@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
+@HANDOFF_STEP@@OBSERVATION_STEP@@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
+
+/// Verification shared by publications whose consumer readback ran beside publication.
+pub(super) const PUBLISH_PUBLICATIONS_VERIFY_JOB: &str = r#"
+needs:
+@NEEDS@
+runs-on: ubuntu-latest
+permissions:
+  contents: read
+env:
+  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
+steps:
+  - id: @SENTINEL@
+    name: Check out the released commit
+    uses: @CHECKOUT@
+    with:
+      fetch-depth: 0
+      fetch-tags: true
+      persist-credentials: false
+  - name: Download the publication observations
+    uses: @DOWNLOAD@
+    with:
+      pattern: @JOB@observation-*
+      path: ${{ runner.temp }}/@JOB@observation
+      merge-multiple: true
+@VERIFY_STEPS@"#;
 
 /// Verify one observation and upload the resulting publisher-evidence fragment.
 pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@

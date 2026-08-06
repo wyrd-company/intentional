@@ -233,8 +233,8 @@ aur:
     }
 
 
-    // Verification runs in the publisher unless a recipe isolates retrieval in
-    // a narrower job. Its handoff follows it: a draft-dependent verifier without
+    // Verification runs after the publisher, in shared read-only verification
+    // or in a narrower retrieval job. Its handoff follows it: a draft-dependent verifier without
     // one is refused by `verify publication`, and a verifier that reads no draft
     // asset supplying one is refused by the same command. Neither refusal is
     // reachable from here, so the derivation has to get both sides right.
@@ -249,17 +249,11 @@ aur:
             let publishers = job_ids(&jobs, "intentional_publish_");
             assert!(!publishers.is_empty(), "{label} derives a publisher job");
             for publisher in publishers {
-                let retrieval = publisher.replace("intentional_publish_", "intentional_retrieve_");
-                let handoff = [publisher.as_str(), retrieval.as_str()]
-                    .into_iter()
-                    .filter(|id| jobs.contains_key(Value::String((*id).to_owned())))
-                    .flat_map(|id| job_steps(&jobs, id))
-                    .find_map(|step| {
-                        step["with"]["draft-handoff"]
-                            .as_str()
-                            .map(std::borrow::ToOwned::to_owned)
-                    })
-                    .unwrap_or_else(|| panic!("{publisher} verifies its publication"));
+                let (_, _, verifier) = publication_verification(&jobs, &publisher);
+                let handoff = verifier["with"]["draft-handoff"]
+                    .as_str()
+                    .expect("the verifier states whether it reads a handoff")
+                    .to_owned();
                 assert_eq!(
                     !handoff.is_empty(),
                     draft_dependent,

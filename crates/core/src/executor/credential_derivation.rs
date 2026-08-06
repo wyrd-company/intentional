@@ -131,9 +131,25 @@ fn secret_reads_in_step(step: &Value) -> BTreeSet<String> {
     let mut secrets = BTreeSet::new();
     walk_values(step, &mut |value| {
         if let Some(text) = value.as_str() {
-            if let Some((StoredCredentialKind::RepositorySecret, name)) = repository_reference(text)
-            {
-                secrets.insert(name);
+            let mut remaining = text;
+            while let Some(open) = remaining.find("${{") {
+                remaining = &remaining[open + 3..];
+                let Some(close) = remaining.find("}}") else {
+                    break;
+                };
+                let expression = &remaining[..close];
+                for tail in expression.split("secrets.").skip(1) {
+                    let name = tail
+                        .chars()
+                        .take_while(|character| {
+                            character.is_ascii_alphanumeric() || *character == '_'
+                        })
+                        .collect::<String>();
+                    if !name.is_empty() {
+                        secrets.insert(name);
+                    }
+                }
+                remaining = &remaining[close + 2..];
             }
         }
     });
@@ -165,9 +181,6 @@ fn is_excluded_standing_secret_read(
     job_text: &str,
 ) -> bool {
     if secret_name == "GITHUB_TOKEN" {
-        return true;
-    }
-    if is_app_mint_credential(secret_name) {
         return true;
     }
     if is_destination_token_mint_step(step) {
@@ -372,4 +385,60 @@ pub fn trusted_publishing_bootstrap_route_count(workflows: &[(WorkflowRole, Stri
                 && trusted_publishing_bootstrap_emission(&emission_text(body))
         })
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_secret_reads_inside_composed_and_compact_expressions() {
+        let step: Value = serde_yaml::from_str(
+            "env:\n  URL: https://account:${{secrets.DELIVERY_TOKEN}}@example.invalid/\n  FALLBACK: ${{ secrets.PRIMARY_TOKEN || secrets.SECONDARY_TOKEN }}\n",
+        )
+        .expect("step parses");
+        assert_eq!(
+            secret_reads_in_step(&step),
+            ["DELIVERY_TOKEN", "PRIMARY_TOKEN", "SECONDARY_TOKEN"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            "every secret expression is visible to the standing-credential census"
+        );
+    }
+
+    #[test]
+    fn excludes_app_mint_credentials_only_on_the_app_token_route() {
+        let ordinary: Value = serde_yaml::from_str(
+            "env:\n  VALUE: ${{ secrets.UNRELATED_GITHUB_APP_PRIVATE_KEY }}\n",
+        )
+        .expect("step parses");
+        let ordinary_text = step_emission_text(&ordinary);
+        assert!(matches!(
+            classify_standing_secret_read(
+                "UNRELATED_GITHUB_APP_PRIVATE_KEY",
+                &ordinary,
+                &ordinary_text,
+                &ordinary_text,
+                "intentional_publish_unknown_primary",
+            ),
+            StandingSecretClass::Unrecognized
+        ));
+
+        let mint: Value = serde_yaml::from_str(
+            "uses: actions/create-github-app-token@0123456789abcdef\nwith:\n  private-key: ${{ secrets.INTENTIONAL_GITHUB_APP_PRIVATE_KEY }}\n",
+        )
+        .expect("step parses");
+        let mint_text = step_emission_text(&mint);
+        assert!(matches!(
+            classify_standing_secret_read(
+                "INTENTIONAL_GITHUB_APP_PRIVATE_KEY",
+                &mint,
+                &mint_text,
+                &mint_text,
+                "intentional_publish_example_homebrew_primary",
+            ),
+            StandingSecretClass::Excluded
+        ));
+    }
 }
