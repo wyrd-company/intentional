@@ -4095,7 +4095,7 @@ exit 0
             "every `gh`-driven step of all three Release writers is swept"
         );
         assert_eq!(
-            paired, 20,
+            paired, 21,
             "every refusal those steps derive is paired, not only the ones a defect happens to reach"
         );
     }
@@ -5293,6 +5293,30 @@ exit 0
             executed.diagnostics.contains("not verified object")
                 && !executed.invocations.contains("release\tupload"),
             "the object mismatch stops closure before upload: {:?}\n{}",
+            executed.diagnostics,
+            executed.invocations
+        );
+    }
+
+    #[test]
+    fn refuses_to_close_when_contributed_attachments_cannot_be_enumerated() {
+        let workspace = workspace("workflow-closure-attachment-enumeration");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let runner = closure_runner(
+            "workflow-closure-attachment-enumeration-runner",
+            CLOSURE_TAG_OBJECT,
+        )
+        .stub(
+            "find",
+            "#!/usr/bin/env bash\nprintf 'fixture enumeration failure\\n' >&2\nexit 1\n",
+        );
+
+        let executed = run_closure(workspace.root(), &runner);
+        assert!(!executed.succeeded, "an incomplete asset vector is refused");
+        assert!(
+            executed.diagnostics.contains("could not be enumerated")
+                && !executed.invocations.contains("release\tupload"),
+            "enumeration failure stops closure before upload: {:?}\n{}",
             executed.diagnostics,
             executed.invocations
         );

@@ -1285,10 +1285,15 @@ steps:
       fi
       assets=("${@ENVVAR@RELEASE}/intentional-evidence.yml")
       if test -d "${@ENVVAR@RELEASE}/attachments"; then
+        attachment_list="${RUNNER_TEMP}/@JOB@closure-attachments"
+        if ! find "${@ENVVAR@RELEASE}/attachments" -mindepth 1 -maxdepth 1 \
+          -type f -print0 | sort -z > "${attachment_list}"; then
+          printf 'the assembled contribution attachments could not be enumerated\n' >&2
+          exit 1
+        fi
         while IFS= read -r -d '' attachment; do
           assets+=("${attachment}")
-        done < <(find "${@ENVVAR@RELEASE}/attachments" -mindepth 1 -maxdepth 1 \
-          -type f -print0 | sort -z)
+        done < "${attachment_list}"
       fi
       gh release upload "${@ENVVAR@GLOBAL_TAG}" "${assets[@]}" --clobber
       for asset in "${assets[@]}"; do
