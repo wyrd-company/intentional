@@ -179,8 +179,10 @@ pub(super) fn build_command(packager: Packager) -> String {
       linux_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}" | cut -d' ' -f1)"
       macos_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}" | cut -d' ' -f1)"
       metadata="$(cargo metadata --no-deps --format-version 1)"
-      description="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .description // "Native executable"' <<<"${{metadata}}")"
-      license="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .license // empty' <<<"${{metadata}}")"
+      manifest_path="$(realpath Cargo.toml)"
+      package_metadata="$(jq -c --arg manifest "${{manifest_path}}" '.packages[] | select(.manifest_path == $manifest)' <<<"${{metadata}}")"
+      description="$(jq -r '.description // "Native executable"' <<<"${{package_metadata}}")"
+      license="$(jq -r '.license // empty' <<<"${{package_metadata}}")"
       description_literal="$(jq -Rn --arg value "${{description}}" '$value')"
       license_literal="$(jq -Rn --arg value "${{license}}" '$value')"
       license_line=""
@@ -221,7 +223,7 @@ pub(super) fn build_command(packager: Packager) -> String {
           "end" > "${{formula}}"
       fi
       if [[ "${{@ENVVAR@RPM}}" == true || "${{@ENVVAR@APT}}" == true ]]; then
-        maintainer="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .authors | map(select(length > 0)) | join(", ")' <<<"${{metadata}}")"
+        maintainer="$(jq -r '.authors | map(select(length > 0)) | join(", ")' <<<"${{package_metadata}}")"
         if [[ -z "${{maintainer}}" ]]; then
           printf 'Cargo package %s must declare at least one author before Intentional can derive RPM or APT maintainer metadata\n' "${{binary}}" >&2
           exit 1

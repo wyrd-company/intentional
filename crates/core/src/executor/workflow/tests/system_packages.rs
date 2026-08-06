@@ -121,13 +121,18 @@ release-units:
         workspace
             .write(
                 "Cargo.toml",
-                "[workspace]\nmembers = [\"component\"]\nresolver = \"2\"\n",
+                "[workspace]\nmembers = [\"component\", \"unrelated\"]\nresolver = \"2\"\n",
             )
             .write(
                 "component/Cargo.toml",
                 "[package]\nname = \"sample-utility\"\nversion = \"1.2.3\"\ndescription = \"Sample utility\"\nauthors = [\"Release Maintainers <maintainers@example.invalid>\"]\nlicense = \"MIT\"\n",
             )
             .write("component/src/main.rs", "fn main() {}\n")
+            .write(
+                "unrelated/Cargo.toml",
+                "[package]\nname = \"unrelated-package\"\nversion = \"1.2.3\"\nauthors = [\"Unrelated Maintainers <unrelated@example.invalid>\"]\n[[bin]]\nname = \"sample-utility\"\npath = \"src/main.rs\"\n",
+            )
+            .write("unrelated/src/main.rs", "fn main() {}\n")
             .write(
                 ".intentional/config.yml",
                 r#"$schema: https://intentional.foo/schemas/config.yml
