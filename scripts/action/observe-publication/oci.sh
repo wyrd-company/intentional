@@ -9,14 +9,23 @@
 
 repository="$INPUT_REGISTRY/$INTENTIONAL_DESTINATION"
 mkdir -p "$INTENTIONAL_WORK"
+clean_client="$INTENTIONAL_WORK/clean"
+rm -rf "$clean_client"
+mkdir -p "$clean_client"
+export DOCKER_CONFIG=$clean_client
 aliases_file="$INTENTIONAL_WORK/aliases.yml"
 metadata_file="$INTENTIONAL_WORK/metadata.yml"
 provenance_file="$INTENTIONAL_WORK/provenance.yml"
 : > "$aliases_file"
 : > "$metadata_file"
 : > "$provenance_file"
-published=$(crane digest "$repository:$INTENTIONAL_VERSION")
-index=$(crane manifest "$repository@$published")
+if ! published=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
+  || ! index=$(crane manifest "$repository@$published" 2>/dev/null); then
+  printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
+    "$repository" "$INTENTIONAL_VERSION" >&2
+  observe_state pending
+  exit 0
+fi
 
 if [[ "$INTENTIONAL_PACKAGER_ID" == buildx ]]; then
   layout="$INTENTIONAL_WORK/layout"
@@ -150,11 +159,10 @@ for component in $INPUT_COMPONENTS; do
   fi
 done
 
-clean_client="$INTENTIONAL_WORK/clean"
 rm -rf "$clean_client"
 mkdir -p "$clean_client"
-if ! retrieved=$(DOCKER_CONFIG="$clean_client" crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
-  || ! DOCKER_CONFIG="$clean_client" crane manifest "$repository@$retrieved" \
+if ! retrieved=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
+  || ! crane manifest "$repository@$retrieved" \
     > "$clean_client/subject.json" 2>/dev/null; then
   printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
     "$repository" "$INTENTIONAL_VERSION" >&2

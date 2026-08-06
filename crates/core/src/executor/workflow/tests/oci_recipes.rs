@@ -1207,9 +1207,10 @@ fi
         fn refuses_a_public_retrieval_that_resolved_another_subject() {
             let recipe = Recipe::new("oci-public-drift", DOCKERHUB_JOB);
             let outcome = recipe.run_with_drift("1.2.3", "public");
-            assert!(
-                !outcome.status.success(),
-                "a consumer path resolving another subject fails the publication"
+            assert_eq!(
+                outcome.observation().state,
+                ObservationState::Conflict,
+                "a consumer path resolving another subject is refused by verification"
             );
         }
 
@@ -1720,16 +1721,20 @@ fi
             assert_eq!(retrieval.digest, outcome.index_digest);
             assert_eq!(retrieval.client, "crane");
             let stores = outcome.retrieval_stores();
-            let clean = stores
-                .iter()
-                .filter(|store| store.contains("clean-client"))
-                .collect::<Vec<_>>();
             assert_eq!(
-                clean.len(),
+                stores.iter().filter(|store| *store == "inherited").count(),
                 1,
-                "one retrieval is performed as a clean client: {stores:?}"
+                "only the inline publisher reads under its write credential: {stores:?}"
             );
-            let store = std::fs::read_dir(clean[0])
+            assert!(
+                stores.len() > 1
+                    && stores
+                        .iter()
+                        .skip(1)
+                        .all(|store| store.contains("clean-client")),
+                "every observer read uses the isolated credential store: {stores:?}"
+            );
+            let store = std::fs::read_dir(&stores[1])
                 .expect("the clean credential store exists")
                 .map(|entry| {
                     entry

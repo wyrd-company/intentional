@@ -77,9 +77,6 @@ pub(super) struct RecipeSteps {
     /// Consumer retrieval isolated from publish authority when required.
     pub retrieval: Option<String>,
     /// Inputs the portable verification Action needs to perform readback.
-    ///
-    /// An empty block means the repository-local recipe still writes the
-    /// observation itself while adapter families move independently.
     pub observation_inputs: String,
 }
 

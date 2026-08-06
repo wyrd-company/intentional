@@ -24,7 +24,7 @@ inputs:
     required: false
     default: ""
   observation:
-    description: "Publication-observation document this Action writes and verifies"
+    description: "Publication-observation document this Action verifies and, when credential-free, writes"
     required: true
   output:
     description: "File the schema-backed publisher evidence fragment is written to"

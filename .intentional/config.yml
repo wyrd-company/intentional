@@ -44,7 +44,7 @@ discovery:
       evidence-digest: sha256:5108fe4c95aa4c8e69719ffcaeba52647fc6ac4b4069a55a8f491e55429b2089
     - detector: github-action
       path: actions/verify-publication/action.yml
-      evidence-digest: sha256:17358156a189deee423ae5d1aedc7c2d2f32ae3e89b9b570c2a0dedee2327e93
+      evidence-digest: sha256:a6916a6bd419b9c73dbce2538af768dcf4bf5fd660ed56e4447d6c27c97fa811
     - detector: github-action
       path: actions/verify-release-tag/action.yml
       evidence-digest: sha256:91c078816a56b864a5b4404fe77fc6088e8cfc9b8384feaab43041992dbee54a
