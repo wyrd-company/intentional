@@ -184,11 +184,17 @@ release-units:
 
     /// Catalog entries workflow derivation refuses rather than deriving steps for.
     ///
-    /// The complement of [`derived_recipes`] over the same catalog, extracted
-    /// through the same predicate. A caller comparing the two against
-    /// [`catalog`] proves no entry falls outside both, which is the only way an
-    /// entry can reach neither the reach assertion nor the refusal assertion and
-    /// so be covered by nothing.
+    /// The complement of [`derived_recipes`] over the same catalog, through the
+    /// negation of the same predicate. That the two sets sum to [`catalog`] is
+    /// therefore a property of how these helpers are written rather than
+    /// anything about derivation: it holds for any predicate and survives every
+    /// change to `recipe_is_derived`. Do not read a length comparison between
+    /// them as coverage.
+    ///
+    /// What this is for is naming the set a caller must account for. A recipe
+    /// that stops deriving appears here, and a caller comparing this set against
+    /// the recipes it has refusal coverage for learns that it now has an
+    /// uncovered one.
     #[must_use]
     pub fn underived_recipes() -> Vec<Recipe> {
         catalog()
