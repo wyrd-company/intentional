@@ -3861,7 +3861,7 @@ exit 0
     /// agree with itself while the emitted command did something else.
     fn selected(subject: &Path, deliverables: &str, consumed: &str) -> Vec<String> {
         let script = format!(
-            "find \"$1\" -maxdepth 1 -type f {deliverables} {consumed} -print0 | sort -z | xargs -0 -n1 basename"
+            "find \"$1\" -maxdepth 1 -type f {deliverables} {consumed} -print0 | LC_ALL=C sort -z | xargs -0 -n1 basename"
         );
         let output = std::process::Command::new("bash")
             .args(["-c", &script, "selection", &subject.display().to_string()])
