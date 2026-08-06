@@ -42,6 +42,19 @@ for asset in intentional-linux-x86_64.tar.gz intentional-linux-arm64.tar.gz; do
   fi
 done
 
+installer_adapter="$root/actions/install.sh"
+# The adapter must preserve these expressions for its own runtime.
+# shellcheck disable=SC2016
+installer_delegate='exec "$SCRIPT_DIR/../scripts/action/install-intentional.sh" "$@"'
+if [[ "$(grep -Fxc "$installer_delegate" "$installer_adapter" || true)" != "1" ]]; then
+  echo "actions/install.sh does not delegate exactly once to the canonical installer" >&2
+  exit 1
+fi
+if grep -Eq 'intentional-linux-|SHA256SUMS|curl[[:space:]]' "$installer_adapter"; then
+  echo "actions/install.sh contains a second installer implementation" >&2
+  exit 1
+fi
+
 assert_archive_layout() {
   local artifact="$1"
   local format="$2"

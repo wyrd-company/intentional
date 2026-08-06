@@ -4,7 +4,9 @@
 # Usage: install-intentional.sh <version|latest>
 #
 # The archive is verified against the published SHA256SUMS before it is used,
-# so a compromised download cannot introduce an unverified release binary.
+# so a truncated or corrupted transfer cannot become the installed binary.
+# The checksum and archive share one release channel; this is an integrity
+# check, not an independent defence against that channel being compromised.
 set -euo pipefail
 
 REQUESTED_VERSION="${1:?requested intentional version}"

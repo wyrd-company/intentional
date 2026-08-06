@@ -14,6 +14,104 @@ fn write_executable(path: &std::path::Path, contents: &str) {
         .expect("executable stub permissions");
 }
 
+/// The shipped Action installer must stop before extracting an archive whose
+/// bytes disagree with the release checksum it downloaded.
+#[test]
+fn action_installer_refuses_a_tampered_release_archive_at_its_checksum_guard() {
+    let temporary = tempfile::tempdir().expect("temporary Action installer root");
+    let root = temporary.path();
+    let bin = root.join("bin");
+    let payload = root.join("payload");
+    fs::create_dir_all(&bin).expect("stub directory");
+    fs::create_dir_all(&payload).expect("payload directory");
+
+    let architecture = Command::new("uname")
+        .arg("-m")
+        .output()
+        .expect("read runner architecture");
+    assert!(architecture.status.success(), "uname succeeds");
+    let asset = match String::from_utf8(architecture.stdout)
+        .expect("architecture is text")
+        .trim()
+    {
+        "x86_64" => "intentional-linux-x86_64.tar.gz",
+        "aarch64" | "arm64" => "intentional-linux-arm64.tar.gz",
+        other => panic!("the shipped Action supports the test architecture {other}"),
+    };
+    let archive_root = asset.trim_end_matches(".tar.gz");
+    let archive_directory = payload.join(archive_root);
+    fs::create_dir_all(&archive_directory).expect("archive directory");
+    write_executable(
+        &archive_directory.join("intentional"),
+        "#!/usr/bin/env bash\nexit 0\n",
+    );
+    let archive = root.join(asset);
+    let packed = Command::new("tar")
+        .args(["-czf"])
+        .arg(&archive)
+        .args(["-C"])
+        .arg(&payload)
+        .arg(archive_root)
+        .status()
+        .expect("create valid archive");
+    assert!(packed.success(), "the tampered fixture remains extractable");
+
+    let checksums = root.join("SHA256SUMS");
+    fs::write(
+        &checksums,
+        format!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  {asset}\n"),
+    )
+    .expect("write a well-formed checksum for different bytes");
+    write_executable(
+        &bin.join("curl"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+output=""
+while (($#)); do
+  if [[ "$1" == "--output" ]]; then
+    output="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+if [[ "$output" == */SHA256SUMS ]]; then
+  cp "$INSTALLER_CHECKSUM_FIXTURE" "$output"
+else
+  cp "$INSTALLER_ARCHIVE_FIXTURE" "$output"
+fi
+"#,
+    );
+
+    let github_path = root.join("github-path");
+    fs::write(&github_path, "").expect("GitHub path file");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = Command::new("bash")
+        .arg("../../scripts/action/install-intentional.sh")
+        .arg("1.2.3")
+        .env("PATH", path)
+        .env("RUNNER_TEMP", root.join("runner"))
+        .env("GITHUB_PATH", github_path)
+        .env("INSTALLER_ARCHIVE_FIXTURE", &archive)
+        .env("INSTALLER_CHECKSUM_FIXTURE", &checksums)
+        .output()
+        .expect("execute shipped Action installer");
+    assert!(
+        !output.status.success(),
+        "a valid but checksum-mismatched archive is refused"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Checksum verification failed"),
+        "the archive dies at the checksum comparison:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn pinned_gnu_task_executes_shared_all_target_and_doctest_contracts() {
     let taskfile = fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
