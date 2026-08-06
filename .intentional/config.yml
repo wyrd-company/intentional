@@ -50,7 +50,7 @@ discovery:
       evidence-digest: sha256:91c078816a56b864a5b4404fe77fc6088e8cfc9b8384feaab43041992dbee54a
     - detector: docker-image
       path: scripts/ci/cargo-homebrew-bsdtar.Dockerfile
-      evidence-digest: sha256:6498260de06bcb37bcc832d0315df475153b3e4367dec32bc5c7987ebbd43e35
+      evidence-digest: sha256:7bb823604353572c3efab7333ab745fc3bdcc008df187324377526b3b6c5f314
     - detector: npm-package
       path: crates/core/tests/fixtures/ecosystems/package.json
       evidence-digest: sha256:afa191b447a065141db78ba646e99b81e111434cad86ff49e4952b83ed478956
