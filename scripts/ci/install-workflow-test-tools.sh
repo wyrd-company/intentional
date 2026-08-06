@@ -127,6 +127,7 @@ RUSTC_WRAPPER=$destination/pinned-gnu-rustc-wrapper
 GNU_BUILD_GIT_VERSION=$GNU_BUILD_GIT_VERSION
 GNU_BUILD_BASH_VERSION=$GNU_BUILD_BASH_VERSION
 GNU_CROSS_TEST_ARGUMENTS=$GNU_CROSS_TEST_ARGUMENTS
+GNU_CROSS_DOC_TEST_ARGUMENTS=$GNU_CROSS_DOC_TEST_ARGUMENTS
 EOF
 
 write_shell_assignment() {
@@ -146,6 +147,7 @@ write_shell_assignment() {
   write_shell_assignment GNU_BUILD_GIT_VERSION "$GNU_BUILD_GIT_VERSION"
   write_shell_assignment GNU_BUILD_BASH_VERSION "$GNU_BUILD_BASH_VERSION"
   write_shell_assignment GNU_CROSS_TEST_ARGUMENTS "$GNU_CROSS_TEST_ARGUMENTS"
+  write_shell_assignment GNU_CROSS_DOC_TEST_ARGUMENTS "$GNU_CROSS_DOC_TEST_ARGUMENTS"
 } > "$destination/workflow-test-tools.sh"
 
 "$destination/actionlint" -version

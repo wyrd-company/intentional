@@ -61,9 +61,11 @@ tasks:
         cross_bin="$(command -v cross)"
         PATH="$(dirname "$cross_bin"):$PATH"
         set +a
-        # Shared baseline is an argument list.
+        # Shared baseline owns the all-target and doc-test argument lists.
         # shellcheck disable=SC2086
         cross test $GNU_CROSS_TEST_ARGUMENTS
+        # shellcheck disable=SC2086
+        cross test $GNU_CROSS_DOC_TEST_ARGUMENTS
 
   npm:test:
     desc: Test the public npm launcher and its exact package contents
