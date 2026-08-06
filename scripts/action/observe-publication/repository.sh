@@ -41,7 +41,7 @@ read_homebrew() {
   test "${#formulas[@]}" -gt 0
   rm -rf "$INTENTIONAL_WORK"
   git clone --quiet --depth 1 \
-    "https://x-access-token:${INPUT_REGISTRY_TOKEN}@github.com/${INTENTIONAL_DESTINATION}.git" \
+    "https://github.com/${INTENTIONAL_DESTINATION}.git" \
     "$INTENTIONAL_WORK" || return 1
   for formula in "${formulas[@]}"; do
     relative=${formula#"$generated/"}
@@ -54,16 +54,8 @@ read_aur() {
   local srcinfo="$INTENTIONAL_SUBJECT/aur/$INTENTIONAL_DESTINATION.srcinfo"
   test -f "$pkgbuild"
   test -f "$srcinfo"
-  install -d -m 700 "$HOME/.ssh"
-  printf '%s\n' "$INPUT_REGISTRY_TOKEN" > "$HOME/.ssh/intentional-observe-aur"
-  chmod 600 "$HOME/.ssh/intentional-observe-aur"
-  ssh-keyscan -t ed25519 aur.archlinux.org > "$INTENTIONAL_WORK-host-key"
-  test "$(ssh-keygen -l -f "$INTENTIONAL_WORK-host-key" | cut -d' ' -f2)" \
-    = "SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
-  cat "$INTENTIONAL_WORK-host-key" >> "$HOME/.ssh/known_hosts"
-  export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/intentional-observe-aur -o IdentitiesOnly=yes"
   rm -rf "$INTENTIONAL_WORK"
-  git clone --quiet "ssh://aur@aur.archlinux.org/${INTENTIONAL_DESTINATION}.git" \
+  git clone --quiet "https://aur.archlinux.org/${INTENTIONAL_DESTINATION}.git" \
     "$INTENTIONAL_WORK" || return 1
   cmp --silent "$pkgbuild" "$INTENTIONAL_WORK/PKGBUILD" || return 1
   cmp --silent "$srcinfo" "$INTENTIONAL_WORK/.SRCINFO" || return 1

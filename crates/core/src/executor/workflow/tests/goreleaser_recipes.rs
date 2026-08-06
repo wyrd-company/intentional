@@ -272,9 +272,7 @@ aur:
                 }
                 let readback_work = step
                     .env
-                    .iter()
-                    .find(|(name, _)| name.ends_with("_WORK"))
-                    .map(|(_, value)| value)
+                    .get("INPUT_WORK")
                     .expect("readback work directory");
                 command
                     .env("FAKE_READBACK_WORK", readback_work)
@@ -284,7 +282,7 @@ aur:
                 let subject = self.temp.join("intentional_subject/bytes");
                 if subject.is_dir() {
                     command.env(
-                        "INTENTIONAL_SUBJECT_DIGEST",
+                        "INPUT_SUBJECT_DIGEST",
                         subject_digest
                             .map(ToOwned::to_owned)
                             .unwrap_or_else(|| digest_tree(&subject)),
@@ -344,7 +342,7 @@ aur:
 
             fn observation(&self) -> PublicationObservation {
                 let step = publish_step(self.workspace.root(), &self.job, &self.temp);
-                PublicationObservation::load(Path::new(&step.env["INTENTIONAL_OBSERVATION"]))
+                PublicationObservation::load(Path::new(&step.env["INPUT_OBSERVATION"]))
                     .expect("the repository readback writes a loadable observation")
             }
         }
@@ -409,7 +407,12 @@ aur:
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            let verify = steps
+            let retrieval = job.replacen("intentional_publish_", "intentional_retrieve_", 1);
+            let observer_steps = document["jobs"]
+                .get(&retrieval)
+                .and_then(|retrieval_job| retrieval_job["steps"].as_sequence())
+                .unwrap_or(steps);
+            let verify = observer_steps
                 .iter()
                 .find(|candidate| {
                     candidate["uses"]
@@ -515,7 +518,7 @@ fi
 arguments=()
 for argument in "$@"; do
   case "${argument}" in
-    https://*@github.com/*|ssh://aur@aur.archlinux.org/*)
+    https://*@github.com/*|https://github.com/*|ssh://aur@aur.archlinux.org/*|https://aur.archlinux.org/*)
       name="${argument##*/}"
       resolved="${FAKE_REMOTES}/${name%.git}"
       # The Arch User Repository registers a package on its initial push, so a

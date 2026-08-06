@@ -10,15 +10,18 @@
 INTENTIONAL_REGISTRY=$INPUT_REGISTRY
 INTENTIONAL_SCOPE=$INPUT_SCOPE
 
-ALLOWED=("PATH=${PATH:-}" "HOME=${HOME:-}" "RUSTUP_HOME=${RUSTUP_HOME:-}")
+auth_home="$INTENTIONAL_WORK/auth-home"
+ALLOWED=("PATH=${PATH:-}" "HOME=$auth_home" "RUSTUP_HOME=${RUSTUP_HOME:-}")
 SCOPE_ARGUMENTS=()
 if [[ -n "$INTENTIONAL_SCOPE" ]]; then
   SCOPE_ARGUMENTS=("--${INTENTIONAL_SCOPE}:registry=${INTENTIONAL_REGISTRY}")
 fi
-if [[ -n "$INPUT_REGISTRY_TOKEN" ]]; then
+if [[ -n "${INPUT_REGISTRY_TOKEN:-}" ]]; then
   host=${INTENTIONAL_REGISTRY#https://}
-  npm config set "//${host%/}/:_authToken=${INPUT_REGISTRY_TOKEN}"
+  mkdir -p "$auth_home"
+  printf '//%s/:_authToken=%s\n' "${host%/}" "$INPUT_REGISTRY_TOKEN" > "$auth_home/.npmrc"
 fi
+trap 'rm -rf "$auth_home"' EXIT
 
 npm_holds() {
   mkdir -p "$INTENTIONAL_WORK/probe"
@@ -63,7 +66,7 @@ if [[ "$INTENTIONAL_RETRIEVAL_MODE" == public ]]; then
   : > "$INTENTIONAL_WORK/clean/npmrc"
 else
   host=${INTENTIONAL_REGISTRY#https://}
-  printf '//%s/:_authToken=%s\n' "${host%/}" "$INPUT_REGISTRY_TOKEN" \
+  printf '//%s/:_authToken=%s\n' "${host%/}" "${INPUT_REGISTRY_TOKEN:-}" \
     > "$INTENTIONAL_WORK/clean/npmrc"
 fi
 (

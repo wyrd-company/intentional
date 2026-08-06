@@ -63,6 +63,7 @@ pub(super) fn publication_jobs(
         subject_identity: &subject.identity,
         build_job: &format!("{}build_{}", namespaces.job, subject.slug),
         working_directory: &subject.working_directory,
+        observation: &observation,
         root,
         work: &format!("${{{{ runner.temp }}}}/{}readback/{slug}", namespaces.job),
         delivery_namespace: &delivery_namespace,

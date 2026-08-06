@@ -60,6 +60,8 @@ pub(super) struct RecipeContext<'a> {
     pub build_job: &'a str,
     /// Workspace-relative directory that owns the packager invocation.
     pub working_directory: &'a str,
+    /// Observation path shared by the recipe writer and portable verifier.
+    pub observation: &'a str,
     /// Scratch directory the readback and retrieval work in.
     pub work: &'a str,
     /// Configured job prefix converted to kebab case for delivery inputs.
@@ -341,6 +343,60 @@ fn portable_observation_inputs(
     )
 }
 
+const OBSERVER_COMMON: &str =
+    include_str!("../../../../scripts/action/observe-publication/common.sh");
+const NPM_OBSERVER: &str = include_str!("../../../../scripts/action/observe-publication/npm.sh");
+const CARGO_OBSERVER: &str =
+    include_str!("../../../../scripts/action/observe-publication/cargo.sh");
+
+fn indent_observer(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| format!("      {line}\n"))
+        .collect()
+}
+
+/// Emit an authenticated observer inline without handing its credential to an Action.
+fn inline_observation_step(
+    context: &RecipeContext<'_>,
+    kind: &str,
+    packager: &str,
+    client: &str,
+    destination: &str,
+    adapter: &str,
+    adapter_environment: &str,
+) -> String {
+    let maintained = ConsistencyPolicy::maintained(context.publication.publisher);
+    let policy = context
+        .publication
+        .observation_deadline
+        .map_or(maintained, |seconds| maintained.with_deadline(seconds));
+    format!(
+        "  - name: {}\n    env:\n      INPUT_RELEASE_UNIT: {}\n      INPUT_PACKAGE: {}\n      INPUT_PUBLISHER: {}\n      INPUT_TARGET: {}\n      INPUT_OBSERVATION: {}\n      INPUT_SUBJECT: ${{{{ runner.temp }}}}/@JOB@subject/bytes\n      INPUT_SUBJECT_KIND: {}\n      INPUT_SUBJECT_IDENTITY: {}\n      INPUT_SUBJECT_VERSION: ${{{{ needs.{}.outputs.version }}}}\n      INPUT_SUBJECT_DIGEST: ${{{{ needs.{}.outputs.digest }}}}\n      INPUT_PACKAGER: {}\n      INPUT_DESTINATION: {}\n      INPUT_RETRIEVAL_MODE: {}\n      INPUT_RETRIEVAL_CLIENT: {}\n      INPUT_WORK: {}\n      INPUT_INTERVAL: {}\n      INPUT_BACKOFF: {}\n      INPUT_MAXIMUM_INTERVAL: {}\n      INPUT_DEADLINE: {}\n{adapter_environment}    run: |\n{}{}",
+        scalar(&format!("Read {} back and retrieve it", context.publication.identity())),
+        scalar(&context.publication.release_unit),
+        scalar(&context.publication.package),
+        scalar(context.publication.publisher.as_str()),
+        scalar(&context.publication.target),
+        scalar(context.observation),
+        scalar(kind),
+        scalar(context.subject_identity),
+        context.build_job,
+        context.build_job,
+        scalar(packager),
+        scalar(destination),
+        scalar(context.publication.retrieval.as_str()),
+        scalar(client),
+        scalar(context.work),
+        scalar(&policy.interval.as_secs().to_string()),
+        scalar(&policy.backoff.to_string()),
+        scalar(&policy.maximum_interval.as_secs().to_string()),
+        scalar(&policy.deadline.as_secs().to_string()),
+        indent_observer(OBSERVER_COMMON),
+        indent_observer(adapter),
+    )
+}
+
 /// Promote a sealed descriptor into its configured repository destination.
 ///
 /// GoReleaser and Cargo archive builds seal their repository descriptors before
@@ -414,23 +470,16 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps
         scalar(&format!("Publish {identity}")),
         subject_environment(context),
     );
-    let mut observation_inputs = portable_observation_inputs(
+    let observation_inputs = portable_observation_inputs(
         context,
         kind,
         context.publication.packager.as_str(),
         "git",
         &destination,
     );
-    observation_inputs.push_str(match context.publication.publisher {
-        PublisherKind::Homebrew => {
-            "      registry-token: ${{ steps.@JOB@destination_token.outputs.token }}\n"
-        }
-        PublisherKind::Aur => "      registry-token: ${{ secrets.@ENVVAR@AUR_KEY }}\n",
-        publisher => unreachable!("{publisher} is refused above"),
-    });
     Ok(RecipeSteps {
         publisher,
-        retrieval: None,
+        retrieval: (context.publication.publisher == PublisherKind::Homebrew).then(String::new),
         observation_inputs,
     })
 }
@@ -1020,15 +1069,30 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         scalar(registry),
         scalar(scope),
     ));
-    if !primary {
-        observation_inputs.push_str("      registry-token: ${{ secrets.GITHUB_TOKEN }}\n");
-    }
+    let retrieval = if primary {
+        String::new()
+    } else {
+        observation_inputs.push_str("      observe: 'false'\n");
+        inline_observation_step(
+            context,
+            "npm-package",
+            "npm",
+            "npm",
+            observed_destination,
+            NPM_OBSERVER,
+            &format!(
+                "      INPUT_REGISTRY: {}\n      INPUT_SCOPE: {}\n      INPUT_REGISTRY_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}\n",
+                scalar(registry),
+                scalar(scope),
+            ),
+        )
+    };
     Ok(RecipeSteps {
         publisher: steps,
-        // GitHub Package Registry retrieval keeps its read token out of the
-        // publisher job. The portable Action performs the retrieval itself,
-        // so an empty body still selects the narrower retrieval-job template.
-        retrieval: (!primary).then(String::new),
+        // Every observer is downstream from publication. GitHub Package
+        // Registry cannot be read anonymously, so its observation stays in
+        // repository-visible shell and only its completed document reaches the Action.
+        retrieval: if primary { None } else { Some(retrieval) },
         observation_inputs,
     })
 }
@@ -1327,7 +1391,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let mut observation_inputs =
         portable_observation_inputs(context, "cargo-crate", "cargo", "cargo", registry);
     observation_inputs.push_str(&format!(
-        "      registry: {}\n      registry-name: {}\n      registry-index-variable: {}\n      registry-index-url: {}\n      carried-token: {}\n",
+        "      registry: {}\n      registry-name: {}\n      registry-index-variable: {}\n      registry-index-url: {}\n",
         scalar(registry),
         scalar(&registry_name),
         scalar(&if crates_io {
@@ -1339,11 +1403,35 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
             )
         }),
         scalar(&index),
-        scalar(&carried),
     ));
+    let retrieval = if crates_io {
+        String::new()
+    } else {
+        observation_inputs.push_str("      observe: 'false'\n");
+        inline_observation_step(
+            context,
+            "cargo-crate",
+            "cargo",
+            "cargo",
+            registry,
+            CARGO_OBSERVER,
+            &format!(
+                "      INPUT_REGISTRY: {}\n      INPUT_REGISTRY_NAME: {}\n      INPUT_REGISTRY_INDEX_VARIABLE: {}\n      INPUT_REGISTRY_INDEX_URL: {}\n      INPUT_CARRIED_TOKEN: {}\n      {}: ${{{{ secrets.{bootstrap} }}}}\n",
+                scalar(registry),
+                scalar(&registry_name),
+                scalar(&format!(
+                    "CARGO_REGISTRIES_{}_INDEX",
+                    environment_fragment(&registry_name)
+                )),
+                scalar(&index),
+                scalar(&carried),
+                carried,
+            ),
+        )
+    };
     Ok(RecipeSteps {
         publisher: steps,
-        retrieval: None,
+        retrieval: if crates_io { None } else { Some(retrieval) },
         observation_inputs,
     })
 }
@@ -1647,32 +1735,14 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
         "crane",
         &observed_destination,
     );
-    let (registry, user, token) = match publication.target.as_str() {
-        "dockerhub" => {
-            let target = context.unit.oci().and_then(|oci| oci.dockerhub.as_ref());
-            let username = target
-                .and_then(|target| target.username_var.as_deref())
-                .unwrap_or(DOCKERHUB_USERNAME_VAR);
-            let secret = target
-                .and_then(|target| target.token_secret.as_deref())
-                .unwrap_or(DOCKERHUB_TOKEN_SECRET);
-            (
-                "docker.io".to_owned(),
-                format!("${{{{ vars.{username} }}}}"),
-                format!("${{{{ secrets.{secret} }}}}"),
-            )
-        }
-        _ => (
-            "ghcr.io".to_owned(),
-            "${{ github.actor }}".to_owned(),
-            "${{ secrets.GITHUB_TOKEN }}".to_owned(),
-        ),
+    let registry = if publication.target == "dockerhub" {
+        "docker.io"
+    } else {
+        "ghcr.io"
     };
     observation_inputs.push_str(&format!(
-        "      registry: {}\n      registry-user: {}\n      registry-token: {}\n      components: {}\n",
+        "      registry: {}\n      components: {}\n",
         scalar(&registry),
-        scalar(&user),
-        scalar(&token),
         scalar(&components),
     ));
     Ok(RecipeSteps {

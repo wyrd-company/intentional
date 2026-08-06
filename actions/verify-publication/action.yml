@@ -79,20 +79,16 @@ inputs:
   deadline:
     description: "Destination-observation deadline in seconds"
     required: true
+  observe:
+    description: "Whether this credential-free Action writes the observation before verifying it"
+    required: false
+    default: "true"
   registry:
     description: "Registry endpoint or Cargo registry identity"
     required: false
     default: ""
   scope:
     description: "npm package scope, including the leading at sign"
-    required: false
-    default: ""
-  registry-token:
-    description: "Short-lived read credential required by an authenticated consumer path"
-    required: false
-    default: ""
-  registry-user:
-    description: "Registry user paired with the short-lived read credential"
     required: false
     default: ""
   registry-name:
@@ -105,10 +101,6 @@ inputs:
     default: ""
   registry-index-url:
     description: "Cargo alternate-registry index URL"
-    required: false
-    default: ""
-  carried-token:
-    description: "Cargo environment key naming an authenticated retrieval token"
     required: false
     default: ""
   public-key-url:
@@ -154,6 +146,7 @@ runs:
 
     - name: Observe the publication
       id: observe
+      if: inputs.observe == 'true'
       shell: bash
       env:
         INPUT_RELEASE_UNIT: ${{ inputs.release-unit }}
@@ -177,12 +170,9 @@ runs:
         INPUT_DEADLINE: ${{ inputs.deadline }}
         INPUT_REGISTRY: ${{ inputs.registry }}
         INPUT_SCOPE: ${{ inputs.scope }}
-        INPUT_REGISTRY_TOKEN: ${{ inputs.registry-token }}
-        INPUT_REGISTRY_USER: ${{ inputs.registry-user }}
         INPUT_REGISTRY_NAME: ${{ inputs.registry-name }}
         INPUT_REGISTRY_INDEX_VARIABLE: ${{ inputs.registry-index-variable }}
         INPUT_REGISTRY_INDEX_URL: ${{ inputs.registry-index-url }}
-        INPUT_CARRIED_TOKEN: ${{ inputs.carried-token }}
         INPUT_PUBLIC_KEY_URL: ${{ inputs.public-key-url }}
         INPUT_APT_SUITE: ${{ inputs.apt-suite }}
         INPUT_APT_COMPONENT: ${{ inputs.apt-component }}

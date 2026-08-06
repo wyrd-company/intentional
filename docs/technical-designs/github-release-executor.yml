@@ -514,9 +514,9 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured four-publication mix is 1,562 lines. Adding its Cargo-shaped AUR
-    publication produces a five-publication mix of 1,748 lines. Both fit. The
-    five-publication fixture plus 252 repository-owned lines lands exactly on
+    configured four-publication mix is 1,583 lines. Adding its Cargo-shaped AUR
+    publication produces a five-publication mix of 1,768 lines. Both fit. The
+    five-publication fixture plus 232 repository-owned lines lands exactly on
     the bound, and one more repository-owned line is refused.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
@@ -771,12 +771,13 @@ proposed-design:
     run the steps their maintained recipe derives. Registry authentication,
     publication, signing, and repository mutation are inline workflow shell so
     their authority-bearing commands stay visible at the point that grants
-    authority. The first-party `verify-publication` Action runs portable,
-    non-mutating destination readback and pre-closure consumer retrieval, writes
-    the publication observation, and invokes the binary that adjudicates it. A
-    destination client receives a read credential through an Action input when
-    anonymous readback cannot witness the configured retrieval contract. The
-    Action contains no publication or destination-mutation command.
+    authority. Where the destination permits credential-free retrieval, the
+    first-party `verify-publication` Action runs portable, non-mutating
+    destination readback and pre-closure consumer retrieval, writes the
+    publication observation, and invokes the binary that adjudicates it.
+    Credential-requiring readback remains inline and passes only its completed
+    observation to the Action. The Action contains no publication or
+    destination-mutation command and receives no publisher credential.
 
     GitHub Package Registry separates publication and retrieval
     into a downstream retrieval job. Its job-scoped `GITHUB_TOKEN` has
@@ -832,9 +833,9 @@ proposed-design:
     `intentional evidence assemble`.
 
   privileged-execution-boundary: >-
-    Intentional-owned reusable Actions perform portable non-mutating plumbing,
-    preparation, and destination observation. Repository-mutating, publishing,
-    signing, and OpenID
+    Intentional-owned reusable Actions perform credential-free plumbing,
+    preparation, and destination observation. Repository-mutating,
+    secret-bearing, and OpenID
     Connect-enabled commands are materialized in repository-local reserved
     jobs. Checkout disables persisted credentials and states its release-tag
     requirement explicitly rather than inheriting tags from an unrelated fetch
@@ -860,9 +861,8 @@ proposed-design:
     network inside the job that later mints repository-write authority. The
     install is required wherever the command runs, so it is the placement rather
     than the network dependency that is chosen here. Three properties bound it.
-    An Action that precedes a repository-authority transition receives no
-    repository credential and the job mints none until after the Action has
-    finished, so no repository token exists on the runner while Intentional's
+    The Action receives no credentials and the job mints none until after the
+    Action has finished, so no token exists on the runner while Intentional's
     own code is first fetched and executed. The installed archive is verified
     against its published checksum before use. The mutating step is a
     repository-local `run:` body that the Action never sees. What remains is

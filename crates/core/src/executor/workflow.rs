@@ -2521,6 +2521,11 @@ jobs:
         if name != "verify-publication" {
             return None;
         }
+        if step["with"]["observe"].as_str() == Some("false")
+            || step["with"]["observe"].as_bool() == Some(false)
+        {
+            return None;
+        }
         let path = action_document(&name);
         let document: Value = serde_yaml::from_str(
             &std::fs::read_to_string(&path).expect("verification Action readable"),
@@ -2554,16 +2559,7 @@ jobs:
                 .cloned()
                 .or_else(|| declared.get(&input_key)?.get("default").cloned())
                 .unwrap_or_else(|| Value::String(String::new()));
-            environment.insert(key.clone(), resolved.clone());
-            let input_name = key.as_str().expect("environment key");
-            if let Some(suffix) = input_name.strip_prefix("INPUT_") {
-                let legacy = if suffix == "SUBJECT_VERSION" {
-                    "INTENTIONAL_VERSION".to_owned()
-                } else {
-                    format!("INTENTIONAL_{suffix}")
-                };
-                environment.insert(Value::String(legacy), resolved);
-            }
+            environment.insert(key.clone(), resolved);
         }
         environment.insert(
             Value::String("GITHUB_ACTION_PATH".to_owned()),
@@ -2833,7 +2829,7 @@ jobs:
     // in crates/cli/tests/derived_workflows.rs holds the exact mint population.
     #[test]
     fn resolves_every_intentional_action_before_any_credential_is_minted() {
-        let workspace = workspace("workflow-credential-order");
+        let workspace = repository_scale_workspace("workflow-credential-order");
         for role in WorkflowRole::ALL {
             converge(workspace.root(), role);
             for (id, steps) in managed_steps(workspace.root(), role) {
@@ -3171,7 +3167,12 @@ release-units:
 
         let mut joined = 0_usize;
         for publisher in job_ids(&jobs, "intentional_publish_") {
-            let steps = job_steps(&jobs, &publisher);
+            let retrieval = publisher.replacen("intentional_publish_", "intentional_retrieve_", 1);
+            let steps = if jobs.contains_key(Value::String(retrieval.clone())) {
+                job_steps(&jobs, &retrieval)
+            } else {
+                job_steps(&jobs, &publisher)
+            };
             let verified = steps
                 .iter()
                 .find_map(|step| step["with"]["draft-handoff"].as_str())
@@ -4233,6 +4234,7 @@ exit 0
             subject_identity: "example-tool",
             build_job: "intentional_build_component_goreleaser",
             working_directory: "component",
+            observation: "observation.yml",
             work: "readback",
             delivery_namespace: "intentional",
             root: workspace.root(),
@@ -7250,7 +7252,10 @@ release-units:
                 "publish_rtwzlf_package_oci_ghcr",
                 "publish_wpdklc_package_aur_primary",
                 "publish_wpdklc_package_homebrew_primary",
+                "retrieve_qhwzru_rust_cargo_primary",
+                "retrieve_qhwzru_rust_homebrew_primary",
                 "retrieve_qhwzru_node_npm_github",
+                "retrieve_wpdklc_package_homebrew_primary",
                 "tag_after_publication",
                 "tag_before_publication",
                 // Task 179's deliverable-upload job comes into the sweep here
@@ -9073,7 +9078,7 @@ release-units:
         );
         assert_eq!(
             output.lines().count(),
-            1_562,
+            1_583,
             "the real four-publication fixture pins the measured line count"
         );
         assert!(
@@ -9109,7 +9114,7 @@ release-units:
         let output = comparison.output.expect("expanded comparison has output");
         assert_eq!(
             output.lines().count(),
-            1_748,
+            1_768,
             "the five-publication fixture pins the measured line count"
         );
 

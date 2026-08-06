@@ -1667,10 +1667,10 @@ fi
             command.env(key.as_str().expect("key"), value);
         }
         command
-            .env("INTENTIONAL_INTERVAL", "2")
-            .env("INTENTIONAL_BACKOFF", "2")
-            .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
-            .env("INTENTIONAL_DEADLINE", "7");
+            .env("INPUT_INTERVAL", "2")
+            .env("INPUT_BACKOFF", "2")
+            .env("INPUT_MAXIMUM_INTERVAL", "3")
+            .env("INPUT_DEADLINE", "7");
         let output = command.output().expect("readback runs");
         let succeeded = output.status.success();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -2005,10 +2005,10 @@ fi
             command.env(key.as_str().expect("key"), value);
         }
         command
-            .env("INTENTIONAL_INTERVAL", "2")
-            .env("INTENTIONAL_BACKOFF", "2")
-            .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
-            .env("INTENTIONAL_DEADLINE", "7");
+            .env("INPUT_INTERVAL", "2")
+            .env("INPUT_BACKOFF", "2")
+            .env("INPUT_MAXIMUM_INTERVAL", "3")
+            .env("INPUT_DEADLINE", "7");
         let succeeded = command.status().expect("readback runs").success();
         let observation = step["env"]
             .as_mapping()

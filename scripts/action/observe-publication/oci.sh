@@ -15,9 +15,6 @@ provenance_file="$INTENTIONAL_WORK/provenance.yml"
 : > "$aliases_file"
 : > "$metadata_file"
 : > "$provenance_file"
-printf '%s' "$INPUT_REGISTRY_TOKEN" | crane auth login "$INPUT_REGISTRY" \
-  --username "$INPUT_REGISTRY_USER" --password-stdin
-
 published=$(crane digest "$repository:$INTENTIONAL_VERSION")
 index=$(crane manifest "$repository@$published")
 

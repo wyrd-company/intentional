@@ -102,7 +102,34 @@
     // it is asserted for the observation too.
     #[test]
     fn binds_every_observation_a_publisher_verifies_to_the_step_that_writes_it() {
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/action/observe-publication");
+        let dispatcher = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/action/observe-publication.sh"),
+        )
+        .expect("observer dispatcher");
         for publisher in PublisherKind::ALL {
+            let (arm, adapter) = match publisher {
+                PublisherKind::Npm => ("npm", "npm"),
+                PublisherKind::Cargo => ("cargo", "cargo"),
+                PublisherKind::Homebrew | PublisherKind::Aur => ("homebrew|aur", "repository"),
+                PublisherKind::Rpm | PublisherKind::Apt => ("rpm|apt", "system-package"),
+                PublisherKind::Oci => ("oci", "oci"),
+            };
+            assert!(
+                dispatcher.contains(&format!(
+                    "{arm}) source \"$GITHUB_ACTION_PATH/../../scripts/action/observe-publication/{adapter}.sh\""
+                )),
+                "the {publisher} input selects {adapter}.sh"
+            );
+            let adapter_body =
+                std::fs::read_to_string(scripts.join(format!("{adapter}.sh")))
+                    .expect("observer adapter");
+            assert!(
+                adapter_body.contains("observe_present"),
+                "the {publisher} adapter writes a present observation"
+            );
             let workspace = match publisher {
                 PublisherKind::Npm => npm_workspace("workflow-observation-npm"),
                 PublisherKind::Cargo => workspace("workflow-observation-cargo"),
@@ -160,12 +187,16 @@
                     .expect("the publisher verifies its publication");
                 let writers = steps
                     .iter()
-                    .filter_map(portable_observer_step)
                     .filter(|step| {
-                        step["env"]["INPUT_OBSERVATION"].as_str() == Some(verified.as_str())
-                            && step["run"]
-                                .as_str()
-                                .is_some_and(|body| body.contains("observe-publication.sh"))
+                        let candidate = portable_observer_step(step).unwrap_or_else(|| (*step).clone());
+                        candidate["env"]["INPUT_OBSERVATION"].as_str()
+                            == Some(verified.as_str())
+                            && candidate["env"]["INPUT_PUBLISHER"].as_str()
+                                == Some(publisher.as_str())
+                            && candidate["run"].as_str().is_some_and(|body| {
+                                body.contains("observe-publication.sh")
+                                    || body.contains("observe_present")
+                            })
                     })
                     .count();
                 assert_eq!(
@@ -198,20 +229,27 @@
             converge(workspace.root(), WorkflowRole::Publish);
             let readback = publisher_steps(workspace.root(), PRIMARY_TARGET)
                 .into_iter()
-                .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+                .find(|step| step_environment(step).contains_key("INPUT_OBSERVATION"))
                 .expect("the recipe writes an observation");
             let environment = step_environment(&readback);
             let body = std::fs::read_to_string(
                 Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../scripts/action/observe-publication.sh"),
+                    .join("../../scripts/action/observe-publication/common.sh"),
             )
-            .expect("portable observer script");
-            let helpers = observation_helpers(&body);
+            .expect("portable observer common script");
 
             let temporary = workspace.root().join("runner");
             std::fs::create_dir_all(&temporary).expect("runner directory");
-            let resolve =
-                |value: &str| value.replace("${{ runner.temp }}", &temporary.display().to_string());
+            let resolve = |value: &str| {
+                if value.contains(".outputs.version }}") {
+                    "1.0.0".to_owned()
+                } else if value.contains(".outputs.digest }}") {
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        .to_owned()
+                } else {
+                    value.replace("${{ runner.temp }}", &temporary.display().to_string())
+                }
+            };
             // Everything the adapter script computes before it writes a present
             // observation reaches the helper as a shell variable, so the
             // document can be driven without reaching a registry. These stand
@@ -242,7 +280,7 @@
                 (ObservationState::Present, "observe_present"),
             ] {
                 let mut command = std::process::Command::new("bash");
-                command.arg("-c").arg(format!("{helpers}\n{call}"));
+                command.arg("-c").arg(format!("{body}\n{call}"));
                 for (key, value) in &environment {
                     command.env(key, resolve(value));
                 }
@@ -256,7 +294,7 @@
                     String::from_utf8_lossy(&output.stderr)
                 );
 
-                let path = resolve(&environment["INTENTIONAL_OBSERVATION"]);
+                let path = resolve(&environment["INPUT_OBSERVATION"]);
                 let observed =
                     crate::publication::observation::PublicationObservation::load(Path::new(&path))
                         .unwrap_or_else(|error| {
@@ -309,25 +347,6 @@
                 );
             }
         }
-    }
-
-    /// The observation helpers one derived recipe script defines, and nothing else.
-    ///
-    /// Running any more of the script would reach a registry. The block ends at
-    /// the last helper's closing brace, which the re-emitted block scalar puts
-    /// in the first column; slicing at the first one instead would stop after
-    /// the header helper and cover neither state.
-    fn observation_helpers(body: &str) -> &str {
-        let start = body
-            .find("observe_header() {")
-            .expect("the observer defines its header helper");
-        let present = body
-            .find("observe_present() {")
-            .expect("the recipe defines the present-observation helper");
-        let end = body[present..]
-            .find("\n}\n")
-            .expect("the present-observation helper is a shell function");
-        &body[start..present + end + "\n}\n".len()]
     }
 
     // Everything the observation says about the release comes from the build
@@ -581,7 +600,7 @@
             .expect("the publisher has a readback step");
         let environment = step_environment(&readback);
         let temporary = workspace.root().join("unresolved-readback");
-        let subject = environment["INTENTIONAL_SUBJECT"]
+        let subject = environment["INPUT_SUBJECT"]
             .replace("${{ runner.temp }}", &temporary.display().to_string());
         std::fs::create_dir_all(&subject).expect("subject directory");
         std::fs::write(
@@ -594,13 +613,13 @@
             &readback,
             &stubs,
             &temporary,
-            &[("INTENTIONAL_DEADLINE", "0")],
+            &[("INPUT_DEADLINE", "0")],
         );
         assert!(
             succeeded,
             "an unresolved {client} destination is reported through an observation; calls: {calls}"
         );
-        let observation = environment["INTENTIONAL_OBSERVATION"]
+        let observation = environment["INPUT_OBSERVATION"]
             .replace("${{ runner.temp }}", &temporary.display().to_string());
         crate::publication::observation::PublicationObservation::load(Path::new(&observation))
             .unwrap_or_else(|error| panic!("the {client} readback wrote an observation: {error}"))
@@ -689,7 +708,7 @@
             .iter()
             .filter_map(|step| {
                 step_environment(step)
-                    .get("INTENTIONAL_RETRIEVAL_MODE")
+                    .get("INPUT_RETRIEVAL_MODE")
                     .cloned()
             })
             .collect::<Vec<_>>();
@@ -727,11 +746,11 @@
         for (target, credentialed) in [(PRIMARY_TARGET, false), ("github", true)] {
             let readback = publisher_steps(workspace.root(), target)
                 .into_iter()
-                .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+                .find(|step| step_environment(step).contains_key("INPUT_OBSERVATION"))
                 .expect("the recipe reads its destination back");
             let environment = step_environment(&readback);
             assert_eq!(
-                environment["INTENTIONAL_RETRIEVAL_MODE"] == "authenticated-registry",
+                environment["INPUT_RETRIEVAL_MODE"] == "authenticated-registry",
                 credentialed,
                 "the {target} destination records the identity it retrieves under"
             );
@@ -749,7 +768,9 @@
                 "the {target} step writes the configuration its retrieval reads"
             );
             assert_eq!(
-                !environment["INPUT_REGISTRY_TOKEN"].is_empty(),
+                environment
+                    .get("INPUT_REGISTRY_TOKEN")
+                    .is_some_and(|token| !token.is_empty()),
                 credentialed,
                 "the {target} observer receives a credential only where the recorded mode says one was used"
             );
@@ -832,12 +853,12 @@
         assert!(
             publishing
                 .iter()
-                .all(|step| !step_environment(step).contains_key("INTENTIONAL_OBSERVATION")),
+                .all(|step| !step_environment(step).contains_key("INPUT_OBSERVATION")),
             "the write-scoped job carries no consumer retrieval"
         );
         let readback = retrieving
             .iter()
-            .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+            .find(|step| step_environment(step).contains_key("INPUT_OBSERVATION"))
             .expect("the read-scoped job performs consumer retrieval");
         let environment = step_environment(readback);
         assert_eq!(
@@ -847,8 +868,8 @@
             Some("${{ secrets.GITHUB_TOKEN }}")
         );
         for (variable, output) in [
-            ("INTENTIONAL_VERSION", "version"),
-            ("INTENTIONAL_SUBJECT_DIGEST", "digest"),
+            ("INPUT_SUBJECT_VERSION", "version"),
+            ("INPUT_SUBJECT_DIGEST", "digest"),
         ] {
             assert_eq!(
                 environment.get(variable).map(String::as_str),
@@ -870,11 +891,11 @@
             "intentional_retrieve_component_package_npm_github",
         )
         .into_iter()
-        .find(|step| step_environment(step).contains_key("INTENTIONAL_OBSERVATION"))
+        .find(|step| step_environment(step).contains_key("INPUT_OBSERVATION"))
         .expect("the retrieval job reads the package back");
         let environment = step_environment(&readback);
         let temporary = workspace.root().join("github-package-reader");
-        let subject = environment["INTENTIONAL_SUBJECT"]
+        let subject = environment["INPUT_SUBJECT"]
             .replace("${{ runner.temp }}", &temporary.display().to_string());
         std::fs::create_dir_all(&subject).expect("subject directory");
         let tarball = Path::new(&subject).join("subject.tgz");
@@ -893,9 +914,9 @@
             &temporary,
             &[
                 ("INPUT_REGISTRY_TOKEN", "read-job-token"),
-                ("INTENTIONAL_VERSION", "1.0.0"),
-                ("INTENTIONAL_SUBJECT_DIGEST", "unused-build-digest"),
-                ("INTENTIONAL_DEADLINE", "0"),
+                ("INPUT_SUBJECT_VERSION", "1.0.0"),
+                ("INPUT_SUBJECT_DIGEST", "unused-build-digest"),
+                ("INPUT_DEADLINE", "0"),
             ],
         );
         assert!(
@@ -1385,7 +1406,7 @@
                 .iter()
                 .filter_map(|step| {
                     step_environment(step)
-                        .get("INTENTIONAL_RETRIEVAL_MODE")
+                        .get("INPUT_RETRIEVAL_MODE")
                         .cloned()
                 })
                 .collect::<Vec<_>>();
@@ -1415,16 +1436,16 @@
             crate::publication::observation::ConsistencyPolicy::maintained(PublisherKind::Cargo);
         let readback = publisher_steps(workspace.root(), "primary")
             .into_iter()
-            .find(|step| step_environment(step).contains_key("INTENTIONAL_DEADLINE"))
+            .find(|step| step_environment(step).contains_key("INPUT_DEADLINE"))
             .expect("the recipe reads its destination back under a bound");
         let environment = step_environment(&readback);
         for (variable, seconds) in [
-            ("INTENTIONAL_INTERVAL", policy.interval.as_secs()),
+            ("INPUT_INTERVAL", policy.interval.as_secs()),
             (
-                "INTENTIONAL_MAXIMUM_INTERVAL",
+                "INPUT_MAXIMUM_INTERVAL",
                 policy.maximum_interval.as_secs(),
             ),
-            ("INTENTIONAL_DEADLINE", policy.deadline.as_secs()),
+            ("INPUT_DEADLINE", policy.deadline.as_secs()),
         ] {
             assert_eq!(
                 environment.get(variable).map(String::as_str),
@@ -1433,7 +1454,7 @@
             );
         }
         assert_eq!(
-            environment.get("INTENTIONAL_BACKOFF").map(String::as_str),
+            environment.get("INPUT_BACKOFF").map(String::as_str),
             Some(policy.backoff.to_string().as_str())
         );
     }
