@@ -750,6 +750,19 @@ fn unparsable(error: Error) -> WorkflowDiagnostic {
 
 /// Expand shorthand trigger syntax into the equivalent mapping.
 fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Value> {
+    let adds_push_tag_filter = contract
+        .triggers
+        .iter()
+        .any(|(path, _)| path.as_slice() == ["on", "push", "tags"]);
+    if let Value::Mapping(current) = current {
+        let push = Value::String("push".to_owned());
+        if adds_push_tag_filter && current.get(&push).is_some_and(Value::is_null) {
+            let mut mapping = current.clone();
+            mapping.insert(push, all_branch_pushes());
+            return Some(Value::Mapping(mapping));
+        }
+        return None;
+    }
     let names = match current {
         Value::String(name) => vec![name.clone()],
         Value::Sequence(names) => names
@@ -760,28 +773,27 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
     };
     let mut mapping = serde_yaml::Mapping::new();
     for name in names {
-        let value = if name == "push"
-            && contract
-                .triggers
-                .iter()
-                .any(|(path, _)| path.as_slice() == ["on", "push", "tags"])
-        {
+        let value = if name == "push" && adds_push_tag_filter {
             // `on: push` means every branch and tag push. Adding a `tags`
             // filter alone would silently remove every branch push, so spell
             // the shorthand's branch half explicitly before adding the owned
             // release-tag patterns.
-            let mut push = serde_yaml::Mapping::new();
-            push.insert(
-                Value::String("branches".to_owned()),
-                Value::Sequence(vec![Value::String("**".to_owned())]),
-            );
-            Value::Mapping(push)
+            all_branch_pushes()
         } else {
             Value::Null
         };
         mapping.insert(Value::String(name), value);
     }
     Some(Value::Mapping(mapping))
+}
+
+fn all_branch_pushes() -> Value {
+    let mut push = serde_yaml::Mapping::new();
+    push.insert(
+        Value::String("branches".to_owned()),
+        Value::Sequence(vec![Value::String("**".to_owned())]),
+    );
+    Value::Mapping(push)
 }
 
 /// The value a trigger entry needs, or `None` when the repository already satisfies it.
@@ -5707,6 +5719,35 @@ release-units:
                 .as_sequence()
                 .is_some_and(|tags| !tags.is_empty()),
             "the derived release-tag filter is still present"
+        );
+    }
+
+    #[test]
+    fn preserves_branch_pushes_from_null_mapping_when_publish_derivation_adds_tag_filters() {
+        let workspace = workspace("workflow-publish-null-push-mapping");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push:\n  workflow_dispatch:\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+
+        assert_eq!(
+            document["on"]["push"]["branches"].as_sequence(),
+            Some(&vec![Value::String("**".to_owned())]),
+            "a null push entry in a trigger mapping retains every branch push"
+        );
+        assert!(
+            document["on"]["push"]["tags"]
+                .as_sequence()
+                .is_some_and(|tags| !tags.is_empty()),
+            "the derived release-tag filter is still present"
+        );
+        assert!(
+            document["on"]["workflow_dispatch"].is_null(),
+            "the neighboring repository trigger survives normalization"
         );
     }
 
