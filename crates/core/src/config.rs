@@ -23,6 +23,12 @@ pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
 /// Current interpretation contract written by initialization.
 pub const CURRENT_CONTRACT: &str = "contract-2";
 
+/// Default pinned Cross image for Cargo/Homebrew Linux x86-64 archives.
+pub const DEFAULT_CARGO_HOMEBREW_LINUX_X86_64_CROSS_IMAGE: &str = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f";
+
+/// Default pinned Cross image for Cargo/Homebrew Linux Arm64 archives.
+pub const DEFAULT_CARGO_HOMEBREW_LINUX_ARM64_CROSS_IMAGE: &str = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c";
+
 /// Whether this binary can interpret a historical release document contract.
 pub fn supports_interpretation_contract(contract: &str) -> bool {
     matches!(contract, "contract-1" | "contract-2")
@@ -140,9 +146,41 @@ pub struct GithubConfig {
     /// Reserved job, step, and environment variable namespaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<ExecutorPrefix>,
+    /// Cargo archive settings for the maintained Homebrew route.
+    #[serde(default)]
+    pub cargo_homebrew: CargoHomebrewConfig,
     /// Optional publication targets explicitly declined during executor initialization.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub declined_publications: BTreeSet<String>,
+}
+
+/// Configurable Cross images for Cargo archives consumed by Homebrew.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct CargoHomebrewConfig {
+    /// Digest-pinned Cross image for Linux x86-64 archives.
+    #[serde(default = "default_cargo_homebrew_linux_x86_64_cross_image")]
+    pub linux_x86_64_cross_image: String,
+    /// Digest-pinned Cross image for Linux Arm64 archives.
+    #[serde(default = "default_cargo_homebrew_linux_arm64_cross_image")]
+    pub linux_arm64_cross_image: String,
+}
+
+impl Default for CargoHomebrewConfig {
+    fn default() -> Self {
+        Self {
+            linux_x86_64_cross_image: default_cargo_homebrew_linux_x86_64_cross_image(),
+            linux_arm64_cross_image: default_cargo_homebrew_linux_arm64_cross_image(),
+        }
+    }
+}
+
+fn default_cargo_homebrew_linux_x86_64_cross_image() -> String {
+    DEFAULT_CARGO_HOMEBREW_LINUX_X86_64_CROSS_IMAGE.to_owned()
+}
+
+fn default_cargo_homebrew_linux_arm64_cross_image() -> String {
+    DEFAULT_CARGO_HOMEBREW_LINUX_ARM64_CROSS_IMAGE.to_owned()
 }
 
 impl GithubConfig {
@@ -1004,6 +1042,14 @@ impl Config {
             return Ok(());
         };
         let namespaces = github.namespaces()?;
+        validate_digest_pinned_image(
+            &github.cargo_homebrew.linux_x86_64_cross_image,
+            "github cargo-homebrew linux-x86-64-cross-image",
+        )?;
+        validate_digest_pinned_image(
+            &github.cargo_homebrew.linux_arm64_cross_image,
+            "github cargo-homebrew linux-arm64-cross-image",
+        )?;
         for role in WorkflowRole::ALL {
             let workflow = github.workflow(role);
             validate_exact_discovery_path(&workflow.path, &format!("github {role} workflow path"))?;
@@ -1174,6 +1220,25 @@ impl Config {
         }
         Ok(())
     }
+}
+
+fn validate_digest_pinned_image(value: &str, description: &str) -> Result<()> {
+    let Some((repository, digest)) = value.split_once("@sha256:") else {
+        return Err(Error::Validation(format!(
+            "{description} must be pinned by sha256 digest"
+        )));
+    };
+    if repository.is_empty()
+        || digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(Error::Validation(format!(
+            "{description} must be an image reference followed by @sha256 and 64 lowercase hexadecimal digits"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn discovery_candidate_directory(detector: &str, path: &Path) -> PathBuf {
@@ -1730,6 +1795,33 @@ release-units:
         assert_eq!(
             config.release_units["library"].publishers(),
             vec![PublisherKind::Npm]
+        );
+    }
+
+    #[test]
+    fn cargo_homebrew_cross_images_survive_configuration_round_trip() {
+        let text = with_github(
+            "  cargo-homebrew:\n    linux-x86-64-cross-image: registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    linux-arm64-cross-image: registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+        );
+        let config = Config::from_yaml(&text).expect("Cargo Homebrew images parse");
+        let serialized = config.to_yaml().expect("configuration serializes");
+        assert!(serialized.contains("registry.invalid/toolchain/x86@sha256:aaaaaaaa"));
+        assert!(serialized.contains("registry.invalid/toolchain/arm@sha256:bbbbbbbb"));
+        assert_eq!(
+            Config::from_yaml(&serialized).expect("serialized configuration reparses"),
+            config
+        );
+    }
+
+    #[test]
+    fn cargo_homebrew_cross_images_must_be_digest_pinned() {
+        let text = with_github(
+            "  cargo-homebrew:\n    linux-x86-64-cross-image: registry.invalid/toolchain/x86:latest\n    linux-arm64-cross-image: registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+        );
+        let error = Config::from_yaml(&text).expect_err("mutable image tag rejected");
+        assert!(
+            error.to_string().contains("linux-x86-64-cross-image"),
+            "{error}"
         );
     }
 

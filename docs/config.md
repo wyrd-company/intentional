@@ -154,6 +154,9 @@ workflow's authority transition:
 ```yaml
 github:
   prefix: intentional
+  cargo-homebrew:
+    linux-x86-64-cross-image: registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    linux-arm64-cross-image: registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   workflows:
     release:
       path: .github/workflows/release.yml
@@ -170,6 +173,8 @@ github:
 | `path` | Yes | Exact workspace-relative workflow file used as the command default. |
 | `gates` | No | Repository-owned job ids the managed transition depends on. |
 | `prefix` | No | Reserved job, step, and environment variable namespaces. |
+| `cargo-homebrew.linux-x86-64-cross-image` | No | Digest-pinned Cross image for the Cargo/Homebrew Linux x86-64 archive. |
+| `cargo-homebrew.linux-arm64-cross-image` | No | Digest-pinned Cross image for the Cargo/Homebrew Linux Arm64 archive. |
 | `declined-publications` | No | Publication targets explicitly declined during executor initialization. |
 
 A scalar `prefix` normalizes to lower snake case for jobs and steps and to
@@ -178,6 +183,12 @@ members sets both namespaces independently. Intentional appends the separator
 and derives the protected release environment from the job namespace. The
 default reserves `intentional_`, `INTENTIONAL_`, and the `intentional-release`
 environment. A gate may not use the reserved job namespace.
+
+The Cargo/Homebrew image keys are independent. Omitting either key uses
+Intentional's pinned baseline for that target. Executor initialization writes
+both defaults when it first adds the `github` mapping. Image references must
+end in a lowercase Secure Hash Algorithm 256-bit (SHA-256) digest pin; mutable
+tags are rejected.
 
 Intentional's own configuration keeps its two workspace-versioned crates and
 npm launcher in one release unit. The unit has three packages and four

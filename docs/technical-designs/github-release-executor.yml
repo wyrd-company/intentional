@@ -323,7 +323,9 @@ proposed-design:
     GoReleaser-only entry point. A Rust crate with one binary selects the Cargo
     archive packager for Homebrew. That packager builds Linux x86-64 and Linux
     Arm64 through digest-pinned Cross 0.2.5 images and builds macOS Arm64 with
-    Cargo. It generates the formula from their digests,
+    Cargo. GitHub executor configuration may override each Linux Cross image
+    independently; omission uses Intentional's repository baseline for that
+    target. It generates the formula from their digests,
     and seals all four together before promotion. A Go application selects GoReleaser, a
     Dockerfile-backed runnable image selects its supported
     Buildx recipe, and a Dev Container Feature selects the Dev Container CLI.

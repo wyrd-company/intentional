@@ -74,7 +74,7 @@ release-units:
             (
                 "intentional_build_component_cargo_archive_linux_x86_64",
                 "intentional_archive-component_cargo_archive-linux_x86_64",
-                "${{ runner.temp }}/linux-x86_64.tar.gz",
+                "${{ runner.temp }}/linux-x86-64.tar.gz",
                 "cross",
                 "x86_64-unknown-linux-gnu",
                 Some("ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f"),
@@ -391,7 +391,7 @@ release-units:
             "generated platform build failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let archive = temporary.join("linux-x86_64.tar.gz");
+        let archive = temporary.join("linux-x86-64.tar.gz");
         let listing = std::process::Command::new("tar")
             .args([
                 "--full-time",
@@ -430,6 +430,55 @@ release-units:
             String::from_utf8_lossy(&output.stdout),
             "sample-tool 1.2.3\n"
         );
+    }
+
+    #[test]
+    fn rust_homebrew_binds_each_configured_cross_image_to_its_linux_target() {
+        let workspace = rust_homebrew_workspace(
+            "rust-homebrew-cross-images",
+            "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\ndescription = \"Sample command line tool\"\nlicense = \"MIT\"\n",
+        );
+        workspace.write("component/src/main.rs", "fn main() {}\n");
+        let config_path = workspace.root().join(".intentional/config.yml");
+        let config = std::fs::read_to_string(&config_path).expect("fixture config");
+        std::fs::write(
+            &config_path,
+            config.replace(
+                "github:\n",
+                "github:\n  cargo-homebrew:\n    linux-x86-64-cross-image: registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    linux-arm64-cross-image: registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+            ),
+        )
+        .expect("configure Cross images");
+
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        for (job, target, image) in [
+            (
+                "intentional_build_component_cargo_archive_linux_x86_64",
+                "x86_64-unknown-linux-gnu",
+                "registry.invalid/toolchain/x86@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            (
+                "intentional_build_component_cargo_archive_linux_arm64",
+                "aarch64-unknown-linux-gnu",
+                "registry.invalid/toolchain/arm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+        ] {
+            let build = job_steps(&jobs, job)
+                .into_iter()
+                .find(|step| step["run"].is_string())
+                .expect("platform build body");
+            assert_eq!(
+                build["env"]["INTENTIONAL_CROSS_IMAGE"].as_str(),
+                Some(image),
+                "{target} consumes its configured image"
+            );
+            let body = build["run"].as_str().expect("build body");
+            assert!(
+                body.contains(&format!("'[target.%s]\\nimage = \\\"%s\\\"\\n' {target}")),
+                "{target} writes its configured image to CROSS_CONFIG:\n{body}"
+            );
+        }
     }
 
     #[test]

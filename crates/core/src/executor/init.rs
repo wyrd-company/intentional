@@ -6,9 +6,10 @@
 //! Executor initialization plan creation, resumption, and application.
 
 use crate::config::{
-    Config, ExcludedPathReceipt, GithubConfig, GithubWorkflow, GithubWorkflows, ManagedPathReceipt,
-    NpmAdditionalTargets, NpmGithubTarget, NpmPublisher, OciPublisher, PackageConfig,
-    ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW, DEFAULT_RELEASE_WORKFLOW,
+    CargoHomebrewConfig, Config, ExcludedPathReceipt, GithubConfig, GithubWorkflow,
+    GithubWorkflows, ManagedPathReceipt, NpmAdditionalTargets, NpmGithubTarget, NpmPublisher,
+    OciPublisher, PackageConfig, ReleaseUnitConfig, CONFIG_PATH, DEFAULT_PUBLISH_WORKFLOW,
+    DEFAULT_RELEASE_WORKFLOW,
 };
 use crate::error::{Error, Result};
 use crate::executor::recipe::{
@@ -471,6 +472,7 @@ fn default_github() -> GithubConfig {
             },
         },
         prefix: None,
+        cargo_homebrew: CargoHomebrewConfig::default(),
         declined_publications: BTreeSet::new(),
     }
 }
@@ -1572,6 +1574,14 @@ release-units:
         assert_eq!(
             github.workflows.release.path,
             PathBuf::from(DEFAULT_RELEASE_WORKFLOW)
+        );
+        assert_eq!(
+            github.cargo_homebrew.linux_x86_64_cross_image,
+            "ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f"
+        );
+        assert_eq!(
+            github.cargo_homebrew.linux_arm64_cross_image,
+            "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"
         );
         let component = &config.release_units["component"];
         assert!(component.npm().is_some());

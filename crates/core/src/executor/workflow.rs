@@ -55,7 +55,7 @@ mod build;
 #[path = "workflow/publishers.rs"]
 mod publishers;
 
-use build::build_environment;
+use build::{build_environment, cargo_archive_platforms};
 use publishers::publication_jobs;
 
 /// Step id every managed job carries, independently of the configurable prefix.
@@ -883,7 +883,12 @@ fn publish_contract(
         build_jobs.push(id.clone());
         let mut needs = vec![verify.clone()];
         if subject.packager == Packager::CargoArchive {
-            for platform in cargo_archive_platforms(subject, namespaces, &verify) {
+            let cargo_homebrew = &config
+                .github
+                .as_ref()
+                .expect("validated publish configuration has GitHub settings")
+                .cargo_homebrew;
+            for platform in cargo_archive_platforms(subject, namespaces, &verify, cargo_homebrew) {
                 needs.push(platform.0.clone());
                 jobs.push(platform);
             }
@@ -1579,79 +1584,6 @@ fn build_job(
             ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
         ],
     )
-}
-
-/// Platform builds whose archives become one sealed Homebrew subject.
-fn cargo_archive_platforms(
-    subject: &DistinctSubject,
-    namespaces: &PrefixNamespaces,
-    verify: &str,
-) -> Vec<(String, std::result::Result<Value, WorkflowDiagnostic>)> {
-    [
-        (
-            "linux_x86_64",
-            "ubuntu-latest",
-            "linux-x86_64.tar.gz",
-            "x86_64-unknown-linux-gnu",
-            "cross",
-            "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
-            "      @ENVVAR@CROSS_CONFIG: ${{ runner.temp }}/intentional-cross.toml\n      @ENVVAR@CROSS_IMAGE: ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f\n",
-            "      printf '[target.%s]\\nimage = \\\"%s\\\"\\n' @TARGET@ \"${@ENVVAR@CROSS_IMAGE}\" > \"${@ENVVAR@CROSS_CONFIG}\"\n      export CROSS_CONFIG=\"${@ENVVAR@CROSS_CONFIG}\"\n",
-        ),
-        (
-            "linux_arm64",
-            "ubuntu-latest",
-            "linux-arm64.tar.gz",
-            "aarch64-unknown-linux-gnu",
-            "cross",
-            "  - name: Install the pinned Cross packager\n    uses: @CROSS_INSTALL@\n    with:\n      tool: cross@0.2.5\n",
-            "      @ENVVAR@CROSS_CONFIG: ${{ runner.temp }}/intentional-cross.toml\n      @ENVVAR@CROSS_IMAGE: ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c\n",
-            "      printf '[target.%s]\\nimage = \\\"%s\\\"\\n' @TARGET@ \"${@ENVVAR@CROSS_IMAGE}\" > \"${@ENVVAR@CROSS_CONFIG}\"\n      export CROSS_CONFIG=\"${@ENVVAR@CROSS_CONFIG}\"\n",
-        ),
-        (
-            "macos_arm64",
-            "macos-14",
-            "macos-arm64.tar.gz",
-            "aarch64-apple-darwin",
-            "cargo",
-            "",
-            "",
-            "",
-        ),
-    ]
-    .into_iter()
-    .map(|(
-        platform,
-        runner,
-        archive,
-        target,
-        build_tool,
-        platform_toolchain,
-        platform_env,
-        build_setup,
-    )| {
-        let id = format!("{}build_{}_{}", namespaces.job, subject.slug, platform);
-        let rendered = job(
-            templates::PUBLISH_CARGO_ARCHIVE_PLATFORM_JOB,
-            namespaces,
-            &[
-                ("@NEEDS@", &render_list(&[verify.to_owned()])),
-                ("@RUNNER@", runner),
-                ("@PLATFORM@", platform),
-                ("@WORKING_DIRECTORY@", &scalar(&subject.working_directory)),
-                ("@SUBJECT_IDENTITY@", &scalar(&subject.identity)),
-                ("@ARCHIVE@", archive),
-                ("@SLUG@", &subject.slug),
-                ("@TARGET@", target),
-                ("@BUILD_TOOL@", build_tool),
-                ("@PLATFORM_TOOLCHAIN@", platform_toolchain),
-                ("@PLATFORM_ENV@", platform_env),
-                ("@BUILD_SETUP@", build_setup),
-            ],
-        );
-        (id, rendered)
-    })
-    .collect()
 }
 
 /// One draft-dependent publication and the subject whose assets it consumes.
