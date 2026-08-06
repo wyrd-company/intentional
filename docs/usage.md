@@ -437,10 +437,9 @@ so the publisher job can mint a token scoped to that repository alone.
 
 ## Publish to a registry for the first time
 
-Configuration has two levels. A **publisher** is what you declare on a package —
-`npm:`, `cargo:`, `homebrew:`, `aur:`, `rpm:`, `apt:`, `oci:`. A **destination**
-is where one publication lands. `npm:` and `oci:` each offer two; the other five
-offer one apiece, for 9 in total.
+Configuration has two levels. A **publisher** is what you declare on a package.
+A **destination** is where one publication lands. Intentional supports 9
+destinations in total.
 
 Each destination authenticates its own way. `Prefixed` marks a name that changes
 with a configured `envvar` prefix.
@@ -451,9 +450,9 @@ with a configured `envvar` prefix.
 | `npm:` | GitHub Package Registry <!-- intentional-target: github --> | the job's `GITHUB_TOKEN` | n/a |
 | `cargo:` | crates.io, or the one alternate registry `Cargo.toml` names <!-- intentional-target: primary --> | `CARGO_REGISTRY_TOKEN` | no |
 | `homebrew:` | your tap <!-- intentional-target: primary --> | minted from the App private key | n/a |
-| `aur:` | the AUR <!-- intentional-target: primary --> | `INTENTIONAL_AUR_KEY`, an SSH private key | **yes** |
 | `rpm:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
 | `apt:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
+| `aur:` | the AUR <!-- intentional-target: primary --> | `INTENTIONAL_AUR_KEY`, an SSH private key | **yes** |
 | `oci:` | Docker Hub <!-- intentional-target: dockerhub --> | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | no |
 | `oci:` | GHCR <!-- intentional-target: ghcr --> | the job's `GITHUB_TOKEN` and actor | n/a |
 

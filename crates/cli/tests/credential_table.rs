@@ -4,7 +4,6 @@
 // ---
 
 use intentional_core::executor::fixture::configured_target_identities;
-use std::collections::BTreeSet;
 
 #[test]
 fn credential_table_covers_every_configured_destination() {
@@ -38,15 +37,19 @@ fn credential_table_covers_every_configured_destination() {
                 .unwrap_or_else(|| panic!("credential row has a target identity: {line}"));
             (publisher, target)
         })
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
     let expected = configured_target_identities()
         .into_iter()
         .map(|(publisher, target)| (publisher.to_string(), target))
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
+    let normalized_section = section.split_whitespace().collect::<Vec<_>>().join(" ");
 
     assert_eq!(rows, expected, "credential rows match configured targets");
     assert!(
-        section.contains(&format!("for {} in total.", expected.len())),
+        normalized_section.contains(&format!(
+            "Intentional supports {} destinations in total.",
+            expected.len()
+        )),
         "credential destination count is derived from configured targets"
     );
 }

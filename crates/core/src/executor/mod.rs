@@ -210,7 +210,7 @@ release-units:
     /// `configured_targets` remains the only code that answers which configured
     /// destinations that declaration produces.
     #[must_use]
-    pub fn configured_target_identities() -> BTreeSet<(PublisherKind, String)> {
+    pub fn configured_target_identities() -> Vec<(PublisherKind, String)> {
         let recipes = catalog().iter().collect::<Vec<_>>();
         let source = format!(
             "contract: contract-2\ngithub:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\nrelease-units:\n  component:\n    path: component\n{}    tags:\n      release: {{ role: primary, template: 'component@{{version}}' }}\n",
@@ -219,8 +219,6 @@ release-units:
         let config = crate::config::Config::from_yaml(&source).expect("catalog config is valid");
         let package = &config.release_units["component"].packages["package"];
         super::recipe::configured_target_identities(package)
-            .into_iter()
-            .collect()
     }
 
     /// Workspace whose release units are generated from the maintained catalog.
@@ -283,13 +281,41 @@ release-units:
                         configured.push_str("    npm: {}\n");
                     }
                 }
-                PublisherKind::Cargo => configured.push_str("    cargo: {}\n"),
+                PublisherKind::Cargo => {
+                    assert!(
+                        targets.len() == 1 && targets.contains(PRIMARY_TARGET),
+                        "the cargo fixture knows every catalog target: {targets:?}"
+                    );
+                    configured.push_str("    cargo: {}\n");
+                }
                 PublisherKind::Homebrew => {
+                    assert!(
+                        targets.len() == 1 && targets.contains(PRIMARY_TARGET),
+                        "the Homebrew fixture knows every catalog target: {targets:?}"
+                    );
                     configured.push_str("    homebrew: { repository: sample-owner/sample-tap }\n")
                 }
-                PublisherKind::Rpm => configured.push_str("    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n"),
-                PublisherKind::Apt => configured.push_str("    apt:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/apt\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      suite: current\n      component: main\n      with: {}\n"),
-                PublisherKind::Aur => configured.push_str("    aur: {}\n"),
+                PublisherKind::Rpm => {
+                    assert!(
+                        targets.len() == 1 && targets.contains(PRIMARY_TARGET),
+                        "the RPM fixture knows every catalog target: {targets:?}"
+                    );
+                    configured.push_str("    rpm:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n");
+                }
+                PublisherKind::Apt => {
+                    assert!(
+                        targets.len() == 1 && targets.contains(PRIMARY_TARGET),
+                        "the APT fixture knows every catalog target: {targets:?}"
+                    );
+                    configured.push_str("    apt:\n      delivery-action: .github/actions/deliver\n      base-url: https://packages.invalid/apt\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      suite: current\n      component: main\n      with: {}\n");
+                }
+                PublisherKind::Aur => {
+                    assert!(
+                        targets.len() == 1 && targets.contains(PRIMARY_TARGET),
+                        "the AUR fixture knows every catalog target: {targets:?}"
+                    );
+                    configured.push_str("    aur: {}\n");
+                }
                 PublisherKind::Oci => {
                     configured.push_str("    oci:\n");
                     for target in targets {
