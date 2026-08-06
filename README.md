@@ -147,8 +147,8 @@ unit contains three publication packages: `core` at `crates/core` publishes
 with Cargo, `cli` at `crates/cli` publishes with Cargo and Homebrew, and
 `launcher` at `npm` publishes with npm. The Homebrew route builds Linux x86-64,
 Linux Arm64, and macOS Arm64 archives once, seals them with the generated
-formula, and
-promotes that formula to the configured tap without rebuilding either archive.
+formula, and promotes that formula to the configured tap without rebuilding
+each archive.
 
 When init reconciles an existing configuration, current non-development npm
 manifest dependencies own edges between npm release units. Removing such a

@@ -290,28 +290,13 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
         Packager::Cargo => cargo_steps(context)
             .map(RecipeSteps::together)
             .map_err(underivable),
-        Packager::CargoArchive => cargo_archive_homebrew_steps(context),
-        Packager::GoReleaser => goreleaser_steps(context).map(RecipeSteps::together),
+        Packager::CargoArchive | Packager::GoReleaser => {
+            descriptor_promotion_steps(context).map(RecipeSteps::together)
+        }
         Packager::Buildx | Packager::DevContainerCli => {
             oci_steps(context).map(RecipeSteps::together)
         }
     }
-}
-
-/// Promote the formula generated beside the archive the Cargo build sealed.
-///
-/// The publisher receives the build artifact and copies its formula into the
-/// configured tap. It never invokes Cargo, so the archive referenced by the
-/// formula is the archive inventoried on the draft Release rather than a second
-/// build whose digest could not agree with the seal.
-fn cargo_archive_homebrew_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
-    debug_assert_eq!(context.publication.publisher, PublisherKind::Homebrew);
-    homebrew_formula_steps(context).map(RecipeSteps::together)
-}
-
-/// Promote a sealed formula into its configured Homebrew tap.
-fn homebrew_formula_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
-    goreleaser_steps(context)
 }
 
 impl RecipeSteps {
@@ -324,22 +309,12 @@ impl RecipeSteps {
     }
 }
 
-/// Credential and promotion steps one GoReleaser destination requires.
+/// Promote a sealed descriptor into its configured repository destination.
 ///
-/// GoReleaser's open-source distribution has no command that publishes a `dist/`
-/// tree a previous invocation built, so a maintained Go recipe cannot reach its
-/// destination by running the packager again: a second `goreleaser release`
-/// rebuilds from source and produces a subject whose digest cannot equal the one
-/// the release sealed. These steps therefore promote the file the build already
-/// produced, as an ordinary repository-local operation against the destination's
-/// own repository.
-///
-/// Each maintained Go recipe promotes into a different repository under a
-/// different authority, so what varies between them is which repository receives
-/// the file and which credential reaches it. Everything else — the sealed
-/// subject, the release tag the commit message carries, the committer identity —
-/// is the part every Go destination shares.
-fn goreleaser_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
+/// GoReleaser and Cargo archive builds seal their repository descriptors before
+/// publication. Promotion copies those files into the configured destination;
+/// it does not invoke either packager and cannot change the sealed subject.
+fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, StepsRefusal> {
     let identity = context.publication.identity();
     // RPM and APT distribute the deliverable itself rather than a descriptor
     // that points at one, so the managed upload job places it on the draft
