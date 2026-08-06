@@ -1857,25 +1857,18 @@ release-units:
         );
     }
 
-    /// Attempts the racing harness makes after its positive control succeeds.
+    /// Run one raced probe after proving it can see a held publication.
     ///
-    /// The bound caps the test's runtime. It is not a sample size the result
-    /// depends on: the rendezvous opens the removal window on every attempt, so
-    /// one observation settles the question.
-    const RACING_ATTEMPTS: usize = 20_000;
-
-    /// Run one probe against a file another thread keeps taking away.
-    ///
-    /// The competitor publishes and withdraws the file continuously, so the
-    /// window between the probe's existence check and its read is reopened for
-    /// every attempt. Any error the probe returns is the defect: the file was
-    /// there, then it was not, which is the interleaving a concurrently dropped
-    /// fixture workspace produces.
+    /// The competitor publishes and withdraws the file through rendezvous with
+    /// the probing thread. The raced probe passes its existence check while the
+    /// file is there, then reads after it is not, which is the interleaving a
+    /// concurrently dropped fixture workspace produces. Any error the probe
+    /// returns is the defect.
     ///
     /// Absence is also what a competitor that never publishes produces. The
     /// publication rendezvous distinguishes the two: before racing, the probe
     /// has to observe a publication while the competitor holds it in place.
-    /// Every raced attempt then starts from another confirmed publication. A
+    /// The raced probe then starts from another confirmed publication. A
     /// test-only hook releases its withdrawal after the existence check enters
     /// `probed_file_text` and waits for the removal before the read, so scheduler
     /// speed cannot move the competitor outside the check-to-read window.
@@ -1960,14 +1953,11 @@ release-units:
                         .expect("the file is withdrawn before the probe reads it");
                 })));
             });
-            for _ in 0..RACING_ATTEMPTS {
-                publication
-                    .recv()
-                    .expect("the competitor publishes before each raced probe");
-                if let Err(error) = probe(&root, relative) {
-                    failure = Some(error);
-                    break;
-                }
+            publication
+                .recv()
+                .expect("the competitor publishes before the raced probe");
+            if let Err(error) = probe(&root, relative) {
+                failure = Some(error);
             }
             PROBED_FILE_BEFORE_READ.with(|before_read| {
                 before_read.replace(None);
