@@ -5649,7 +5649,12 @@ case "$1" in
     esac
     ;;
   rev-parse) printf '%s\n' "${GIT_STUB_LOCAL_TAG}" ;;
-  push) printf 'unexpected push on recovery\n' >&2; exit 65 ;;
+  push)
+    if test "${GIT_STUB_PUSH}" != allow; then
+      printf 'unexpected push on recovery\n' >&2
+      exit 65
+    fi
+    ;;
 esac
 exit 0
 "#;
@@ -5662,6 +5667,7 @@ exit 0
             .setting("GIT_STUB_BRANCH", AUTHORITY_RELEASE)
             .setting("GIT_STUB_REMOTE_TAG", remote_tag)
             .setting("GIT_STUB_LOCAL_TAG", AUTHORITY_TAG_OBJECT)
+            .setting("GIT_STUB_PUSH", "refuse")
     }
 
     /// A `gh` stub that records its arguments and answers `release view` with
@@ -5825,6 +5831,31 @@ exit 0
             "the same rerun reaches draft recovery: {}\n{}",
             recovered.invocations,
             recovered.diagnostics
+        );
+    }
+
+    #[test]
+    fn first_authority_transition_atomically_pushes_the_release_and_tag() {
+        let workspace = workspace("workflow-authority-push-first");
+        converge(workspace.root(), WorkflowRole::Release);
+        let runner =
+            authority_rerun_runner("workflow-authority-push-first-runner", AUTHORITY_TAG_OBJECT)
+                .setting("GIT_STUB_BRANCH", AUTHORITY_SOURCE)
+                .setting("GIT_STUB_PUSH", "allow");
+        let (push, environment) = authority_push(workspace.root(), &runner);
+
+        let executed = runner.execute(&push, &environment);
+        assert!(
+            executed.succeeded,
+            "the accepted source advances atomically: {}",
+            executed.diagnostics
+        );
+        assert!(
+            executed.invocations.contains(&format!(
+                "git push --atomic origin {AUTHORITY_RELEASE}:refs/heads/main refs/tags/{CLOSURE_TAG}"
+            )),
+            "the first run publishes R and its verified tag together: {}",
+            executed.invocations
         );
     }
 
