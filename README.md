@@ -159,8 +159,9 @@ their index coordinates. Their Cargo package declares at least one author for
 the downstream package maintainer field. An Arch User Repository (AUR) package
 declares
 `aur: {}` and provides the `INTENTIONAL_AUR_KEY` repository secret. Intentional
-derives the command identity, creates the configured native packages or
-descriptors in the aggregate build, and never rebuilds source in a publisher
+derives the command identity, marks the generated `-bin` descriptor as providing
+and conflicting with its base package, creates the configured native packages
+or descriptors in the aggregate build, and never rebuilds source in a publisher
 job.
 
 When init reconciles an existing configuration, current non-development npm

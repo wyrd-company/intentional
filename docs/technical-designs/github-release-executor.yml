@@ -368,6 +368,13 @@ proposed-design:
     declared authors; absent authors refuse those routes. Publisher jobs promote
     or deliver those outputs and never rebuild an archive.
 
+    The Cargo AUR destination is `<binary>-bin`. Descriptor generation removes
+    that final suffix to obtain the non-empty base package identity, then writes
+    it as both `provides` and `conflicts` in the generated `PKGBUILD` and
+    `.SRCINFO`. A destination without a removable `-bin` suffix cannot identify
+    the source-built counterpart and is refused rather than emitted with an
+    unrelated or empty identity.
+
     Capability derivation consumes the same detector evidence produced by
     `intentional init`. It filters that lossless evidence to the declared package
     path and resolves the native artifact there; it does not probe a list of

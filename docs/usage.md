@@ -281,7 +281,10 @@ For AUR, declare `aur: {}` and provide `INTENTIONAL_AUR_KEY` as a repository
 secret. Intentional derives `<binary>-bin` as the package repository, generates
 `PKGBUILD` and `.SRCINFO` from the two Linux archive digests, pins the AUR host
 key, and pushes only those sealed descriptors. A new package is created by its
-initial push.
+initial push. The generated `-bin` package provides and conflicts with
+`<binary>`, the non-empty base identity obtained by removing the final `-bin`
+suffix. Descriptor generation fails when the destination does not have that
+form.
 
 ## Reconcile the managed workflow slices
 

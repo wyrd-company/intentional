@@ -222,6 +222,40 @@ release-units:
     }
 
     #[cfg(unix)]
+    fn parse_pkgbuild_relationships(
+        pkgbuild: &std::path::Path,
+    ) -> BTreeMap<String, Vec<String>> {
+        let output = std::process::Command::new("bash")
+            .args([
+                "-c",
+                r#"set -euo pipefail
+source "$1"
+printf 'provides=%s\n' "${provides[@]}"
+printf 'conflicts=%s\n' "${conflicts[@]}"
+"#,
+                "parse-pkgbuild",
+            ])
+            .arg(pkgbuild)
+            .output()
+            .expect("Bash evaluates the generated PKGBUILD");
+        assert!(
+            output.status.success(),
+            "Bash could not consume the generated PKGBUILD: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("PKGBUILD field readback is UTF-8")
+            .lines()
+            .map(|line| {
+                let (name, value) = line
+                    .split_once('=')
+                    .unwrap_or_else(|| panic!("PKGBUILD field readback names its value: {line:?}"));
+                (name.to_owned(), vec![value.to_owned()])
+            })
+            .collect()
+    }
+
+    #[cfg(unix)]
     #[test]
     fn cargo_system_routes_build_one_sealed_subject_from_the_open_catalog() {
         use sha2::{Digest, Sha256};
@@ -385,7 +419,11 @@ printf 'external package outcome\n' > "${target}"
         permissions.set_mode(0o755);
         std::fs::set_permissions(&stub, permissions).expect("executable stub");
         let recording = execution.join("nfpm.args");
-        let run_aggregate = |subject: &std::path::Path, recording: &std::path::Path| {
+        let run_aggregate = |
+            subject: &std::path::Path,
+            recording: &std::path::Path,
+            aur_destination: Option<&str>,
+        | {
             std::fs::create_dir_all(subject).expect("subject directory");
             for archive in produced_archives.values() {
                 std::fs::copy(archive_fixtures.join(archive), subject.join(archive))
@@ -407,13 +445,16 @@ printf 'external package outcome\n' > "${target}"
             for (key, value) in step_environment(build) {
                 command.env(key, value);
             }
+            if let Some(aur_destination) = aur_destination {
+                command.env("INTENTIONAL_AUR_DESTINATION", aur_destination);
+            }
             command
                 .env("INTENTIONAL_SUBJECT", subject)
                 .env("INTENTIONAL_NFPM", &stub)
                 .output()
                 .expect("aggregate body runs")
         };
-        let output = run_aggregate(&subject, &recording);
+        let output = run_aggregate(&subject, &recording, None);
         assert!(
             output.status.success(),
             "aggregate body failed: {}",
@@ -441,8 +482,9 @@ printf 'external package outcome\n' > "${target}"
         ] {
             assert!(nfpm.contains(expected), "nFPM configuration carries {expected}: {nfpm}");
         }
-        let pkgbuild = std::fs::read_to_string(subject.join("aur/sample-utility-bin.pkgbuild"))
-            .expect("generated PKGBUILD");
+        let pkgbuild_path = subject.join("aur/sample-utility-bin.pkgbuild");
+        let pkgbuild =
+            std::fs::read_to_string(&pkgbuild_path).expect("generated PKGBUILD");
         let srcinfo = std::fs::read_to_string(subject.join("aur/sample-utility-bin.srcinfo"))
             .expect("generated .SRCINFO");
         let x86_digest = format!(
@@ -479,9 +521,30 @@ printf 'external package outcome\n' > "${target}"
         ] {
             assert!(pkgbuild.contains(&expected), "PKGBUILD carries {expected}: {pkgbuild}");
         }
-        let (pkgbase, srcinfo_fields, pkgname) = parse_srcinfo(&srcinfo);
+        let pkgbuild_relationships = parse_pkgbuild_relationships(&pkgbuild_path);
+        assert_eq!(
+            pkgbuild_relationships.get("provides"),
+            Some(&vec!["sample-utility".to_owned()]),
+            "Bash reads the base identity from PKGBUILD provides"
+        );
+        assert_eq!(
+            pkgbuild_relationships.get("conflicts"),
+            Some(&vec!["sample-utility".to_owned()]),
+            "Bash reads the base identity from PKGBUILD conflicts"
+        );
+        let (pkgbase, mut srcinfo_fields, pkgname) = parse_srcinfo(&srcinfo);
         assert_eq!(pkgbase, "sample-utility-bin");
         assert_eq!(pkgname, "sample-utility-bin");
+        assert_eq!(
+            srcinfo_fields.remove("provides"),
+            Some(vec!["sample-utility".to_owned()]),
+            ".SRCINFO grammar reads the base identity from provides"
+        );
+        assert_eq!(
+            srcinfo_fields.remove("conflicts"),
+            Some(vec!["sample-utility".to_owned()]),
+            ".SRCINFO grammar reads the base identity from conflicts"
+        );
         let expected_srcinfo_fields = BTreeMap::from([
             ("arch".to_owned(), vec!["x86_64".to_owned(), "aarch64".to_owned()]),
             ("license".to_owned(), vec!["MIT".to_owned()]),
@@ -514,7 +577,7 @@ printf 'external package outcome\n' > "${target}"
         std::fs::write(&manifest_path, &unlicensed_manifest).expect("license-less Cargo manifest");
         let unlicensed_subject = execution.join("unlicensed-subject");
         let unlicensed_recording = execution.join("unlicensed-nfpm.args");
-        let unlicensed_output = run_aggregate(&unlicensed_subject, &unlicensed_recording);
+        let unlicensed_output = run_aggregate(&unlicensed_subject, &unlicensed_recording, None);
         assert!(
             unlicensed_output.status.success(),
             "license-less aggregate failed: {}",
@@ -531,6 +594,8 @@ printf 'external package outcome\n' > "${target}"
             unlicensed_fields.remove("license").is_none(),
             "license-less .SRCINFO omits the optional field"
         );
+        unlicensed_fields.remove("provides");
+        unlicensed_fields.remove("conflicts");
         let mut fields_without_license = expected_srcinfo_fields.clone();
         fields_without_license.remove("license");
         assert_eq!(unlicensed_fields, fields_without_license);
@@ -540,6 +605,22 @@ printf 'external package outcome\n' > "${target}"
         .expect("license-less PKGBUILD");
         assert!(!unlicensed_pkgbuild.lines().any(|line| line.starts_with("license=")));
 
+        let invalid_subject = execution.join("invalid-aur-subject");
+        let invalid_recording = execution.join("invalid-aur-nfpm.args");
+        let invalid_output = run_aggregate(
+            &invalid_subject,
+            &invalid_recording,
+            Some("sample-utility"),
+        );
+        assert!(!invalid_output.status.success());
+        assert!(
+            String::from_utf8_lossy(&invalid_output.stderr).contains(
+                "AUR destination sample-utility must end in -bin with a non-empty base package identity"
+            ),
+            "an AUR destination without a derivable base identity is refused: {}",
+            String::from_utf8_lossy(&invalid_output.stderr)
+        );
+
         let authorless_manifest = unlicensed_manifest.replace(
             "authors = [\"Release Maintainers <maintainers@example.invalid>\"]\n",
             "",
@@ -547,7 +628,7 @@ printf 'external package outcome\n' > "${target}"
         std::fs::write(&manifest_path, authorless_manifest).expect("author-less Cargo manifest");
         let authorless_subject = execution.join("authorless-subject");
         let authorless_recording = execution.join("authorless-nfpm.args");
-        let authorless_output = run_aggregate(&authorless_subject, &authorless_recording);
+        let authorless_output = run_aggregate(&authorless_subject, &authorless_recording, None);
         assert!(!authorless_output.status.success());
         assert_eq!(
             String::from_utf8_lossy(&authorless_output.stderr),

@@ -260,6 +260,12 @@ pub(super) fn build_command(packager: Packager) -> String {
       if [[ "${{@ENVVAR@AUR}}" == true ]]; then
         pkgname="${{@ENVVAR@AUR_DESTINATION}}"
         test -n "${{pkgname}}"
+        if [[ "${{pkgname}}" != *-bin || "${{pkgname}}" == -bin ]]; then
+          printf 'AUR destination %s must end in -bin with a non-empty base package identity\n' \
+            "${{pkgname}}" >&2
+          exit 1
+        fi
+        base_pkgname="${{pkgname%-bin}}"
         pkgver="${{version//-/_}}"
         description_shell="$(jq -Rr '@sh' <<<"${{description//$'\n'/ }}")"
         license_shell="$(jq -Rr '@sh' <<<"${{license}}")"
@@ -280,6 +286,8 @@ pub(super) fn build_command(packager: Packager) -> String {
           "pkgdesc=${{description_shell}}" \
           "arch=('x86_64' 'aarch64')" \
           "url='https://github.com/${{GITHUB_REPOSITORY}}'" \
+          "provides=('${{base_pkgname}}')" \
+          "conflicts=('${{base_pkgname}}')" \
           "${{license_pkgbuild}}" \
           "source_x86_64=('${{x86_source}}::${{base_url}}/${{linux_x86_64_archive}}')" \
           "source_aarch64=('${{arm64_source}}::${{base_url}}/${{linux_arm64_archive}}')" \
@@ -296,6 +304,8 @@ pub(super) fn build_command(packager: Packager) -> String {
           "${{srcinfo_indent}}url = https://github.com/${{GITHUB_REPOSITORY}}"
           "${{srcinfo_indent}}arch = x86_64"
           "${{srcinfo_indent}}arch = aarch64"
+          "${{srcinfo_indent}}provides = ${{base_pkgname}}"
+          "${{srcinfo_indent}}conflicts = ${{base_pkgname}}"
         )
         if [[ -n "${{license}}" ]]; then
           srcinfo_fields+=("${{srcinfo_indent}}license = ${{license}}")

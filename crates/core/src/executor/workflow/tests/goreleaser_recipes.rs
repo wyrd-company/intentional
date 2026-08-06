@@ -513,12 +513,12 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             std::fs::create_dir_all(&bytes).expect("Cargo AUR descriptor directory");
             std::fs::write(
                 bytes.join("sample-utility-bin.pkgbuild"),
-                "pkgname=sample-utility-bin\nsource_x86_64=('sealed archive')\n",
+                "pkgname=sample-utility-bin\nprovides=('sample-utility')\nconflicts=('sample-utility')\nsource_x86_64=('sealed archive')\n",
             )
             .expect("Cargo PKGBUILD");
             std::fs::write(
                 bytes.join("sample-utility-bin.srcinfo"),
-                "pkgbase = sample-utility-bin\n\tpkgver = 1.2.3\n",
+                "pkgbase = sample-utility-bin\n\tprovides = sample-utility\n\tconflicts = sample-utility\n\tpkgver = 1.2.3\n",
             )
             .expect("Cargo .SRCINFO");
 
@@ -526,11 +526,11 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             let files = recipe.destination_files("sample-utility-bin");
             assert_eq!(
                 files["PKGBUILD"],
-                "pkgname=sample-utility-bin\nsource_x86_64=('sealed archive')\n"
+                "pkgname=sample-utility-bin\nprovides=('sample-utility')\nconflicts=('sample-utility')\nsource_x86_64=('sealed archive')\n"
             );
             assert_eq!(
                 files[".SRCINFO"],
-                "pkgbase = sample-utility-bin\n\tpkgver = 1.2.3\n"
+                "pkgbase = sample-utility-bin\n\tprovides = sample-utility\n\tconflicts = sample-utility\n\tpkgver = 1.2.3\n"
             );
             assert!(
                 !job_run_bodies(
