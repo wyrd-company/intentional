@@ -560,7 +560,7 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
     );
 }
 
-/// Hold the unprivileged job out of the protected environment.
+/// Put every authority-spending job, and only those jobs, in the protected environment.
 ///
 /// The usage documentation says the preparation job "runs in no environment,
 /// mints no token, and checks out without persisting credentials, so nothing it
@@ -569,22 +569,21 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
 /// which was held by nothing — `environment:` could be added to
 /// `RELEASE_PREPARE_JOB` and the whole suite stayed green.
 ///
-/// The invariant is one-directional, and deliberately so. "Mints a token
-/// therefore declares an environment" is **false**: the Homebrew publisher mints
-/// one scoped to the destination tap rather than to this repository, and
-/// declares no environment. What must hold is the converse — a job holding no
-/// repository token has no business inside the protected environment, where it
-/// would gain that environment's secrets and the reviewer gate would stop
-/// separating the two jobs.
+/// Repository and Release mutation spend minted App authority. Publisher jobs
+/// spend destination authority, whether it comes from a stored credential, a
+/// job token, or an OpenID Connect identity. Both irreversible classes belong
+/// behind the environment gate. Preparation, build, retrieval, and verification
+/// jobs spend none of them and remain outside it.
 ///
 /// Both directions of non-vacuity are checked. A run that reached no managed job,
 /// or one where nothing declares an environment, would satisfy the loop while
 /// proving nothing.
 #[test]
-fn a_managed_job_that_mints_no_token_declares_no_environment() {
+fn places_only_authority_spending_jobs_in_the_protected_environment() {
     let workflows = derived_recipe_workflows("derived-workflow-environments");
     let mut managed = 0usize;
     let mut with_environment = 0usize;
+    let mut without_environment = 0usize;
 
     for (role, workflow) in &workflows {
         let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
@@ -609,15 +608,17 @@ fn a_managed_job_that_mints_no_token_declares_no_environment() {
                     .as_str()
                     .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))
             });
+            let publishes = job.starts_with("intentional_publish_");
+            let spends_authority = mints || publishes;
             if environment.is_some() {
                 with_environment += 1;
+            } else {
+                without_environment += 1;
             }
-            assert!(
-                mints || environment.is_none(),
-                "{role} job {job} mints no repository token but declares environment {environment:?}: \
-                 an unprivileged job placed in the protected environment gains that \
-                 environment's secrets, and the gate stops separating it from the \
-                 privileged job"
+            assert_eq!(
+                environment.is_some(),
+                spends_authority,
+                "{role} job {job} environment {environment:?} disagrees with its authority-spending classification: mints={mints}, publishes={publishes}"
             );
         }
     }
@@ -627,6 +628,10 @@ fn a_managed_job_that_mints_no_token_declares_no_environment() {
         with_environment > 0,
         "at least one managed job declares an environment, so the assertion above \
          is not passing because nothing ever declares one"
+    );
+    assert!(
+        without_environment > 0,
+        "at least one managed job remains outside the environment, so the assertion above is not passing because every job declares one"
     );
 }
 
