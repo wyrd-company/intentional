@@ -81,10 +81,19 @@
                 .find_map(|(key, value)| key.ends_with("ARCHIVE").then_some(value))
                 .expect("derived archive name"),
         );
+        let working_directory = step["working-directory"]
+            .as_str()
+            .expect("parsed job declares its working directory");
+        let execution_directory = workspace.root().join(working_directory);
+        assert!(
+            execution_directory.is_dir(),
+            "emitted workspace working directory exists: {}",
+            execution_directory.display()
+        );
         let mut command = std::process::Command::new("bash");
         command
             .args(["-c", body])
-            .current_dir(workspace.root().join("component"))
+            .current_dir(execution_directory)
             .env("RUNNER_TEMP", &runner)
             .env("LC_ALL", "C")
             .env("PATH", format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap_or_default()));
@@ -253,6 +262,10 @@ printf '#!/usr/bin/env bash\nprintf "%s 1.2.3\\n"\n' "$binary" > "${CARGO_TARGET
             .iter()
             .find_map(|(key, value)| key.ends_with("ARCHIVE").then_some(value.clone()))
             .expect("derived macOS archive name");
+        let working_directory = step["working-directory"]
+            .as_str()
+            .expect("parsed job declares its working directory");
+        let container_working_directory = Path::new("/workspace").join(working_directory);
         let metadata = std::fs::metadata(workspace.root()).expect("workspace metadata");
         let mut command = std::process::Command::new("docker");
         command.args([
@@ -269,7 +282,9 @@ printf '#!/usr/bin/env bash\nprintf "%s 1.2.3\\n"\n' "$binary" > "${CARGO_TARGET
             "--volume",
             &format!("{}:/stubs:ro", stubs.display()),
             "--workdir",
-            "/workspace/component",
+            container_working_directory
+                .to_str()
+                .expect("UTF-8 container working directory"),
             "--env",
             "LC_ALL=C",
         ]);
