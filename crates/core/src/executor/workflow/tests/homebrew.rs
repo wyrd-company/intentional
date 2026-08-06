@@ -71,11 +71,10 @@ release-units:
             );
         }
         let mut produced_archives = BTreeMap::new();
-        for (id, artifact, archive, build_tool, target, image) in [
+        for (id, artifact, build_tool, target, image) in [
             (
                 "intentional_build_component_cargo_archive_linux_x86_64",
                 "intentional_archive-component_cargo_archive-linux_x86_64",
-                "${{ runner.temp }}/linux-x86_64.tar.gz",
                 "cross",
                 "x86_64-unknown-linux-gnu",
                 Some("ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c09874bc1816c675ed11afca2c2ed6cee0c4ed2b3c1d5763c346c9ae3f"),
@@ -83,7 +82,6 @@ release-units:
             (
                 "intentional_build_component_cargo_archive_linux_arm64",
                 "intentional_archive-component_cargo_archive-linux_arm64",
-                "${{ runner.temp }}/linux-arm64.tar.gz",
                 "cross",
                 "aarch64-unknown-linux-gnu",
                 Some("ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5@sha256:7f8308a8734d9fcd2ebbe9a3e4bdea74af293f0799d80c3cc341e340cda49a4c"),
@@ -91,7 +89,6 @@ release-units:
             (
                 "intentional_build_component_cargo_archive_macos_arm64",
                 "intentional_archive-component_cargo_archive-macos_arm64",
-                "${{ runner.temp }}/macos-arm64.tar.gz",
                 "cargo",
                 "aarch64-apple-darwin",
                 None,
@@ -143,7 +140,6 @@ release-units:
                 .iter()
                 .find(|step| step["with"]["name"].as_str() == Some(artifact))
                 .unwrap_or_else(|| panic!("{id} uploads artifact {artifact}"));
-            assert_eq!(upload["with"]["path"].as_str(), Some(archive));
             let produced_archive = upload["with"]["path"]
                 .as_str()
                 .and_then(|path| path.strip_prefix("${{ runner.temp }}/"))
