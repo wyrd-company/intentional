@@ -170,13 +170,19 @@ fn recorded_invocation(supplied: &BTreeMap<&str, String>) -> Vec<String> {
         "GITHUB_OUTPUT".to_owned(),
         github_output.display().to_string(),
     );
+    let mut paths = vec![bin];
+    if let Some(python_home) = std::env::var_os("PYTHON_HOME") {
+        paths.push(PathBuf::from(python_home).join("bin"));
+    }
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
     environment.insert(
         "PATH".to_owned(),
-        format!(
-            "{}:{}",
-            bin.display(),
-            std::env::var("PATH").unwrap_or_default()
-        ),
+        std::env::join_paths(paths)
+            .expect("root Action test tools form a PATH")
+            .to_string_lossy()
+            .into_owned(),
     );
 
     let status = Command::new("bash")
