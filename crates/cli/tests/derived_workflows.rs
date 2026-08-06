@@ -210,6 +210,14 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
     let taskfile = std::fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
     let taskfile: Value = serde_yaml::from_str(&taskfile).expect("Taskfile parses");
     let tasks = &taskfile["tasks"];
+    let baseline = std::fs::read_to_string("../../scripts/release/linux-gnu-baseline.env")
+        .expect("GNU baseline is readable");
+    assert!(
+        baseline.lines().any(|line| {
+            line == "GNU_CROSS_TEST_ARGUMENTS=\"--workspace --locked --all-targets --no-fail-fast --target x86_64-unknown-linux-gnu\""
+        }),
+        "the shared GNU test arguments run every target without hiding later failures"
+    );
     for command in [
         "cargo test --all",
         "cargo nextest run --workspace",
@@ -287,8 +295,12 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
                         "{} job {job} exports the installer-derived Cross environment",
                         path.display()
                     );
-                    assert!(command.contains("--all-targets"));
-                    assert!(command.contains("--no-fail-fast"));
+                    assert_eq!(
+                        command,
+            "# Shared baseline is an argument list.\n# shellcheck disable=SC2086\ncross test $GNU_CROSS_TEST_ARGUMENTS\n",
+                        "{} job {job} uses the shared complete-suite argument contract",
+                        path.display()
+                    );
                 } else {
                     assert!(
                         installation["run"]

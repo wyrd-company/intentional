@@ -110,7 +110,26 @@ SHELLCHECK=$destination/shellcheck
 RUSTC_WRAPPER=$destination/pinned-gnu-rustc-wrapper
 GNU_BUILD_GIT_VERSION=$GNU_BUILD_GIT_VERSION
 GNU_BUILD_BASH_VERSION=$GNU_BUILD_BASH_VERSION
+GNU_CROSS_TEST_ARGUMENTS=$GNU_CROSS_TEST_ARGUMENTS
 EOF
+
+write_shell_assignment() {
+  local quoted
+  # $value is a jq variable.
+  # shellcheck disable=SC2016
+  quoted=$("$destination/jq" -Rrn --arg value "$2" '$value | @sh')
+  printf '%s=%s\n' "$1" "$quoted"
+}
+
+{
+  write_shell_assignment ACTIONLINT "$destination/actionlint"
+  write_shell_assignment JQ "$destination/jq"
+  write_shell_assignment SHELLCHECK "$destination/shellcheck"
+  write_shell_assignment RUSTC_WRAPPER "$destination/pinned-gnu-rustc-wrapper"
+  write_shell_assignment GNU_BUILD_GIT_VERSION "$GNU_BUILD_GIT_VERSION"
+  write_shell_assignment GNU_BUILD_BASH_VERSION "$GNU_BUILD_BASH_VERSION"
+  write_shell_assignment GNU_CROSS_TEST_ARGUMENTS "$GNU_CROSS_TEST_ARGUMENTS"
+} > "$destination/workflow-test-tools.sh"
 
 "$destination/actionlint" -version
 "$destination/jq" --version

@@ -116,9 +116,10 @@ jobs:
             linux-gnu-x86_64-unknown-linux-gnu-${{
             hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
       - name: Run workspace tests through the pinned GNU target
-        run: >-
-          cross test --workspace --locked --all-targets --no-fail-fast
-          --target x86_64-unknown-linux-gnu
+        run: |
+          # Shared baseline is an argument list.
+          # shellcheck disable=SC2086
+          cross test $GNU_CROSS_TEST_ARGUMENTS
 
   smoke-x86_64:
     name: Smoke x86_64 (${{ matrix.label }})

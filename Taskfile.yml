@@ -54,13 +54,16 @@ tasks:
         set -a
         . scripts/release/linux-gnu-baseline.env
         scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
-        . .ci-tools/bin/workflow-test-tools.env
+        . .ci-tools/bin/workflow-test-tools.sh
         RUSTUP_TOOLCHAIN="$RUST_VERSION"
-        PATH="/usr/local/cargo/bin:$PATH"
+        # Cross mounts the Cargo home containing its own executable. Prefer
+        # that bin directory over an unrelated ambient Cargo installation.
+        cross_bin="$(command -v cross)"
+        PATH="$(dirname "$cross_bin"):$PATH"
         set +a
-        cross test \
-        --workspace --locked --all-targets --no-fail-fast \
-        --target x86_64-unknown-linux-gnu
+        # Shared baseline is an argument list.
+        # shellcheck disable=SC2086
+        cross test $GNU_CROSS_TEST_ARGUMENTS
 
   npm:test:
     desc: Test the public npm launcher and its exact package contents

@@ -134,9 +134,10 @@ jobs:
 
       - name: Test release source through pinned x86_64 GNU toolchain
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: >-
-          cross test --workspace --locked --all-targets --no-fail-fast
-          --target "${{ matrix.target }}"
+        run: |
+          # Shared baseline is an argument list.
+          # shellcheck disable=SC2086
+          cross test $GNU_CROSS_TEST_ARGUMENTS
 
       - name: Assemble deterministic release archive
         shell: bash
