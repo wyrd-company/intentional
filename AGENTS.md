@@ -12,9 +12,11 @@ based on a branch with an open GitHub pull request, also run
 diagnosed and assigned before later work treats that branch as a valid base.
 Run `task pinned-gnu:test` when changing release execution, packaging recipes,
 emitted workflow bodies, or Linux GNU validation. It executes all workspace
-targets and doctests through the same pinned Cross image and mounted
-test-runtime paths as hosted Linux GNU evidence. The gate provisions actionlint,
-jq, shellcheck, and python3, and runs under Git 2.7.4 and Bash 4.3.48.
+targets and doctests through the pinned Cross image and mounted test-runtime
+paths. Hosted Linux GNU evidence runs the all-target leg only. The local gate
+adds doctests so pre-handoff validation covers them without duplicating the
+costly Cross leg in every hosted run. Both gates provision actionlint, jq,
+shellcheck, and python3, and run under Git 2.7.4 and Bash 4.3.48.
 
 ## Domains
 
