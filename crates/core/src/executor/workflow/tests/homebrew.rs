@@ -17,7 +17,11 @@
         package_path: &str,
     ) -> Workspace {
         let workspace = Workspace::new(label);
-        let package_directory = Path::new("component").join(package_path);
+        let package_directory = if package_path == "." {
+            PathBuf::from("component")
+        } else {
+            Path::new("component").join(package_path)
+        };
         let workspace_manifest = format!(
             "[workspace]\nmembers = [\"{}\"]\nresolver = \"2\"\n",
             package_directory.display()

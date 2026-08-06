@@ -13,6 +13,8 @@
             "command",
         );
         workspace
+            // Keep `Packager::CargoArchive => unit.path.clone()` past identity derivation so
+            // the emitted-versus-configured working-directory equality remains its death site.
             .write("component/Cargo.toml", manifest)
             .write("component/src/main.rs", "fn main() {}\n")
             .write(
