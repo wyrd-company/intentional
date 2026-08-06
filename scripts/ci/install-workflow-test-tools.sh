@@ -10,8 +10,13 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Root is resolved from this script at runtime.
 # shellcheck disable=SC1091
 source "$root/scripts/release/linux-gnu-baseline.env"
-cross_environment='["'"${GNU_WORKFLOW_TEST_TOOL_ENVIRONMENT// /\", \"}"'"]'
 for agreement in passthrough volumes; do
+  if [[ "$agreement" == passthrough ]]; then
+    environment="$GNU_CROSS_PASSTHROUGH_ENVIRONMENT"
+  else
+    environment="$GNU_CROSS_VOLUME_ENVIRONMENT"
+  fi
+  cross_environment='["'"${environment// /\", \"}"'"]'
   if ! grep -Fqx "$agreement = $cross_environment" "$root/Cross.toml"; then
     echo "pinned GNU Cross $agreement agreement must be $cross_environment" >&2
     exit 1
@@ -82,6 +87,18 @@ for variable in ACTIONLINT JQ SHELLCHECK; do
   fi
 done
 
+if [[ "${CARGO_HOME:-}" == /cargo ]]; then
+  git_version="$(git --version)"
+  if [[ "$git_version" != "git version $GNU_BUILD_GIT_VERSION" ]]; then
+    echo "pinned GNU baseline witness: expected git $GNU_BUILD_GIT_VERSION, found $git_version" >&2
+    exit 1
+  fi
+  if [[ "${BASH_VERSION%%(*}" != "$GNU_BUILD_BASH_VERSION" ]]; then
+    echo "pinned GNU baseline witness: expected bash $GNU_BUILD_BASH_VERSION, found $BASH_VERSION" >&2
+    exit 1
+  fi
+fi
+
 exec "$@"
 EOF
 chmod 0755 "$destination/pinned-gnu-rustc-wrapper"
@@ -91,6 +108,8 @@ ACTIONLINT=$destination/actionlint
 JQ=$destination/jq
 SHELLCHECK=$destination/shellcheck
 RUSTC_WRAPPER=$destination/pinned-gnu-rustc-wrapper
+GNU_BUILD_GIT_VERSION=$GNU_BUILD_GIT_VERSION
+GNU_BUILD_BASH_VERSION=$GNU_BUILD_BASH_VERSION
 EOF
 
 "$destination/actionlint" -version
