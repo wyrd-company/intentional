@@ -380,7 +380,12 @@ even in the job that publishes.
 Every managed checkout requests `fetch-depth: 0` and `fetch-tags: true`.
 Verification rebuilds the candidate from the accepted source commit and derives
 versions from annotated tags, so a shallow or tagless checkout fails
-verification rather than producing a wrong release.
+verification rather than producing a wrong release. Publisher and retrieval
+jobs keep the same requirement even though they promote an already-built
+subject: after delivery, `intentional verify publication` loads the released
+configuration, reconstructs the planned release from the annotated global tag,
+and reads phase tags before it accepts the publication observation. A shallow
+publisher checkout would therefore remove evidence the verification step uses.
 
 ## Prepare the repository
 
