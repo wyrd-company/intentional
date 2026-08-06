@@ -260,8 +260,9 @@ the package that owns its Cargo manifest. The package must expose exactly one
 `[[bin]].name`, or a package binary at `src/main.rs`. Intentional derives that
 binary as the formula identity. The binary's `--version` output must contain the
 release version so the generated formula's installation test can verify it. It
-builds Linux x86-64, Linux Arm64, and macOS
-Arm64 archives in separate jobs, seals all three with the generated formula,
+builds Linux x86-64 and Linux Arm64 through digest-pinned Cross 0.2.5 images and
+builds macOS Arm64 with Cargo. Separate jobs seal all three archives with the
+generated formula,
 uploads the archives to the draft GitHub Release, and promotes the sealed
 formula into the configured tap. The tap repository must install the release
 GitHub App so the publisher job can mint a token scoped to that repository alone.
