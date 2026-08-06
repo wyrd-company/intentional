@@ -145,8 +145,9 @@ plan seals, and that tag triggers publication. `intentional@{version}` records
 the release unit before publication. The
 unit contains three publication packages: `core` at `crates/core` publishes
 with Cargo, `cli` at `crates/cli` publishes with Cargo and Homebrew, and
-`launcher` at `npm` publishes with npm. The Homebrew route builds Linux x86-64
-and macOS Arm64 archives once, seals them with the generated formula, and
+`launcher` at `npm` publishes with npm. The Homebrew route builds Linux x86-64,
+Linux Arm64, and macOS Arm64 archives once, seals them with the generated
+formula, and
 promotes that formula to the configured tap without rebuilding either archive.
 
 When init reconciles an existing configuration, current non-development npm

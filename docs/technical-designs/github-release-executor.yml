@@ -320,9 +320,9 @@ proposed-design:
     RPM, APT, and AUR therefore admit maintained routes for each native packager
     that can produce their required distribution input instead of inheriting a
     GoReleaser-only entry point. A Rust crate with one binary selects the Cargo
-    archive packager for Homebrew. That packager builds Linux x86-64 and macOS
-    Arm64 archives, generates the formula from their digests, and seals all
-    three together before promotion. A Go application selects GoReleaser, a
+    archive packager for Homebrew. That packager builds Linux x86-64, Linux
+    Arm64, and macOS Arm64 archives, generates the formula from their digests,
+    and seals all four together before promotion. A Go application selects GoReleaser, a
     Dockerfile-backed runnable image selects its supported
     Buildx recipe, and a Dev Container Feature selects the Dev Container CLI.
     Exactly one maintained recipe must match every configured publication.
@@ -352,8 +352,8 @@ proposed-design:
 
     A Rust Homebrew package derives its formula identity from exactly one
     explicit Cargo binary, or from the package name when `src/main.rs` declares
-    the package binary. The Cargo archive packager builds the Linux x86-64 and
-    macOS Arm64 executables in separate unprivileged jobs. One aggregate build
+    the package binary. The Cargo archive packager builds Linux x86-64, Linux
+    Arm64, and macOS Arm64 executables in separate unprivileged jobs. One aggregate build
     generates the formula from those archives and seals the combined subject.
     The publisher promotes that sealed formula and never rebuilds an archive.
 

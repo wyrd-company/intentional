@@ -281,10 +281,11 @@ publish descriptors into their own repositories and are derived today.
 A Rust package with one binary may publish a Homebrew formula alongside its
 Cargo publication. The binary identity comes from exactly one `[[bin]].name`,
 or from the package name when `src/main.rs` supplies the package binary. The
-maintained build creates Linux x86-64 and macOS Arm64 archives and generates the
-formula inside the same sealed subject. The publisher copies that formula to
-the configured tap and never invokes Cargo. A library or multi-binary package
-must not declare Homebrew because it does not determine one formula identity.
+maintained build creates Linux x86-64, Linux Arm64, and macOS Arm64 archives
+and generates the formula inside the same sealed subject. The publisher copies
+that formula to the configured tap and never invokes Cargo. A library or
+multi-binary package must not declare Homebrew because it does not determine
+one formula identity.
 
 A Go release unit publishes through GoReleaser, and its native
 `.goreleaser.yaml` is where the rest of the contract lives. `intentional
