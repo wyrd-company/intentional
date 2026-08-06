@@ -3229,6 +3229,22 @@ release-units:
                 Some(deadline)
             );
         }
+        let apt_readback = jobs["release_automation_publish_component_package_apt_primary"]
+            ["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Read back "))
+            })
+            .expect("readback step");
+        assert_eq!(
+            apt_readback["env"]["RELEASE_AUTOMATION_APT_COMPONENT"].as_str(),
+            Some("section-a"),
+            "the product-shaped APT component reaches its readback consumer"
+        );
         let rpm = &jobs["release_automation_publish_component_package_rpm_primary"]["steps"]
             .as_sequence()
             .expect("steps")
@@ -5719,8 +5735,8 @@ exit 0
         );
     }
 
-    // Every current catalog pair derives. A synthetic future pair keeps the
-    // generic refusal observable without withholding a real recipe.
+    // A synthetic future pair keeps the generic refusal observable without
+    // withholding either system-package recipe this fixture needs.
     #[test]
     fn refuses_a_publication_whose_maintained_recipe_is_not_derived() {
         let workspace = system_package_workspace("workflow-underived-future-pair");
@@ -10495,20 +10511,72 @@ release-units:
     //   roster. A value that should have been listed and never was is not
     //   caught, and cannot be by anything short of the roster's own conversion.
     //
-    // # Publisher kinds this gate does not read, and why
-    //
-    // `recipe::catalog()` names seven publisher kinds and this configuration
-    // resolves five. `PublisherKind::Rpm` and `PublisherKind::Apt` are excluded
-    // because their configuration requires repository-local Action metadata
-    // and destination coordinates that this cross-recipe fixture does not
-    // supply. Their configured values are swept separately by
-    // `derives_system_package_delivery_calls_under_the_non_default_prefix`,
-    // which asserts every value at its `env:` or `with:` consumer, and by
-    // `executes_each_derived_delivery_call_against_its_recording_action`, which
-    // executes both derived calls. This test therefore makes no claim about
-    // RPM or APT establishment and readback shell bodies.
+    // RPM and APT require repository-local Action metadata, so their
+    // product-shaped fixture is swept below beside this cross-recipe fixture.
     #[test]
     fn no_repository_supplied_value_is_spliced_into_a_managed_shell_body() {
+        let system_packages = system_package_workspace("workflow-system-package-supplied-values");
+        converge(system_packages.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(system_packages.root(), WorkflowRole::Publish))
+                .expect("workflow parses");
+        let configured_values = [
+            ".github/actions/deliver-rpm",
+            ".github/actions/deliver-apt",
+            "https://packages.invalid/rpm/",
+            "https://packages.invalid/rpm-key.asc",
+            "https://packages.invalid/apt",
+            "https://packages.invalid/apt-key.asc",
+            "stable",
+            "current",
+            "section-a",
+            "${{ secrets.DELIVERY_TOKEN }}",
+            "${{ vars.DELIVERY_BUCKET }}",
+            "unchanged",
+            "${{ matrix.destination }}",
+        ];
+        let delivery_inputs = &configured_values[9..];
+        let mut system_package_bodies = 0;
+        for job in [
+            "release_automation_publish_component_package_rpm_primary",
+            "release_automation_publish_component_package_apt_primary",
+        ] {
+            let steps = document["jobs"][job]["steps"].as_sequence().expect("steps");
+            let readback = steps
+                .iter()
+                .find(|step| {
+                    step["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Read back "))
+                })
+                .expect("readback step");
+            let environment =
+                serde_yaml::to_string(&readback["env"]).expect("readback environment renders");
+            let body = readback["run"].as_str().expect("readback body");
+            for input in delivery_inputs {
+                assert!(
+                    !carries(&environment, input) && !carries(body, input),
+                    "{job} carries delivery input {input:?} into anonymous readback"
+                );
+            }
+            for step in steps {
+                let Some(body) = step.get("run").and_then(Value::as_str) else {
+                    continue;
+                };
+                system_package_bodies += 1;
+                for value in configured_values {
+                    assert!(
+                        !splices(body, value),
+                        "the system-package workflow splices {value:?} into {job}:\n{body}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            system_package_bodies, 4,
+            "the sweep reads establishment and readback bodies for both system-package jobs"
+        );
+
         // How much the gate inspected is established before any rule is
         // applied to it. A sweep that finds nothing satisfies every rule, and
         // this sweep found nothing under a configured prefix until the
