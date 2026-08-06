@@ -170,7 +170,7 @@ fn require_clean_worktree(root: &Path, output: &Path) -> Result<()> {
         .canonicalize()
         .map_err(|error| Error::io(output, error))?;
     let status = GitCommand::new(root)
-        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+        .args(["status", "--porcelain", "-z", "--untracked-files=all"])
         .run()?;
     let text = status.text()?;
     let mut records = text.split('\0').filter(|value| !value.is_empty());
@@ -204,7 +204,7 @@ fn require_clean_worktree(root: &Path, output: &Path) -> Result<()> {
 /// Prove that the remote default branch still identifies the accepted source commit.
 fn require_remote_default_branch(root: &Path, source: &str) -> Result<()> {
     let output = GitCommand::new(root)
-        .args(["ls-remote", "--symref", SOURCE_REMOTE, "HEAD"])
+        .args(["ls-remote", SOURCE_REMOTE, "HEAD"])
         .run()?;
     let text = output.text()?;
     let mut default_branch = None;
@@ -247,7 +247,7 @@ fn require_remote_default_branch(root: &Path, source: &str) -> Result<()> {
 /// real release tag after verification.
 fn record_local_global_tag(root: &Path, object: &str) -> Result<()> {
     let existing = GitCommand::new(root)
-        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .args(["rev-parse", "--verify", "--quiet"])
         .arg(LOCAL_GLOBAL_TAG_REF)
         .output()?;
     if existing.succeeded() && existing.line()? == object {

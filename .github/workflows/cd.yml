@@ -133,8 +133,9 @@ jobs:
       - name: Test release source through pinned x86_64 GNU toolchain
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         env:
-          ACTIONLINT: /project/.ci-tools/bin/actionlint
-          SHELLCHECK: /project/.ci-tools/bin/shellcheck
+          ACTIONLINT: ${{ github.workspace }}/.ci-tools/bin/actionlint
+          JQ: ${{ github.workspace }}/.ci-tools/bin/jq
+          SHELLCHECK: ${{ github.workspace }}/.ci-tools/bin/shellcheck
         run: cross test --workspace --locked --target "${{ matrix.target }}"
 
       - name: Assemble deterministic release archive

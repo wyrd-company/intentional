@@ -13,12 +13,16 @@ case "$(uname -m)" in
   x86_64)
     actionlint_arch="amd64"
     actionlint_digest="023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757"
+    jq_arch="amd64"
+    jq_digest="5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
     shellcheck_arch="x86_64"
     shellcheck_digest="6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
     ;;
   aarch64|arm64)
     actionlint_arch="arm64"
     actionlint_digest="401942f9c24ed71e4fe71b76c7d638f66d8633575c4016efd2977ce7c28317d0"
+    jq_arch="arm64"
+    jq_digest="4dd2d8a0661df0b22f1bb9a1f9830f06b6f3b8f7d91211a1ef5d7c4f06a8b4a5"
     shellcheck_arch="aarch64"
     shellcheck_digest="324a7e89de8fa2aed0d0c28f3dab59cf84c6d74264022c00c22af665ed1a09bb"
     ;;
@@ -32,14 +36,21 @@ temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 
 actionlint_archive="actionlint_1.7.7_linux_${actionlint_arch}.tar.gz"
-curl -fsSL \
+curl -fsSL --max-redirs 5 \
   "https://github.com/rhysd/actionlint/releases/download/v1.7.7/$actionlint_archive" \
   -o "$temporary/$actionlint_archive"
 printf '%s  %s\n' "$actionlint_digest" "$temporary/$actionlint_archive" | sha256sum --check
 tar -xzf "$temporary/$actionlint_archive" -C "$destination" actionlint
 
+jq_asset="jq-linux-${jq_arch}"
+curl -fsSL --max-redirs 5 \
+  "https://github.com/jqlang/jq/releases/download/jq-1.7.1/$jq_asset" \
+  -o "$temporary/$jq_asset"
+printf '%s  %s\n' "$jq_digest" "$temporary/$jq_asset" | sha256sum --check
+install -m 0755 "$temporary/$jq_asset" "$destination/jq"
+
 shellcheck_archive="shellcheck-v0.10.0.linux.${shellcheck_arch}.tar.xz"
-curl -fsSL \
+curl -fsSL --max-redirs 5 \
   "https://github.com/koalaman/shellcheck/releases/download/v0.10.0/$shellcheck_archive" \
   -o "$temporary/$shellcheck_archive"
 printf '%s  %s\n' "$shellcheck_digest" "$temporary/$shellcheck_archive" | sha256sum --check
@@ -47,4 +58,5 @@ tar -xJf "$temporary/$shellcheck_archive" -C "$temporary"
 install -m 0755 "$temporary/shellcheck-v0.10.0/shellcheck" "$destination/shellcheck"
 
 "$destination/actionlint" -version
+"$destination/jq" --version
 "$destination/shellcheck" --version

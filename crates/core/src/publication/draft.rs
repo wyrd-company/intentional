@@ -569,7 +569,8 @@ release-units:
             let temp = tempfile::tempdir().expect("temporary directory");
             let root = temp.path().join("workspace");
             std::fs::create_dir_all(&root).expect("create workspace");
-            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["init", "--quiet"]);
+            git(&root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
             git(&root, &["config", "user.name", "Fixture Author"]);
             git(&root, &["config", "user.email", "fixture@example.invalid"]);
             git(

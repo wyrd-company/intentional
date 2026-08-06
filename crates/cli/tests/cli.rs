@@ -2841,10 +2841,10 @@ fn release_the_fixture(repo: &TestRepo) -> BTreeMap<String, String> {
             "init",
             "--quiet",
             "--bare",
-            "--initial-branch=main",
             remote.to_str().expect("remote path"),
         ],
     );
+    git(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(&repo.root, &["add", "-A"]);
     git(
         &repo.root,

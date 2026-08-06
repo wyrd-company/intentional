@@ -112,8 +112,8 @@ impl<'a> GitCommand<'a> {
             .arg("core.hooksPath=/dev/null")
             .arg("-c")
             .arg("log.showSignature=false")
-            .arg("--no-pager")
             .args(&self.arguments)
+            .env("GIT_PAGER", "cat")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_OPTIONAL_LOCKS", "0")
             .stdin(if self.stdin.is_some() {
@@ -172,7 +172,7 @@ impl<'a> GitCommand<'a> {
 /// Resolve one revision to its full object identity.
 pub(crate) fn resolve(directory: &Path, revision: &str) -> Result<String> {
     GitCommand::new(directory)
-        .args(["rev-parse", "--verify", "--end-of-options"])
+        .args(["rev-parse", "--verify"])
         .arg(format!("{revision}^{{object}}"))
         .run()?
         .line()

@@ -124,6 +124,70 @@ fn shellcheck(body: &str) -> Result<Output, String> {
         .map_err(|error| format!("cannot finish shellcheck: {error}"))
 }
 
+fn command_runs_rust_tests(command: &str) -> bool {
+    command.lines().any(|line| {
+        let Ok(words) = shell_words::split(line) else {
+            return false;
+        };
+        words.iter().enumerate().any(|(position, word)| {
+            matches!(word.as_str(), "cargo" | "cross")
+                && words[position + 1..]
+                    .iter()
+                    .any(|argument| matches!(argument.as_str(), "test" | "nextest"))
+        })
+    })
+}
+
+fn task_reaches_rust_tests(name: &str, tasks: &Value, visiting: &mut BTreeSet<String>) -> bool {
+    if !visiting.insert(name.to_owned()) {
+        return false;
+    }
+    let task = &tasks[name];
+    let dependency_reaches = task["deps"].as_sequence().is_some_and(|dependencies| {
+        dependencies.iter().any(|dependency| {
+            dependency
+                .as_str()
+                .is_some_and(|dependency| task_reaches_rust_tests(dependency, tasks, visiting))
+        })
+    });
+    let command_reaches = task["cmds"].as_sequence().is_some_and(|commands| {
+        commands.iter().any(|command| {
+            let command = command
+                .as_str()
+                .or_else(|| command["cmd"].as_str())
+                .unwrap_or_default();
+            command_runs_rust_tests(command) || command_invokes_test_task(command, tasks, visiting)
+        })
+    });
+    visiting.remove(name);
+    dependency_reaches || command_reaches
+}
+
+fn command_invokes_test_task(
+    command: &str,
+    tasks: &Value,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    command.lines().any(|line| {
+        let Ok(words) = shell_words::split(line) else {
+            return false;
+        };
+        words.iter().enumerate().any(|(position, word)| {
+            word == "task"
+                && words[position + 1..].iter().any(|argument| {
+                    !argument.starts_with('-')
+                        && !tasks[argument.as_str()].is_null()
+                        && task_reaches_rust_tests(argument, tasks, visiting)
+                })
+        })
+    })
+}
+
+fn command_reaches_rust_tests(command: &str, tasks: &Value) -> bool {
+    command_runs_rust_tests(command)
+        || command_invokes_test_task(command, tasks, &mut BTreeSet::new())
+}
+
 #[test]
 fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
     let missing = || std::io::Error::from(std::io::ErrorKind::NotFound);
@@ -143,6 +207,27 @@ fn every_required_tool_names_the_surface_its_absence_leaves_unchecked() {
 #[test]
 fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_requires() {
     let directory = std::path::Path::new("../../.github/workflows");
+    let taskfile = std::fs::read_to_string("../../Taskfile.yml").expect("Taskfile is readable");
+    let taskfile: Value = serde_yaml::from_str(&taskfile).expect("Taskfile parses");
+    let tasks = &taskfile["tasks"];
+    for command in [
+        "cargo test --all",
+        "cargo nextest run --workspace",
+        "cross --verbose test --workspace",
+        "task test",
+        "task ci",
+    ] {
+        assert!(
+            command_reaches_rust_tests(command, tasks),
+            "{command} reaches Rust tests"
+        );
+    }
+    for command in ["cargo clippy --all-targets", "npm test", "test-retry.sh"] {
+        assert!(
+            !command_reaches_rust_tests(command, tasks),
+            "{command} does not run Rust tests"
+        );
+    }
     let mut reached = Vec::new();
     for entry in std::fs::read_dir(directory).expect("workflow directory is readable") {
         let path = entry.expect("workflow entry is readable").path();
@@ -165,10 +250,13 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
                 let Some(command) = test["run"].as_str() else {
                     continue;
                 };
-                let cross = command.contains("cross test --workspace");
-                if !cross && !command.contains("cargo test --workspace") {
+                if !command_reaches_rust_tests(command, tasks) {
                     continue;
                 }
+                let cross = command.lines().any(|line| {
+                    shell_words::split(line)
+                        .is_ok_and(|words| words.iter().any(|word| word == "cross"))
+                });
                 let job = job.as_str().expect("job id");
                 let installation = steps[..test_position]
                     .iter()
@@ -193,11 +281,15 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
                 if cross {
                     assert_eq!(
                         test["env"]["ACTIONLINT"],
-                        "/project/.ci-tools/bin/actionlint"
+                        "${{ github.workspace }}/.ci-tools/bin/actionlint"
+                    );
+                    assert_eq!(
+                        test["env"]["JQ"],
+                        "${{ github.workspace }}/.ci-tools/bin/jq"
                     );
                     assert_eq!(
                         test["env"]["SHELLCHECK"],
-                        "/project/.ci-tools/bin/shellcheck"
+                        "${{ github.workspace }}/.ci-tools/bin/shellcheck"
                     );
                 } else {
                     assert!(

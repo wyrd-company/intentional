@@ -36,19 +36,15 @@ impl ReleaseFixture {
                 "init",
                 "--quiet",
                 "--bare",
-                "--initial-branch=main",
                 remote.to_str().expect("remote path"),
             ],
         );
+        git(&remote, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git(
             temp.path(),
-            &[
-                "init",
-                "--quiet",
-                "--initial-branch=main",
-                source.to_str().expect("source path"),
-            ],
+            &["init", "--quiet", source.to_str().expect("source path")],
         );
+        git(&source, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git(&source, &["config", "user.name", "Fixture Author"]);
         git(
             &source,

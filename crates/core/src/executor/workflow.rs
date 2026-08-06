@@ -1933,6 +1933,15 @@ mod tests {
     use crate::publication::observation::ObservationState;
     use std::collections::{BTreeMap, BTreeSet};
 
+    fn test_tool_path(base: &str) -> String {
+        std::env::var_os("JQ")
+            .and_then(|jq| std::path::PathBuf::from(jq).parent().map(Path::to_path_buf))
+            .map_or_else(
+                || base.to_owned(),
+                |directory| format!("{}:{base}", directory.display()),
+            )
+    }
+
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
 workspace-tags:
@@ -5538,7 +5547,11 @@ release-units:
                 .env_clear()
                 .env(
                     "PATH",
-                    format!("{}:/usr/bin:/bin", self.scaffold.root().display()),
+                    format!(
+                        "{}:{}",
+                        self.scaffold.root().display(),
+                        test_tool_path("/usr/bin:/bin")
+                    ),
                 )
                 .env("RUNNER_TEMP", self.temp().display().to_string())
                 .env("GH_STUB_LOG", log.display().to_string());
@@ -6781,7 +6794,7 @@ release-units:
                 format!(
                     "{}:{}",
                     stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("HOME", temporary)
@@ -8416,7 +8429,7 @@ release-units:
                 format!(
                     "{}:{}",
                     stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("RUNNER_TEMP", &temporary)
@@ -8495,7 +8508,7 @@ release-units:
                 format!(
                     "{}:{}",
                     stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("RUNNER_TEMP", &temporary)
@@ -9587,7 +9600,7 @@ release-units:
                     format!(
                         "{}:{}",
                         stubs.display(),
-                        std::env::var("PATH").unwrap_or_default()
+                        test_tool_path(&std::env::var("PATH").unwrap_or_default())
                     ),
                 )
                 .env("RUNNER_TEMP", &temporary)
@@ -10076,11 +10089,21 @@ aur:
             fn with_destination(self, name: &str) -> Self {
                 let path = self.remotes.join(name);
                 let status = std::process::Command::new("git")
-                    .args(["init", "--quiet", "--bare", "--initial-branch=master"])
+                    .args(["init", "--quiet", "--bare"])
                     .arg(&path)
                     .status()
                     .expect("git init runs");
                 assert!(status.success(), "the destination repository exists");
+                let status = std::process::Command::new("git")
+                    .args([
+                        "-C",
+                        path.to_str().expect("destination path"),
+                        "symbolic-ref",
+                    ])
+                    .args(["HEAD", "refs/heads/master"])
+                    .status()
+                    .expect("git symbolic-ref runs");
+                assert!(status.success(), "the destination branch is master");
                 self
             }
 
@@ -10159,7 +10182,7 @@ aur:
                         format!(
                             "{}:{}",
                             self.stubs.display(),
-                            std::env::var("PATH").unwrap_or_default()
+                            test_tool_path(&std::env::var("PATH").unwrap_or_default())
                         ),
                     )
                     .env("HOME", root)
@@ -10338,7 +10361,8 @@ for argument in "$@"; do
       # clone still fails against an absent package, which is the branch the
       # recipe has to handle.
       if [[ " $* " == *" remote "* ]] && [ ! -d "${resolved}" ]; then
-        @GIT@ init --quiet --bare --initial-branch=master "${resolved}"
+        @GIT@ init --quiet --bare "${resolved}"
+        @GIT@ -C "${resolved}" symbolic-ref HEAD refs/heads/master
       fi
       arguments+=("${resolved}")
       ;;
@@ -10767,7 +10791,7 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                         format!(
                             "{}:{}",
                             self.stubs.display(),
-                            std::env::var("PATH").unwrap_or_default()
+                            test_tool_path(&std::env::var("PATH").unwrap_or_default())
                         ),
                     )
                     .env("HOME", root)

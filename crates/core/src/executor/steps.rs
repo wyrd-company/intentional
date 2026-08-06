@@ -436,7 +436,10 @@ const DESTINATION_TOKEN_STEPS: &str = r#"  - id: @JOB@destination_token
 /// whether the publication is present rather than whether this step wrote.
 const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/homebrew"
       test -d "${generated}"
-      mapfile -t -d '' formulas < <(find "${generated}" -type f -name '*.rb' -print0 | sort -z)
+      formulas=()
+      while IFS= read -r -d '' formula; do
+        formulas+=("${formula}")
+      done < <(find "${generated}" -type f -name '*.rb' -print0 | sort -z)
       test "${#formulas[@]}" -gt 0
       rm -rf "${RUNNER_TEMP}/@JOB@tap"
       git clone --quiet --depth 1 \
@@ -493,7 +496,8 @@ const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@E
       rm -rf "${RUNNER_TEMP}/@JOB@aur"
       if ! git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
         "${RUNNER_TEMP}/@JOB@aur"; then
-        git init --quiet --initial-branch=master "${RUNNER_TEMP}/@JOB@aur"
+        git init --quiet "${RUNNER_TEMP}/@JOB@aur"
+        git -C "${RUNNER_TEMP}/@JOB@aur" symbolic-ref HEAD refs/heads/master
         git -C "${RUNNER_TEMP}/@JOB@aur" remote add origin \
           "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git"
       fi
@@ -834,7 +838,7 @@ const NPM_HOLDS: &str = r#"      @ENVVAR@npm_holds() {
         if @ENVVAR@VIEW="$(cd "${RUNNER_TEMP}/@JOB@npm-probe" \
           && env -i "${@ENVVAR@ALLOWED[@]}" \
             npm view "$1" dist.integrity --registry "${@ENVVAR@REGISTRY}" \
-            "${@ENVVAR@SCOPE_ARGUMENTS[@]}" 2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
+            ${@ENVVAR@SCOPE_ARGUMENTS[@]+"${@ENVVAR@SCOPE_ARGUMENTS[@]}"} 2>"${RUNNER_TEMP}/@JOB@npm-error")"; then
           printf '%s' "${@ENVVAR@VIEW}"
           return 0
         fi
@@ -1243,7 +1247,7 @@ const CARGO_RESOLVE: &str = r#"      @ENVVAR@REGISTRY_ARGUMENTS=()
           cargo new --quiet --lib "$1/probe" >/dev/null
         if ( cd "$1/probe" \
           && env -i "${@ENVVAR@ALLOWED[@]}" CARGO_HOME="$1/home" \
-            cargo add --quiet "${@ENVVAR@REGISTRY_ARGUMENTS[@]}" \
+            cargo add --quiet ${@ENVVAR@REGISTRY_ARGUMENTS[@]+"${@ENVVAR@REGISTRY_ARGUMENTS[@]}"} \
             "${@ENVVAR@SUBJECT_IDENTITY}@=${@ENVVAR@VERSION}" \
           && env -i "${@ENVVAR@ALLOWED[@]}" CARGO_HOME="$1/home" \
             cargo fetch --quiet ) > "$1/log" 2>&1; then
@@ -1336,7 +1340,7 @@ const CARGO_PUBLISH: &str = r#"      @ENVVAR@CRATE="$(find "${@ENVVAR@SUBJECT}" 
       @ENVVAR@REPACKAGED="${RUNNER_TEMP}/@JOB@repackage/package/$(basename "${@ENVVAR@CRATE}")"
       test "$(sha256sum < "${@ENVVAR@REPACKAGED}" | cut -d' ' -f1)" \
         = "$(sha256sum < "${@ENVVAR@CRATE}" | cut -d' ' -f1)"
-      cargo publish --locked --no-verify "${@ENVVAR@REGISTRY_ARGUMENTS[@]}"
+      cargo publish --locked --no-verify ${@ENVVAR@REGISTRY_ARGUMENTS[@]+"${@ENVVAR@REGISTRY_ARGUMENTS[@]}"}
 "#;
 
 /// Destination readback, clean-client retrieval, and the observation they produce.

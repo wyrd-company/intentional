@@ -25,6 +25,7 @@ required_env_vars=(
   GNU_BUILD_BASE_SUPPORT_STATUS
   GNU_IMAGE_HOST_ARCH
   GNU_SYSROOT_GLIBC_VERSION
+  GNU_BUILD_GIT_VERSION
   LINUX_GNU_MAX_GLIBC_SYMBOL
   X86_64_GNU_CROSS_IMAGE
   AARCH64_GNU_CROSS_IMAGE
@@ -39,6 +40,11 @@ for variable in "${required_env_vars[@]}"; do
     exit 1
   fi
 done
+
+if ! grep -Fq "Git $GNU_BUILD_GIT_VERSION" "$root/README.md"; then
+  echo "README.md must record minimum supported Git $GNU_BUILD_GIT_VERSION." >&2
+  exit 1
+fi
 
 for file in "$technical_design" "$decision_record" "$install_doc"; do
   if ! grep -Fq "$CROSS_SOURCE_COMMIT" "$file"; then

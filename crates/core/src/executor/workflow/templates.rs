@@ -808,7 +808,10 @@ pub(super) const PUBLISH_UPLOAD_STEP: &str = r#"  - name: @DELIVERABLE_NAME@
       @ENVVAR@LEDGER: ${{ runner.temp }}/@JOB@uploaded
     run: |
       set -euo pipefail
-      mapfile -t -d '' @ENVVAR@DELIVERABLES < <(find "${@ENVVAR@SUBJECT}" \
+      @ENVVAR@DELIVERABLES=()
+      while IFS= read -r -d '' @ENVVAR@DELIVERABLE; do
+        @ENVVAR@DELIVERABLES+=("${@ENVVAR@DELIVERABLE}")
+      done < <(find "${@ENVVAR@SUBJECT}" \
         -maxdepth 1 -type f @DELIVERABLE_FIND@ -print0 | sort -z)
       if test "${#@ENVVAR@DELIVERABLES[@]}" -eq 0; then
         printf 'the %s build produced no GitHub-hosted deliverable under %s, so this publication has nothing its consumers could resolve\n' \
@@ -868,7 +871,10 @@ pub(super) const PUBLISH_HANDOFF_STEP: &str = r#"  - name: @HANDOFF_NAME@
     run: |
       set -euo pipefail
       @ENVVAR@RELEASE="$(cat "${@ENVVAR@RELEASE_ID}")"
-      mapfile -t -d '' @ENVVAR@CONSUMED < <(find "${@ENVVAR@SUBJECT}" \
+      @ENVVAR@CONSUMED=()
+      while IFS= read -r -d '' @ENVVAR@DELIVERABLE; do
+        @ENVVAR@CONSUMED+=("${@ENVVAR@DELIVERABLE}")
+      done < <(find "${@ENVVAR@SUBJECT}" \
         -maxdepth 1 -type f @DELIVERABLE_FIND@ @CONSUMED_FIND@ -print0 | sort -z)
       if test "${#@ENVVAR@CONSUMED[@]}" -eq 0; then
         printf 'the %s publication consumes a GitHub Release asset, but its subject produced none under %s\n' \

@@ -724,7 +724,7 @@ fn verify_identity_chain(
     // would accept any descendant of S, so the claim the affirmative entry
     // makes is the one checked here.
     let parents = GitCommand::new(root)
-        .args(["rev-list", "--parents", "-n", "1", "--end-of-options"])
+        .args(["rev-list", "--parents", "-n", "1"])
         .arg(&release.release_commit)
         .output()?;
     if !parents.succeeded() {
@@ -754,7 +754,7 @@ fn verify_identity_chain(
 /// Resolve one revision, reporting absence rather than failing.
 fn rev_parse(root: &Path, revision: &str) -> Result<Option<String>> {
     let output = GitCommand::new(root)
-        .args(["rev-parse", "--verify", "--quiet", "--end-of-options"])
+        .args(["rev-parse", "--verify", "--quiet"])
         .arg(revision)
         .output()?;
     if !output.succeeded() {
@@ -1496,7 +1496,8 @@ release-units:
                 );
         }
         let root = workspace.root().to_path_buf();
-        git(&root, &["init", "--quiet", "--initial-branch=main"]);
+        git(&root, &["init", "--quiet"]);
+        git(&root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         git(&root, &["config", "user.email", "release@example.test"]);
         git(&root, &["config", "user.name", "Example Release"]);
         git(

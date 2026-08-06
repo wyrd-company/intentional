@@ -1647,7 +1647,8 @@ release-units:
                     &format!("{{\n  \"name\": \"sample-library\",\n  \"version\": \"{PREVIOUS_VERSION}\"\n}}\n"),
                 );
             let root = workspace.root().to_path_buf();
-            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["init", "--quiet"]);
+            git(&root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
             git(&root, &["config", "user.name", "Fixture Author"]);
             git(&root, &["config", "user.email", "fixture@example.invalid"]);
             git(&root, &["add", "-A"]);

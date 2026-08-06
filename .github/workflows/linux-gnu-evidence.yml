@@ -115,8 +115,9 @@ jobs:
             hashFiles('Cross.toml', 'scripts/release/linux-gnu-baseline.env', 'Cargo.lock') }}
       - name: Run workspace tests through the pinned GNU target
         env:
-          ACTIONLINT: /project/.ci-tools/bin/actionlint
-          SHELLCHECK: /project/.ci-tools/bin/shellcheck
+          ACTIONLINT: ${{ github.workspace }}/.ci-tools/bin/actionlint
+          JQ: ${{ github.workspace }}/.ci-tools/bin/jq
+          SHELLCHECK: ${{ github.workspace }}/.ci-tools/bin/shellcheck
         run: cross test --workspace --locked --target x86_64-unknown-linux-gnu
 
   smoke-x86_64:

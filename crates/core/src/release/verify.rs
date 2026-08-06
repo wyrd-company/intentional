@@ -313,7 +313,6 @@ fn verify_bundle(clone: &Path, bundle: &Path, candidate: &ReleaseCandidate) -> R
             "fetch",
             "--quiet",
             "--no-tags",
-            "--no-write-fetch-head",
             &bundle_argument,
             &format!("{BUNDLE_RELEASE_HEAD}:{STAGED_RELEASE_REF}"),
             &format!("{BUNDLE_TAG_HEAD}:{STAGED_TAG_REF}"),
@@ -332,7 +331,7 @@ fn verify_imported_objects(clone: &Path, candidate: &ReleaseCandidate) -> Result
         )));
     }
     let tag_object = GitCommand::new(clone)
-        .args(["rev-parse", "--verify", "--end-of-options", STAGED_TAG_REF])
+        .args(["rev-parse", "--verify", STAGED_TAG_REF])
         .run()?
         .line()?;
     if tag_object != candidate.global_tag.object {
@@ -540,13 +539,7 @@ fn reproduce_candidate(
 fn discard_previously_imported_tag(clone: &Path, candidate: &ReleaseCandidate) -> Result<()> {
     let reference = format!("refs/tags/{}", candidate.global_tag.name);
     let existing = GitCommand::new(clone)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "--end-of-options",
-            &reference,
-        ])
+        .args(["rev-parse", "--verify", "--quiet", &reference])
         .output()?;
     if !existing.succeeded() || existing.line()? != candidate.global_tag.object {
         return Ok(());
@@ -578,7 +571,6 @@ fn import_pushable_identities(
             "fetch",
             "--quiet",
             "--no-tags",
-            "--no-write-fetch-head",
             &source_argument,
             &format!("{STAGED_RELEASE_REF}:{IMPORTED_RELEASE_REF}"),
             &format!("{STAGED_TAG_REF}:{tag_reference}"),
@@ -594,7 +586,7 @@ fn import_pushable_identities(
         )));
     }
     let imported_tag = GitCommand::new(root)
-        .args(["rev-parse", "--verify", "--end-of-options", &tag_reference])
+        .args(["rev-parse", "--verify", &tag_reference])
         .run()?
         .line()?;
     if imported_tag != candidate.global_tag.object {
@@ -618,13 +610,7 @@ fn require_importable_refs(root: &Path, candidate: &ReleaseCandidate) -> Result<
 /// Accept an identical existing ref and reject a conflicting one.
 fn require_absent_or_identical(root: &Path, reference: &str, object: &str) -> Result<()> {
     let existing = GitCommand::new(root)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            "--end-of-options",
-            reference,
-        ])
+        .args(["rev-parse", "--verify", "--quiet", reference])
         .output()?;
     if !existing.succeeded() {
         return Ok(());

@@ -555,7 +555,8 @@ pub(crate) mod tests {
             let temp = tempfile::tempdir().expect("temporary directory");
             let root = temp.path().join("workspace");
             std::fs::create_dir_all(&root).expect("create workspace");
-            git(&root, &["init", "--quiet", "--initial-branch=main"]);
+            git(&root, &["init", "--quiet"]);
+            git(&root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
             git(&root, &["config", "user.name", "Fixture Author"]);
             git(&root, &["config", "user.email", "fixture@example.invalid"]);
             write(&root, ".intentional/config.yml", config);
@@ -1134,7 +1135,8 @@ pub(crate) mod tests {
         let root = temp.path().join("workspace");
         std::fs::create_dir_all(root.join(".intentional")).expect("create config directory");
         std::fs::write(root.join(".intentional/config.yml"), config_yaml).expect("write config");
-        git(&root, &["init", "--quiet", "--initial-branch=main"]);
+        git(&root, &["init", "--quiet"]);
+        git(&root, &["symbolic-ref", "HEAD", "refs/heads/main"]);
         verify_release_tag(&root)
             .expect_err("configuration is invalid")
             .to_string()
