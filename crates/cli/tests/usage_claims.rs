@@ -108,6 +108,11 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
         "trusted publishing bootstraps exactly npmjs and crates.io in emitted workflows"
     );
     assert!(
+        normalize_whitespace(bootstrap_section)
+            .contains("Both publish through registry trusted publishing"),
+        "the bootstrap subsection names trusted publishing for npmjs and crates.io"
+    );
+    assert!(
         !bootstrap_section.contains("Two properties hold for these two destinations"),
         "the bootstrap subsection does not restate exhaustive counts the bold paragraphs already carry"
     );

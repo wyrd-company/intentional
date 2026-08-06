@@ -22,6 +22,8 @@ const APP_TOKEN_ACTION_PREFIX: &str = "actions/create-github-app-token@";
 #[cfg(any(test, feature = "test-support"))]
 const GITHUB_TOKEN_SECRET: &str = "secrets.GITHUB_TOKEN";
 #[cfg(any(test, feature = "test-support"))]
+const DOCKERHUB_TOKEN_SECRET: &str = "DOCKERHUB_TOKEN";
+#[cfg(any(test, feature = "test-support"))]
 const TRUSTED_PUBLISHING_TOKENS: &str = "trusted_publishing/tokens";
 #[cfg(any(test, feature = "test-support"))]
 const NPM_TRUSTED_PREP_STEP: &str = "Prepare the npm client for trusted publishing";
@@ -33,6 +35,12 @@ const LABEL_AUR: &str = "the AUR";
 const LABEL_CARGO_ALTERNATE: &str = "a non-crates.io Cargo registry";
 #[cfg(any(test, feature = "test-support"))]
 const LABEL_GITHUB_PACKAGES: &str = "GitHub Package Registry";
+#[cfg(any(test, feature = "test-support"))]
+const LABEL_GHCR: &str = "GHCR";
+#[cfg(any(test, feature = "test-support"))]
+const DESTINATION_TOKEN_OUTPUT: &str = "destination_token.outputs.token";
+#[cfg(any(test, feature = "test-support"))]
+const DELIVERY_ACTION_PATH: &str = ".github/actions/deliver";
 #[cfg(any(test, feature = "test-support"))]
 const NPM_PKG_GITHUB_REGISTRY: &str = "npm.pkg.github.com";
 #[cfg(any(test, feature = "test-support"))]
@@ -110,40 +118,48 @@ fn trusted_publishing_bootstrap_emission(text: &str) -> bool {
 }
 
 #[cfg(any(test, feature = "test-support"))]
-fn standing_label_for_publish_job(job_id: &str, text: &str) -> Option<String> {
-    if trusted_publishing_bootstrap_emission(text) {
-        return None;
-    }
-    if job_id.ends_with("_homebrew_primary")
-        || job_id.ends_with("_rpm_primary")
-        || job_id.ends_with("_apt_primary")
+fn minted_destination_token_emission(text: &str) -> bool {
+    text.contains(DESTINATION_TOKEN_OUTPUT) || text.contains("destination_token")
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn delivery_action_emission(text: &str) -> bool {
+    text.contains(DELIVERY_ACTION_PATH) || text.contains("intentional_establish")
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn job_token_emission(text: &str) -> bool {
+    text.contains(GITHUB_TOKEN_SECRET)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn stored_secret_emission(text: &str) -> bool {
+    text.contains(&github_reference_prefix("secrets"))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn standing_label_from_emission(text: &str) -> Option<String> {
+    if trusted_publishing_bootstrap_emission(text)
+        || minted_destination_token_emission(text)
+        || delivery_action_emission(text)
+        || job_token_emission(text)
     {
         return None;
     }
-    if job_id.ends_with("_oci_ghcr")
-        || (job_id.ends_with("_npm_github") && text.contains(GITHUB_TOKEN_SECRET))
-        || job_id.ends_with("_npm_primary")
-    {
-        return None;
-    }
-    if job_id.ends_with("_oci_dockerhub") || text.contains("DOCKERHUB_TOKEN") {
+    if text.contains(DOCKERHUB_TOKEN_SECRET) && stored_secret_emission(text) {
         return Some(LABEL_DOCKER_HUB.to_owned());
     }
-    if job_id.ends_with("_aur_primary") || text.contains("INTENTIONAL_AUR_KEY") {
+    if text.contains("AUR_KEY") && stored_secret_emission(text) {
         return Some(LABEL_AUR.to_owned());
     }
-    if job_id.ends_with("_cargo_primary")
-        && text.contains("CARGO_REGISTRY_TOKEN")
-        && !text.contains(TRUSTED_PUBLISHING_TOKENS)
-    {
+    if text.contains("CARGO_REGISTRY_TOKEN") && !text.contains(TRUSTED_PUBLISHING_TOKENS) {
         return Some(LABEL_CARGO_ALTERNATE.to_owned());
     }
-    if job_id.ends_with("_npm_github")
-        && text.contains(NPM_PKG_GITHUB_REGISTRY)
-        && text.contains(&github_reference_prefix("secrets"))
-        && !text.contains(GITHUB_TOKEN_SECRET)
-    {
+    if text.contains(NPM_PKG_GITHUB_REGISTRY) && stored_secret_emission(text) {
         return Some(LABEL_GITHUB_PACKAGES.to_owned());
+    }
+    if text.contains("ghcr.io") && stored_secret_emission(text) {
+        return Some(LABEL_GHCR.to_owned());
     }
     None
 }
@@ -237,7 +253,7 @@ pub fn standing_credential_usage_labels(workflows: &[(WorkflowRole, String)]) ->
         if !job_id.starts_with("intentional_publish_") {
             continue;
         }
-        if let Some(label) = standing_label_for_publish_job(job_id, &emission_text(body)) {
+        if let Some(label) = standing_label_from_emission(&emission_text(body)) {
             labels.insert(label);
         }
     }
