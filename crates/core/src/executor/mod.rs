@@ -458,19 +458,9 @@ aur:
             .collect()
     }
 
-    /// Reconcile one role and read back what the repository would receive.
+    /// Materialize one catalog-wide role for structural test inspection.
     fn derive_role(root: &Path, role: crate::config::WorkflowRole) -> crate::Result<String> {
-        let comparison = super::compare_workflow(root, role, None)?;
-        assert_eq!(
-            comparison.status,
-            super::ComparisonStatus::Different,
-            "the {role} contract must derive: {:?}",
-            comparison.diagnostics
-        );
-        let applied = comparison.apply()?;
-        assert!(applied.applied);
-        let path = root.join(&applied.path);
-        std::fs::read_to_string(&path).map_err(|error| crate::Error::io(&path, error))
+        super::workflow::materialize_contract_for_structural_test(root, role)
     }
 
     /// Why one role's derivation did not finish.

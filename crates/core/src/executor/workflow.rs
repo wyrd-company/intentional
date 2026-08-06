@@ -359,6 +359,53 @@ pub fn compare_configured_workflow(
     })
 }
 
+/// Materialize a deliberately broad contract for structural test sweeps.
+///
+/// Catalog-wide fixtures exceed the supported workflow size by construction:
+/// they combine every maintained recipe to inspect emitted syntax and safety
+/// properties, not to model a repository that can apply the result. Keeping
+/// this bypass inside test-support prevents those sweeps from weakening the
+/// public comparison and apply boundary.
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn materialize_contract_for_structural_test(
+    root: &Path,
+    role: WorkflowRole,
+) -> Result<String> {
+    let config = Config::load(root)?;
+    let github = config.github.as_ref().ok_or_else(|| {
+        Error::Validation(
+            "no github executor configuration; run intentional executor init".to_owned(),
+        )
+    })?;
+    let workflow = github.workflow(role);
+    let path = absolute(root, &workflow.path);
+    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    let document = Document::parse(&text)?;
+    let gate_diagnostics = configured_gate_diagnostics(github, role, &document.value()?);
+    if !gate_diagnostics.is_empty() {
+        return Err(Error::Validation(
+            gate_diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
+    }
+    let contract = derive_contract(root, &config, github, role).map_err(|diagnostics| {
+        Error::Validation(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })?;
+    let (output, _) = reconcile(document, &contract)
+        .map_err(|diagnostic| Error::Validation(diagnostic.message))?;
+    std::fs::write(&path, &output).map_err(|error| Error::io(&path, error))?;
+    Ok(output)
+}
+
 fn blocked(
     role: WorkflowRole,
     relative: PathBuf,
@@ -2143,20 +2190,8 @@ jobs:
     /// sweeps. Its all-recipe fixture exceeds the supported workflow size by
     /// construction, so it cannot exercise the public comparison/apply path.
     fn materialize_contract_for_structural_sweep(root: &Path, role: WorkflowRole) {
-        let config = Config::load(root).expect("config loads");
-        let github = config.github.as_ref().expect("github config");
-        let workflow = github.workflow(role);
-        let path = root.join(&workflow.path);
-        let text = std::fs::read_to_string(&path).expect("workflow reads");
-        let document = Document::parse(&text).expect("workflow parses");
-        let parsed = document.value().expect("workflow value");
-        assert!(
-            configured_gate_diagnostics(github, role, &parsed).is_empty(),
-            "the structural fixture declares its configured gates"
-        );
-        let contract = derive_contract(root, &config, github, role).expect("contract derives");
-        let (output, _) = reconcile(document, &contract).expect("contract reconciles");
-        std::fs::write(path, output).expect("structural contract writes");
+        super::materialize_contract_for_structural_test(root, role)
+            .expect("structural contract derives");
     }
 
     fn workflow(root: &Path, role: WorkflowRole) -> String {
