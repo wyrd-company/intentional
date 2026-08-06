@@ -2544,7 +2544,9 @@ jobs:
     // two apart: no credential exists on the runner while Intentional's own
     // Action is fetched and executed. Moving the mint earlier would read as a
     // harmless reordering and would silently widen the job's trust boundary, so
-    // the order is asserted rather than described.
+    // the order is asserted rather than described. This test constrains mint
+    // position only; every_derived_github_app_token_uses_variable_id_and_secret_key
+    // in crates/cli/tests/derived_workflows.rs holds the exact mint population.
     #[test]
     fn resolves_every_intentional_action_before_any_credential_is_minted() {
         let workspace = workspace("workflow-credential-order");
