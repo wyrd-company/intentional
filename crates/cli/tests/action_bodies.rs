@@ -395,12 +395,17 @@ fn project_values(reported: &str, keys: &[&str]) -> Result<BTreeMap<String, Stri
 /// that reaches the projector. A newly requested key therefore has to acquire
 /// a projection contract before the Action can pass offline validation.
 fn requested_projector_keys() -> Vec<String> {
-    let actions = repository_root().join("actions");
-    let mut keys = fs::read_dir(actions)
-        .expect("the Actions directory is readable")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join("action.yml"))
-        .filter(|path| path.is_file())
+    let root = repository_root();
+    let mut action_documents = vec![root.join("action.yml")];
+    action_documents.extend(
+        fs::read_dir(root.join("actions"))
+            .expect("the Actions directory is readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("action.yml"))
+            .filter(|path| path.is_file()),
+    );
+    let mut keys = action_documents
+        .into_iter()
         .flat_map(|path| {
             let document: serde_yaml::Value = serde_yaml::from_str(
                 &fs::read_to_string(&path).expect("the Action document is readable"),

@@ -654,7 +654,7 @@ while IFS= read -r use; do
     echo "the verifier workflow use $use does not match declared commit $declared_commit" >&2
     failures=$((failures + 1))
   fi
-done < <(sed -nE 's/^[[:space:]]*-[[:space:]]+uses:[[:space:]]+([^[:space:]#]+).*/\1/p' \
+done < <(yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' \
   "$root/.github/workflows/github-action-pins.yml")
 
 # ---------------------------------------------------------------------------
