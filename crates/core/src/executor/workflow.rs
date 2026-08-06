@@ -2175,6 +2175,63 @@ jobs:
         workspace
     }
 
+    fn repository_scale_workspace(label: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release: { template: '{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  sample:
+    path: .
+    packages:
+      tool:
+        path: tool
+        cargo: {}
+        homebrew: { repository: sample-owner/sample-tap }
+      library:
+        path: library
+        cargo: {}
+      launcher:
+        path: launcher
+        npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}', require-phase: before-publication }
+      published: { role: projection, template: '{id}/published@{version}', require-phase: after-publication }
+"#,
+            )
+            .write(
+                "tool/Cargo.toml",
+                "[package]\nname = \"sample-tool\"\nversion = \"1.0.0\"\nauthors = [\"Sample Maintainer <maintainer@example.invalid>\"]\n",
+            )
+            .write("tool/src/main.rs", "fn main() {}\n")
+            .write(
+                "library/Cargo.toml",
+                "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
+            )
+            .write("library/src/lib.rs", "pub fn sample() {}\n")
+            .write(
+                "launcher/package.json",
+                r#"{"name":"sample-launcher","version":"1.0.0"}"#,
+            )
+            .write(
+                ".github/workflows/release.yml",
+                "name: release\non: {}\njobs: {}\n",
+            )
+            .write(
+                ".github/workflows/publish.yml",
+                "name: publish\non: push\njobs: {}\n",
+            );
+        workspace
+    }
+
     fn converge(root: &Path, role: WorkflowRole) -> WorkflowComparison {
         let comparison = compare_workflow(root, role, None).expect("comparison runs");
         assert_eq!(
@@ -8394,25 +8451,18 @@ release-units:
 
     #[test]
     fn intentional_publish_contract_fits_the_readback_bound() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("core crate is inside the repository");
-        let config = Config::load(repository).expect("repository config loads");
+        let workspace = repository_scale_workspace("workflow-repository-scale");
+        let config = Config::load(workspace.root()).expect("repository-scale config loads");
         assert_eq!(
-            resolve_publications(repository, &config)
+            resolve_publications(workspace.root(), &config)
                 .expect("repository publications resolve")
                 .selected
                 .len(),
             4,
             "the capacity measurement covers every configured publication"
         );
-        let candidate = Workspace::new("workflow-repository-scale");
-        let path = candidate.root().join("publish.yml");
-        candidate.write("publish.yml", "name: publish\non: push\njobs: {}\n");
-
         let comparison =
-            compare_configured_workflow(repository, &config, WorkflowRole::Publish, Some(&path))
+            compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
                 .expect("repository-scale contract derives");
         assert_eq!(
             comparison.status,
@@ -8429,33 +8479,26 @@ release-units:
 
     #[test]
     fn a_fifth_cargo_shaped_publication_exceeds_the_readback_bound() {
-        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("core crate is inside the repository");
-        let mut config = Config::load(repository).expect("repository config loads");
+        let workspace = repository_scale_workspace("workflow-fifth-cargo-publication");
+        let mut config = Config::load(workspace.root()).expect("repository-scale config loads");
         config
             .release_units
-            .get_mut("intentional")
+            .get_mut("sample")
             .expect("release unit")
             .packages
-            .get_mut("cli")
+            .get_mut("tool")
             .expect("Cargo application package")
             .aur = Some(crate::config::SystemPackagePublisher::default());
         assert_eq!(
-            resolve_publications(repository, &config)
+            resolve_publications(workspace.root(), &config)
                 .expect("expanded publications resolve")
                 .selected
                 .len(),
             5,
             "the expanded shape adds one Cargo publication"
         );
-        let candidate = Workspace::new("workflow-fifth-cargo-publication");
-        let path = candidate.root().join("publish.yml");
-        candidate.write("publish.yml", "name: publish\non: push\njobs: {}\n");
-
         let comparison =
-            compare_configured_workflow(repository, &config, WorkflowRole::Publish, Some(&path))
+            compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
                 .expect("expanded contract compares");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert!(
