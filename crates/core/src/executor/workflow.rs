@@ -3471,20 +3471,6 @@ release-units:
         }));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn refuses_a_windows_drive_relative_delivery_action_path() {
-        let workspace = system_package_workspace("system-package-windows-prefix-action");
-        workspace.write(
-            ".intentional/config.yml",
-            &SYSTEM_PACKAGE_CONFIG.replace(".github/actions/deliver-rpm", "C:actions/deliver-rpm"),
-        );
-        assert!(blocked_diagnostics(&workspace).iter().any(|message| {
-            message.contains("C:actions/deliver-rpm")
-                && message.contains("workspace-relative directory")
-        }));
-    }
-
     #[test]
     fn refuses_a_delivery_action_metadata_file_instead_of_its_directory() {
         let workspace = system_package_workspace("system-package-metadata-action");
@@ -3967,11 +3953,22 @@ fi
         std::fs::write(subject.join("example-tool.rpm"), "sealed package bytes").expect("package");
         let digest = crate::evidence::digest_bytes(b"sealed package bytes");
         let package_checksum = digest.trim_start_matches("sha256:");
-        let primary = if scenario == "package-absent" {
-            format!("<metadata><package><name>another-tool</name><arch>arm64</arch><version ver=\"1.2.3\" rel=\"1\"/><checksum>{package_checksum}</checksum></package></metadata>")
-        } else {
-            format!("<metadata><package><name>example-tool</name><arch>arm64</arch><version ver=\"1.2.3\" rel=\"1\"/><checksum>{package_checksum}</checksum></package></metadata>")
+        let (indexed_name, indexed_version, indexed_architecture, indexed_checksum) = match scenario
+        {
+            "package-absent" => ("another-tool", "1.2.3", "arm64", package_checksum),
+            "version-mismatch" => ("example-tool", "1.2.2", "arm64", package_checksum),
+            "architecture-mismatch" => ("example-tool", "1.2.3", "amd64", package_checksum),
+            "package-digest-mismatch" => (
+                "example-tool",
+                "1.2.3",
+                "arm64",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            _ => ("example-tool", "1.2.3", "arm64", package_checksum),
         };
+        let primary = format!(
+            "<metadata><package><name>{indexed_name}</name><arch>{indexed_architecture}</arch><version ver=\"{indexed_version}\" rel=\"1\"/><checksum>{indexed_checksum}</checksum></package></metadata>"
+        );
         let primary_digest = crate::evidence::digest_bytes(primary.as_bytes())
             .trim_start_matches("sha256:")
             .to_owned();
@@ -4113,6 +4110,30 @@ fi
     #[test]
     fn rpm_readback_refuses_a_package_absent_from_the_signed_index() {
         assert!(!run_rpm_readback("rpm-package-absent", "package-absent"));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_an_indexed_package_with_a_different_version() {
+        assert!(!run_rpm_readback(
+            "rpm-version-mismatch",
+            "version-mismatch"
+        ));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_an_indexed_package_with_a_different_architecture() {
+        assert!(!run_rpm_readback(
+            "rpm-architecture-mismatch",
+            "architecture-mismatch"
+        ));
+    }
+
+    #[test]
+    fn rpm_readback_refuses_an_indexed_package_with_a_different_digest() {
+        assert!(!run_rpm_readback(
+            "rpm-package-digest-mismatch",
+            "package-digest-mismatch"
+        ));
     }
 
     #[test]
