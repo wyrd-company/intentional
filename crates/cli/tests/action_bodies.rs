@@ -389,6 +389,46 @@ fn project_values(reported: &str, keys: &[&str]) -> Result<BTreeMap<String, Stri
         .collect())
 }
 
+/// Keys requested by every shipped Action that invokes the shared projector.
+///
+/// Reading the rendered step bodies keeps the census bound to the population
+/// that reaches the projector. A newly requested key therefore has to acquire
+/// a projection contract before the Action can pass offline validation.
+fn requested_projector_keys() -> Vec<String> {
+    let actions = repository_root().join("actions");
+    let mut keys = fs::read_dir(actions)
+        .expect("the Actions directory is readable")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("action.yml"))
+        .filter(|path| path.is_file())
+        .flat_map(|path| {
+            let document: serde_yaml::Value = serde_yaml::from_str(
+                &fs::read_to_string(&path).expect("the Action document is readable"),
+            )
+            .expect("the Action document parses");
+            document["runs"]["steps"]
+                .as_sequence()
+                .expect("the Action runs steps")
+                .iter()
+                .filter_map(|step| step.get("run").and_then(serde_yaml::Value::as_str))
+                .filter(|run| run.contains("project-identities.sh"))
+                .flat_map(|body| {
+                    body.rsplit_once("project-identities.sh")
+                        .expect("the projector invocation")
+                        .1
+                        .split_whitespace()
+                        .filter(|word| !word.contains(['"', '$', '\\']))
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 #[test]
 fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
     let temp = tempfile::tempdir().expect("identity fixtures");
@@ -400,19 +440,8 @@ fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
     for path in [&evidence, &built, &sealed] {
         fs::write(path, "fixture\n").expect("identity file");
     }
-    let keys = [
-        "source-sha",
-        "release-sha",
-        "global-tag-object",
-        "plan-digest",
-        "digest",
-        "version",
-        "global-tag",
-        "evidence-path",
-        "built-subject-path",
-        "sealed-phase-evidence",
-        "candidate-path",
-    ];
+    let keys = requested_projector_keys();
+    let key_references = keys.iter().map(String::as_str).collect::<Vec<_>>();
     let reported = format!(
         "source-sha: {source}\nrelease-sha: {release}\nglobal-tag-object: {object}\nplan-digest: sha256:{plan}\ndigest: sha256:{digest}\nversion: 1.2.3-rc.1+build.2\nglobal-tag: release/1.2.3\nevidence-path: {}\nbuilt-subject-path: {}\nsealed-phase-evidence: {}\ncandidate-path: {}\n",
         evidence.display(),
@@ -425,7 +454,8 @@ fn projects_every_declared_identity_shape_and_refuses_unowned_keys() {
         plan = "4".repeat(64),
         digest = "5".repeat(64),
     );
-    let projected = project_values(&reported, &keys).expect("every declared shape projects");
+    let projected =
+        project_values(&reported, &key_references).expect("every requested shape projects");
     assert_eq!(
         projected.len(),
         keys.len(),

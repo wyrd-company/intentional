@@ -43,15 +43,19 @@ for asset in intentional-linux-x86_64.tar.gz intentional-linux-arm64.tar.gz; do
 done
 
 installer_adapter="$root/actions/install.sh"
-# The adapter must preserve these expressions for its own runtime.
+# Compare the complete executable body so no second implementation can run
+# before the adapter delegates to the canonical installer.
+mapfile -t installer_body < <(sed -nE '/^#!/p; /^[[:space:]]*[^#[:space:]]/p' "$installer_adapter")
+# These are literal shell lines from the adapter, not expressions for this test.
 # shellcheck disable=SC2016
-installer_delegate='exec "$SCRIPT_DIR/../scripts/action/install-intentional.sh" "$@"'
-if [[ "$(grep -Fxc "$installer_delegate" "$installer_adapter" || true)" != "1" ]]; then
-  echo "actions/install.sh does not delegate exactly once to the canonical installer" >&2
-  exit 1
-fi
-if grep -Eq 'intentional-linux-|SHA256SUMS|curl[[:space:]]' "$installer_adapter"; then
-  echo "actions/install.sh contains a second installer implementation" >&2
+expected_installer_body=(
+  '#!/usr/bin/env bash'
+  'set -euo pipefail'
+  'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+  'exec "$SCRIPT_DIR/../scripts/action/install-intentional.sh" "$@"'
+)
+if [[ "${installer_body[*]}" != "${expected_installer_body[*]}" ]]; then
+  echo "actions/install.sh executable body is not the canonical four-line adapter" >&2
   exit 1
 fi
 
