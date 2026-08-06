@@ -431,7 +431,9 @@ fn the_release_preparation_job_mints_no_repository_token() {
 
     for (role, workflow) in &workflows {
         let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
-        let jobs = document["jobs"].as_mapping().expect("derived workflow jobs");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived workflow jobs");
         for (job, body) in jobs {
             let Some(steps) = body["steps"].as_sequence() else {
                 continue;
@@ -445,9 +447,10 @@ fn the_release_preparation_job_mints_no_repository_token() {
                 continue;
             }
             preparation_jobs += 1;
-            let mints = steps.iter().filter_map(|step| step["uses"].as_str()).find(
-                |uses| uses.starts_with("actions/create-github-app-token@"),
-            );
+            let mints = steps
+                .iter()
+                .filter_map(|step| step["uses"].as_str())
+                .find(|uses| uses.starts_with("actions/create-github-app-token@"));
             assert!(
                 mints.is_none(),
                 "{role} job {} builds the release candidate and mints a repository token \
