@@ -182,8 +182,8 @@ intentional-sample/LICENSE
 intentional-sample/README.md
 intentional-sample/intentional
 EOF
-tar -tzf "$temporary/archive-one.tar.gz" | sort | cmp - "$expected_archive_entries"
-unzip -Z1 "$temporary/archive-one.zip" | sort | cmp - "$expected_archive_entries"
+tar -tzf "$temporary/archive-one.tar.gz" | LC_ALL=C sort | cmp - "$expected_archive_entries"
+unzip -Z1 "$temporary/archive-one.zip" | LC_ALL=C sort | cmp - "$expected_archive_entries"
 test "$(tar -tvzf "$temporary/archive-one.tar.gz" intentional-sample/intentional | cut -c1-10)" = "-rwxr-xr-x"
 test "$(zipinfo -l "$temporary/archive-one.zip" intentional-sample/intentional | awk '{print $1}')" = "-rwxr-xr-x"
 

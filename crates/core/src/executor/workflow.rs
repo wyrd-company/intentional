@@ -3859,6 +3859,7 @@ exit 0
     /// The predicates are run by `find` rather than reimplemented, because they
     /// are shell text the derivation splices and a Rust reimplementation would
     /// agree with itself while the emitted command did something else.
+    /// Expected vectors use byte order, so the sort must ignore UTF-8 collation.
     fn selected(subject: &Path, deliverables: &str, consumed: &str) -> Vec<String> {
         let script = format!(
             "find \"$1\" -maxdepth 1 -type f {deliverables} {consumed} -print0 | LC_ALL=C sort -z | xargs -0 -n1 basename"

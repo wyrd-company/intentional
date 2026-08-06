@@ -2,4 +2,4 @@
 intentional: patch
 ---
 
-Make deliverable-selection tests independent of operator locale.
+Make release gates independent of operator locale.
