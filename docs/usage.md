@@ -414,34 +414,48 @@ creating the defaults instead leaves the release to fail after verification has
 already passed. Run `intentional executor init`, which reports the names your
 own configuration derives, and create those.
 
-**Publisher credentials** belong to the destination rather than the repository,
-and Intentional stores names, never values. A tap repository must install the
-release App so the publisher job can mint a token scoped to that repository
-alone.
+**Publisher credentials** vary by destination, and Intentional stores names,
+never values. Some destinations need a secret you create; others authenticate
+with the job's own token or with one the job mints from the release App. The
+next section has the full table. A tap repository must install the release App
+so the publisher job can mint a token scoped to that repository alone.
 
 ## Publish to a registry for the first time
 
-Destinations differ in how they authenticate, and the difference decides
-whether a secret you configure is temporary or permanent. Check which group
-your destination is in before deciding how to store its credential.
+Configuration has two levels here, and the credential rules follow the lower
+one. A **publisher** is what you declare on a package — `npm:`, `cargo:`,
+`homebrew:`, `aur:`, `rpm:`, `apt:`, `oci:`. A **destination** is where one
+publication lands. Most publishers reach exactly one destination; `npm:` and
+`oci:` reach more than one, and the credential belongs to the destination
+rather than to the publisher above it.
 
-### Destinations that bootstrap, then stop using the secret
+| Publisher | Destination | Credential | Lifetime |
+| --- | --- | --- | --- |
+| `npm:` | npmjs | `NPM_TOKEN` to bootstrap, then trusted publishing | bootstrap only |
+| `npm:` | GitHub Package Registry | the job's `GITHUB_TOKEN` | expires with the job |
+| `cargo:` | crates.io | `CARGO_REGISTRY_TOKEN` to bootstrap, then trusted publishing | bootstrap only |
+| `cargo:` | another registry | `CARGO_REGISTRIES_<NAME>_TOKEN` | standing |
+| `homebrew:` | your tap | a token minted from the release App | expires with the job |
+| `aur:` | the AUR | `INTENTIONAL_AUR_KEY`, an SSH private key | standing |
+| `rpm:` | your repository | inputs you pass your delivery Action | yours to decide |
+| `apt:` | your repository | inputs you pass your delivery Action | yours to decide |
+| `oci:` | Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | standing |
+| `oci:` | GHCR | the job's `GITHUB_TOKEN` and actor | expires with the job |
 
-npm's npmjs primary and Cargo's crates.io primary publish through registry
-trusted publishing, which needs no stored credential. Neither will let you
-configure a trusted identity until the package exists, so the first publication
-has nothing to authenticate. Both recipes therefore expose a bootstrap path
-that uses a conventional token:
+Three groups follow from that table, and the rest of this section is about each.
 
-| Destination | Bootstrap secret |
-| --- | --- |
-| npm (npmjs) | `NPM_TOKEN` |
-| Cargo (crates.io) | `CARGO_REGISTRY_TOKEN` |
+### npmjs and crates.io bootstrap, then stop using the secret
+
+These two destinations publish through registry trusted publishing, which needs
+no stored credential. Neither registry will let you configure a trusted identity
+until the package exists, so the first publication has nothing to authenticate.
+Both recipes therefore expose a bootstrap path using the conventional token in
+the table above.
 
 Configure the secret, publish once, then configure the registry's trusted
 identity. From then on the secret is unreachable on this path.
 
-Two properties hold for these two destinations.
+Two properties hold for these two destinations, and for no others.
 
 **The bootstrap path opens only on proof that the destination does not hold the
 package.** A registry client reports a missing package and a failed request the
@@ -456,58 +470,46 @@ falls back.** An identity failure fails the publication rather than reaching for
 the bootstrap token, so a misconfigured trusted publisher cannot silently revert
 to a long-lived credential.
 
-### Destinations whose credential is permanent
+### Docker Hub, the AUR, and a non-crates.io Cargo registry hold a standing credential
 
-Every other destination implements no trusted-publishing exchange. There is no
-bootstrap and no probe: whatever credential reaches the publisher authenticates
-**every** publication, not only the first.
+Neither property above applies to these three. There is no bootstrap and no
+probe: the configured credential authenticates every publication.
 
-This table covers all seven publishers Intentional derives recipes for, so
-reading down it tells you which case you are in.
+The AUR's is the one to weigh most carefully, because it is an SSH private key
+rather than a scoped registry token. Rotate all three on whatever schedule you
+use for any standing publish credential.
 
-| Destination | Credential | Lifetime |
-| --- | --- | --- |
-| Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | standing, every publication |
-| AUR | `INTENTIONAL_AUR_KEY` — an SSH private key | standing, every publication |
-| Homebrew tap | a token the job mints from the release App | short-lived, per job |
-| GitHub Container Registry | the job's `GITHUB_TOKEN` and actor | expires with the job |
-| GitHub Package Registry | the job's `GITHUB_TOKEN` | expires with the job |
-| RPM | whatever your delivery Action's inputs carry | **yours to decide** |
-| APT | whatever your delivery Action's inputs carry | **yours to decide** |
+### The rest hold nothing standing
 
-**Docker Hub and AUR are the two Intentional configures that hold a standing
-credential.** Both are presented on every release and neither property above
-protects them. AUR's is an SSH private key, the strongest credential in this
-table. Rotate both on whatever schedule you use for any standing publish
-credential.
+GHCR and GitHub Package Registry accept the repository-scoped workflow token,
+which expires when the job ends, so neither needs anything configured. The
+Homebrew publisher mints a short-lived token scoped to the tap repository alone,
+which is why the tap must install the release App.
 
-**RPM and APT are different in kind: Intentional configures no credential for
-them at all.** Both route through a repository-owned delivery Action you name
-with `delivery-action`, and they pass it the inputs you supply under `with:`.
-Whatever that Action authenticates with, and how long it lives, is yours — this
-section cannot tell you what to rotate, only that Intentional is not the place
-the answer lives.
-
-The rest hold nothing standing. GHCR and GitHub Package Registry accept the
-repository-scoped workflow token, which expires when the job ends, so neither
-needs anything configured. The Homebrew publisher mints a short-lived token
-scoped to the tap repository alone, which is why the tap must install the
-release App.
+RPM and APT are a different case again: **Intentional derives no credential for
+them.** Both route through a repository-owned delivery Action you name with
+`delivery-action`, and pass it whatever you supply under that publisher's
+`with:` block. What that Action authenticates with, and how long it lives, is
+yours to decide — and unlike every other row, its name lives in your
+`.intentional/config.yml` rather than in a convention.
 
 ### Renaming a credential
 
-Three publishers accept a `token-secret` override: **npm**, **Cargo** and
-**Docker Hub**. Docker Hub alone also accepts `username-var`. Configuration
+`token-secret` is accepted in exactly three places: on the `npm:` publisher, on
+the `cargo:` publisher, and on the `dockerhub` target **inside** `oci:`.
+`username-var` is accepted on that Docker Hub target alone. Configuration
 carries names, never values.
 
-No other publisher takes an override, and asking for one is refused rather than
-ignored — `aur: { token-secret: … }` fails configuration loading with *unknown
-field `token-secret`, there are no fields*. That is worth knowing precisely
-because AUR is the destination named above as holding the strongest standing
-credential: its secret name is fixed at `INTENTIONAL_AUR_KEY`, and the way to
-change what it holds is to change the secret, not its name.
+The nesting matters. `oci: { token-secret: … }` is refused with *unknown field
+`token-secret`, expected `dockerhub` or `ghcr`* — the override belongs to the
+target, not to the publisher holding it.
 
-The remaining credentials are not named in Intentional configuration at all.
-Homebrew mints from the release App, GHCR and GitHub Package Registry use the
-job's own token, and RPM and APT carry whatever inputs you pass your delivery
-Action.
+Asking anywhere else is refused rather than ignored: `aur: { token-secret: … }`
+fails configuration loading with *unknown field `token-secret`, there are no
+fields*. That is worth knowing because the AUR holds the strongest standing
+credential in the table. Its secret name is fixed at `INTENTIONAL_AUR_KEY`, and
+the way to change what it holds is to change the secret, not its name.
+
+Homebrew, GHCR and GitHub Package Registry name no credential to override,
+because none of them reads a stored one. RPM and APT name theirs under the
+publisher's `with:` block instead, where you choose both the key and the value.
