@@ -3596,6 +3596,92 @@ release-units:
         }
     }
 
+    #[test]
+    fn rpm_establishment_compares_the_sealed_version_without_appending_package_release() {
+        let workspace = system_package_workspace("system-package-rpm-version");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("workflow");
+        let step = document["jobs"]["release_automation_publish_component_package_rpm_primary"]
+            ["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Establish "))
+            })
+            .expect("establishment step");
+        let temporary = workspace.root().join("runner-rpm-establishment");
+        let subject = PathBuf::from(
+            step["env"]
+                .as_mapping()
+                .expect("environment")
+                .iter()
+                .find(|(key, _)| key.as_str().is_some_and(|key| key.ends_with("_SUBJECT")))
+                .and_then(|(_, value)| value.as_str())
+                .expect("subject path")
+                .replace("${{ runner.temp }}", &temporary.display().to_string()),
+        );
+        std::fs::create_dir_all(&subject).expect("subject");
+        std::fs::write(subject.join("example-tool.rpm"), "sealed package bytes").expect("package");
+        let digest = crate::evidence::digest_bytes(b"sealed package bytes");
+        let stubs = temporary.join("stubs");
+        std::fs::create_dir_all(&stubs).expect("stubs");
+        let rpm = stubs.join("rpm");
+        std::fs::write(
+            &rpm,
+            "#!/usr/bin/env bash\ncase \"$3\" in '%{NAME}') printf 'example-tool' ;; '%{VERSION}') printf '1.2.3' ;; '%{ARCH}') printf 'arm64' ;; *) exit 2 ;; esac\n",
+        )
+        .expect("stub");
+        assert!(std::process::Command::new("chmod")
+            .args(["+x", rpm.to_str().expect("path")])
+            .status()
+            .expect("chmod")
+            .success());
+        let output_file = temporary.join("outputs");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(step["run"].as_str().expect("run"))
+            .env_clear()
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    stubs.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env("GITHUB_OUTPUT", &output_file);
+        for (key, value) in step["env"].as_mapping().expect("env") {
+            let value = value
+                .as_str()
+                .expect("value")
+                .replace("${{ runner.temp }}", &temporary.display().to_string())
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.version }}",
+                    "1.2.3",
+                )
+                .replace(
+                    "${{ needs.release_automation_build_component_goreleaser.outputs.digest }}",
+                    &digest,
+                );
+            command.env(key.as_str().expect("key"), value);
+        }
+        let output = command.output().expect("establishment runs");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let outputs = std::fs::read_to_string(output_file).expect("outputs");
+        assert!(outputs.lines().any(|line| line == "version=1.2.3"));
+        assert!(outputs.lines().any(|line| line == "architecture=arm64"));
+    }
+
     fn run_apt_readback(label: &str, scenario: &str) -> bool {
         let workspace = system_package_workspace(label);
         converge(workspace.root(), WorkflowRole::Publish);
