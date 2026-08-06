@@ -167,8 +167,13 @@
                                 name.ends_with("_OBSERVATION") && *path == &verified
                             })
                             .is_some_and(|(name, _)| {
+                                let invocation = format!(
+                                    "{}observe_present",
+                                    name.strip_suffix("OBSERVATION")
+                                        .expect("observation environment name")
+                                );
                                 step.get("run").and_then(Value::as_str).is_some_and(|body| {
-                                    body.contains(&format!("> \"${{{name}}}\""))
+                                    body.lines().any(|line| line.trim() == invocation)
                                 })
                             })
                     })
