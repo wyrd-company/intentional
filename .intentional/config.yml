@@ -93,6 +93,8 @@ workspace-tags:
   release:
     template: "{version}"
 github:
+  declined-publications:
+    - intentional/launcher/npm/github
   workflows:
     release:
       path: .github/workflows/release.yml

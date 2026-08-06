@@ -1712,6 +1712,25 @@ phase-tags: []
     }
 
     #[test]
+    fn a_before_publication_tag_refuses_an_underspecified_publisher() {
+        let workspace = phase_workspace("tag-before-publication-empty-publisher");
+        workspace.write(
+            ".intentional/config.yml",
+            &PHASE_CONFIG.replace("npm: { npmjs: {} }", "npm: {}"),
+        );
+        let input = stage_built_subject(&workspace, "sample-library");
+
+        let error = plan_phase_tags(workspace.root(), TagPhase::BeforePublication, &input)
+            .expect_err("release evidence refuses an underspecified publisher");
+        assert!(
+            error
+                .to_string()
+                .contains("configured publisher component/package/npm names no target"),
+            "release refusal names the underspecified publisher: {error}"
+        );
+    }
+
+    #[test]
     fn an_after_publication_tag_seals_the_accepted_fragments() {
         let workspace = phase_workspace("tag-after-publication");
         let object = "6666666666666666666666666666666666666666";

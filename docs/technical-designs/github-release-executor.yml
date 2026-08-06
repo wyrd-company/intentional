@@ -155,13 +155,15 @@ proposed-design:
   publisher-adapter-configuration: |-
     A package-ecosystem adapter reads identity and compatible settings from its
     native package files. Its Intentional property contains only the explicit
-    opt-in and data that those files cannot express. Every destination is named
-    inside its publisher mapping. `npm.npmjs` selects npmjs, `npm.github`
-    selects GitHub Package Registry, and `cargo.registry` selects the registry
-    identified by native Cargo metadata. An empty `npm` or `cargo` mapping
-    selects nothing and is reported by executor initialization and checking.
-    Adding a maintained target to an adapter therefore cannot create a
-    publication in a repository that has not named that target.
+    opt-in and data that those files cannot express. npm, Cargo, and OCI
+    destinations are named inside their publisher mappings. `npm.npmjs` selects
+    npmjs, `npm.github` selects GitHub Package Registry, and `cargo.registry`
+    selects the registry identified by native Cargo metadata. An empty `npm` or
+    `cargo` mapping selects nothing and is reported by executor initialization
+    and checking. Selection reads only named configuration and never derives
+    targets from the maintained recipe catalog. Adding a maintained target to
+    an adapter therefore cannot create a publication in a repository that has
+    not named that target.
 
     Homebrew configuration contains the tap repository. Intentional derives the
     formula identity and packager from release-unit evidence. AUR configuration

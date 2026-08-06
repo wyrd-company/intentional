@@ -557,16 +557,44 @@ impl ReleaseUnitConfig {
     }
 }
 
-/// npm publication intent; every destination is an explicit peer target.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct NpmPublisher {
-    /// npmjs destination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub npmjs: Option<NpmjsTarget>,
-    /// GitHub Package Registry destination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub github: Option<NpmGithubTarget>,
+macro_rules! explicit_target_publisher {
+    (
+        $(#[$publisher_meta:meta])*
+        pub struct $publisher:ident {
+            $(
+                $(#[$target_meta:meta])*
+                pub $target:ident: Option<$target_type:ty> => $schema_reference:literal,
+            )+
+        }
+    ) => {
+        $(#[$publisher_meta])*
+        #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+        #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+        pub struct $publisher {
+            $(
+                $(#[$target_meta])*
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                pub $target: Option<$target_type>,
+            )+
+        }
+
+        #[cfg(test)]
+        impl $publisher {
+            const SCHEMA_TARGETS: &'static [(&'static str, &'static str)] = &[
+                $((stringify!($target), $schema_reference),)+
+            ];
+        }
+    };
+}
+
+explicit_target_publisher! {
+    /// npm publication intent; every destination is an explicit peer target.
+    pub struct NpmPublisher {
+        /// npmjs destination.
+        pub npmjs: Option<NpmjsTarget> => "#/$defs/npmjs-target",
+        /// GitHub Package Registry destination.
+        pub github: Option<NpmGithubTarget> => "#/$defs/npm-github-target",
+    }
 }
 
 /// npmjs destination.
@@ -583,13 +611,12 @@ pub struct NpmjsTarget {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct NpmGithubTarget {}
 
-/// Cargo publication intent; the native registry is an explicit target.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct CargoPublisher {
-    /// Registry selected by the native Cargo manifest.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry: Option<CargoRegistryTarget>,
+explicit_target_publisher! {
+    /// Cargo publication intent; the native registry is an explicit target.
+    pub struct CargoPublisher {
+        /// Registry selected by the native Cargo manifest.
+        pub registry: Option<CargoRegistryTarget> => "#/$defs/cargo-registry-target",
+    }
 }
 
 /// Cargo registry destination.
@@ -2193,20 +2220,31 @@ release-units:
                 "schema declares the {publisher} publisher"
             );
         }
-        for (publisher, target, reference) in [
-            ("npm-publisher", "npmjs", "#/$defs/npmjs-target"),
-            ("npm-publisher", "github", "#/$defs/npm-github-target"),
-            (
-                "cargo-publisher",
-                "registry",
-                "#/$defs/cargo-registry-target",
-            ),
+        for (publisher, runtime_targets) in [
+            ("npm-publisher", NpmPublisher::SCHEMA_TARGETS),
+            ("cargo-publisher", CargoPublisher::SCHEMA_TARGETS),
         ] {
+            let schema_targets = schema["$defs"][publisher]["properties"]
+                .as_mapping()
+                .expect("publisher schema properties");
             assert_eq!(
-                schema["$defs"][publisher]["properties"][target]["$ref"].as_str(),
-                Some(reference),
-                "schema target {publisher}.{target} agrees with the runtime field"
+                schema_targets
+                    .keys()
+                    .filter_map(serde_yaml::Value::as_str)
+                    .collect::<BTreeSet<_>>(),
+                runtime_targets
+                    .iter()
+                    .map(|(target, _)| *target)
+                    .collect::<BTreeSet<_>>(),
+                "schema target population agrees with runtime {publisher} selectors"
             );
+            for (target, reference) in runtime_targets {
+                assert_eq!(
+                    schema_targets[*target]["$ref"].as_str(),
+                    Some(*reference),
+                    "schema target {publisher}.{target} agrees with its runtime selector"
+                );
+            }
         }
         assert_eq!(
             schema["$defs"]["attached-component"]["enum"]

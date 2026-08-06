@@ -219,7 +219,8 @@ publisher properties. Publisher properties are invalid directly on a release
 unit and invalid without the top-level `github` property. Native package
 metadata never creates publication intent on its own. A publisher mapping names
 each destination it enables. An empty npm or Cargo mapping selects nothing and
-is reported by `executor init` and `executor check`:
+is reported by `executor init` and `executor check`. Release execution refuses
+the mapping until the maintainer names a destination or removes the publisher:
 
 ```yaml
 release-units:

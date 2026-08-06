@@ -444,8 +444,10 @@ so the publisher job can mint a token scoped to that repository alone.
 
 Configuration has two levels. A **publisher** is what you declare on a package.
 A **destination** is where one publication lands. Intentional supports 9
-destinations in total. Every destination is explicit. An empty publisher
-mapping publishes nowhere and `executor init` and `executor check` report it.
+destinations in total. npm, Cargo, and OCI destinations are explicit. An empty
+`npm` or `cargo` mapping names no destination. `executor init` and `executor
+check` report it, and release execution refuses it until the maintainer names a
+target or removes the publisher mapping.
 For example:
 
 ```yaml

@@ -16,8 +16,7 @@ use crate::error::{Error, Result};
 use crate::executor::recipe::PRIMARY_TARGET;
 use crate::executor::recipe::{
     capability_set, derive_capabilities, derive_package_candidates, recipes_for,
-    resolve_publications, select_publications, Capability, CapabilityEvidence,
-    PackageCandidateEvidence, Packager,
+    resolve_publications, Capability, CapabilityEvidence, PackageCandidateEvidence, Packager,
 };
 use crate::init::SourceEvidence;
 use crate::model::{PublisherKind, ReleaseUnitDisposition};
@@ -366,7 +365,9 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
             )?;
         }
         config.validate()?;
-        select_publications(root, &config)?;
+        for diagnostic in resolve_publications(root, &config)?.diagnostics {
+            operations.push(format!("report: {diagnostic}"));
+        }
         if let Some(updated) = edited_config(&config_text, &edits, &config)? {
             operations.push(format!(
                 "update {CONFIG_PATH} in place; comments, key order, and formatting outside the edited keys are preserved"
@@ -2016,16 +2017,89 @@ github:
 
         let result = initialize_executor(workspace.root()).expect("executor init runs");
         assert_eq!(result.state, ExecutorInitState::NeedsInput);
+        let offered = result
+            .plan
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.kind == CandidateKind::PublicationIntent)
+            .filter_map(|candidate| candidate.choices[0].target.as_deref())
+            .collect::<BTreeSet<_>>();
+        let catalog = recipes_for(
+            &BTreeSet::from([Capability::NodePackage]),
+            PublisherKind::Npm,
+        )
+        .into_iter()
+        .map(|recipe| recipe.target)
+        .collect::<BTreeSet<_>>();
         assert_eq!(
-            result
-                .plan
-                .candidates
-                .iter()
-                .filter(|candidate| candidate.kind == CandidateKind::PublicationIntent)
-                .filter_map(|candidate| candidate.choices[0].target.as_deref())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([PRIMARY_TARGET, "github"]),
+            offered, catalog,
             "initialization names every available destination instead of silently selecting one"
+        );
+    }
+
+    #[test]
+    fn reports_an_empty_publisher_after_every_offer_is_declined() {
+        let workspace = Workspace::new("init-empty-publisher-declined");
+        workspace
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+discovery:
+  managed-paths:
+    - detector: npm-package
+      path: component/package.json
+      release-unit: component
+      package: package
+release-units:
+  component:
+    path: component
+    packages:
+      package:
+        path: .
+        npm: {}
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+"#,
+            )
+            .write(
+                "component/package.json",
+                r#"{"name":"sample-library","version":"1.0.0"}"#,
+            );
+
+        let first = run(&workspace);
+        assert_eq!(first.state, ExecutorInitState::NeedsInput);
+        for target in [PRIMARY_TARGET, "github"] {
+            resolve(
+                workspace.root(),
+                "node-package",
+                &format!("npm/{target}"),
+                DECLINE_CHOICE,
+            );
+        }
+
+        let reported = run(&workspace);
+        assert_eq!(reported.state, ExecutorInitState::Ready);
+        assert!(
+            reported.operations.iter().any(|operation| operation
+                == "report: configured publisher component/package/npm names no target"),
+            "ready initialization reports the underspecified publisher: {:?}",
+            reported.operations
+        );
+        assert_eq!(
+            Config::load(workspace.root())
+                .expect("configured decline history loads")
+                .github
+                .expect("GitHub executor")
+                .declined_publications,
+            BTreeSet::from([
+                "component/package/npm/github".to_owned(),
+                "component/package/npm/primary".to_owned(),
+            ])
         );
     }
 

@@ -1435,28 +1435,27 @@ release-units:
             "component/package.json",
             r#"{"name":"sample-library","version":"1.0.0"}"#,
         );
-        let npm_recipes = recipes_for(
-            &BTreeSet::from([Capability::NodePackage]),
-            PublisherKind::Npm,
-        );
-        assert_eq!(
-            npm_recipes
-                .iter()
-                .map(|recipe| recipe.target)
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([PRIMARY_TARGET, "github"]),
-            "the publisher catalog has a target the configuration does not name"
-        );
-
         let selected = select_publications(workspace.root(), &config("    npm: { npmjs: {} }\n"))
             .expect("the named npmjs target resolves");
+        let selected_targets = selected
+            .iter()
+            .map(|publication| publication.target.as_str())
+            .collect::<BTreeSet<_>>();
         assert_eq!(
-            selected
-                .iter()
-                .map(|publication| publication.target.as_str())
-                .collect::<Vec<_>>(),
-            vec![PRIMARY_TARGET],
+            selected_targets,
+            BTreeSet::from([PRIMARY_TARGET]),
             "a catalog peer cannot arm itself under an existing publisher declaration"
+        );
+        let catalog_targets = recipes_for(
+            &BTreeSet::from([Capability::NodePackage]),
+            PublisherKind::Npm,
+        )
+        .iter()
+        .map(|recipe| recipe.target)
+        .collect::<BTreeSet<_>>();
+        assert!(
+            catalog_targets.is_superset(&selected_targets) && catalog_targets != selected_targets,
+            "the behavioral witness requires at least one unselected catalog peer: {catalog_targets:?}"
         );
     }
 
