@@ -190,6 +190,14 @@ both defaults when it first adds the `github` mapping. Image references must
 end in a lowercase Secure Hash Algorithm 256-bit (SHA-256) digest pin; mutable
 tags are rejected.
 
+`CargoArchive` is the maintained native executable shape, not a general Cargo
+distribution matrix. It requires one binary target in the configured package
+and derives that binary, description, license, and authors from Cargo metadata.
+It emits `linux-x86_64`, `linux-arm64`, and `macos-arm64` gzip archives named
+`<binary>-<version>-<platform>.tar.gz`. Packages with zero or several binaries,
+or without a non-empty description, are refused. Windows, Intel macOS, musl,
+multiple binaries, and alternate archive naming are outside this packager.
+
 Intentional's own configuration keeps its two workspace-versioned crates and
 npm launcher in one release unit. The unit has three packages and four
 publications: `core` at `crates/core` and `cli` at `crates/cli` name

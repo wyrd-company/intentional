@@ -171,7 +171,26 @@ pub(super) fn build_command(packager: Packager) -> String {
             "      cargo package --locked --target-dir \"${RUNNER_TEMP}/@JOB@cargo\"\n      cp \"${RUNNER_TEMP}\"/@JOB@cargo/package/*.crate \"${@ENVVAR@SUBJECT}/\"".to_owned()
         }
         Packager::CargoArchive => format!(
-            r#"{RELEASE_VERSION_COMMAND}      binary="${{@ENVVAR@SUBJECT_IDENTITY}}"
+            r#"{RELEASE_VERSION_COMMAND}      metadata="$(cargo metadata --no-deps --format-version 1)"
+      manifest_path="$(realpath Cargo.toml)"
+      package_metadata="$(jq -c --arg manifest "${{manifest_path}}" '.packages[] | select(.manifest_path == $manifest)' <<<"${{metadata}}")"
+      if [[ -z "${{package_metadata}}" ]]; then
+        printf 'No Cargo package matched manifest %s while deriving native package metadata\n' "${{manifest_path}}" >&2
+        exit 1
+      fi
+      package_name="$(jq -r '.name' <<<"${{package_metadata}}")"
+      mapfile -t binaries < <(jq -r '[.targets[] | select(.kind | index("bin")) | .name] | unique | .[]' <<<"${{package_metadata}}")
+      if [[ "${{#binaries[@]}}" -ne 1 ]]; then
+        printf 'Cargo package %s exposes %s binary targets; CargoArchive requires exactly one\n' \
+          "${{package_name}}" "${{#binaries[@]}}" >&2
+        exit 1
+      fi
+      binary="${{binaries[0]}}"
+      if [[ "${{binary}}" != "${{@ENVVAR@SUBJECT_IDENTITY}}" ]]; then
+        printf 'Cargo package metadata names binary %s, but the sealed subject identity is %s\n' \
+          "${{binary}}" "${{@ENVVAR@SUBJECT_IDENTITY}}" >&2
+        exit 1
+      fi
       linux_x86_64_archive="${{binary}}-${{version}}-linux-x86_64.tar.gz"
       linux_arm64_archive="${{binary}}-${{version}}-linux-arm64.tar.gz"
       macos_arm64_archive="${{binary}}-${{version}}-macos-arm64.tar.gz"
@@ -181,10 +200,11 @@ pub(super) fn build_command(packager: Packager) -> String {
       linux_x86_64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}" | cut -d' ' -f1)"
       linux_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{linux_arm64_archive}}" | cut -d' ' -f1)"
       macos_arm64_digest="$(sha256sum "${{@ENVVAR@SUBJECT}}/${{macos_arm64_archive}}" | cut -d' ' -f1)"
-      metadata="$(cargo metadata --no-deps --format-version 1)"
-      manifest_path="$(realpath Cargo.toml)"
-      package_metadata="$(jq -c --arg manifest "${{manifest_path}}" '.packages[] | select(.manifest_path == $manifest)' <<<"${{metadata}}")"
-      description="$(jq -r '.description // "Native executable"' <<<"${{package_metadata}}")"
+      description="$(jq -r '.description // empty' <<<"${{package_metadata}}")"
+      if [[ -z "${{description//[[:space:]]/}}" ]]; then
+        printf 'Cargo package %s must declare a non-empty description before Intentional can derive native package metadata\n' "${{package_name}}" >&2
+        exit 1
+      fi
       license="$(jq -r '.license // empty' <<<"${{package_metadata}}")"
       description_literal="$(jq -Rn --arg value "${{description}}" '$value')"
       license_literal="$(jq -Rn --arg value "${{license}}" '$value')"
@@ -228,7 +248,7 @@ pub(super) fn build_command(packager: Packager) -> String {
       if [[ "${{@ENVVAR@RPM}}" == true || "${{@ENVVAR@APT}}" == true ]]; then
         maintainer="$(jq -r '.authors | map(select(length > 0)) | join(", ")' <<<"${{package_metadata}}")"
         if [[ -z "${{maintainer}}" ]]; then
-          printf 'Cargo package %s must declare at least one author before Intentional can derive RPM or APT maintainer metadata\n' "${{binary}}" >&2
+          printf 'Cargo package %s must declare at least one author before Intentional can derive RPM or APT maintainer metadata\n' "${{package_name}}" >&2
           exit 1
         fi
         package_root="${{RUNNER_TEMP}}/@JOB@package-root"
@@ -393,13 +413,32 @@ steps:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/@JOB@cargo-@SLUG@-@PLATFORM@
 @PLATFORM_ENV@    run: |
       set -euo pipefail
-@BUILD_SETUP@      @BUILD_TOOL@ build --release --locked --target @TARGET@ \
-        --bin "${@ENVVAR@SUBJECT_IDENTITY}"
-      binary_path="${CARGO_TARGET_DIR}/@TARGET@/release/${@ENVVAR@SUBJECT_IDENTITY}"
+      metadata="$(cargo metadata --no-deps --format-version 1)"
+      manifest_path="$(realpath Cargo.toml)"
+      package_metadata="$(jq -c --arg manifest "${manifest_path}" '.packages[] | select(.manifest_path == $manifest)' <<<"${metadata}")"
+      if [[ -z "${package_metadata}" ]]; then
+        printf 'No Cargo package matched manifest %s while deriving the native archive\n' "${manifest_path}" >&2
+        exit 1
+      fi
+      package_name="$(jq -r '.name' <<<"${package_metadata}")"
+      mapfile -t binaries < <(jq -r '[.targets[] | select(.kind | index("bin")) | .name] | unique | .[]' <<<"${package_metadata}")
+      if [[ "${#binaries[@]}" -ne 1 ]]; then
+        printf 'Cargo package %s exposes %s binary targets; CargoArchive requires exactly one\n' \
+          "${package_name}" "${#binaries[@]}" >&2
+        exit 1
+      fi
+      binary="${binaries[0]}"
+      if [[ "${binary}" != "${@ENVVAR@SUBJECT_IDENTITY}" ]]; then
+        printf 'Cargo package metadata names binary %s, but the sealed subject identity is %s\n' \
+          "${binary}" "${@ENVVAR@SUBJECT_IDENTITY}" >&2
+        exit 1
+      fi
+@BUILD_SETUP@      @BUILD_TOOL@ build --release --locked --target @TARGET@ --bin "${binary}"
+      binary_path="${CARGO_TARGET_DIR}/@TARGET@/release/${binary}"
       chmod 755 "${binary_path}"
       touch -t 197001010000 "${binary_path}"
       tar -cf - -C "$(dirname "${binary_path}")" \
-        "${@ENVVAR@SUBJECT_IDENTITY}" \
+        "${binary}" \
         | gzip -n > "${RUNNER_TEMP}/${@ENVVAR@ARCHIVE}"
   - name: Upload the @PLATFORM@ native archive
     uses: @UPLOAD@

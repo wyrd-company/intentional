@@ -137,7 +137,7 @@ release-units:
     fn rust_homebrew_builds_platform_archives_once_and_promotes_the_sealed_formula() {
         let workspace = rust_homebrew_workspace(
             "rust-homebrew-route",
-            "[package]\nname = \"sample-tool\"\nversion = \"1.2.3\"\ndescription = \"Sample command line tool\"\nlicense = \"MIT\"\n",
+            "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\ndescription = \"Sample command line tool\"\nlicense = \"MIT\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
         );
         workspace.write("component/src/main.rs", "fn main() {}\n");
         converge(workspace.root(), WorkflowRole::Publish);
@@ -397,6 +397,10 @@ release-units:
             std::fs::write(digit_root.join(&produced_archives[producer]), bytes)
                 .unwrap_or_else(|error| panic!("write digit-leading {producer} archive: {error}"));
         }
+        let manifest_path = workspace.root().join("component/Cargo.toml");
+        let manifest = std::fs::read_to_string(&manifest_path).expect("package manifest");
+        std::fs::write(&manifest_path, manifest.replace("sample-tool", "2fast-tool"))
+            .expect("digit-leading package manifest");
         let mut digit_command = std::process::Command::new("bash");
         digit_command
             .arg("-c")
@@ -422,7 +426,12 @@ release-units:
         let output = digit_command
             .output()
             .expect("digit-leading formula builds");
-        assert!(output.status.success());
+        std::fs::write(&manifest_path, manifest).expect("restore package manifest");
+        assert!(
+            output.status.success(),
+            "digit-leading aggregate failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let digit_formula =
             std::fs::read_to_string(digit_root.join("homebrew/Formula/2fast-tool.rb"))
                 .expect("digit-leading formula");
@@ -464,9 +473,19 @@ release-units:
         let stubs = temporary.join("stubs");
         std::fs::create_dir_all(&stubs).expect("stub directory");
         let cargo = stubs.join("cargo");
+        let cargo_command = std::process::Command::new("sh")
+            .args(["-c", "command -v cargo"])
+            .output()
+            .expect("Cargo command lookup");
+        let cargo_command = String::from_utf8(cargo_command.stdout)
+            .expect("Cargo command path is UTF-8")
+            .trim()
+            .to_owned();
         std::fs::write(
             &cargo,
-            "#!/usr/bin/env bash\nset -euo pipefail\ntarget=''\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == --target ]]; then target=$2; shift 2; else shift; fi\ndone\ntest -n \"$target\"\nmkdir -p \"${CARGO_TARGET_DIR}/${target}/release\"\nprintf '#!/usr/bin/env bash\\nprintf \\\"sample-tool 1.2.3\\\\n\\\"\\n' > \"${CARGO_TARGET_DIR}/${target}/release/sample-tool\"\nchmod 755 \"${CARGO_TARGET_DIR}/${target}/release/sample-tool\"\n",
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nif [[ ${{1:-}} == metadata ]]; then exec {cargo_command} \"$@\"; fi\ntarget=''\nwhile [[ $# -gt 0 ]]; do\n  if [[ $1 == --target ]]; then target=$2; shift 2; else shift; fi\ndone\ntest -n \"$target\"\nmkdir -p \"${{CARGO_TARGET_DIR}}/${{target}}/release\"\nprintf '#!/usr/bin/env bash\\nprintf \\\"sample-tool 1.2.3\\\\n\\\"\\n' > \"${{CARGO_TARGET_DIR}}/${{target}}/release/sample-tool\"\nchmod 755 \"${{CARGO_TARGET_DIR}}/${{target}}/release/sample-tool\"\n"
+            ),
         )
         .expect("Cargo stub");
         #[cfg(unix)]
@@ -547,6 +566,115 @@ release-units:
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
             "sample-tool 1.2.3\n"
+        );
+    }
+
+    #[test]
+    fn rust_homebrew_refuses_a_package_without_a_description() {
+        let workspace = rust_homebrew_workspace(
+            "rust-homebrew-description-refusal",
+            "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+        );
+        workspace.write("component/src/main.rs", "fn main() {}\n");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
+        let body = aggregate
+            .iter()
+            .find_map(|step| step["run"].as_str())
+            .expect("aggregate build body");
+        let subject = workspace.root().join("description-refusal/bytes");
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        for archive in [
+            "linux-x86_64.tar.gz",
+            "linux-arm64.tar.gz",
+            "macos-arm64.tar.gz",
+        ] {
+            std::fs::write(subject.join(archive), b"sealed archive").expect("archive fixture");
+        }
+        let build = aggregate
+            .iter()
+            .find(|step| step["run"].as_str() == Some(body))
+            .expect("aggregate build step");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(body)
+            .current_dir(workspace.root().join("component"))
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env(
+                "PATH",
+                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+            );
+        for (key, value) in step_environment(build) {
+            command.env(key, value);
+        }
+        let output = command
+            .env("INTENTIONAL_SUBJECT", &subject)
+            .output()
+            .expect("aggregate body runs");
+        assert!(!output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "Cargo package sample-package must declare a non-empty description before Intentional can derive native package metadata\n"
+        );
+        assert!(
+            !subject.join("homebrew").exists(),
+            "an empty Homebrew description is refused before formula emission"
+        );
+    }
+
+    #[test]
+    fn cargo_archive_names_a_manifest_that_matches_no_package() {
+        let workspace = rust_homebrew_workspace(
+            "rust-homebrew-package-selection-refusal",
+            "[package]\nname = \"sample-package\"\nversion = \"1.2.3\"\ndescription = \"Sample package\"\n\n[[bin]]\nname = \"sample-tool\"\npath = \"src/main.rs\"\n",
+        );
+        workspace.write("component/src/main.rs", "fn main() {}\n");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let aggregate = job_steps(&jobs, "intentional_build_component_cargo_archive");
+        let body = aggregate
+            .iter()
+            .find_map(|step| step["run"].as_str())
+            .expect("aggregate build body");
+        let build = aggregate
+            .iter()
+            .find(|step| step["run"].as_str() == Some(body))
+            .expect("aggregate build step");
+        let subject = workspace.root().join("package-selection-refusal/bytes");
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(body)
+            .current_dir(workspace.root())
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env(
+                "PATH",
+                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+            );
+        for (key, value) in step_environment(build) {
+            command.env(key, value);
+        }
+        let output = command
+            .env("INTENTIONAL_SUBJECT", &subject)
+            .output()
+            .expect("aggregate body runs");
+        assert!(!output.status.success());
+        let root_manifest = workspace.root().join("Cargo.toml");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            format!(
+                "No Cargo package matched manifest {} while deriving native package metadata\n",
+                root_manifest.display()
+            )
+        );
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("must declare at least one author"),
+            "package selection failure is not misreported as absent maintainer metadata"
         );
     }
 
