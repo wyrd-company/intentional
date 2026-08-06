@@ -315,10 +315,18 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
             }
         }
     }
+    reached.sort();
     assert_eq!(
-        reached.len(),
-        5,
-        "the derived workspace-test job population: {reached:?}"
+        reached,
+        [
+            "../../.github/workflows/cd.yml:build",
+            "../../.github/workflows/ci.yml:minimum-rust",
+            "../../.github/workflows/ci.yml:test",
+            "../../.github/workflows/ci.yml:test",
+            "../../.github/workflows/linux-gnu-evidence.yml:native-arm64",
+            "../../.github/workflows/linux-gnu-evidence.yml:test-x86_64-gnu-toolchain",
+        ],
+        "the derived workspace-test command population"
     );
 }
 
