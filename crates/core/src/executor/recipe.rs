@@ -199,6 +199,30 @@ const CATALOG: &[Recipe] = &[
         retrieval: CleanClientMode::AuthenticatedDraft,
     },
     Recipe {
+        capability: Capability::RustCrate,
+        packager: Packager::CargoArchive,
+        publisher: PublisherKind::Rpm,
+        target: PRIMARY_TARGET,
+        components: &[],
+        retrieval: CleanClientMode::Public,
+    },
+    Recipe {
+        capability: Capability::RustCrate,
+        packager: Packager::CargoArchive,
+        publisher: PublisherKind::Apt,
+        target: PRIMARY_TARGET,
+        components: &[],
+        retrieval: CleanClientMode::Public,
+    },
+    Recipe {
+        capability: Capability::RustCrate,
+        packager: Packager::CargoArchive,
+        publisher: PublisherKind::Aur,
+        target: PRIMARY_TARGET,
+        components: &[],
+        retrieval: CleanClientMode::AuthenticatedDraft,
+    },
+    Recipe {
         capability: Capability::GoApplication,
         packager: Packager::GoReleaser,
         publisher: PublisherKind::Homebrew,
@@ -655,9 +679,33 @@ fn select_one(
         // The Arch User Repository resolves a package by name, and GoReleaser's
         // own configuration is where that name lives: explicitly under `aur`,
         // and otherwise as the binary package of the declared project.
-        (None, PublisherKind::Aur) => {
-            aur_package(root, release_unit, &format!("{id}/{package_id}/{publisher}/{target}"))?
-        }
+        (None, PublisherKind::Aur) => match recipe.packager {
+            Packager::GoReleaser => aur_package(
+                root,
+                release_unit,
+                &format!("{id}/{package_id}/{publisher}/{target}"),
+            )?,
+            Packager::CargoArchive => {
+                let directory = package_path(release_unit, package);
+                let binary = cargo_binary_identity(
+                    root,
+                    &directory,
+                    &format!("{id}/{package_id}/{publisher}/{target}"),
+                )
+                .map_err(Error::Validation)?;
+                let origin = format!("{} binary name", directory.join("Cargo.toml").display());
+                crate::executor::goreleaser::arch_package_name(
+                    None,
+                    &names::SuppliedName {
+                        origin: &origin,
+                        value: &binary,
+                    },
+                )
+                .map(Some)
+                .map_err(Error::Validation)?
+            }
+            _ => None,
+        },
         (None, _) if configured.destination_required => {
             return Err(Error::Validation(format!(
                 "configured target {id}/{package_id}/{publisher}/{target} requires an explicit repository; its destination identity is not derivable"

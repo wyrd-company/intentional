@@ -37,10 +37,11 @@ use std::path::{Path, PathBuf};
 mod templates;
 
 use templates::{
-    build_command, job, render_list, toolchain_steps, OCI_TITLE_LABEL, PUBLISH_ASSEMBLE_JOB,
-    PUBLISH_BUILD_JOB, PUBLISH_CLOSE_JOB, PUBLISH_HANDOFF_STEP, PUBLISH_PHASE_TAG_JOB,
-    PUBLISH_PUBLISHER_JOB, PUBLISH_RETRIEVAL_JOB, PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP,
-    PUBLISH_VERIFY_JOB, PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB, RELEASE_PREPARE_JOB,
+    build_command, job, nfpm_toolchain_steps, render_list, toolchain_steps, OCI_TITLE_LABEL,
+    PUBLISH_ASSEMBLE_JOB, PUBLISH_BUILD_JOB, PUBLISH_CLOSE_JOB, PUBLISH_HANDOFF_STEP,
+    PUBLISH_PHASE_TAG_JOB, PUBLISH_PUBLISHER_JOB, PUBLISH_RETRIEVAL_JOB, PUBLISH_UPLOAD_JOB,
+    PUBLISH_UPLOAD_STEP, PUBLISH_VERIFY_JOB, PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB,
+    RELEASE_PREPARE_JOB,
 };
 
 /// Pinned identities and the scalar renderer the recipe modules share.
@@ -940,17 +941,29 @@ fn publish_contract(
         // not what the two system-package adapters happen to distribute, so the
         // exclusion a descriptor adapter's handoff applies is read from the
         // packager's own configuration.
-        let unit = &config.release_units[&publication.release_unit];
-        let declared = crate::executor::goreleaser::read(&root.join(&unit.path))
-            .map_err(|error| {
-                vec![WorkflowDiagnostic::at(
-                    "packager-configuration-unreadable",
-                    error.to_string(),
-                    &format!("release-units.{}", publication.release_unit),
-                )]
-            })?
-            .map(|native| native.nfpm_formats)
-            .unwrap_or_default();
+        let declared = if publication.packager == Packager::CargoArchive {
+            subject
+                .publishers
+                .iter()
+                .filter_map(|publisher| match publisher {
+                    PublisherKind::Rpm => Some("rpm".to_owned()),
+                    PublisherKind::Apt => Some("deb".to_owned()),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            let unit = &config.release_units[&publication.release_unit];
+            crate::executor::goreleaser::read(&root.join(&unit.path))
+                .map_err(|error| {
+                    vec![WorkflowDiagnostic::at(
+                        "packager-configuration-unreadable",
+                        error.to_string(),
+                        &format!("release-units.{}", publication.release_unit),
+                    )]
+                })?
+                .map(|native| native.nfpm_formats)
+                .unwrap_or_default()
+        };
         let consumed = crate::executor::steps::consumed_deliverables(
             publication.publisher,
             &publication.release_unit,
@@ -1122,6 +1135,10 @@ struct DistinctSubject {
     package: String,
     /// Packager that produces the subject's format.
     packager: Packager,
+    /// Publisher routes whose deliverables this one subject must contain.
+    publishers: BTreeSet<PublisherKind>,
+    /// Derived Arch package repository, when this subject carries an AUR route.
+    aur_destination: Option<String>,
     /// Identity every configured destination resolves the subject by.
     identity: String,
     /// Workspace-relative directory that owns the packager invocation.
@@ -1187,13 +1204,41 @@ fn distinct_subjects(
             release_unit: publication.release_unit.clone(),
             package: publication.package.clone(),
             packager: publication.packager,
+            publishers: publications
+                .iter()
+                .filter(|candidate| {
+                    candidate.release_unit == publication.release_unit
+                        && candidate.package == publication.package
+                        && candidate.packager == publication.packager
+                })
+                .map(|candidate| candidate.publisher)
+                .collect(),
+            aur_destination: publications
+                .iter()
+                .find(|candidate| {
+                    candidate.release_unit == publication.release_unit
+                        && candidate.package == publication.package
+                        && candidate.packager == publication.packager
+                        && candidate.publisher == PublisherKind::Aur
+                })
+                .and_then(|candidate| candidate.destination.clone()),
             identity: subject_identity(root, &working_directory, publication).map_err(
                 |message| {
-                    let (code, path) = if publication.packager == Packager::CargoArchive {
+                    let (code, path) = if publication.packager == Packager::CargoArchive
+                        && publication.publisher == PublisherKind::Homebrew
+                    {
                         (
                             "homebrew-formula-underived",
                             format!(
                                 "release-units.{}.packages.{}.homebrew",
+                                publication.release_unit, publication.package
+                            ),
+                        )
+                    } else if publication.packager == Packager::CargoArchive {
+                        (
+                            "cargo-archive-identity-underived",
+                            format!(
+                                "release-units.{}.packages.{}",
                                 publication.release_unit, publication.package
                             ),
                         )
@@ -1509,7 +1554,15 @@ fn build_job(
     subject: &DistinctSubject,
     global_tag: &str,
 ) -> std::result::Result<Value, WorkflowDiagnostic> {
-    let tools = toolchain_steps(subject.packager).replace("@SLUG@", &subject.slug);
+    let mut tools = toolchain_steps(subject.packager).replace("@SLUG@", &subject.slug);
+    if subject.packager == Packager::CargoArchive
+        && subject
+            .publishers
+            .iter()
+            .any(|publisher| matches!(publisher, PublisherKind::Rpm | PublisherKind::Apt))
+    {
+        tools.push_str(&nfpm_toolchain_steps());
+    }
     job(
         PUBLISH_BUILD_JOB,
         namespaces,

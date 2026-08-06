@@ -286,7 +286,13 @@ pub(super) const fn recipe_is_derived(packager: Packager, publisher: PublisherKi
                     | PublisherKind::Rpm
                     | PublisherKind::Apt
             )
-            | (Packager::CargoArchive, PublisherKind::Homebrew)
+            | (
+                Packager::CargoArchive,
+                PublisherKind::Homebrew
+                    | PublisherKind::Aur
+                    | PublisherKind::Rpm
+                    | PublisherKind::Apt
+            )
             | (Packager::Buildx, PublisherKind::Oci)
             | (Packager::DevContainerCli, PublisherKind::Oci)
     )

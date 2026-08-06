@@ -112,6 +112,10 @@ aur:
                 let workspace = go_workspace(label);
                 workspace.write("component/.goreleaser.yaml", native);
                 converge(workspace.root(), WorkflowRole::Publish);
+                Self::from_workspace(workspace, job)
+            }
+
+            fn from_workspace(workspace: Workspace, job: &str) -> Self {
                 let root = workspace.root().to_path_buf();
                 let remotes = root.join("remotes");
                 let stubs = root.join("stubs");
@@ -494,6 +498,48 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             );
             assert_eq!(files["PKGBUILD"], "pkgname=example-tool-bin\n");
             assert_eq!(files[".SRCINFO"], "pkgbase = example-tool-bin\n");
+        }
+
+        #[test]
+        fn cargo_aur_route_promotes_the_aggregate_descriptors_without_rebuilding() {
+            let workspace = cargo_system_package_workspace("recipe-cargo-aur-promote");
+            converge(workspace.root(), WorkflowRole::Publish);
+            let recipe = Recipe::from_workspace(
+                workspace,
+                "intentional_publish_component_utility_aur_primary",
+            )
+            .with_destination("sample-utility-bin");
+            let bytes = recipe.temp.join("intentional_subject/bytes/aur");
+            std::fs::create_dir_all(&bytes).expect("Cargo AUR descriptor directory");
+            std::fs::write(
+                bytes.join("sample-utility-bin.pkgbuild"),
+                "pkgname=sample-utility-bin\nsource_x86_64=('sealed archive')\n",
+            )
+            .expect("Cargo PKGBUILD");
+            std::fs::write(
+                bytes.join("sample-utility-bin.srcinfo"),
+                "pkgbase = sample-utility-bin\n\tpkgver = 1.2.3\n",
+            )
+            .expect("Cargo .SRCINFO");
+
+            recipe.run().expect_success();
+            let files = recipe.destination_files("sample-utility-bin");
+            assert_eq!(
+                files["PKGBUILD"],
+                "pkgname=sample-utility-bin\nsource_x86_64=('sealed archive')\n"
+            );
+            assert_eq!(
+                files[".SRCINFO"],
+                "pkgbase = sample-utility-bin\n\tpkgver = 1.2.3\n"
+            );
+            assert!(
+                !job_run_bodies(
+                    &publish_jobs(recipe.workspace.root()),
+                    "intentional_publish_component_utility_aur_primary"
+                )
+                .contains("cargo build"),
+                "the publisher promotes the sealed descriptors"
+            );
         }
 
         // A release unit with a second `aur` entry writes its files into the

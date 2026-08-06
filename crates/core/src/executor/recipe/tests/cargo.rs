@@ -59,6 +59,104 @@
         assert_eq!(selected[0].destination.as_deref(), Some("example-registry"));
     }
 
+    #[test]
+    fn open_catalog_selects_each_non_go_system_package_route() {
+        let routes = catalog()
+            .iter()
+            .filter(|recipe| {
+                recipe.capability != Capability::GoApplication
+                    && matches!(
+                        recipe.publisher,
+                        PublisherKind::Rpm | PublisherKind::Apt | PublisherKind::Aur
+                    )
+            })
+            .map(|recipe| (recipe.capability, recipe.packager, recipe.publisher))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            routes,
+            BTreeSet::from([
+                (
+                    Capability::RustCrate,
+                    Packager::CargoArchive,
+                    PublisherKind::Rpm,
+                ),
+                (
+                    Capability::RustCrate,
+                    Packager::CargoArchive,
+                    PublisherKind::Apt,
+                ),
+                (
+                    Capability::RustCrate,
+                    Packager::CargoArchive,
+                    PublisherKind::Aur,
+                ),
+            ])
+        );
+
+        let workspace = Workspace::new("cargo-system-routes");
+        workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-utility\"\nversion = \"1.0.0\"\n",
+            )
+            .write("component/src/main.rs", "fn main() {}\n");
+        let selected = select_publications(
+            workspace.root(),
+            &config(
+                "    rpm:\n      delivery-action: .github/actions/deliver-rpm\n      base-url: https://packages.invalid/rpm\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      channel: stable\n      with: {}\n    apt:\n      delivery-action: .github/actions/deliver-apt\n      base-url: https://packages.invalid/apt\n      public-signing-key-url: https://packages.invalid/key.asc\n      observation-deadline: 47\n      suite: current\n      component: main\n      with: {}\n    aur: {}\n",
+            ),
+        )
+        .expect("Cargo package selects the maintained system routes");
+        assert_eq!(selected.len(), routes.len());
+        for route in &selected {
+            assert_eq!(route.capability, Capability::RustCrate);
+            assert_eq!(route.packager, Packager::CargoArchive);
+        }
+        let destinations = selected
+            .iter()
+            .map(|route| (route.publisher, route.destination.as_deref()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            destinations,
+            BTreeMap::from([
+                (PublisherKind::Rpm, Some("https://packages.invalid/rpm")),
+                (PublisherKind::Apt, Some("https://packages.invalid/apt")),
+                (PublisherKind::Aur, Some("sample-utility-bin")),
+            ])
+        );
+
+        let explicit_workspace = Workspace::new("cargo-system-explicit-binary");
+        explicit_workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-container\"\nversion = \"1.0.0\"\nautobins = false\n\n[[bin]]\nname = \"sample-runner\"\npath = \"src/runner.rs\"\n",
+            )
+            .write("component/src/runner.rs", "fn main() {}\n");
+        let explicit = select_publications(
+            explicit_workspace.root(),
+            &config("    aur: {}\n"),
+        )
+        .expect("one explicit Cargo binary selects AUR");
+        assert_eq!(explicit[0].destination.as_deref(), Some("sample-runner-bin"));
+    }
+
+    #[test]
+    fn refuses_an_aur_route_without_one_cargo_binary_identity() {
+        let workspace = Workspace::new("cargo-aur-identity-refusal");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
+        );
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("a library cannot guess an Arch package repository");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot derive one native executable identity"),
+            "{error}"
+        );
+    }
+
 
     /// The window the CLI handoff fixtures fell into, opened on purpose.
     #[test]

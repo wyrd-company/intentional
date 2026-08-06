@@ -28,10 +28,20 @@ pub(super) fn build_environment(subject: &DistinctSubject, global_tag: &str) -> 
         .split_once("{version}")
         .unwrap_or((global_tag, ""));
     format!(
-        "      @ENVVAR@SUBJECT_IDENTITY: {}\n      @ENVVAR@TAG_PREFIX: {}\n      @ENVVAR@TAG_SUFFIX: {}\n",
+        "      @ENVVAR@SUBJECT_IDENTITY: {}\n      @ENVVAR@TAG_PREFIX: {}\n      @ENVVAR@TAG_SUFFIX: {}\n      @ENVVAR@HOMEBREW: {}\n      @ENVVAR@RPM: {}\n      @ENVVAR@APT: {}\n      @ENVVAR@AUR: {}\n      @ENVVAR@AUR_DESTINATION: {}\n      @ENVVAR@NFPM: ${{{{ runner.temp }}}}/@JOB@tools/nfpm\n",
         scalar(&subject.identity),
         scalar(prefix),
         scalar(suffix),
+        scalar(
+            &subject
+                .publishers
+                .contains(&PublisherKind::Homebrew)
+                .to_string(),
+        ),
+        scalar(&subject.publishers.contains(&PublisherKind::Rpm).to_string()),
+        scalar(&subject.publishers.contains(&PublisherKind::Apt).to_string()),
+        scalar(&subject.publishers.contains(&PublisherKind::Aur).to_string()),
+        scalar(subject.aur_destination.as_deref().unwrap_or("")),
     )
 }
 

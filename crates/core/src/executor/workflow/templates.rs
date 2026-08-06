@@ -76,6 +76,12 @@ pub(in crate::executor) const COSIGN_INSTALLER_ACTION: &str =
 /// build the same subject twice once the packager moved underneath it.
 pub(super) const GORELEASER_VERSION: &str = "2.17.1";
 
+/// nFPM release that turns a sealed Cargo executable into RPM and Debian packages.
+pub(super) const NFPM_VERSION: &str = "2.47.0";
+/// SHA-256 digest of nFPM's Linux x86-64 archive for [`NFPM_VERSION`].
+pub(super) const NFPM_LINUX_X86_64_DIGEST: &str =
+    "0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783";
+
 pub(super) const APP_TOKEN_ACTION: &str =
     "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349";
 
@@ -129,6 +135,26 @@ pub(super) const fn toolchain_steps(packager: Packager) -> &'static str {
     }
 }
 
+/// Install the pinned nFPM command used only by Cargo system-package routes.
+pub(super) fn nfpm_toolchain_steps() -> String {
+    format!(
+        r#"  - name: Install the pinned nFPM packager
+    env:
+      @ENVVAR@NFPM_VERSION: {NFPM_VERSION}
+      @ENVVAR@NFPM_DIGEST: {NFPM_LINUX_X86_64_DIGEST}
+    run: |
+      set -euo pipefail
+      archive="${{RUNNER_TEMP}}/@JOB@nfpm.tar.gz"
+      install -d "${{RUNNER_TEMP}}/@JOB@tools"
+      curl -fsSL --max-redirs 5 \
+        "https://github.com/goreleaser/nfpm/releases/download/v${{@ENVVAR@NFPM_VERSION}}/nfpm_${{@ENVVAR@NFPM_VERSION}}_Linux_x86_64.tar.gz" \
+        -o "${{archive}}"
+      printf '%s  %s\n' "${{@ENVVAR@NFPM_DIGEST}}" "${{archive}}" | sha256sum --check
+      tar -xzf "${{archive}}" -C "${{RUNNER_TEMP}}/@JOB@tools" nfpm
+"#
+    )
+}
+
 /// Native command that produces one subject's bytes without distributing them.
 ///
 /// This is the packager seam the maintained recipes refine. It states the
@@ -159,39 +185,119 @@ pub(super) fn build_command(packager: Packager) -> String {
       license_literal="$(jq -Rn --arg value "${{license}}" '$value')"
       license_line=""
       if [[ -n "${{license}}" ]]; then license_line="  license ${{license_literal}}"; fi
-      formula_class="$(printf '%s' "${{binary}}" | awk -F '[-_]' '{{ for (i=1; i<=NF; i++) printf toupper(substr($i,1,1)) substr($i,2) }}')"
-      if [[ "${{formula_class}}" == [0-9]* ]]; then formula_class="V${{formula_class}}"; fi
-      formula="${{@ENVVAR@SUBJECT}}/homebrew/Formula/${{binary}}.rb"
-      install -d "$(dirname "${{formula}}")"
-      printf '%s\n' \
-        "class ${{formula_class}} < Formula" \
-        "  desc ${{description_literal}}" \
-        "  homepage \"https://github.com/${{GITHUB_REPOSITORY}}\"" \
-        "${{license_line}}" \
-        "  version \"${{version}}\"" \
-        "  on_linux do" \
-        "    on_arm do" \
-        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_arm64_archive}}\"" \
-        "      sha256 \"${{linux_arm64_digest}}\"" \
-        "    end" \
-        "    on_intel do" \
-        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_x86_64_archive}}\"" \
-        "      sha256 \"${{linux_x86_64_digest}}\"" \
-        "    end" \
-        "  end" \
-        "  on_macos do" \
-        "    on_arm do" \
-        "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{macos_arm64_archive}}\"" \
-        "      sha256 \"${{macos_arm64_digest}}\"" \
-        "    end" \
-        "  end" \
-        "  def install" \
-        "    bin.install \"${{binary}}\"" \
-        "  end" \
-        "  test do" \
-        "    assert_match version.to_s, shell_output((bin/\"${{binary}}\").to_s + \" --version\")" \
-        "  end" \
-        "end" > "${{formula}}""#,
+      if [[ "${{@ENVVAR@HOMEBREW}}" == true ]]; then
+        formula_class="$(printf '%s' "${{binary}}" | awk -F '[-_]' '{{ for (i=1; i<=NF; i++) printf toupper(substr($i,1,1)) substr($i,2) }}')"
+        if [[ "${{formula_class}}" == [0-9]* ]]; then formula_class="V${{formula_class}}"; fi
+        formula="${{@ENVVAR@SUBJECT}}/homebrew/Formula/${{binary}}.rb"
+        install -d "$(dirname "${{formula}}")"
+        printf '%s\n' \
+          "class ${{formula_class}} < Formula" \
+          "  desc ${{description_literal}}" \
+          "  homepage \"https://github.com/${{GITHUB_REPOSITORY}}\"" \
+          "${{license_line}}" \
+          "  version \"${{version}}\"" \
+          "  on_linux do" \
+          "    on_arm do" \
+          "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_arm64_archive}}\"" \
+          "      sha256 \"${{linux_arm64_digest}}\"" \
+          "    end" \
+          "    on_intel do" \
+          "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{linux_x86_64_archive}}\"" \
+          "      sha256 \"${{linux_x86_64_digest}}\"" \
+          "    end" \
+          "  end" \
+          "  on_macos do" \
+          "    on_arm do" \
+          "      url \"https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}/${{macos_arm64_archive}}\"" \
+          "      sha256 \"${{macos_arm64_digest}}\"" \
+          "    end" \
+          "  end" \
+          "  def install" \
+          "    bin.install \"${{binary}}\"" \
+          "  end" \
+          "  test do" \
+          "    assert_match version.to_s, shell_output((bin/\"${{binary}}\").to_s + \" --version\")" \
+          "  end" \
+          "end" > "${{formula}}"
+      fi
+      if [[ "${{@ENVVAR@RPM}}" == true || "${{@ENVVAR@APT}}" == true ]]; then
+        package_root="${{RUNNER_TEMP}}/@JOB@package-root"
+        rm -rf "${{package_root}}"
+        install -d "${{package_root}}/usr/bin"
+        tar -xzf "${{@ENVVAR@SUBJECT}}/${{linux_x86_64_archive}}" \
+          -C "${{package_root}}/usr/bin" "${{binary}}"
+        source_literal="$(jq -Rn --arg value "${{package_root}}/usr/bin/${{binary}}" '$value')"
+        destination_literal="$(jq -Rn --arg value "/usr/bin/${{binary}}" '$value')"
+        nfpm_config="${{RUNNER_TEMP}}/@JOB@nfpm.yml"
+        printf '%s\n' \
+          "name: ${{binary}}" \
+          "arch: amd64" \
+          "platform: linux" \
+          "version: ${{version}}" \
+          "maintainer: Intentional <releases@intentional.foo>" \
+          "description: ${{description_literal}}" \
+          "license: ${{license_literal}}" \
+          "contents:" \
+          "  - src: ${{source_literal}}" \
+          "    dst: ${{destination_literal}}" > "${{nfpm_config}}"
+        if [[ "${{@ENVVAR@RPM}}" == true ]]; then
+          "${{@ENVVAR@NFPM}}" package --config "${{nfpm_config}}" --packager rpm \
+            --target "${{@ENVVAR@SUBJECT}}/${{binary}}-${{version}}.x86_64.rpm"
+        fi
+        if [[ "${{@ENVVAR@APT}}" == true ]]; then
+          "${{@ENVVAR@NFPM}}" package --config "${{nfpm_config}}" --packager deb \
+            --target "${{@ENVVAR@SUBJECT}}/${{binary}}_${{version}}_amd64.deb"
+        fi
+      fi
+      if [[ "${{@ENVVAR@AUR}}" == true ]]; then
+        pkgname="${{@ENVVAR@AUR_DESTINATION}}"
+        test -n "${{pkgname}}"
+        pkgver="${{version//-/_}}"
+        description_shell="$(jq -Rr '@sh' <<<"${{description//$'\n'/ }}")"
+        license_shell="$(jq -Rr '@sh' <<<"${{license}}")"
+        license_pkgbuild=""
+        license_srcinfo=""
+        if [[ -n "${{license}}" ]]; then
+          license_pkgbuild="license=(${{license_shell}})"
+          license_srcinfo="\tlicense = ${{license}}"
+        fi
+        x86_source="${{binary}}-${{version}}-linux-x86_64.tar.gz"
+        arm64_source="${{binary}}-${{version}}-linux-aarch64.tar.gz"
+        base_url="https://github.com/${{GITHUB_REPOSITORY}}/releases/download/${{GITHUB_REF_NAME}}"
+        pkgbuild="${{@ENVVAR@SUBJECT}}/aur/${{pkgname}}.pkgbuild"
+        srcinfo="${{@ENVVAR@SUBJECT}}/aur/${{pkgname}}.srcinfo"
+        install -d "$(dirname "${{pkgbuild}}")"
+        printf '%s\n' \
+          "pkgname=${{pkgname}}" \
+          "pkgver=${{pkgver}}" \
+          "pkgrel=1" \
+          "pkgdesc=${{description_shell}}" \
+          "arch=('x86_64' 'aarch64')" \
+          "url='https://github.com/${{GITHUB_REPOSITORY}}'" \
+          "${{license_pkgbuild}}" \
+          "source_x86_64=('${{x86_source}}::${{base_url}}/${{linux_x86_64_archive}}')" \
+          "source_aarch64=('${{arm64_source}}::${{base_url}}/${{linux_arm64_archive}}')" \
+          "sha256sums_x86_64=('${{linux_x86_64_digest}}')" \
+          "sha256sums_aarch64=('${{linux_arm64_digest}}')" \
+          "package() {{" \
+          "  install -Dm755 \"\${{srcdir}}/${{binary}}\" \"\${{pkgdir}}/usr/bin/${{binary}}\"" \
+          "}}" > "${{pkgbuild}}"
+        printf '%s\n' \
+          "pkgbase = ${{pkgname}}" \
+          "\tpkgdesc = ${{description//$'\n'/ }}" \
+          "\tpkgver = ${{pkgver}}" \
+          "\tpkgrel = 1" \
+          "\turl = https://github.com/${{GITHUB_REPOSITORY}}" \
+          "\tarch = x86_64" \
+          "\tarch = aarch64" \
+          "${{license_srcinfo}}" \
+          "\tsource_x86_64 = ${{x86_source}}::${{base_url}}/${{linux_x86_64_archive}}" \
+          "\tsha256sums_x86_64 = ${{linux_x86_64_digest}}" \
+          "\tsource_aarch64 = ${{arm64_source}}::${{base_url}}/${{linux_arm64_archive}}" \
+          "\tsha256sums_aarch64 = ${{linux_arm64_digest}}" \
+          "" \
+          "pkgname = ${{pkgname}}" > "${{srcinfo}}"
+      fi"#,
             linux_x86_64_input = super::build::CARGO_ARCHIVE_LINUX_X86_64,
             linux_arm64_input = super::build::CARGO_ARCHIVE_LINUX_ARM64,
             macos_arm64_input = super::build::CARGO_ARCHIVE_MACOS_ARM64,

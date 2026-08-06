@@ -104,6 +104,324 @@ release-units:
         workspace
     }
 
+    fn cargo_system_package_workspace(label: &str) -> Workspace {
+        let workspace = Workspace::new(label);
+        let common = [
+            "intentional-package-path",
+            "intentional-format",
+            "intentional-name",
+            "intentional-version",
+            "intentional-architecture",
+            "intentional-digest",
+        ];
+        let mut rpm = common.to_vec();
+        rpm.push("intentional-rpm-channel");
+        let mut apt = common.to_vec();
+        apt.extend(["intentional-apt-suite", "intentional-apt-component"]);
+        workspace
+            .write(
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"component\"]\nresolver = \"2\"\n",
+            )
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-utility\"\nversion = \"1.2.3\"\ndescription = \"Sample utility\"\nlicense = \"MIT\"\n",
+            )
+            .write("component/src/main.rs", "fn main() {}\n")
+            .write(
+                ".intentional/config.yml",
+                r#"$schema: https://intentional.foo/schemas/config.yml
+contract: contract-2
+workspace-tags:
+  release: { template: '{version}' }
+github:
+  workflows:
+    release: { path: .github/workflows/release.yml }
+    publish: { path: .github/workflows/publish.yml }
+release-units:
+  component:
+    path: component
+    packages:
+      utility:
+        path: .
+        rpm:
+          delivery-action: .github/actions/deliver-rpm
+          base-url: https://packages.invalid/rpm
+          public-signing-key-url: https://packages.invalid/rpm-key.asc
+          observation-deadline: 47
+          channel: stable
+          with: {}
+        apt:
+          delivery-action: .github/actions/deliver-apt
+          base-url: https://packages.invalid/apt
+          public-signing-key-url: https://packages.invalid/apt-key.asc
+          observation-deadline: 53
+          suite: current
+          component: main
+          with: {}
+        aur: {}
+    tags:
+      staged: { role: primary, template: '{id}@{version}', require-phase: before-publication }
+"#,
+            )
+            .write(
+                ".github/workflows/release.yml",
+                "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+            )
+            .write(
+                ".github/workflows/publish.yml",
+                "name: repository\n\non:\n  workflow_dispatch:\n\njobs: {}\n",
+            )
+            .write(
+                ".github/actions/deliver-rpm/action.yml",
+                &delivery_action(&rpm, "composite"),
+            )
+            .write(
+                ".github/actions/deliver-apt/action.yml",
+                &delivery_action(&apt, "composite"),
+            );
+        workspace
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cargo_system_routes_build_one_sealed_subject_from_the_open_catalog() {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::PermissionsExt;
+
+        let workspace = cargo_system_package_workspace("cargo-system-route");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let routes = crate::executor::recipe::catalog()
+            .iter()
+            .filter(|recipe| {
+                recipe.capability == Capability::RustCrate
+                    && matches!(
+                        recipe.publisher,
+                        PublisherKind::Rpm | PublisherKind::Apt | PublisherKind::Aur
+                    )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(routes.len(), 3, "the open catalog supplies the route census");
+        for route in routes {
+            let job = format!(
+                "intentional_publish_component_utility_{}_primary",
+                route.publisher.as_str()
+            );
+            let steps = job_steps(&jobs, &job);
+            assert!(!steps.is_empty(), "the {} route derives {job}", route.publisher);
+            if matches!(route.publisher, PublisherKind::Rpm | PublisherKind::Apt) {
+                for prefix in ["Establish ", "Deliver ", "Read back "] {
+                    assert!(
+                        steps.iter().any(|step| step["name"]
+                            .as_str()
+                            .is_some_and(|name| name.starts_with(prefix))),
+                        "{job} derives its {prefix} consumer"
+                    );
+                }
+            } else {
+                let body = job_run_bodies(&jobs, &job);
+                assert!(body.contains("aur.archlinux.org/${INTENTIONAL_DESTINATION}.git"));
+                assert!(body.contains("aur/${INTENTIONAL_DESTINATION}.pkgbuild"));
+                assert!(!body.contains("cargo build"));
+                let destination = steps
+                    .iter()
+                    .find_map(|step| step["env"]["INTENTIONAL_DESTINATION"].as_str())
+                    .expect("the AUR route carries its derived destination as data");
+                assert_eq!(destination, "sample-utility-bin");
+            }
+        }
+
+        for id in [
+            "intentional_build_component_cargo_archive_linux_x86_64",
+            "intentional_build_component_cargo_archive_linux_arm64",
+            "intentional_build_component_cargo_archive_macos_arm64",
+            "intentional_build_component_cargo_archive",
+        ] {
+            assert!(jobs.contains_key(id), "the shared subject derives {id}");
+        }
+        let upload = job_run_bodies(&jobs, "intentional_upload_deliverables");
+        for expected in [
+            "-name '*.rpm'",
+            "-name '*.deb'",
+            "! -name '*.deb' ! -name '*.rpm'",
+        ] {
+            assert!(
+                upload.contains(expected),
+                "the open route consumers carry {expected}: {upload}"
+            );
+        }
+        let build_steps = job_steps(&jobs, "intentional_build_component_cargo_archive");
+        let installer = build_steps
+            .iter()
+            .find(|step| step["name"].as_str() == Some("Install the pinned nFPM packager"))
+            .expect("system routes install their pinned native packager");
+        assert_eq!(
+            installer["env"]["INTENTIONAL_NFPM_VERSION"].as_str(),
+            Some(crate::executor::workflow::templates::NFPM_VERSION)
+        );
+        assert_eq!(
+            installer["env"]["INTENTIONAL_NFPM_DIGEST"].as_str(),
+            Some(crate::executor::workflow::templates::NFPM_LINUX_X86_64_DIGEST)
+        );
+
+        let build = build_steps
+            .iter()
+            .find(|step| {
+                step["run"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("linux_x86_64_archive="))
+            })
+            .expect("aggregate build step");
+        let body = build["run"].as_str().expect("aggregate build body").to_owned();
+        let execution = workspace.root().join("aggregate-execution");
+        let subject = execution.join("subject");
+        let archive_input = execution.join("archive-input");
+        std::fs::create_dir_all(&subject).expect("subject directory");
+        std::fs::create_dir_all(&archive_input).expect("archive input directory");
+        std::fs::write(archive_input.join("sample-utility"), b"sealed executable\n")
+            .expect("archive executable");
+        for archive in ["linux-x86_64.tar.gz", "linux-arm64.tar.gz", "macos-arm64.tar.gz"] {
+            let status = std::process::Command::new("tar")
+                .args(["-czf"])
+                .arg(subject.join(archive))
+                .arg("-C")
+                .arg(&archive_input)
+                .arg("sample-utility")
+                .status()
+                .expect("archive fixture runs");
+            assert!(status.success(), "archive fixture creates {archive}");
+        }
+        let stub = execution.join("nfpm");
+        std::fs::write(
+            &stub,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${NFPM_RECORDING}"
+target=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == --target ]]; then target="$2"; shift 2; else shift; fi
+done
+test -n "${target}"
+install -d "$(dirname "${target}")"
+printf 'external package outcome\n' > "${target}"
+"#,
+        )
+        .expect("nFPM outcome stub");
+        let mut permissions = std::fs::metadata(&stub).expect("stub metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&stub, permissions).expect("executable stub");
+        let recording = execution.join("nfpm.args");
+        let mut command = std::process::Command::new("bash");
+        command
+            .arg("-c")
+            .arg(&body)
+            .current_dir(workspace.root().join("component"))
+            .env("GITHUB_REF_NAME", "1.2.3")
+            .env("GITHUB_REPOSITORY", "sample-owner/sample-repository")
+            .env("RUNNER_TEMP", &execution)
+            .env("NFPM_RECORDING", &recording)
+            .env(
+                "PATH",
+                test_tool_path(&std::env::var("PATH").unwrap_or_default()),
+            );
+        for (key, value) in step_environment(build) {
+            command.env(key, value);
+        }
+        command
+            .env("INTENTIONAL_SUBJECT", &subject)
+            .env("INTENTIONAL_NFPM", &stub);
+        let output = command.output().expect("aggregate body runs");
+        assert!(
+            output.status.success(),
+            "aggregate body failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let arguments = std::fs::read_to_string(&recording).expect("nFPM calls recorded");
+        for expected in [
+            "--packager rpm --target",
+            "sample-utility-1.2.3.x86_64.rpm",
+            "--packager deb --target",
+            "sample-utility_1.2.3_amd64.deb",
+        ] {
+            assert!(arguments.contains(expected), "nFPM calls carry {expected}: {arguments}");
+        }
+        let nfpm = std::fs::read_to_string(execution.join("intentional_nfpm.yml"))
+            .expect("generated nFPM configuration");
+        for expected in [
+            "name: sample-utility",
+            "version: 1.2.3",
+            "description: \"Sample utility\"",
+            "dst: \"/usr/bin/sample-utility\"",
+        ] {
+            assert!(nfpm.contains(expected), "nFPM configuration carries {expected}: {nfpm}");
+        }
+        let pkgbuild = std::fs::read_to_string(subject.join("aur/sample-utility-bin.pkgbuild"))
+            .expect("generated PKGBUILD");
+        let srcinfo = std::fs::read_to_string(subject.join("aur/sample-utility-bin.srcinfo"))
+            .expect("generated .SRCINFO");
+        let x86_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                std::fs::read(subject.join("sample-utility-1.2.3-linux-x86_64.tar.gz"))
+                    .expect("renamed x86 archive")
+            )
+        );
+        let arm_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                std::fs::read(subject.join("sample-utility-1.2.3-linux-arm64.tar.gz"))
+                    .expect("renamed arm archive")
+            )
+        );
+        for expected in [
+            "pkgname=sample-utility-bin",
+            "pkgver=1.2.3",
+            "pkgrel=1",
+            "pkgdesc='Sample utility'",
+            "arch=('x86_64' 'aarch64')",
+            "url='https://github.com/sample-owner/sample-repository'",
+            "license=('MIT')",
+            "sample-utility-1.2.3-linux-x86_64.tar.gz::https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-utility-1.2.3-linux-x86_64.tar.gz",
+            "sample-utility-1.2.3-linux-aarch64.tar.gz::https://github.com/sample-owner/sample-repository/releases/download/1.2.3/sample-utility-1.2.3-linux-arm64.tar.gz",
+            "install -Dm755 \"${srcdir}/sample-utility\" \"${pkgdir}/usr/bin/sample-utility\"",
+        ] {
+            assert!(pkgbuild.contains(expected), "PKGBUILD carries {expected}: {pkgbuild}");
+        }
+        for expected in [
+            format!("sha256sums_x86_64=('{}')", x86_digest),
+            format!("sha256sums_aarch64=('{}')", arm_digest),
+        ] {
+            assert!(pkgbuild.contains(&expected), "PKGBUILD carries {expected}: {pkgbuild}");
+        }
+        for expected in [
+            "pkgbase = sample-utility-bin",
+            "pkgdesc = Sample utility",
+            "pkgver = 1.2.3",
+            "pkgrel = 1",
+            "url = https://github.com/sample-owner/sample-repository",
+            "arch = x86_64",
+            "arch = aarch64",
+            "license = MIT",
+            "source_x86_64 = sample-utility-1.2.3-linux-x86_64.tar.gz::",
+            "source_aarch64 = sample-utility-1.2.3-linux-aarch64.tar.gz::",
+            "pkgname = sample-utility-bin",
+        ] {
+            assert!(srcinfo.contains(expected), ".SRCINFO carries {expected}: {srcinfo}");
+        }
+        for expected in [
+            format!("sha256sums_x86_64 = {}", x86_digest),
+            format!("sha256sums_aarch64 = {}", arm_digest),
+        ] {
+            assert!(srcinfo.contains(&expected), ".SRCINFO carries {expected}: {srcinfo}");
+        }
+        assert!(
+            !subject.join("homebrew").exists(),
+            "an unconfigured descriptor route produces no formula"
+        );
+    }
+
     fn blocked_diagnostics(workspace: &Workspace) -> Vec<String> {
         let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
             .expect("comparison runs");
