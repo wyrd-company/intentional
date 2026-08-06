@@ -437,15 +437,11 @@ fn isolated_clone(root: &Path, into: &Path, source: &str) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Remove every tag the release itself created from the reproduction clone.
+/// Remove release-output tags from the reproduction clone.
 ///
-/// The release commit did not exist when the release plan was sealed, so a tag
-/// resolving to it is an output of this release rather than an input to it.
-/// Leaving those tags in place would let the release under verification supply
-/// the version authority it is supposed to be derived from, and a resumed
-/// publication would then reproduce a different plan than the one it is
-/// verifying. Only tags that already resolve to the release commit are removed,
-/// so no tag record can steer the reproduction environment.
+/// Version authority already comes from the source commit's reachable history.
+/// Removing tags that resolve to the later release commit keeps the isolated
+/// clone limited to the records that existed at source time as well.
 fn discard_released_tags(clone: &Path, release: &str) -> Result<()> {
     let listed = GitCommand::new(clone)
         .args([

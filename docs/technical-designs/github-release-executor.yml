@@ -555,9 +555,9 @@ proposed-design:
     verified released binary, and projects step outputs only from validated
     identity lines the command printed after it succeeded. The prepare Action exposes
     `candidate-path`, `source-sha`, `release-sha`, `global-tag`, and
-    `plan-digest`. The verify-handoff and verify-release-tag Actions each expose
-    `source-sha`, `release-sha`, `global-tag`, and `plan-digest`. The
-    verify-publication Action exposes `evidence-path`. The
+    `plan-digest`. The verify-handoff Action exposes `source-sha`, `release-sha`,
+    `global-tag`, and `plan-digest`. The verify-release-tag Action also exposes
+    `global-tag-object`. The verify-publication Action exposes `evidence-path`. The
     record-built-subject Action exposes `built-subject-path`, `digest`, and
     `version`. The seal-phase-tags Action exposes `sealed-phase-evidence` and
     never pushes, because tag creation is local and the repository-owned job

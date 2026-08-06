@@ -1008,8 +1008,9 @@ commands:
           - >-
             The credential-free verify-release-tag Action wraps this command
             for the initial job in the generated publication workflow. Its
-            outputs are exactly source-sha, release-sha, global-tag, and
-            plan-digest, projected from the verified release identity.
+            outputs are exactly source-sha, release-sha, global-tag,
+            global-tag-object, and plan-digest, projected from the verified
+            release identity.
       - name: publication
         summary: Verify one destination publication and write its affirmative evidence.
         mode: non-interactive
