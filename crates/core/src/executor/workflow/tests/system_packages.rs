@@ -1492,10 +1492,22 @@ release-units:
         std::fs::write(subject.join("sample-command.deb"), "sealed package bytes")
             .expect("package");
         let digest = crate::evidence::digest_bytes(b"sealed package bytes");
-        let packages = if scenario == "package-absent" {
-            "Package: another\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: deadbeef\n\n"
-        } else {
-            "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
+        let packages = match scenario {
+            "package-absent" => {
+                "Package: another\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: deadbeef\n\n"
+            }
+            "version-mismatch" => {
+                "Package: example-tool\nVersion: 1.2.2\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
+            }
+            "architecture-mismatch" => {
+                "Package: example-tool\nVersion: 1.2.3\nArchitecture: arm64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
+            }
+            "package-digest-mismatch" => {
+                "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 0000000000000000000000000000000000000000000000000000000000000000\n\n"
+            }
+            _ => {
+                "Package: example-tool\nVersion: 1.2.3\nArchitecture: amd64\nSHA256: 4df1176a73c8a18d44f8b4db0df4808205205a5b88c42d36d95321aeecccc213\n\n"
+            }
         };
         let packages_digest = crate::evidence::digest_bytes(packages.as_bytes())
             .trim_start_matches("sha256:")
@@ -1511,8 +1523,10 @@ case "${url}" in
   https://packages.invalid/apt/dists/current/InRelease)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PACKAGES_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
-    printf 'SHA256:\n %s 1 section-a/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
+    relative=section-a/binary-amd64/Packages; [ "${FAKE_SCENARIO}" != component-absent ] || relative=section-b/binary-amd64/Packages
+    printf 'SHA256:\n %s 1 %s\n' "${digest}" "${relative}" > "${output}" ;;
   https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages)
+    [ "${FAKE_SCENARIO}" != packages-absent ] || exit 22
     printf '%s' "${FAKE_PACKAGES}" > "${output}" ;;
   https://packages.invalid/apt-key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
@@ -1638,8 +1652,27 @@ fi
     }
 
     #[test]
-    fn apt_readback_refuses_a_followed_digest_that_disagrees() {
-        assert!(!run_apt_readback("apt-followed-digest", "followed-digest").succeeded);
+    fn apt_readback_retries_a_torn_followed_index_until_its_policy_is_exhausted() {
+        let run = run_apt_readback("apt-followed-digest", "followed-digest");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn apt_readback_retries_an_index_missing_the_configured_component() {
+        let run = run_apt_readback("apt-component-absent", "component-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn apt_readback_retries_a_followed_packages_file_not_yet_uploaded() {
+        let run = run_apt_readback("apt-packages-absent", "packages-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]
@@ -1648,6 +1681,29 @@ fi
         assert!(run.succeeded, "pending is reported to verification");
         assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
         assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_indexed_package_with_a_different_version() {
+        assert!(!run_apt_readback("apt-version-mismatch", "version-mismatch").succeeded);
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_indexed_package_with_a_different_architecture() {
+        assert!(!run_apt_readback(
+            "apt-architecture-mismatch",
+            "architecture-mismatch"
+        )
+        .succeeded);
+    }
+
+    #[test]
+    fn apt_readback_refuses_an_indexed_package_with_a_different_digest() {
+        assert!(!run_apt_readback(
+            "apt-package-digest-mismatch",
+            "package-digest-mismatch"
+        )
+        .succeeded);
     }
 
     #[test]
@@ -1708,7 +1764,9 @@ fi
         );
         let primary_source = temporary.join("primary.xml");
         std::fs::write(&primary_source, &primary).expect("primary source");
-        let primary_bytes = if scenario == "gzip-primary" {
+        let primary_bytes = if scenario == "malformed-primary" {
+            b"not primary metadata".to_vec()
+        } else if scenario == "gzip-primary" {
             let output = std::process::Command::new("gzip")
                 .args(["-n", "-c"])
                 .arg(&primary_source)
@@ -1732,14 +1790,18 @@ fi
 set -euo pipefail
 output=${*: -1}; url=${*: -3:1}
 case "${url}" in
-  https://packages.invalid/rpm/stable/repodata/repomd.xml.asc) printf 'signature' > "${output}" ;;
+  https://packages.invalid/rpm/stable/repodata/repomd.xml.asc)
+    [ "${FAKE_SCENARIO}" != signature-absent ] || exit 22
+    printf 'signature' > "${output}" ;;
   https://packages.invalid/rpm/stable/repodata/repomd.xml)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
+    if [ "${FAKE_SCENARIO}" = malformed-index ]; then printf 'not repomd metadata' > "${output}"; exit 0; fi
     digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
     location=metadata/current-primary.xml; [ "${FAKE_SCENARIO}" != alternate-location ] || location=indices/alternate-primary.xml
     printf '<repomd><data type="filelists"><checksum>ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff</checksum><location href="metadata/filelists.xml"/></data><data type="primary"><checksum>%s</checksum><location href="%s"/></data></repomd>' "${digest}" "${location}" > "${output}" ;;
   https://packages.invalid/rpm/stable/metadata/current-primary.xml)
     [ "${FAKE_SCENARIO}" != alternate-location ] || exit 64
+    [ "${FAKE_SCENARIO}" != primary-absent ] || exit 22
     cp "${FAKE_PRIMARY_PATH}" "${output}" ;;
   https://packages.invalid/rpm/stable/indices/alternate-primary.xml)
     [ "${FAKE_SCENARIO}" = alternate-location ] || exit 64
@@ -1888,8 +1950,43 @@ fi
     }
 
     #[test]
-    fn rpm_readback_refuses_a_followed_digest_that_disagrees() {
-        assert!(!run_rpm_readback("rpm-followed-digest", "followed-digest").succeeded);
+    fn rpm_readback_retries_a_torn_followed_index_until_its_policy_is_exhausted() {
+        let run = run_rpm_readback("rpm-followed-digest", "followed-digest");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn rpm_readback_retries_a_signature_not_yet_uploaded() {
+        let run = run_rpm_readback("rpm-signature-absent", "signature-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn rpm_readback_retries_an_incomplete_repository_index() {
+        let run = run_rpm_readback("rpm-malformed-index", "malformed-index");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn rpm_readback_retries_primary_metadata_not_yet_uploaded() {
+        let run = run_rpm_readback("rpm-primary-absent", "primary-absent");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
+    }
+
+    #[test]
+    fn rpm_readback_retries_incomplete_primary_metadata() {
+        let run = run_rpm_readback("rpm-malformed-primary", "malformed-primary");
+        assert!(run.succeeded, "pending is reported to verification");
+        assert_eq!(run.observation.expect("observation").state, ObservationState::Pending);
+        assert_eq!(run.waits, vec![2, 3, 2]);
     }
 
     #[test]

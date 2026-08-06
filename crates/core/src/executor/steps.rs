@@ -743,18 +743,29 @@ const APT_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       index="${@ENVVAR@WORK}/InRelease"
       relative="${@ENVVAR@APT_COMPONENT}/binary-${package_architecture}/Packages"
       packages="${@ENVVAR@WORK}/Packages"
+      @ENVVAR@apt_probe() {
+        expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
+        test -n "${expected}" || return 1
+        curl --fail --silent --show-error --location \
+          "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" \
+          --output "${packages}" || return 1
+        test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}" || return 1
+        indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
+          $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
+        ' "${packages}")
+        named=$(awk -v RS='' -v name="${package_name}" '$0 ~ "(^|\\n)Package: " name "(\\n|$)" { print "yes"; exit }' "${packages}")
+      }
       @ENVVAR@ELAPSED=0
       while : ; do
         if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/InRelease" --output "${index}"; then
           gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}"
-          expected=$(awk -v wanted="${relative}" '$1 == "SHA256:" { section=1; next } section && NF == 3 && $3 == wanted { print $1; exit }' "${index}")
-          test -n "${expected}"
-          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/dists/${@ENVVAR@APT_SUITE}/${relative}" --output "${packages}"
-          test "$(sha256sum "${packages}" | cut -d' ' -f1)" = "${expected}"
-          indexed=$(awk -v RS='' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '
-            $0 ~ "(^|\\n)Package: " name "(\\n|$)" && $0 ~ "(^|\\n)Version: " version "(\\n|$)" && $0 ~ "(^|\\n)Architecture: " architecture "(\\n|$)" && $0 ~ "(^|\\n)SHA256: " digest "(\\n|$)" { print "yes"; exit }
-          ' "${packages}")
-          if [ "${indexed}" = yes ]; then break; fi
+          if @ENVVAR@apt_probe; then
+            if [ "${indexed}" = yes ]; then break; fi
+            if [ "${named}" = yes ]; then
+              echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
+              exit 1
+            fi
+          fi
         fi
         if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
           @ENVVAR@observe_state pending
@@ -791,12 +802,8 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       index="${@ENVVAR@WORK}/repomd.xml"
       primary="${@ENVVAR@WORK}/primary"
       entries="${@ENVVAR@WORK}/primary.entries"
-      @ENVVAR@ELAPSED=0
-      while : ; do
-        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
-          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"
-          gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
-          read -r expected relative < <(python3 - "${index}" <<'PY'
+      @ENVVAR@rpm_probe() {
+        read -r expected relative < <(python3 - "${index}" 2>/dev/null <<'PY'
       import sys, xml.etree.ElementTree as ET
       root = ET.parse(sys.argv[1]).getroot()
       data = next(node for node in root if node.tag.endswith('data') and node.attrib.get('type') == 'primary')
@@ -804,10 +811,13 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
       location = next(node.attrib['href'] for node in data if node.tag.endswith('location'))
       print(checksum, location)
       PY
-          )
-          curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" --output "${primary}"
-          test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}"
-          python3 - "${primary}" > "${entries}" <<'PY'
+        ) || return 1
+        test -n "${expected}" && test -n "${relative}" || return 1
+        curl --fail --silent --show-error --location \
+          "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/${relative}" \
+          --output "${primary}" || return 1
+        test "$(sha256sum "${primary}" | cut -d' ' -f1)" = "${expected}" || return 1
+        python3 - "${primary}" > "${entries}" 2>/dev/null <<'PY' || return 1
       import bz2, gzip, lzma, pathlib, sys, xml.etree.ElementTree as ET
       path = pathlib.Path(sys.argv[1])
       raw = path.read_bytes()
@@ -827,12 +837,21 @@ const RPM_READBACK: &str = r#"      rm -rf "${@ENVVAR@WORK}"
           if name is not None and version is not None and architecture is not None and checksum is not None:
               print(name.text, version.attrib.get('ver'), architecture.text, checksum.text, sep='\t')
       PY
-          indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
-          if [ "${indexed}" = yes ]; then break; fi
-          named=$(awk -F '\t' -v name="${package_name}" '$1 == name { print "yes"; exit }' "${entries}")
-          if [ "${named}" = yes ]; then
-            echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
-            exit 1
+        indexed=$(awk -F '\t' -v name="${package_name}" -v version="${package_version}" -v architecture="${package_architecture}" -v digest="${package_sha256}" '$1 == name && $2 == version && $3 == architecture && $4 == digest { print "yes"; exit }' "${entries}")
+        named=$(awk -F '\t' -v name="${package_name}" '$1 == name { print "yes"; exit }' "${entries}")
+      }
+      @ENVVAR@ELAPSED=0
+      while : ; do
+        if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml" --output "${index}"; then
+          if curl --fail --silent --show-error --location "${@ENVVAR@DESTINATION%/}/${@ENVVAR@RPM_CHANNEL}/repodata/repomd.xml.asc" --output "${index}.asc"; then
+            gpgv --keyring "${@ENVVAR@WORK}/keyring.gpg" "${index}.asc" "${index}"
+            if @ENVVAR@rpm_probe; then
+              if [ "${indexed}" = yes ]; then break; fi
+              if [ "${named}" = yes ]; then
+                echo "${package_name} is indexed with facts that disagree with the sealed package" >&2
+                exit 1
+              fi
+            fi
           fi
         fi
         if [ "${@ENVVAR@ELAPSED}" -ge "${@ENVVAR@DEADLINE}" ]; then
