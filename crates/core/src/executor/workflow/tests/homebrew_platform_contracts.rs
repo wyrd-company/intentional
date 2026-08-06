@@ -349,11 +349,39 @@ test "$#" -eq 1
 printf 'name=%s\n' "$(basename "$1")"
 printf 'mode=%s\n' "$(stat -c %a "$1")"
 printf 'epoch=%s\n' "$(stat -c %Y "$1")"
-"$1" --version
 "#,
             ])
             .output()
             .expect("bsdtar archive inspection runs")
+    }
+
+    fn cargo_homebrew_execute_archived_binary(
+        workspace: &Workspace,
+        archive: &Path,
+        binary: &str,
+    ) -> std::process::Output {
+        use std::os::unix::fs::MetadataExt;
+
+        let runner = archive.parent().expect("archive directory");
+        let metadata = std::fs::metadata(workspace.root()).expect("workspace metadata");
+        std::process::Command::new("docker")
+            .args([
+                "run",
+                "--rm",
+                "--platform",
+                "linux/amd64",
+                "--user",
+                &format!("{}:{}", metadata.uid(), metadata.gid()),
+                "--volume",
+                &format!("{}:/runner:ro", runner.display()),
+                "--env",
+                "LC_ALL=C",
+                cargo_homebrew_bsdtar_image(),
+                &format!("/runner/inspect/{binary}"),
+                "--version",
+            ])
+            .output()
+            .expect("archived binary executes")
     }
 
     #[test]
@@ -386,7 +414,27 @@ printf 'epoch=%s\n' "$(stat -c %Y "$1")"
         assert_eq!(lines.next(), Some("name=sample-tool"), "archive content assertion");
         assert_eq!(lines.next(), Some("mode=755"), "archive executable-mode assertion");
         assert_eq!(lines.next(), Some("epoch=0"), "archive timestamp assertion");
-        assert_eq!(lines.next(), Some("sample-tool 1.2.3"), "archived binary assertion");
+        let binary = step["env"]
+            .as_mapping()
+            .expect("macOS build environment")
+            .iter()
+            .find_map(|(key, value)| {
+                key.as_str()
+                    .filter(|key| key.ends_with("SUBJECT_IDENTITY"))
+                    .and_then(|_| value.as_str())
+            })
+            .expect("derived binary identity");
+        let execution = cargo_homebrew_execute_archived_binary(&workspace, &archive, binary);
+        assert!(
+            execution.status.success(),
+            "archived binary failed: {}",
+            String::from_utf8_lossy(&execution.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&execution.stdout),
+            "sample-tool 1.2.3\n",
+            "archived binary assertion"
+        );
     }
 
     #[test]
