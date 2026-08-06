@@ -124,6 +124,17 @@ fn native_packager_findings(
             }
         }
     }
+    if publication.publisher == PublisherKind::Homebrew {
+        let configured = publication.destination.as_deref().unwrap_or_default();
+        for (index, declared) in config.brew_repositories.iter().enumerate() {
+            if declared.as_deref() != Some(configured) {
+                let declared = declared.as_deref().unwrap_or("no complete repository");
+                findings.push(format!(
+                    "{identity} publishes to configured tap {configured}, but brews[{index}].repository in {file} declares {declared}"
+                ));
+            }
+        }
+    }
     // `brews` handles multiplicity by promoting every generated formula; `aur`
     // cannot. One publication reaches one Arch package, so a second entry is
     // built by the packager and then silently left unpublished. Saying so here
@@ -458,6 +469,28 @@ aur:
                 "an undeclared {publisher} pipe is reported: {findings:?}"
             );
         }
+    }
+
+    #[test]
+    fn reports_each_homebrew_entry_whose_repository_disagrees_with_the_destination() {
+        let workspace = go_workspace(
+            "check-goreleaser-homebrew-destination",
+            "    homebrew: { repository: example-org/homebrew-tap }\n",
+        );
+        workspace.write(
+            "component/.goreleaser.yaml",
+            &GORELEASER_CONFIG.replace(
+                "  - repository: { owner: example-org, name: homebrew-tap }\n",
+                "  - repository: { owner: example-org, name: homebrew-tap }\n  - repository: { owner: example-org, name: alternate-tap }\n",
+            ),
+        );
+        let findings = packager_findings(&workspace);
+        assert!(
+            findings.iter().any(|finding| finding.contains(
+                "brews[1].repository in component/.goreleaser.yaml declares example-org/alternate-tap"
+            )),
+            "the disagreeing native destination is reported before publication: {findings:?}"
+        );
     }
 
     #[test]

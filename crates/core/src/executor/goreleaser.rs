@@ -83,6 +83,12 @@ pub struct GoReleaserConfig {
     pub pipes: Vec<String>,
     /// Formats `nfpms` declares across every entry.
     pub nfpm_formats: Vec<String>,
+    /// Repository each `brews` entry declares, as `owner/name`.
+    ///
+    /// An absent or incomplete repository remains `None`, so conformance can
+    /// distinguish a declaration that agrees with the maintained destination
+    /// from one whose destination cannot be established.
+    pub brew_repositories: Vec<Option<String>>,
     /// What each `aur` entry declares as its name, in declaration order.
     ///
     /// An entry that declares none is `None` rather than absent, because the
@@ -145,6 +151,21 @@ fn parse(name: &Path, document: &serde_yaml::Value) -> GoReleaserConfig {
                     .iter()
                     .filter_map(serde_yaml::Value::as_str)
                     .map(str::to_owned)
+            })
+            .collect(),
+        brew_repositories: sequence(document, "brews")
+            .iter()
+            .map(|entry| {
+                let repository = entry.get("repository")?;
+                let owner = repository
+                    .get("owner")?
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())?;
+                let name = repository
+                    .get("name")?
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())?;
+                Some(format!("{owner}/{name}"))
             })
             .collect(),
         aur_names: sequence(document, "aur")
@@ -404,6 +425,10 @@ mod tests {
             vec![PathBuf::from("cmd/example"), PathBuf::from("tools/other")]
         );
         assert!(config.pipes.contains(&"brews".to_owned()));
+        assert_eq!(
+            config.brew_repositories,
+            vec![Some("example-org/homebrew-tap".to_owned())]
+        );
         assert_eq!(
             config.nfpm_formats,
             vec!["rpm".to_owned(), "deb".to_owned()]
