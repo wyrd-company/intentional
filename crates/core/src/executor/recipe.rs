@@ -1425,7 +1425,6 @@ release-units:
         );
     }
 
-
     /// Every capability the maintained catalog indexes is reached by derivation.
     ///
     /// The expected set is extracted from the catalog itself. A route added
@@ -1473,7 +1472,6 @@ release-units:
         let derived = derive_component(workspace.root(), &config("")).expect("capabilities derive");
         assert!(capability_set(&derived).is_empty());
     }
-
 
     #[test]
     fn reports_manifests_that_cannot_be_parsed() {
@@ -1794,10 +1792,6 @@ release-units:
         );
     }
 
-
-
-
-
     #[test]
     fn maintained_catalog_selects_unambiguously() {
         // Selection matches on capability, publisher, and target only, so two
@@ -1921,5 +1915,4 @@ release-units:
             "the competitor never published {file}, so no removal was ever raced and this run proves nothing"
         );
     }
-
 }

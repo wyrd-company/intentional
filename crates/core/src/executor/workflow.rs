@@ -1825,8 +1825,6 @@ fn phase_tag_job(
     )
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::templates::{
@@ -2746,7 +2744,6 @@ release-units:
         template: '{id}/published@{version}'
         require-phase: after-publication
 "#;
-
 
     /// The managed job that places GitHub-hosted deliverables on the draft.
     const UPLOAD_JOB: &str = "intentional_upload_deliverables";
@@ -6350,7 +6347,6 @@ release-units:
         assert_eq!(comparison.diagnostics[0].code, "job-identifier-collision");
     }
 
-
     /// Every value a maintained recipe reads out of the repository it releases.
     ///
     /// This is the list the boundary rule is written against, so it is written
@@ -8671,7 +8667,6 @@ release-units:
         );
     }
 
-
     #[test]
     fn refuses_to_compare_an_unbounded_workflow() {
         let workspace = workspace("workflow-too-large");
@@ -8782,6 +8777,4 @@ release-units:
             assert!(emitted.get(key).is_some(), "{key} is emitted");
         }
     }
-
-
 }
