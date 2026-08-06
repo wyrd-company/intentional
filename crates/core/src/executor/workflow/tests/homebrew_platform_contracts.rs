@@ -58,6 +58,22 @@
             .collect()
     }
 
+    fn cargo_homebrew_workspace_working_directory(
+        workspace: &Workspace,
+        step: &Value,
+    ) -> PathBuf {
+        let working_directory = step["working-directory"]
+            .as_str()
+            .expect("parsed job declares its working directory");
+        let execution_directory = workspace.root().join(working_directory);
+        assert!(
+            execution_directory.is_dir(),
+            "emitted workspace working directory exists: {}",
+            execution_directory.display()
+        );
+        execution_directory
+    }
+
     fn cargo_homebrew_execute_workspace_body(
         workspace: &Workspace,
         step: &Value,
@@ -81,15 +97,7 @@
                 .find_map(|(key, value)| key.ends_with("ARCHIVE").then_some(value))
                 .expect("derived archive name"),
         );
-        let working_directory = step["working-directory"]
-            .as_str()
-            .expect("parsed job declares its working directory");
-        let execution_directory = workspace.root().join(working_directory);
-        assert!(
-            execution_directory.is_dir(),
-            "emitted workspace working directory exists: {}",
-            execution_directory.display()
-        );
+        let execution_directory = cargo_homebrew_workspace_working_directory(workspace, step);
         let mut command = std::process::Command::new("bash");
         command
             .args(["-c", body])
@@ -262,10 +270,13 @@ printf '#!/usr/bin/env bash\nprintf "%s 1.2.3\\n"\n' "$binary" > "${CARGO_TARGET
             .iter()
             .find_map(|(key, value)| key.ends_with("ARCHIVE").then_some(value.clone()))
             .expect("derived macOS archive name");
-        let working_directory = step["working-directory"]
-            .as_str()
-            .expect("parsed job declares its working directory");
-        let container_working_directory = Path::new("/workspace").join(working_directory);
+        let workspace_working_directory =
+            cargo_homebrew_workspace_working_directory(workspace, step);
+        let relative_working_directory = workspace_working_directory
+            .strip_prefix(workspace.root())
+            .expect("working directory remains inside the mounted workspace");
+        let container_working_directory =
+            Path::new("/workspace").join(relative_working_directory);
         let metadata = std::fs::metadata(workspace.root()).expect("workspace metadata");
         let mut command = std::process::Command::new("docker");
         command.args([
