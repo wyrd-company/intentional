@@ -13,7 +13,7 @@ fn credential_table_covers_every_configured_destination() {
         .expect("usage guide has the registry section")
         .1;
     let table = section
-        .split_once("| Publisher | Destination | Credential | Prefixed |")
+        .split_once("| Publisher | Destination | Credential |")
         .expect("registry section has the credential table")
         .1;
     let rows = table
@@ -43,13 +43,22 @@ fn credential_table_covers_every_configured_destination() {
         .map(|(publisher, target)| (publisher.to_string(), target))
         .collect::<Vec<_>>();
     let normalized_section = section.split_whitespace().collect::<Vec<_>>().join(" ");
+    let destination_count_claims = normalized_section
+        .split('.')
+        .map(str::trim)
+        .filter(|sentence| {
+            sentence.starts_with("Intentional supports ")
+                && sentence.ends_with(" destinations in total")
+        })
+        .collect::<Vec<_>>();
 
     assert_eq!(rows, expected, "credential rows match configured targets");
-    assert!(
-        normalized_section.contains(&format!(
-            "Intentional supports {} destinations in total.",
+    assert_eq!(
+        destination_count_claims,
+        [format!(
+            "Intentional supports {} destinations in total",
             expected.len()
-        )),
-        "credential destination count is derived from configured targets"
+        )],
+        "one exact credential destination count is derived from configured targets"
     );
 }

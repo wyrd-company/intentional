@@ -441,25 +441,19 @@ Configuration has two levels. A **publisher** is what you declare on a package.
 A **destination** is where one publication lands. Intentional supports 9
 destinations in total.
 
-Each destination authenticates its own way. `Prefixed` marks a name that changes
-with a configured `envvar` prefix.
+Each destination authenticates its own way.
 
-| Publisher | Destination | Credential | Prefixed |
-| --- | --- | --- | --- |
-| `npm:` | npmjs <!-- intentional-target: primary --> | `NPM_TOKEN`, then trusted publishing | no |
-| `npm:` | GitHub Package Registry <!-- intentional-target: github --> | the job's `GITHUB_TOKEN` | n/a |
-| `cargo:` | crates.io, or the one alternate registry `Cargo.toml` names <!-- intentional-target: primary --> | `CARGO_REGISTRY_TOKEN` | no |
-| `homebrew:` | your tap <!-- intentional-target: primary --> | minted from the App private key | n/a |
-| `rpm:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
-| `apt:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
-| `aur:` | the AUR <!-- intentional-target: primary --> | `INTENTIONAL_AUR_KEY`, an SSH private key | **yes** |
-| `oci:` | Docker Hub <!-- intentional-target: dockerhub --> | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | no |
-| `oci:` | GHCR <!-- intentional-target: ghcr --> | the job's `GITHUB_TOKEN` and actor | n/a |
-
-`aur:` is the only publisher secret carrying the prefix. Its default is
-`INTENTIONAL_AUR_KEY`; under a configured prefix it is not, and the release
-fails after verification has passed. `intentional executor init` reports the
-name your configuration derives.
+| Publisher | Destination | Credential |
+| --- | --- | --- |
+| `npm:` | npmjs <!-- intentional-target: primary --> | `NPM_TOKEN`, then trusted publishing |
+| `npm:` | GitHub Package Registry <!-- intentional-target: github --> | the job's `GITHUB_TOKEN` |
+| `cargo:` | crates.io, or the one alternate registry `Cargo.toml` names <!-- intentional-target: primary --> | `CARGO_REGISTRY_TOKEN` |
+| `homebrew:` | your tap <!-- intentional-target: primary --> | minted from the App private key |
+| `rpm:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action |
+| `apt:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action |
+| `aur:` | the AUR <!-- intentional-target: primary --> | `INTENTIONAL_AUR_KEY`, an SSH private key |
+| `oci:` | Docker Hub <!-- intentional-target: dockerhub --> | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` |
+| `oci:` | GHCR <!-- intentional-target: ghcr --> | the job's `GITHUB_TOKEN` and actor |
 
 ### npmjs and crates.io start with a token and stop using it
 
@@ -503,24 +497,21 @@ the tap repository must install that App.
 
 ### Credentials you name yourself
 
-RPM and APT are the two destinations Intentional derives no credential for. Both
-route through a repository-owned delivery Action you name with
-`delivery-action`, and pass it whatever you supply under that publisher's
-`with:` block. You choose the key as well as the value, there is no conventional
-default to fall back to, and what that Action authenticates with is yours to
-decide.
+Intentional derives no credential for RPM or APT. Each routes through a
+repository-owned delivery Action you name with `delivery-action`, and passes it
+whatever you supply under that publisher's `with:` block. You choose the key as
+well as the value, there is no conventional default to fall back to, and what
+that Action authenticates with is yours to decide.
 
 ### Renaming a credential
 
-`token-secret` is accepted in exactly three places: on the `npm:` publisher, on
-the `cargo:` publisher, and on the `dockerhub` target **inside** `oci:`.
-`username-var` is accepted on that Docker Hub target alone.
+The `npm:` and `cargo:` publishers accept `token-secret`. The `dockerhub` target
+**inside** `oci:` accepts `token-secret` and `username-var`.
 
 The nesting matters. `oci: { token-secret: … }` is refused with *unknown field
 `token-secret`, expected `dockerhub` or `ghcr`* — the override belongs to the
-target, not the publisher holding it. Asking anywhere else is refused too:
-`aur: { token-secret: … }` fails with *unknown field `token-secret`, there are
-no fields*.
+target, not the publisher holding it. `aur: { token-secret: … }` is also refused
+with *unknown field `token-secret`, there are no fields*.
 
 The AUR is the destination most likely to send you looking for this override and
 the one it does not exist for. Its secret name is not fixed — it follows the
