@@ -405,16 +405,74 @@ fn every_catalog_recipe_is_either_derived_or_refused() {
     );
 }
 
-/// Hold the unprivileged half of the authority split to the derived text.
+/// The job that builds the release candidate mints no repository token.
+///
+/// This is the load-bearing half of the authority split. The preparation job
+/// runs before anything has verified the candidate it produces, so a repository
+/// token there is authority granted ahead of the check that authorises it —
+/// which is the whole reason the work is split across two jobs.
+///
+/// It needs its own assertion, and the reason is worth stating because it is not
+/// obvious. `resolves_every_intentional_action_before_any_credential_is_minted`
+/// looks like it covers this: it finds the mint step and requires every
+/// Intentional Action to precede it. But it locates the mint *first* and
+/// quantifies over steps second, so a mint appended after the last Intentional
+/// Action satisfies it for every step and passes **vacuously**. It constrains
+/// where a mint sits relative to Action resolution; it does not constrain
+/// whether this job mints at all.
+///
+/// The job is identified by the Action that gives it its purpose rather than by
+/// name or position, so a rename or a reordering does not quietly empty the
+/// check.
+#[test]
+fn the_release_preparation_job_mints_no_repository_token() {
+    let workflows = derived_recipe_workflows("derived-workflow-prepare-authority");
+    let mut preparation_jobs = 0usize;
+
+    for (role, workflow) in &workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let jobs = document["jobs"].as_mapping().expect("derived workflow jobs");
+        for (job, body) in jobs {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            let builds_candidate = steps.iter().any(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.contains("/actions/prepare-release@"))
+            });
+            if !builds_candidate {
+                continue;
+            }
+            preparation_jobs += 1;
+            let mints = steps.iter().filter_map(|step| step["uses"].as_str()).find(
+                |uses| uses.starts_with("actions/create-github-app-token@"),
+            );
+            assert!(
+                mints.is_none(),
+                "{role} job {} builds the release candidate and mints a repository token \
+                 ({mints:?}): the candidate is not verified until the next job, so a token \
+                 here is authority granted before the check that authorises it",
+                job.as_str().expect("job id")
+            );
+        }
+    }
+
+    assert_eq!(
+        preparation_jobs, 1,
+        "exactly one derived job builds the release candidate, so the assertion \
+         above is not passing because it reached none"
+    );
+}
+
+/// Hold the unprivileged job out of the protected environment.
 ///
 /// The usage documentation says the preparation job "runs in no environment,
 /// mints no token, and checks out without persisting credentials, so nothing it
-/// does can reach the repository". Two of those three were asserted somewhere:
-/// minting a token in the preparation job kills
-/// `resolves_every_intentional_action_before_any_credential_is_minted`, and the
-/// checkout options are held by the test below. The environment half was held by
-/// nothing — `environment:` could be added to `RELEASE_PREPARE_JOB` and the whole
-/// suite stayed green.
+/// does can reach the repository". The mint half is held by the test above and
+/// the checkout options by the test below; this one holds the environment half,
+/// which was held by nothing — `environment:` could be added to
+/// `RELEASE_PREPARE_JOB` and the whole suite stayed green.
 ///
 /// The invariant is one-directional, and deliberately so. "Mints a token
 /// therefore declares an environment" is **false**: the Homebrew publisher mints
