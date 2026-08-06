@@ -300,6 +300,7 @@ fn cargo_homebrew_compatibility_task_is_part_of_repository_validation() {
     assert!(
         hosted_steps.iter().any(|step| {
             step["name"].as_str() == Some("Exercise Cargo Homebrew emitted bodies")
+                && step["env"]["LC_ALL"].as_str() == Some("C")
                 && step["run"].as_str() == compatibility_command
         }),
         "hosted CI executes the documented Cargo/Homebrew compatibility command"

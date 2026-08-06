@@ -46,6 +46,8 @@ jobs:
       - name: Test
         run: cargo test --workspace
       - name: Exercise Cargo Homebrew emitted bodies
+        env:
+          LC_ALL: C
         run: >-
           cargo test -p intentional-core cargo_homebrew_platform_contract
           -- --ignored --nocapture
