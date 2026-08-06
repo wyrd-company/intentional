@@ -205,23 +205,39 @@ aur:
                 self
             }
 
+            fn with_digest_order_fixture(self) -> Self {
+                let bytes = self.temp.join("intentional_subject/bytes");
+                for (relative, contents) in [("foo-bar", "flat"), ("foo/baz", "nested")] {
+                    let path = bytes.join(relative);
+                    std::fs::create_dir_all(path.parent().expect("parent"))
+                        .expect("digest fixture directory");
+                    std::fs::write(path, contents).expect("digest fixture file");
+                }
+                self
+            }
+
             /// Run the derived promotion body, optionally with a drifted host key.
             fn run(&self) -> Outcome {
-                self.run_with_overrides(None, None)
+                self.run_with_overrides(None, None, 0)
             }
 
             fn run_with_host_fingerprint(&self, fingerprint: Option<&str>) -> Outcome {
-                self.run_with_overrides(fingerprint, None)
+                self.run_with_overrides(fingerprint, None, 0)
             }
 
             fn run_with_subject_digest(&self, digest: &str) -> Outcome {
-                self.run_with_overrides(None, Some(digest))
+                self.run_with_overrides(None, Some(digest), 0)
+            }
+
+            fn run_with_readback_misses(&self, misses: u32) -> Outcome {
+                self.run_with_overrides(None, None, misses)
             }
 
             fn run_with_overrides(
                 &self,
                 fingerprint: Option<&str>,
                 subject_digest: Option<&str>,
+                readback_misses: u32,
             ) -> Outcome {
                 let root = self.workspace.root();
                 let step = publish_step(root, &self.job, &self.temp);
@@ -254,6 +270,21 @@ aur:
                 for (name, value) in &step.env {
                     command.env(name, value);
                 }
+                let readback_work = step
+                    .env
+                    .iter()
+                    .find(|(name, _)| name.ends_with("_WORK"))
+                    .map(|(_, value)| value)
+                    .expect("readback work directory");
+                command
+                    .env("FAKE_READBACK_WORK", readback_work)
+                    .env("FAKE_READBACK_MISSES", readback_misses.to_string())
+                    .env("FAKE_READBACK_COUNT", self.temp.join("readback-count"))
+                    .env("FAKE_SLEEP_LOG", self.temp.join("sleep-log"))
+                    .env("INTENTIONAL_INTERVAL", "2")
+                    .env("INTENTIONAL_BACKOFF", "2")
+                    .env("INTENTIONAL_MAXIMUM_INTERVAL", "3")
+                    .env("INTENTIONAL_DEADLINE", "7");
                 let subject = self.temp.join("intentional_subject/bytes");
                 if subject.is_dir() {
                     command.env(
@@ -270,6 +301,14 @@ aur:
                 }
             }
 
+            fn waits(&self) -> Vec<u64> {
+                std::fs::read_to_string(self.temp.join("sleep-log"))
+                    .unwrap_or_default()
+                    .lines()
+                    .map(|line| line.parse().expect("numeric wait"))
+                    .collect()
+            }
+
             /// Files the destination repository carries, by repository path.
             fn destination_files(&self, name: &str) -> BTreeMap<String, String> {
                 let checkout = self.workspace.root().join(format!("read-{name}"));
@@ -282,6 +321,7 @@ aur:
                     .status()
                     .expect("git clone runs");
                 assert!(status.success(), "the destination repository is readable");
+                std::fs::remove_dir_all(checkout.join(".git")).expect("transport metadata");
                 let mut files = BTreeMap::new();
                 collect(&checkout, &checkout, &mut files);
                 files
@@ -335,36 +375,7 @@ aur:
         }
 
         fn digest_tree(root: &Path) -> String {
-            let mut members = Vec::new();
-            for entry in walkdir::WalkDir::new(root) {
-                let entry = entry.expect("subject member");
-                let relative = entry.path().strip_prefix(root).expect("relative member");
-                if entry.file_type().is_file()
-                    && !relative
-                        .components()
-                        .any(|component| component.as_os_str() == ".git")
-                {
-                    members.push(entry.into_path());
-                }
-            }
-            members.sort();
-            let mut manifest = Vec::new();
-            for member in members {
-                manifest.extend_from_slice(
-                    member
-                        .strip_prefix(root)
-                        .expect("relative member")
-                        .to_string_lossy()
-                        .as_bytes(),
-                );
-                manifest.push(0);
-                manifest.extend_from_slice(
-                    crate::evidence::digest_bytes(&std::fs::read(member).expect("member bytes"))
-                        .as_bytes(),
-                );
-                manifest.push(b'\n');
-            }
-            crate::evidence::digest_bytes(&manifest)
+            crate::evidence::phase::digest_subject(root).expect("canonical tree digest")
         }
 
         struct PublishStep {
@@ -434,6 +445,7 @@ aur:
                 ("git", GIT_STUB.replace("@GIT@", &git)),
                 ("ssh-keyscan", SSH_KEYSCAN_STUB.to_owned()),
                 ("ssh-keygen", SSH_KEYGEN_STUB.to_owned()),
+                ("sleep", SLEEP_STUB.to_owned()),
             ] {
                 let path = directory.join(name);
                 std::fs::write(&path, body).expect("stub written");
@@ -462,8 +474,15 @@ aur:
         /// clone of an unregistered package fails, that `status --porcelain` is
         /// empty when nothing changed, that a push lands what was committed --
         /// is the real client's behaviour rather than a stub's imitation.
-        const GIT_STUB: &str = r#"#!/usr/bin/env bash
+const GIT_STUB: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ " $* " == *" clone "* ]] && [ "${*: -1}" = "${FAKE_READBACK_WORK:-}" ]; then
+  count=0
+  if [ -f "${FAKE_READBACK_COUNT}" ]; then count=$(cat "${FAKE_READBACK_COUNT}"); fi
+  count=$(( count + 1 ))
+  printf '%s\n' "${count}" > "${FAKE_READBACK_COUNT}"
+  if [ "${count}" -le "${FAKE_READBACK_MISSES}" ]; then exit 1; fi
+fi
 arguments=()
 for argument in "$@"; do
   case "${argument}" in
@@ -484,6 +503,11 @@ for argument in "$@"; do
   esac
 done
 exec @GIT@ "${arguments[@]}"
+"#;
+
+        const SLEEP_STUB: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >> "${FAKE_SLEEP_LOG}"
 "#;
 
         const SSH_KEYSCAN_STUB: &str = r#"#!/usr/bin/env bash
@@ -510,12 +534,17 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             let observation = recipe.observation();
             assert_eq!(observation.state, ObservationState::Present);
             assert_eq!(
-                observation.destination.expect("destination").digest,
+                observation.destination.as_ref().expect("destination").digest,
                 digest_tree(&recipe.workspace.root().join("read-homebrew-tap"))
             );
             assert_eq!(
+                observation.retrieval.as_ref().expect("retrieval").digest,
+                observation.destination.as_ref().expect("destination").digest
+            );
+            assert_ne!(
                 observation.retrieval.expect("retrieval").digest,
-                digest_tree(&recipe.temp.join("intentional_subject/bytes"))
+                digest_tree(&recipe.temp.join("intentional_subject/bytes")),
+                "retrieval records the fresh clone rather than the local subject tree"
             );
             assert_eq!(
                 files.keys().cloned().collect::<Vec<_>>(),
@@ -539,6 +568,30 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
                 !outcome.succeeded(),
                 "retrieved descriptor bytes must match the sealed subject digest"
             );
+        }
+
+        #[test]
+        fn descriptor_subject_digest_matches_the_canonical_member_order() {
+            let recipe = Recipe::new("recipe-homebrew-digest-order", HOMEBREW_JOB)
+                .with_destination("homebrew-tap")
+                .with_distribution()
+                .with_digest_order_fixture();
+            recipe.run().expect_success();
+        }
+
+        #[test]
+        fn repository_readback_retries_visibility_lag_under_its_policy() {
+            for (label, job, destination) in [
+                ("homebrew", HOMEBREW_JOB, "homebrew-tap"),
+                ("aur", AUR_JOB, AUR_PACKAGE),
+            ] {
+                let recipe = Recipe::new(&format!("recipe-{label}-visibility-lag"), job)
+                    .with_destination(destination)
+                    .with_distribution();
+                recipe.run_with_readback_misses(1).expect_success();
+                assert_eq!(recipe.waits(), vec![2], "{label} consumes its policy");
+                assert_eq!(recipe.observation().state, ObservationState::Present);
+            }
         }
 
         // Destination readback decides whether a publication is present, so a
@@ -583,12 +636,17 @@ printf '256 %s host (ED25519)\n' "${FAKE_HOST_FINGERPRINT}"
             let observation = recipe.observation();
             assert_eq!(observation.state, ObservationState::Present);
             assert_eq!(
-                observation.destination.expect("destination").digest,
+                observation.destination.as_ref().expect("destination").digest,
                 digest_tree(&recipe.workspace.root().join(format!("read-{AUR_PACKAGE}")))
             );
             assert_eq!(
+                observation.retrieval.as_ref().expect("retrieval").digest,
+                observation.destination.as_ref().expect("destination").digest
+            );
+            assert_ne!(
                 observation.retrieval.expect("retrieval").digest,
-                digest_tree(&recipe.temp.join("intentional_subject/bytes"))
+                digest_tree(&recipe.temp.join("intentional_subject/bytes")),
+                "retrieval records the fresh clone rather than the local subject tree"
             );
             assert_eq!(
                 files.keys().cloned().collect::<Vec<_>>(),

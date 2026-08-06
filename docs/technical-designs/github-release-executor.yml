@@ -953,8 +953,13 @@ proposed-design:
 
     A rerun that finds a destination already carrying this release commits
     nothing and still succeeds. After either a changed or unchanged push, a
-    fresh clone compares every promoted descriptor byte for byte and writes the
-    observation that publication verification reads.
+    fresh clone compares every promoted descriptor byte for byte. A clone that
+    cannot yet see the push, or still carries earlier bytes, is retried under
+    the repository adapter's configured interval, backoff, maximum interval,
+    and deadline. The retrieved descriptor tree supplies both the destination
+    and retrieval digests in the observation that publication verification
+    reads; the separately recomputed local subject digest checks that promotion
+    consumed the sealed subject.
 
   system-package-distribution: |-
     An APT repository and an RPM repository are directories of files served over
@@ -1123,9 +1128,12 @@ proposed-design:
     observation deadline is configured rather than fixed, because the
     arrangement that determines it belongs to the repository. The recipe polls
     the signed index with the configured interval, backoff, maximum interval,
-    and deadline. Reaching the deadline writes `pending` and reports that the
-    publication was not observed, which is the honest claim — a repository that
-    has not yet indexed the package and one whose
+    and deadline. An index that is absent, incomplete, or names a followed file
+    not yet served remains pending. An invalid signature or a same-name package
+    whose version, architecture, or digest disagrees with the sealed package
+    fails immediately. Reaching the deadline writes `pending` and reports that
+    the publication was not observed, which is the honest claim — a repository
+    that has not yet indexed the package and one whose
     delivery failed after the step returned are indistinguishable from outside,
     and verification treats that final observation as an immediate retryable
     failure so that a rerun reads the destination again without paying the same

@@ -91,9 +91,9 @@ validation-criteria: >-
   a recipe that already consumed that policy and is an immediate retryable
   failure; no derived step can update it. A `conflict` fails immediately, an
   `absent` observation after a completed publish attempt fails, and reaching
-  the deadline while the document is missing is a distinct retryable failure. The command writes its
-  publisher-evidence fragment only after a `present` observation passes every
-  check, including that `retrieval.mode` is the mode the destination's
-  maintained recipe fixes. An `authenticated-draft` retrieval spells its digest
-  in the canonical `sha256:` form the draft-asset inventory uses; every other
-  mode spells it in the retrieving client's own form.
+  the deadline while the document is missing is a distinct retryable failure.
+  The command writes its publisher-evidence fragment only after a `present`
+  observation passes every check, including that `retrieval.mode` is the mode
+  the destination's maintained recipe fixes. An `authenticated-draft` retrieval
+  spells its digest in the canonical `sha256:` form the draft-asset inventory
+  uses; every other mode spells it in the retrieving client's own form.

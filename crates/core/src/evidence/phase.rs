@@ -398,7 +398,7 @@ pub fn record_built_subject(
 /// so a build that renames a member without changing any byte still changes the
 /// subject digest. The manifest is the release-unit-relative path and the member
 /// digest of every regular file, sorted by path.
-fn digest_subject(subject: &Path) -> Result<String> {
+pub(crate) fn digest_subject(subject: &Path) -> Result<String> {
     if subject.is_file() {
         return digest_file(subject);
     }

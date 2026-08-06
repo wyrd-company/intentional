@@ -400,10 +400,14 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<String, Ste
         packager => unreachable!("{packager} does not produce repository descriptors"),
     };
     Ok(format!(
-        "{credential}  - name: {}\n    env:\n{}{}      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{observe}{digest_subject}{command}\n      @ENVVAR@RETRIEVED_DIGEST=$(@ENVVAR@digest_subject \"${{@ENVVAR@SUBJECT}}\")\n      test \"${{@ENVVAR@RETRIEVED_DIGEST}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n{readback}      @ENVVAR@PACKAGER_VERSION={packager_version}\n      @ENVVAR@RETRIEVAL_VERSION=$(git --version | head -n1)\n      @ENVVAR@observe_present\n",
+        "{credential}  - name: {}\n    env:\n{}{}{}      @ENVVAR@GLOBAL_TAG: ${{{{ github.ref_name }}}}\n{environment}    run: |\n      set -euo pipefail\n{observe}{digest_subject}{command}\n      @ENVVAR@SEALED_DIGEST=$(@ENVVAR@digest_subject \"${{@ENVVAR@SUBJECT}}\")\n      test \"${{@ENVVAR@SEALED_DIGEST}}\" = \"${{@ENVVAR@SUBJECT_DIGEST}}\"\n{readback}      @ENVVAR@ELAPSED=0\n      until @ENVVAR@readback_destination; do\n        if [ \"${{@ENVVAR@ELAPSED}}\" -ge \"${{@ENVVAR@DEADLINE}}\" ]; then\n          @ENVVAR@observe_state pending\n          exit 0\n        fi\n        @ENVVAR@WAIT=${{@ENVVAR@INTERVAL}}\n        @ENVVAR@REMAINING=$(( @ENVVAR@DEADLINE - @ENVVAR@ELAPSED ))\n        if [ \"${{@ENVVAR@WAIT}}\" -gt \"${{@ENVVAR@REMAINING}}\" ]; then @ENVVAR@WAIT=${{@ENVVAR@REMAINING}}; fi\n        sleep \"${{@ENVVAR@WAIT}}\"\n        @ENVVAR@ELAPSED=$(( @ENVVAR@ELAPSED + @ENVVAR@WAIT ))\n        @ENVVAR@INTERVAL=$(( @ENVVAR@INTERVAL * @ENVVAR@BACKOFF ))\n        if [ \"${{@ENVVAR@INTERVAL}}\" -gt \"${{@ENVVAR@MAXIMUM_INTERVAL}}\" ]; then\n          @ENVVAR@INTERVAL=${{@ENVVAR@MAXIMUM_INTERVAL}}\n        fi\n      done\n      @ENVVAR@PACKAGER_VERSION={packager_version}\n      @ENVVAR@RETRIEVAL_VERSION=$(git --version | head -n1)\n      @ENVVAR@observe_present\n",
         scalar(&format!("Publish {identity}")),
         subject_environment(context),
         observation_environment(context, kind, context.publication.packager.as_str(), "git"),
+        policy_environment(
+            context.publication.publisher,
+            context.publication.observation_deadline,
+        ),
         observe = OBSERVE,
         digest_subject = DIGEST_SUBJECT,
     ))
@@ -942,19 +946,19 @@ const HOMEBREW_PROMOTE_COMMAND: &str = r#"      generated="${@ENVVAR@SUBJECT}/ho
       fi"#;
 
 /// Fresh clone and byte-for-byte readback of every promoted formula.
-const HOMEBREW_READBACK_COMMAND: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+const HOMEBREW_READBACK_COMMAND: &str = r#"      @ENVVAR@readback_destination() {
+      rm -rf "${@ENVVAR@WORK}"
       git clone --quiet --depth 1 \
         "https://x-access-token:${GITHUB_TOKEN}@github.com/${@ENVVAR@DESTINATION}.git" \
-        "${@ENVVAR@WORK}"
+        "${@ENVVAR@WORK}" || return 1
       for formula in "${formulas[@]}"; do
         relative=${formula#"${generated}/"}
-        if ! cmp --silent "${formula}" "${@ENVVAR@WORK}/${relative}"; then
-          @ENVVAR@observe_state conflict \
-            "${@ENVVAR@DESTINATION} does not carry the promoted formula ${relative}"
-          exit 0
-        fi
+        cmp --silent "${formula}" "${@ENVVAR@WORK}/${relative}" || return 1
       done
-      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}")
+      rm -rf "${@ENVVAR@WORK}/.git"
+      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}") || return 1
+      @ENVVAR@RETRIEVED_DIGEST=${@ENVVAR@DESTINATION_DIGEST}
+      }
 "#;
 
 /// Promote the generated Arch package sources into the Arch User Repository.
@@ -1012,16 +1016,16 @@ const AUR_PROMOTE_COMMAND: &str = r#"      pkgbuild="${@ENVVAR@SUBJECT}/aur/${@E
       fi"#;
 
 /// Fresh clone and byte-for-byte readback of both promoted AUR descriptors.
-const AUR_READBACK_COMMAND: &str = r#"      rm -rf "${@ENVVAR@WORK}"
+const AUR_READBACK_COMMAND: &str = r#"      @ENVVAR@readback_destination() {
+      rm -rf "${@ENVVAR@WORK}"
       git clone --quiet "ssh://aur@aur.archlinux.org/${@ENVVAR@DESTINATION}.git" \
-        "${@ENVVAR@WORK}"
-      if ! cmp --silent "${pkgbuild}" "${@ENVVAR@WORK}/PKGBUILD" \
-        || ! cmp --silent "${srcinfo}" "${@ENVVAR@WORK}/.SRCINFO"; then
-        @ENVVAR@observe_state conflict \
-          "${@ENVVAR@DESTINATION} does not carry the promoted Arch package descriptors"
-        exit 0
-      fi
-      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}")
+        "${@ENVVAR@WORK}" || return 1
+      cmp --silent "${pkgbuild}" "${@ENVVAR@WORK}/PKGBUILD" || return 1
+      cmp --silent "${srcinfo}" "${@ENVVAR@WORK}/.SRCINFO" || return 1
+      rm -rf "${@ENVVAR@WORK}/.git"
+      @ENVVAR@DESTINATION_DIGEST=$(@ENVVAR@digest_subject "${@ENVVAR@WORK}") || return 1
+      @ENVVAR@RETRIEVED_DIGEST=${@ENVVAR@DESTINATION_DIGEST}
+      }
 "#;
 
 /// Index one alternate Cargo registry is declared with, if the workspace declares one.
@@ -1173,17 +1177,27 @@ const OBSERVE: &str = r#"      @ENVVAR@observe_header() {
       }
 "#;
 
-/// Shell digesting a file tree exactly as `record-built-subject` does.
+/// Shell digesting a file tree under the canonical built-subject ordering.
 const DIGEST_SUBJECT: &str = r#"      @ENVVAR@digest_subject() {
-        root=$1
-        manifest=$(mktemp)
-        while IFS= read -r -d '' member; do
-          relative=${member#"${root}/"}
-          printf '%s\0sha256:%s\n' "${relative}" "$(sha256sum "${member}" | cut -d' ' -f1)"
-        done < <(find "${root}" -type f ! -path "${root}/.git/*" -print0 | sort -z) > "${manifest}"
-        test -s "${manifest}"
-        printf 'sha256:%s\n' "$(sha256sum "${manifest}" | cut -d' ' -f1)"
-        rm -f "${manifest}"
+        python3 - "$1" <<'PY'
+      import hashlib, os, stat, sys
+      root = os.fsencode(sys.argv[1])
+      members = []
+      for directory, _, names in os.walk(root, followlinks=False):
+          for name in names:
+              member = os.path.join(directory, name)
+              if stat.S_ISREG(os.stat(member, follow_symlinks=False).st_mode):
+                  members.append(member)
+      members.sort(key=lambda member: os.path.relpath(member, root).split(os.sep.encode()))
+      if not members:
+          raise SystemExit(1)
+      manifest = bytearray()
+      for member in members:
+          relative = os.path.relpath(member, root).decode(errors='replace').encode()
+          digest = hashlib.sha256(open(member, 'rb').read()).hexdigest().encode()
+          manifest.extend(relative + b'\0sha256:' + digest + b'\n')
+      print('sha256:' + hashlib.sha256(manifest).hexdigest())
+      PY
       }
 "#;
 
