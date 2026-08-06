@@ -3042,7 +3042,7 @@ release-units:
         rpm:
           delivery-action: .github/actions/deliver-rpm
           base-url: https://packages.invalid/rpm/
-          public-signing-key-url: https://packages.invalid/key.asc
+          public-signing-key-url: https://packages.invalid/rpm-key.asc
           observation-deadline: 47
           channel: stable
           with:
@@ -3053,7 +3053,7 @@ release-units:
         apt:
           delivery-action: .github/actions/deliver-apt
           base-url: https://packages.invalid/apt
-          public-signing-key-url: https://packages.invalid/key.asc
+          public-signing-key-url: https://packages.invalid/apt-key.asc
           observation-deadline: 53
           suite: current
           component: section-a
@@ -3134,7 +3134,7 @@ release-units:
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow parses");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        for (job, coordinate, coordinate_value, action, format, deadline, base_url) in [
+        for (job, coordinate, coordinate_value, action, format, deadline, base_url, key_url) in [
             (
                 "release_automation_publish_component_package_rpm_primary",
                 "release-automation-rpm-channel",
@@ -3143,6 +3143,7 @@ release-units:
                 "rpm",
                 "47",
                 "https://packages.invalid/rpm/",
+                "https://packages.invalid/rpm-key.asc",
             ),
             (
                 "release_automation_publish_component_package_apt_primary",
@@ -3152,6 +3153,7 @@ release-units:
                 "deb",
                 "53",
                 "https://packages.invalid/apt",
+                "https://packages.invalid/apt-key.asc",
             ),
         ] {
             let step = jobs[job]["steps"]
@@ -3208,7 +3210,7 @@ release-units:
             );
             assert_eq!(
                 readback["env"]["RELEASE_AUTOMATION_PUBLIC_KEY_URL"].as_str(),
-                Some("https://packages.invalid/key.asc")
+                Some(key_url)
             );
             assert_eq!(
                 readback["env"]["RELEASE_AUTOMATION_DEADLINE"].as_str(),
@@ -3829,7 +3831,7 @@ case "${url}" in
     printf 'SHA256:\n %s 1 section-a/binary-amd64/Packages\n' "${digest}" > "${output}" ;;
   https://packages.invalid/apt/dists/current/section-a/binary-amd64/Packages)
     printf '%s' "${FAKE_PACKAGES}" > "${output}" ;;
-  https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
+  https://packages.invalid/apt-key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
 esac
 "#),
@@ -3997,9 +3999,15 @@ case "${url}" in
   https://packages.invalid/rpm/stable/repodata/repomd.xml)
     [ "${FAKE_SCENARIO}" != absent-index ] || exit 22
     digest=${FAKE_PRIMARY_DIGEST}; [ "${FAKE_SCENARIO}" != followed-digest ] || digest=0000000000000000000000000000000000000000000000000000000000000000
-    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="metadata/current-primary.xml"/></data></repomd>' "${digest}" > "${output}" ;;
-  https://packages.invalid/rpm/stable/metadata/current-primary.xml) printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
-  https://packages.invalid/key.asc) printf 'key served today' > "${output}" ;;
+    location=metadata/current-primary.xml; [ "${FAKE_SCENARIO}" != alternate-location ] || location=indices/alternate-primary.xml
+    printf '<repomd><data type="primary"><checksum>%s</checksum><location href="%s"/></data></repomd>' "${digest}" "${location}" > "${output}" ;;
+  https://packages.invalid/rpm/stable/metadata/current-primary.xml)
+    [ "${FAKE_SCENARIO}" != alternate-location ] || exit 64
+    printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+  https://packages.invalid/rpm/stable/indices/alternate-primary.xml)
+    [ "${FAKE_SCENARIO}" = alternate-location ] || exit 64
+    printf '%s' "${FAKE_PRIMARY}" > "${output}" ;;
+  https://packages.invalid/rpm-key.asc) printf 'key served today' > "${output}" ;;
   *) exit 64 ;;
 esac
 "#),
@@ -4007,28 +4015,6 @@ esac
             ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
             ("rpm", "#!/usr/bin/env bash\nprintf 'arm64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
-            ("python3", r#"#!/usr/bin/env bash
-set -euo pipefail
-script=$(cat)
-test "$#" -eq 2
-if [[ "${script}" == *"ET.parse(sys.argv[1])"* ]]; then
-  document=$(cat "$2")
-  checksum=$(printf '%s' "${document}" | sed -n 's|.*<checksum>\([^<]*\)</checksum>.*|\1|p')
-  location=$(printf '%s' "${document}" | sed -n 's|.*<location href="\([^"]*\)"/>.*|\1|p')
-  test -n "${checksum}"
-  test -n "${location}"
-  printf '%s %s\n' "${checksum}" "${location}"
-elif [[ "${script}" == *"ET.fromstring(raw)"* ]]; then
-  document=$(cat "$2")
-  name=$(printf '%s' "${document}" | sed -n 's|.*<name>\([^<]*\)</name>.*|\1|p')
-  version=$(printf '%s' "${document}" | sed -n 's|.*<version ver="\([^"]*\)".*|\1|p')
-  architecture=$(printf '%s' "${document}" | sed -n 's|.*<arch>\([^<]*\)</arch>.*|\1|p')
-  checksum=$(printf '%s' "${document}" | sed -n 's|.*<checksum>\([^<]*\)</checksum>.*|\1|p')
-  printf '%s\t%s\t%s\t%s\n' "${name}" "${version}" "${architecture}" "${checksum}"
-else
-  exit 64
-fi
-"#),
             ("dnf", r#"#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = --version ]; then printf 'dnf 4.0\n'; exit 0; fi
@@ -4104,6 +4090,14 @@ fi
     #[test]
     fn rpm_readback_accepts_a_matching_signed_index_and_consumer_retrieval() {
         assert!(run_rpm_readback("rpm-present", "ok"));
+    }
+
+    #[test]
+    fn rpm_readback_follows_an_alternate_primary_location() {
+        assert!(run_rpm_readback(
+            "rpm-alternate-location",
+            "alternate-location"
+        ));
     }
 
     #[test]
