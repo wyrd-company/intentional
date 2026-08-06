@@ -12,8 +12,9 @@ workflow="$root/.github/workflows/cd.yml"
 evidence_workflow="$root/.github/workflows/linux-gnu-evidence.yml"
 cross_toml="$root/Cross.toml"
 baseline_env="$root/scripts/release/linux-gnu-baseline.env"
+executor="$root/crates/core/src/executor/workflow.rs"
 
-for file in "$workflow" "$evidence_workflow" "$cross_toml" "$baseline_env"; do
+for file in "$workflow" "$evidence_workflow" "$cross_toml" "$baseline_env" "$executor"; do
   if [[ ! -f "$file" ]]; then
     echo "Missing release baseline file: $file" >&2
     exit 1
@@ -49,11 +50,13 @@ if ! grep -Fq "hashFiles('Cross.toml'" "$workflow" || \
   exit 1
 fi
 
-for image in "$X86_64_GNU_CROSS_IMAGE" "$AARCH64_GNU_CROSS_IMAGE"; do
-  if ! grep -Fq "$image" "$cross_toml"; then
-    echo "Cross.toml is missing pinned image: $image" >&2
-    exit 1
-  fi
+for file in "$cross_toml" "$executor"; do
+  for image in "$X86_64_GNU_CROSS_IMAGE" "$AARCH64_GNU_CROSS_IMAGE"; do
+    if ! grep -Fq "$image" "$file"; then
+      echo "$file is missing pinned image: $image" >&2
+      exit 1
+    fi
+  done
 done
 
 if grep -En 'ghcr\.io/cross-rs/[^:]+:(main|latest)' "$cross_toml" >/dev/null; then
