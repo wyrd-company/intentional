@@ -513,7 +513,7 @@ The nesting matters. `oci: { token-secret: … }` is refused with *unknown field
 target, not the publisher holding it. `aur: { token-secret: … }` is also refused
 with *unknown field `token-secret`, there are no fields*.
 
-The AUR is the destination most likely to send you looking for this override and
-the one it does not exist for. Its secret name is not fixed — it follows the
+The AUR is the destination most likely to send you looking for this override,
+but it does not have one. Its secret name is not fixed — it follows the
 configured prefix — but it is derived rather than chosen, so the way to change
 what it holds is to change the secret, not its name.
