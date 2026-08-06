@@ -258,11 +258,11 @@ release-units:
             .expect("system routes install their pinned native packager");
         assert_eq!(
             installer["env"]["INTENTIONAL_NFPM_VERSION"].as_str(),
-            Some(crate::executor::workflow::templates::NFPM_VERSION)
+            Some("2.47.0")
         );
         assert_eq!(
             installer["env"]["INTENTIONAL_NFPM_DIGEST"].as_str(),
-            Some(crate::executor::workflow::templates::NFPM_LINUX_X86_64_DIGEST)
+            Some("0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783")
         );
 
         let build = build_steps
@@ -279,9 +279,12 @@ release-units:
         let archive_input = execution.join("archive-input");
         std::fs::create_dir_all(&subject).expect("subject directory");
         std::fs::create_dir_all(&archive_input).expect("archive input directory");
-        std::fs::write(archive_input.join("sample-utility"), b"sealed executable\n")
-            .expect("archive executable");
         for archive in ["linux-x86_64.tar.gz", "linux-arm64.tar.gz", "macos-arm64.tar.gz"] {
+            std::fs::write(
+                archive_input.join("sample-utility"),
+                format!("sealed {archive} executable\n"),
+            )
+            .expect("architecture-specific archive executable");
             let status = std::process::Command::new("tar")
                 .args(["-czf"])
                 .arg(subject.join(archive))
