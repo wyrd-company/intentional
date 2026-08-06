@@ -7662,12 +7662,21 @@ release-units:
             "${{ vars.DELIVERY_BUCKET }}",
             "unchanged",
             "${{ matrix.destination }}",
+            "${{ secrets.APT_DELIVERY_TOKEN }}",
+            "${{ vars.APT_DELIVERY_BUCKET }}",
+            "apt-unchanged",
+            "${{ matrix.apt_destination }}",
         ];
-        let delivery_inputs = &configured_values[9..];
         let mut system_package_bodies = 0;
-        for job in [
-            "release_automation_publish_component_package_rpm_primary",
-            "release_automation_publish_component_package_apt_primary",
+        for (job, delivery_inputs) in [
+            (
+                "release_automation_publish_component_package_rpm_primary",
+                &configured_values[9..13],
+            ),
+            (
+                "release_automation_publish_component_package_apt_primary",
+                &configured_values[13..17],
+            ),
         ] {
             let steps = document["jobs"][job]["steps"].as_sequence().expect("steps");
             let readback = steps

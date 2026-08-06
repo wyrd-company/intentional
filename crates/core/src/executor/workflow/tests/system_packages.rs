@@ -38,7 +38,11 @@ release-units:
           observation-deadline: 53
           suite: current
           component: section-a
-          with: {}
+          with:
+            apt-credential: '${{ secrets.APT_DELIVERY_TOKEN }}'
+            apt-variable: '${{ vars.APT_DELIVERY_BUCKET }}'
+            apt-literal: apt-unchanged
+            apt-unavailable-context: '${{ matrix.apt_destination }}'
     tags:
       staged: { role: primary, template: '{id}/staged@{version}', require-phase: before-publication }
       published: { role: projection, template: '{id}/published@{version}', require-phase: after-publication }
@@ -83,6 +87,10 @@ release-units:
         apt.extend([
             "release-automation-apt-suite",
             "release-automation-apt-component",
+            "apt-credential",
+            "apt-variable",
+            "apt-literal",
+            "apt-unavailable-context",
         ]);
         workspace
             .write(
@@ -236,6 +244,29 @@ release-units:
         assert_eq!(
             rpm["unavailable-context"].as_str(),
             Some("${{ matrix.destination }}")
+        );
+        let apt = &jobs["release_automation_publish_component_package_apt_primary"]["steps"]
+            .as_sequence()
+            .expect("steps")
+            .iter()
+            .find(|step| {
+                step["name"]
+                    .as_str()
+                    .is_some_and(|name| name.starts_with("Deliver "))
+            })
+            .expect("delivery step")["with"];
+        assert_eq!(
+            apt["apt-credential"].as_str(),
+            Some("${{ secrets.APT_DELIVERY_TOKEN }}")
+        );
+        assert_eq!(
+            apt["apt-variable"].as_str(),
+            Some("${{ vars.APT_DELIVERY_BUCKET }}")
+        );
+        assert_eq!(apt["apt-literal"].as_str(), Some("apt-unchanged"));
+        assert_eq!(
+            apt["apt-unavailable-context"].as_str(),
+            Some("${{ matrix.apt_destination }}")
         );
     }
 
