@@ -158,6 +158,42 @@
         (command.output().expect("workspace platform body runs"), archive)
     }
 
+    fn cargo_homebrew_gzip_mtime(archive: &[u8]) -> u32 {
+        assert!(archive.len() >= 10, "gzip header is complete");
+        assert_eq!(&archive[..3], &[0x1f, 0x8b, 0x08], "gzip header identifies DEFLATE");
+        u32::from_le_bytes(
+            archive[4..8]
+                .try_into()
+                .expect("gzip MTIME occupies four header bytes"),
+        )
+    }
+
+    fn cargo_homebrew_run_archive_twice(
+        label: &str,
+        mut execute: impl FnMut() -> (std::process::Output, PathBuf),
+    ) -> (Vec<u8>, Vec<u8>) {
+        let (first_output, first_archive) = execute();
+        assert!(
+            first_output.status.success(),
+            "{label} first archive run succeeds: {}",
+            String::from_utf8_lossy(&first_output.stderr)
+        );
+        let first = std::fs::read(&first_archive)
+            .unwrap_or_else(|error| panic!("read {}: {error}", first_archive.display()));
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let (second_output, second_archive) = execute();
+        assert!(
+            second_output.status.success(),
+            "{label} second archive run succeeds: {}",
+            String::from_utf8_lossy(&second_output.stderr)
+        );
+        let second = std::fs::read(&second_archive)
+            .unwrap_or_else(|error| panic!("read {}: {error}", second_archive.display()));
+        (first, second)
+    }
+
     #[test]
     #[ignore = "run through task cargo-homebrew:compatibility"]
     fn cargo_homebrew_platform_contract_workspace_member_reads_workspace_root_target() {
@@ -208,6 +244,44 @@
             String::from_utf8_lossy(&listing.stdout),
             "sample-tool\n",
             "the archive contains the binary read from the workspace-root target"
+        );
+    }
+
+    #[test]
+    #[ignore = "run through task cargo-homebrew:compatibility"]
+    fn cargo_homebrew_platform_contract_gnu_gzip_stdin_mtime_is_zero() {
+        let workspace = cargo_homebrew_platform_contract_workspace("gnu-gzip-mtime");
+        let step = cargo_homebrew_platform_contract_step(
+            &workspace,
+            "intentional_build_component_cargo_archive_linux_x86_64",
+        );
+        let body = step["run"].as_str().expect("derived Linux body");
+        let without_no_name = body.replacen("gzip -n", "gzip", 1);
+        let (first_without_no_name, second_without_no_name) = cargo_homebrew_run_archive_twice(
+            "GNU gzip without -n",
+            || cargo_homebrew_execute_workspace_body(&workspace, &step, &without_no_name),
+        );
+        assert_eq!(
+            cargo_homebrew_gzip_mtime(&first_without_no_name),
+            0,
+            "GNU gzip assigns MTIME zero to piped standard input without -n"
+        );
+        assert_eq!(
+            first_without_no_name, second_without_no_name,
+            "GNU gzip piped-standard-input bytes do not depend on -n"
+        );
+
+        let (first, second) = cargo_homebrew_run_archive_twice("emitted GNU gzip body", || {
+            cargo_homebrew_execute_workspace_body(&workspace, &step, body)
+        });
+        assert_eq!(
+            first, second,
+            "emitted GNU gzip archive bytes are identical across runs"
+        );
+        assert_eq!(
+            cargo_homebrew_gzip_mtime(&first),
+            0,
+            "emitted GNU gzip archive header MTIME is zero"
         );
     }
 
@@ -364,6 +438,47 @@ printf '#!/usr/bin/env bash\nprintf "%s 1.2.3\\n"\n' "$binary" > "${CARGO_TARGET
             command.output().expect("emitted body runs in bsdtar environment"),
             runner.join(archive_name),
         )
+    }
+
+    #[test]
+    #[ignore = "run through task cargo-homebrew:compatibility"]
+    fn cargo_homebrew_platform_contract_bsd_gzip_header_is_run_independent() {
+        let workspace = cargo_homebrew_platform_contract_workspace("bsd-gzip-mtime");
+        let step = cargo_homebrew_platform_contract_step(
+            &workspace,
+            "intentional_build_component_cargo_archive_macos_arm64",
+        );
+        let body = step["run"].as_str().expect("derived macOS body");
+
+        // Positive control first: BSD gzip assigns wall time to piped standard
+        // input without -n, so the harness must observe two different archives.
+        let without_no_name = body.replacen("gzip -n", "gzip", 1);
+        let (varying_first, varying_second) = cargo_homebrew_run_archive_twice(
+            "BSD gzip positive control without -n",
+            || cargo_homebrew_execute_bsdtar_body(&workspace, &step, &without_no_name),
+        );
+        assert_ne!(
+            cargo_homebrew_gzip_mtime(&varying_first),
+            cargo_homebrew_gzip_mtime(&varying_second),
+            "BSD gzip positive control advances header MTIME"
+        );
+        assert_ne!(
+            varying_first, varying_second,
+            "BSD gzip positive control produces time-varying compressed bytes"
+        );
+
+        let (first, second) = cargo_homebrew_run_archive_twice("emitted BSD gzip body", || {
+            cargo_homebrew_execute_bsdtar_body(&workspace, &step, body)
+        });
+        assert_eq!(
+            first, second,
+            "emitted BSD gzip archive bytes are identical across runs"
+        );
+        assert_eq!(
+            cargo_homebrew_gzip_mtime(&first),
+            0,
+            "emitted BSD gzip archive header MTIME is zero"
+        );
     }
 
     fn cargo_homebrew_inspect_bsdtar_archive(
