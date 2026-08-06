@@ -440,22 +440,22 @@ so the publisher job can mint a token scoped to that repository alone.
 Configuration has two levels. A **publisher** is what you declare on a package —
 `npm:`, `cargo:`, `homebrew:`, `aur:`, `rpm:`, `apt:`, `oci:`. A **destination**
 is where one publication lands. `npm:` and `oci:` each offer two; the other five
-offer one apiece, for nine in total.
+offer one apiece, for 9 in total.
 
 Each destination authenticates its own way. `Prefixed` marks a name that changes
 with a configured `envvar` prefix.
 
 | Publisher | Destination | Credential | Prefixed |
 | --- | --- | --- | --- |
-| `npm:` | npmjs | `NPM_TOKEN`, then trusted publishing | no |
-| `npm:` | GitHub Package Registry | the job's `GITHUB_TOKEN` | n/a |
-| `cargo:` | crates.io, or the one alternate registry `Cargo.toml` names | `CARGO_REGISTRY_TOKEN` | no |
-| `homebrew:` | your tap | minted from the App private key | n/a |
-| `aur:` | the AUR | `INTENTIONAL_AUR_KEY`, an SSH private key | **yes** |
-| `rpm:` | your repository | inputs you pass your delivery Action | n/a |
-| `apt:` | your repository | inputs you pass your delivery Action | n/a |
-| `oci:` | Docker Hub | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | no |
-| `oci:` | GHCR | the job's `GITHUB_TOKEN` and actor | n/a |
+| `npm:` | npmjs <!-- intentional-target: primary --> | `NPM_TOKEN`, then trusted publishing | no |
+| `npm:` | GitHub Package Registry <!-- intentional-target: github --> | the job's `GITHUB_TOKEN` | n/a |
+| `cargo:` | crates.io, or the one alternate registry `Cargo.toml` names <!-- intentional-target: primary --> | `CARGO_REGISTRY_TOKEN` | no |
+| `homebrew:` | your tap <!-- intentional-target: primary --> | minted from the App private key | n/a |
+| `aur:` | the AUR <!-- intentional-target: primary --> | `INTENTIONAL_AUR_KEY`, an SSH private key | **yes** |
+| `rpm:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
+| `apt:` | your repository <!-- intentional-target: primary --> | inputs you pass your delivery Action | n/a |
+| `oci:` | Docker Hub <!-- intentional-target: dockerhub --> | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | no |
+| `oci:` | GHCR <!-- intentional-target: ghcr --> | the job's `GITHUB_TOKEN` and actor | n/a |
 
 `aur:` is the only publisher secret carrying the prefix. Its default is
 `INTENTIONAL_AUR_KEY`; under a configured prefix it is not, and the release

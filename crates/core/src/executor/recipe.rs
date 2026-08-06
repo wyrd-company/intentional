@@ -593,6 +593,16 @@ fn configured_targets(package: &PackageConfig) -> Vec<(PublisherKind, String, Co
     targets
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub(super) fn configured_target_identities(
+    package: &PackageConfig,
+) -> Vec<(PublisherKind, String)> {
+    configured_targets(package)
+        .into_iter()
+        .map(|(publisher, target, _)| (publisher, target))
+        .collect()
+}
+
 #[derive(Debug, Default, Clone)]
 struct Configured {
     destination: Option<String>,

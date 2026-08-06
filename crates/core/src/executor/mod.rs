@@ -204,6 +204,25 @@ release-units:
             .collect()
     }
 
+    /// Publisher and target identities produced by an exhaustive package declaration.
+    ///
+    /// The maintained catalog supplies the product-shaped declaration, while
+    /// `configured_targets` remains the only code that answers which configured
+    /// destinations that declaration produces.
+    #[must_use]
+    pub fn configured_target_identities() -> BTreeSet<(PublisherKind, String)> {
+        let recipes = catalog().iter().collect::<Vec<_>>();
+        let source = format!(
+            "contract: contract-2\ngithub:\n  workflows:\n    release: {{ path: .github/workflows/release.yml }}\n    publish: {{ path: .github/workflows/publish.yml }}\nrelease-units:\n  component:\n    path: component\n{}    tags:\n      release: {{ role: primary, template: 'component@{{version}}' }}\n",
+            publisher_config(&recipes)
+        );
+        let config = crate::config::Config::from_yaml(&source).expect("catalog config is valid");
+        let package = &config.release_units["component"].packages["package"];
+        super::recipe::configured_target_identities(package)
+            .into_iter()
+            .collect()
+    }
+
     /// Workspace whose release units are generated from the maintained catalog.
     fn recipe_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
