@@ -4827,8 +4827,7 @@ release-units:
                 sha256(macos_arm64_bytes)
             ),
             "bin.install \"sample-tool\"".to_owned(),
-            "prefix.install_metafiles".to_owned(),
-            "test do".to_owned(),
+            "test do\n    assert_match version.to_s, shell_output((bin/\"sample-tool\").to_s + \" --version\")".to_owned(),
         ] {
             assert!(
                 formula.contains(&line),
@@ -4874,6 +4873,14 @@ release-units:
             digit_formula.starts_with("class V2fastTool < Formula\n"),
             "formula class is a Ruby constant: {digit_formula}"
         );
+        assert!(
+            !digit_formula.contains("license \"\""),
+            "formula omits an unavailable license: {digit_formula}"
+        );
+        assert!(
+            !formula.contains("prefix.install_metafiles"),
+            "formula does not install metadata absent from its archives: {formula}"
+        );
         let publisher = job_steps(
             &jobs,
             "intentional_publish_component_command_homebrew_primary",
@@ -4902,7 +4909,7 @@ release-units:
         let cargo = stubs.join("cargo");
         std::fs::write(
             &cargo,
-            "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p target/release\nprintf 'native executable' > target/release/sample-tool\nchmod 755 target/release/sample-tool\n",
+            "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p target/release\nprintf '#!/usr/bin/env bash\\nprintf \\\"sample-tool 1.2.3\\\\n\\\"\\n' > target/release/sample-tool\nchmod 755 target/release/sample-tool\n",
         )
         .expect("Cargo stub");
         #[cfg(unix)]
@@ -4956,6 +4963,22 @@ release-units:
         assert!(
             listing.ends_with(" sample-tool\n"),
             "archive names the binary: {listing}"
+        );
+        let extracted = temporary.join("extracted");
+        std::fs::create_dir_all(&extracted).expect("extraction directory");
+        let status = std::process::Command::new("tar")
+            .args(["-xzf", archive.to_str().expect("archive path")])
+            .current_dir(&extracted)
+            .status()
+            .expect("archive extracts");
+        assert!(status.success());
+        let output = std::process::Command::new(extracted.join("sample-tool"))
+            .arg("--version")
+            .output()
+            .expect("archived binary executes");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "sample-tool 1.2.3\n"
         );
     }
 

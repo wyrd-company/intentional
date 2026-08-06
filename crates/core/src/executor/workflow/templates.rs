@@ -154,7 +154,8 @@ pub(super) fn build_command(packager: Packager) -> String {
       license="$(jq -r --arg name "${{binary}}" '.packages[] | select(any(.targets[]; .name == $name and any(.kind[]; . == "bin"))) | .license // empty' <<<"${{metadata}}")"
       description_literal="$(jq -Rn --arg value "${{description}}" '$value')"
       license_literal="$(jq -Rn --arg value "${{license}}" '$value')"
-      test_match_literal="$(jq -Rn --arg value "${{description%% *}}" '$value')"
+      license_line=""
+      if [[ -n "${{license}}" ]]; then license_line="  license ${{license_literal}}"; fi
       formula_class="$(printf '%s' "${{binary}}" | awk -F '[-_]' '{{ for (i=1; i<=NF; i++) printf toupper(substr($i,1,1)) substr($i,2) }}')"
       if [[ "${{formula_class}}" == [0-9]* ]]; then formula_class="V${{formula_class}}"; fi
       formula="${{@ENVVAR@SUBJECT}}/homebrew/Formula/${{binary}}.rb"
@@ -163,7 +164,7 @@ pub(super) fn build_command(packager: Packager) -> String {
         "class ${{formula_class}} < Formula" \
         "  desc ${{description_literal}}" \
         "  homepage \"https://github.com/${{GITHUB_REPOSITORY}}\"" \
-        "  license ${{license_literal}}" \
+        "${{license_line}}" \
         "  version \"${{version}}\"" \
         "  on_linux do" \
         "    on_arm do" \
@@ -183,10 +184,9 @@ pub(super) fn build_command(packager: Packager) -> String {
         "  end" \
         "  def install" \
         "    bin.install \"${{binary}}\"" \
-        "    prefix.install_metafiles" \
         "  end" \
         "  test do" \
-        "    assert_match ${{test_match_literal}}, shell_output((bin/\"${{binary}}\").to_s + \" --help\")" \
+        "    assert_match version.to_s, shell_output((bin/\"${{binary}}\").to_s + \" --version\")" \
         "  end" \
         "end" > "${{formula}}""#
         ),
