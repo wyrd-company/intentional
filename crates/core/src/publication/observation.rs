@@ -474,7 +474,7 @@ state: pending
     }
 
     #[test]
-    fn a_document_the_recipe_has_not_written_yet_stays_pending() {
+    fn a_document_the_recipe_has_not_written_yet_is_re_read_under_policy() {
         let workspace = Workspace::new("observe-missing");
         let path = workspace.root().join("observation.yml");
         let document = present_document();
@@ -505,6 +505,30 @@ state: pending
             .expect("the observation is accepted once it appears");
         assert_eq!(observed.state, ObservationState::Present);
         assert_eq!(clock.waits.get(), 1, "the loop re-read the destination");
+    }
+
+    #[test]
+    fn a_document_the_recipe_has_not_written_yet_stays_pending() {
+        let workspace = Workspace::new("observe-missing-deadline");
+        let path = workspace.root().join("observation.yml");
+        let clock = TestClock::new();
+        let error = observe(
+            &path,
+            "component/package/npm/primary",
+            &policy(),
+            &clock,
+        )
+        .expect_err("a never-written observation exhausts the deadline");
+        let message = error.to_string();
+        assert!(
+            message.contains("remained pending past its 60 second observation deadline"),
+            "{message}"
+        );
+        assert!(message.contains("retryable"), "{message}");
+        assert!(
+            !clock.waits.borrow().is_empty(),
+            "a missing document is polled under the policy before the deadline fails"
+        );
     }
 
     #[test]
