@@ -81,12 +81,18 @@ done
 
 cp "$root/.github/workflows/ci.yml" "$temporary/pull-request-excluded.yml"
 contract_job="$(task_ci_job "$temporary/pull-request-excluded.yml")"
+if [[ "$contract_job" != "shared-contract" ]]; then
+  SOURCE_JOB="$contract_job" yq -i \
+    '.jobs."shared-contract" = .jobs[strenv(SOURCE_JOB)] |
+     del(.jobs[strenv(SOURCE_JOB)])' \
+    "$temporary/pull-request-excluded.yml"
+fi
+contract_job="$(task_ci_job "$temporary/pull-request-excluded.yml")"
 # Preserve the GitHub expression literally in the mutated workflow.
 # shellcheck disable=SC2016
-CI_JOB="$contract_job" yq -i \
-  '.jobs."shared-contract" = .jobs[strenv(CI_JOB)] |
-   del(.jobs[strenv(CI_JOB)]) |
-   .jobs."shared-contract".if = "${{ github.event_name != '\''pull_request'\'' }}"' \
+JOB_IF="\${{ github.event_name != 'pull_request' }}" \
+  CI_JOB="$contract_job" yq -i \
+  '.jobs[strenv(CI_JOB)].if = strenv(JOB_IF)' \
   "$temporary/pull-request-excluded.yml"
 if "$root/scripts/ci/assert-hosted-task-ci.sh" \
   "$temporary/pull-request-excluded.yml" \
@@ -95,7 +101,7 @@ if "$root/scripts/ci/assert-hosted-task-ci.sh" \
   echo "a task ci job that excludes pull requests passed its production assertion" >&2
   exit 1
 elif ! grep -Fq \
-  'the hosted task ci job must remain unconditional for pull requests: shared-contract' \
+  "the hosted task ci job must remain unconditional for pull requests: $contract_job" \
   "$temporary/pull-request-excluded.stderr"; then
   echo "the pull-request-excluding task ci job failed for the wrong reason" >&2
   cat "$temporary/pull-request-excluded.stderr" >&2
