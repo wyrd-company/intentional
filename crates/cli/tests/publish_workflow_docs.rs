@@ -67,6 +67,16 @@ fn documented_environments(page: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn feature_scenario_bindings(source: &str) -> BTreeSet<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            line.split_once("intentional-feature-scenario: ")
+                .map(|(_, binding)| binding.trim().to_owned())
+        })
+        .collect()
+}
+
 fn job_kind(id: &str) -> &'static str {
     if id.ends_with("verify_tag") {
         "verify-tag"
@@ -338,5 +348,26 @@ fn publish_workflow_page_matches_derived_environment_boundaries() {
         documented_environments(&page),
         boundaries,
         "every documented environment boundary is witnessed by a repository or conditional derivation"
+    );
+}
+
+#[test]
+fn feature_alias_scenario_is_bound_to_both_packager_recipes() {
+    let feature = std::fs::read_to_string("../../docs/features/github-release-publication.yml")
+        .expect("publication feature is readable");
+    let recipes = std::fs::read_to_string("../core/src/executor/workflow/tests/oci_recipes.rs")
+        .expect("OCI recipe tests are readable");
+    let documented = feature_scenario_bindings(&feature);
+    let executable = feature_scenario_bindings(&recipes);
+
+    assert_eq!(
+        documented,
+        executable,
+        "every documented packager branch names one executable witness and every witness names its scenario"
+    );
+    assert_eq!(
+        documented.len(),
+        2,
+        "the prerelease alias scenario covers runnable images and Dev Container Features"
     );
 }

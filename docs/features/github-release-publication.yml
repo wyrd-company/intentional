@@ -609,16 +609,20 @@ rules:
               sealed_evidence_reused: true
               publication_resubmitted: false
               evidence_verifies: true
+      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/buildx
+      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/feature
       do-not-advance-stable-alias-for-prerelease:
         addresses: OCI alias safety
         steps:
           - given: The published subject has a prerelease Semantic Version
             world:
               alias_advanced: false
-          - when: The OCI recipe applies aliases
-          - then: Stable major, minor, and latest aliases remain unchanged
+          - when: The runnable-image recipe applies aliases
+          - then: Stable major, minor, and latest aliases remain unchanged for the runnable image
             world:
               alias_advanced: false
+          - when: The Dev Container Feature recipe observes aliases applied by the native client
+          - then: Stable alias moves remain visible in release evidence without overriding the native client policy
       prevent-backward-alias-movement:
         addresses: Monotonic OCI aliases
         steps:
