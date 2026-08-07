@@ -4,7 +4,7 @@
 #   implements: github-release-executor
 #   verifies: github-action-pins
 # ---
-"""Resolve each declared GitHub Action tag and verify its pinned commit.
+"""Resolve each declared GitHub Action reference and verify its pinned commit.
 
 The declaration to read defaults to this repository's. A caller may name
 another so this seam can be held to declarations that are deliberately
@@ -59,7 +59,7 @@ DECLARATION = ROOT / "github-action-pins.yml"
 IGNORED = re.compile(r"[ \t]*(#.*)?")
 SEQUENCE_KEY = re.compile(r"actions:")
 HEADER = re.compile(r"  - constant: ([A-Z][A-Z0-9_]*)")
-FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
+FIELD = re.compile(r"    (repository|tag|kind|commit): (\S+)")
 
 #: What each field's value is allowed to be, spelled out rather than left as
 #: "anything without a space".
@@ -75,6 +75,7 @@ FIELD = re.compile(r"    (repository|tag|commit): (\S+)")
 VALUES = {
     "repository": re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+"),
     "tag": re.compile(r"[A-Za-z0-9._+-]+"),
+    "kind": re.compile(r"tag|branch"),
     # A complete commit identity, matching the rule the offline Action lint
     # holds every pinned reference to. An abbreviation names whatever object
     # currently shares that prefix.
@@ -97,11 +98,11 @@ REQUIRED_FIELDS = ("repository", "tag", "commit")
 #: in this declaration needs one.
 AMBIGUOUS_BREAKS = "\v\f\x1c\x1d\x1e\x85\u2028\u2029"
 
-#: Attempts one repository's resolution is given before the run fails.
+#: Attempts one declaration's resolution is given before the run fails.
 #:
-#: The same bounded-attempt shape the publication scripts use. Nine
-#: repositories are resolved per run, and each is bounded independently, so one
-#: unreachable repository cannot make the other eight resolve again.
+#: The same bounded-attempt shape the publication scripts use. Each declaration
+#: is bounded independently, so one unreachable repository cannot make another
+#: declaration resolve again.
 ATTEMPTS = 18
 
 #: Seconds between attempts. The workflow does not set the override; it exists
@@ -210,8 +211,8 @@ def finish(current, entries):
     return None
 
 
-def resolve(repository, tag):
-    """Resolve one tag upstream, retrying only a failed resolution.
+def resolve(repository, tag, kind="tag"):
+    """Resolve one tag or branch upstream, retrying only a failed resolution.
 
     Retry covers process failure -- a rate limit, a DNS failure, a transient
     GitHub outage -- because this workflow runs on every push and a blip would
@@ -223,15 +224,17 @@ def resolve(repository, tag):
     returned here and judged by the caller. Re-running it would convert the
     finding into silence.
     """
-    reference = f"refs/tags/{tag}"
+    namespace = "tags" if kind == "tag" else "heads"
+    reference = f"refs/{namespace}/{tag}"
     command = [
         "git",
         "ls-remote",
-        "--tags",
+        f"--{namespace}",
         f"https://github.com/{repository}.git",
         reference,
-        f"{reference}^{{}}",
     ]
+    if kind == "tag":
+        command.append(f"{reference}^{{}}")
     for attempt in range(1, ATTEMPTS + 1):
         result = subprocess.run(command, check=False, capture_output=True, text=True)
         if result.returncode == 0:
@@ -268,16 +271,16 @@ def main(argv):
         raise SystemExit("the declaration is readable but declares no Action")
     disagreements = []
     for pin in pins:
-        actual = resolve(pin["repository"], pin["tag"])
+        actual = resolve(pin["repository"], pin["tag"], pin.get("kind", "tag"))
         if actual != pin["commit"]:
             disagreements.append(
                 f'{pin["repository"]}@{pin["tag"]}: declared {pin["commit"]}, resolved {actual}'
             )
     if disagreements:
-        print("GitHub Action tag resolution disagrees with declared pins:", file=sys.stderr)
+        print("GitHub Action reference resolution disagrees with declared pins:", file=sys.stderr)
         print("\n".join(disagreements), file=sys.stderr)
         return 1
-    print(f"Verified {len(pins)} GitHub Action tags against their declared commits.")
+    print(f"Verified {len(pins)} GitHub Action references against their declared commits.")
     return 0
 
 

@@ -89,7 +89,6 @@ url="\$3"
 reference="\$4"
 repository="\${url#https://github.com/}"
 repository="\${repository%.git}"
-tag="\${reference#refs/tags/}"
 behaviour="\$(grep -m1 -F -- "\${repository}=" "$directory/behaviour" || true)"
 if [[ -z "\$behaviour" ]]; then
   echo "stub: no behaviour declared for \$repository" >&2
@@ -111,7 +110,7 @@ case "\$mode" in
     exit 128
     ;;
 esac
-printf '%s\trefs/tags/%s\n' "\$payload" "\$tag"
+printf '%s\t%s\n' "\$payload" "\$reference"
 STUB
   chmod +x "$directory/bin/git"
 }
@@ -607,6 +606,28 @@ if ! run_check "$directory" "$directory/pins.yml"; then
   report "$directory"
 fi
 
+# A branch-backed Action reference preserves the commit named by that branch
+# without pretending the repository publishes a tag of the same name.
+case_number=$((case_number + 1))
+directory="$(new_case branch-reference)"
+stub_git "$directory" "example-owner/example-action=succeed:$EXAMPLE_COMMIT"
+cat >"$directory/pins.yml" <<YAML
+actions:
+  - constant: EXAMPLE_ACTION
+    repository: example-owner/example-action
+    tag: stable
+    kind: branch
+    commit: $EXAMPLE_COMMIT
+YAML
+if ! run_check "$directory" "$directory/pins.yml"; then
+  echo "expected a branch-backed Action declaration to pass the check" >&2
+  report "$directory"
+elif ! grep -Fq 'ls-remote --heads https://github.com/example-owner/example-action.git refs/heads/stable' \
+  "$directory/git.log"; then
+  echo "the branch-backed declaration was not resolved through refs/heads/stable" >&2
+  report "$directory"
+fi
+
 # THIS repository's real declaration is read whole. Because an unaccounted line
 # is a refusal, a zero exit here IS the completeness evidence for the file the
 # workflow actually checks -- no count has to be stated or compared. Nothing
@@ -621,10 +642,14 @@ url="\$3"
 reference="\$4"
 repository="\${url#https://github.com/}"
 repository="\${repository%.git}"
-tag="\${reference#refs/tags/}"
-commit="\$(awk -v r="\$repository" '\$1 == "repository:" && \$2 == r { found = 1 }
-  found && \$1 == "commit:" { print \$2; exit }' "$root/github-action-pins.yml")"
-printf '%s\trefs/tags/%s\n' "\$commit" "\$tag"
+name="\${reference#refs/tags/}"
+name="\${name#refs/heads/}"
+commit="\$(awk -v r="\$repository" -v t="\$name" '
+  \$1 == "repository:" { repository = \$2 }
+  \$1 == "tag:" { tag = \$2 }
+  \$1 == "commit:" && repository == r && tag == t { print \$2; exit }
+' "$root/github-action-pins.yml")"
+printf '%s\t%s\n' "\$commit" "\$reference"
 STUB
 chmod +x "$directory/bin/git"
 if ! run_check "$directory" "$root/github-action-pins.yml"; then
@@ -632,45 +657,48 @@ if ! run_check "$directory" "$root/github-action-pins.yml"; then
   report "$directory"
 fi
 
-# The verifier workflow bootstraps through external Actions before it can read
-# the declaration. Every such dependency participates in the same census: each
-# use must name a complete commit that agrees with the declaration. A missing
-# or failing `yq`, or an empty extraction, fails closed — vacuous enumeration
-# is not evidence.
+# Every repository workflow bootstraps through external Actions before it can
+# run its own checks. A fixture added under a second supported extension proves
+# the roster is derived from the directory and that a new floating reference
+# fails the production census.
 case_number=$((case_number + 1))
-verifier_workflow="$root/.github/workflows/github-action-pins.yml"
-verifier_uses_file="$temporary/verifier-workflow-uses.txt"
-yq_stderr="$temporary/verifier-workflow-yq.stderr"
-if ! command -v yq >/dev/null 2>&1; then
-  echo "the verifier workflow pin census requires yq, but it is unavailable" >&2
+directory="$(new_case workflow-census)"
+mkdir -p "$directory/workflows"
+declaration >"$directory/pins.yml"
+cat >"$directory/workflows/pinned.yml" <<YAML
+name: Pinned fixture
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: example-owner/example-action@$EXAMPLE_COMMIT
+YAML
+cat >"$directory/workflows/new-floating.yaml" <<'YAML'
+name: Newly added floating fixture
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: other-owner/other-action@v4
+YAML
+if "$root/scripts/release/assert-workflow-action-pins.sh" \
+  "$directory/workflows" "$directory/pins.yml" \
+  >"$directory/stdout" 2>"$directory/stderr"; then
+  echo "a newly added workflow with a floating Action passed the pin census" >&2
+  report "$directory"
+elif ! grep -Fq 'new-floating.yaml uses other-owner/other-action@v4 instead of a complete commit' \
+  "$directory/stderr"; then
+  echo "the new floating workflow was refused for the wrong reason" >&2
+  report "$directory"
+fi
+
+case_number=$((case_number + 1))
+if ! "$root/scripts/release/assert-workflow-action-pins.sh" \
+  "$root/.github/workflows" "$root/github-action-pins.yml"; then
+  echo "the repository workflow pin census failed" >&2
   failures=$((failures + 1))
-elif ! yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' \
-  "$verifier_workflow" >"$verifier_uses_file" 2>"$yq_stderr"; then
-  echo "the verifier workflow pin census could not extract uses entries with yq: $(cat "$yq_stderr")" >&2
-  failures=$((failures + 1))
-elif [[ ! -s "$verifier_uses_file" ]]; then
-  echo "the verifier workflow pin census extracted zero uses entries" >&2
-  failures=$((failures + 1))
-else
-  while IFS= read -r use; do
-    repository="${use%@*}"
-    workflow_commit="${use##*@}"
-    declared_commit="$(awk -v repository="$repository" '
-      $1 == "repository:" && $2 == repository { found = 1; next }
-      found && $1 == "commit:" { print $2; exit }
-      found && $1 == "-" { exit }
-    ' "$root/github-action-pins.yml")"
-    if [[ ! "$workflow_commit" =~ ^[0-9a-f]{40}$ ]]; then
-      echo "the verifier workflow uses $use instead of a complete commit" >&2
-      failures=$((failures + 1))
-    elif [[ -z "$declared_commit" ]]; then
-      echo "the verifier workflow uses undeclared Action $repository" >&2
-      failures=$((failures + 1))
-    elif [[ "$workflow_commit" != "$declared_commit" ]]; then
-      echo "the verifier workflow use $use does not match declared commit $declared_commit" >&2
-      failures=$((failures + 1))
-    fi
-  done <"$verifier_uses_file"
 fi
 
 # ---------------------------------------------------------------------------

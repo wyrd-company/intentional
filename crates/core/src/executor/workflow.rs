@@ -2012,6 +2012,7 @@ release-units:
         let declared_names = declared
             .iter()
             .map(|entry| entry["constant"].as_str().expect("constant name"))
+            .filter(|name| !name.starts_with("WORKFLOW_"))
             .collect::<BTreeSet<_>>();
 
         let source = include_str!("workflow/templates.rs");
@@ -2063,6 +2064,9 @@ release-units:
         }
         for entry in declared {
             let name = entry["constant"].as_str().expect("constant name");
+            if name.starts_with("WORKFLOW_") {
+                continue;
+            }
             let expected = format!(
                 "{}@{}",
                 entry["repository"].as_str().expect("repository"),
@@ -2084,6 +2088,12 @@ release-units:
             .as_sequence()
             .expect("actions table")
             .iter()
+            .filter(|entry| {
+                !entry["constant"]
+                    .as_str()
+                    .expect("constant name")
+                    .starts_with("WORKFLOW_")
+            })
             .map(|entry| {
                 format!(
                     "{}@{}",

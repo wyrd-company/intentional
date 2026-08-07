@@ -93,9 +93,9 @@ tasks:
 
   release:check:
     desc: Validate release automation and cross-channel version agreement
+    deps: [ shell:lint ]
     cmds:
       - actionlint .github/workflows/*.yml
-      - shellcheck scripts/action/*.sh scripts/ci/*.sh scripts/release/*.sh
       - >-
         ryl check .github/workflows/*.yml Taskfile.yml
         .intentional/config.yml github-action-pins.yml
@@ -117,6 +117,7 @@ tasks:
       # workflow. Its completeness and retry semantics do not, and are proved
       # here against a stubbed git.
       - scripts/release/test-action-pin-evidence.sh
+      - scripts/ci/test-guard-coverage.sh
       - scripts/release/assert-release-workflow-baseline.sh
       - scripts/release/assert-linux-gnu-baseline-provenance.sh
       # As with the action lint above, both lines are deliberate: the first
@@ -126,6 +127,14 @@ tasks:
       - scripts/release/test-action-paths.sh
       - scripts/release/assert-consumer-contract.sh
       - scripts/release/test-self-hosted-tag.sh
+
+  shell:lint:
+    desc: Lint every repository shell script
+    cmds:
+      - >-
+        find scripts -type f -name '*.sh' -print0 |
+        sort -z |
+        xargs -0 shellcheck
 
   self-release:verify:
     desc: Build the workspace binary and verify self-hosted tag acceptance of a sealed plan

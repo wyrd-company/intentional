@@ -17,14 +17,14 @@ permissions:
 
 jobs:
   verify-tags:
-    name: Resolve declared tags
+    name: Resolve declared references
     runs-on: ubuntu-latest
     # Bounded retry gives every declared repository its own attempt ceiling, so
     # a total upstream outage now costs wall-clock rather than failing fast.
     # This bound is held above that worst case by
     # scripts/release/test-action-pin-evidence.sh.
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - name: Compare upstream tags with declared commits
+      - name: Compare upstream references with declared commits
         run: scripts/release/verify-github-action-pins-online.py

@@ -324,6 +324,7 @@ fn every_hosted_job_running_workspace_tests_installs_the_tools_the_suite_require
         [
             "../../.github/workflows/cd.yml:build",
             "../../.github/workflows/ci.yml:minimum-rust",
+            "../../.github/workflows/ci.yml:repository-ci",
             "../../.github/workflows/ci.yml:test",
             "../../.github/workflows/ci.yml:test",
             "../../.github/workflows/linux-gnu-evidence.yml:native-arm64",
