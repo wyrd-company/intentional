@@ -6,17 +6,22 @@
 # RYL 0.21.0 rule baseline. Every rule shipped by the installed version is
 # enabled below or excluded here. scripts/ci/assert-ryl-rule-baseline.sh keeps
 # this census closed when the pinned RYL version changes.
+# excluded-rule: anchors - Anchor and alias use remains available for shared YAML fragments.
 # excluded-rule: block-scalar-chomping - Existing command blocks use YAML's clip default.
 # excluded-rule: comments - Existing workflow pin annotations use one separating space.
+# excluded-rule: comments-indentation - Comments follow the source construct they explain.
+# excluded-rule: float-values - Numeric scalar spelling remains owned by each file's domain.
 # excluded-rule: key-ordering - Domain and GitHub mappings use reader-first key order.
+# excluded-rule: merge-keys - Merge-key use remains available for shared YAML mappings.
+# excluded-rule: new-lines - Git owns repository line-ending normalization.
+# excluded-rule: octal-values - Numeric scalar spelling remains owned by each file's domain.
 # excluded-rule: quoted-strings - Plain scalars keep workflow and Taskfile source readable.
+# excluded-rule: tags - Custom YAML tags are not prohibited by repository policy.
 # excluded-rule: truthy - Workflow source keeps plain `on`, which YAML 1.1 treats as truthy.
+# excluded-rule: unicode-line-breaks - Git owns repository line-ending normalization.
 
 [files]
 yaml = ["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
-
-[rules.anchors]
-level = "error"
 
 [rules.braces]
 level = "error"
@@ -44,9 +49,6 @@ level = "error"
 max-spaces-before = 0
 min-spaces-after = 1
 max-spaces-after = 1
-
-[rules.comments-indentation]
-level = "error"
 
 [rules.empty-lines]
 level = "error"
@@ -91,26 +93,8 @@ forbid-in-block-mappings = false
 forbid-in-flow-mappings = true
 forbid-in-block-sequences = true
 
-[rules.float-values]
-level = "error"
-
 [rules.key-duplicates]
 level = "error"
 forbid-duplicated-merge-keys = false
 check-canonical = false
 forbid-merge-key-shadowing = false
-
-[rules.merge-keys]
-level = "error"
-
-[rules.new-lines]
-level = "error"
-
-[rules.octal-values]
-level = "error"
-
-[rules.tags]
-level = "error"
-
-[rules.unicode-line-breaks]
-level = "error"
