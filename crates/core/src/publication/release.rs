@@ -334,22 +334,20 @@ fn attestation_from_json(name: &str, value: &serde_json::Value) -> Result<Attest
 
 /// Extract the workflow run identifier from an attested invocation reference.
 fn run_identifier(invocation: &str) -> Result<u64> {
-    let mut segments = invocation.split('/');
-    while let Some(segment) = segments.next() {
-        if segment == "runs" {
-            return segments
-                .next()
-                .and_then(|run_id| run_id.parse().ok())
-                .ok_or_else(|| {
-                    Error::Validation(format!(
-                        "attested invocation {invocation:?} names no workflow run identifier"
-                    ))
-                });
-        }
-    }
-    Err(Error::Validation(format!(
-        "attested invocation {invocation:?} names no workflow run identifier"
-    )))
+    invocation
+        .split('/')
+        .collect::<Vec<_>>()
+        .windows(3)
+        .find_map(|segments| {
+            (segments[..2] == ["actions", "runs"])
+                .then(|| segments[2].parse().ok())
+                .flatten()
+        })
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "attested invocation {invocation:?} names no workflow run identifier"
+            ))
+        })
 }
 
 /// The document one fresh live observation produces.
@@ -2519,6 +2517,15 @@ retrieval:
         )
         .expect("the statement is read");
         assert_eq!(attestation.run_id, 42);
+    }
+
+    #[test]
+    fn an_attestation_ignores_runs_segments_outside_the_actions_path() {
+        assert_eq!(
+            run_identifier("https://example.test/runs/sample/actions/runs/42/attempts/7")
+                .expect("the workflow run is read"),
+            42
+        );
     }
 
     #[test]
