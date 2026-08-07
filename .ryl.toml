@@ -3,7 +3,7 @@
 #   implements: intent-driven-polyglot-release
 # ---
 #
-# RYL 0.21.0 rule baseline. Every rule shipped by the installed version is
+# RYL rule baseline. Every rule shipped by the installed version is
 # enabled below or excluded here. scripts/ci/assert-ryl-rule-baseline.sh keeps
 # this census closed when the pinned RYL version changes.
 # excluded-rule: anchors - Anchor and alias use remains available for shared YAML fragments.
