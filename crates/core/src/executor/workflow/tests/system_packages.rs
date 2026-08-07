@@ -143,6 +143,37 @@ release-units:
         workspace
     }
 
+    #[test]
+    fn configured_system_package_deadlines_and_packagers_reach_observer_inputs() {
+        let go = system_package_workspace("system-observation-inputs-go");
+        converge(go.root(), WorkflowRole::Publish);
+        let document: Value = serde_yaml::from_str(&workflow(go.root(), WorkflowRole::Publish))
+            .expect("workflow");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        for (publisher, deadline) in [("rpm", "47"), ("apt", "53")] {
+            let job = format!("release_automation_publish_component_package_{publisher}_primary");
+            let observer = publication_observer(jobs, &job);
+            assert_eq!(observer["env"]["INPUT_DEADLINE"].as_str(), Some(deadline));
+            assert_eq!(observer["env"]["INPUT_PACKAGER"].as_str(), Some("goreleaser"));
+        }
+
+        let cargo = cargo_system_package_workspace("system-observation-inputs-cargo");
+        converge(cargo.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(cargo.root(), WorkflowRole::Publish))
+                .expect("workflow");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        for (publisher, deadline) in [("rpm", "47"), ("apt", "53")] {
+            let job = format!("intentional_publish_component_utility_{publisher}_primary");
+            let observer = publication_observer(jobs, &job);
+            assert_eq!(observer["env"]["INPUT_DEADLINE"].as_str(), Some(deadline));
+            assert_eq!(
+                observer["env"]["INPUT_PACKAGER"].as_str(),
+                Some("cargo-archive")
+            );
+        }
+    }
+
     fn cargo_system_package_workspace(label: &str) -> Workspace {
         let workspace = Workspace::new(label);
         let common = [
@@ -1488,12 +1519,21 @@ release-units:
 
     fn run_apt_readback(label: &str, scenario: &str) -> ReadbackRun {
         let workspace = system_package_workspace(label);
+        run_apt_readback_in(workspace, scenario)
+    }
+
+    fn run_apt_readback_in(workspace: Workspace, scenario: &str) -> ReadbackRun {
         converge(workspace.root(), WorkflowRole::Publish);
         let document: Value =
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        let publisher = "release_automation_publish_component_package_apt_primary";
+        let publisher = jobs
+            .keys()
+            .filter_map(Value::as_str)
+            .find(|job| job.ends_with("_publish_component_package_apt_primary")
+                || job.ends_with("_publish_component_utility_apt_primary"))
+            .expect("APT publisher job");
         let installed = observer_installed_clients(jobs, publisher);
         let step = publication_observer(jobs, publisher);
         let temporary = workspace.root().join("runner-readback");
@@ -1608,6 +1648,7 @@ esac
             ("gpgv", "#!/usr/bin/env bash\n[ \"${FAKE_SCENARIO}\" != bad-signature ]\n"),
             ("dpkg-deb", "#!/usr/bin/env bash\nprintf 'amd64\\n'\n"),
             ("goreleaser", "#!/usr/bin/env bash\nprintf 'goreleaser 2.0\\n'\n"),
+            ("intentional", "#!/usr/bin/env bash\nprintf 'intentional 1.2.3\\n'\n"),
             ("apt", "#!/usr/bin/env bash\nprintf 'apt 2.0\\n'\n"),
             ("sleep", "#!/usr/bin/env bash\nprintf '%s\\n' \"$1\" >> \"${FAKE_SLEEP_LOG}\"\n"),
             ("apt-get", r#"#!/usr/bin/env bash
@@ -1642,7 +1683,16 @@ fi
         let verification_stubs = system_verification_stubs(
             &stubs,
             &temporary,
-            &["curl", "gpg", "gpgv", "dpkg-deb", "apt", "apt-get", "sleep"],
+            &[
+                "curl",
+                "gpg",
+                "gpgv",
+                "dpkg-deb",
+                "apt",
+                "apt-get",
+                "intentional",
+                "sleep",
+            ],
             &installed,
         );
         let observer_baseline =
@@ -1667,18 +1717,14 @@ fi
             .env("FAKE_SLEEP_LOG", &sleep_log)
             .env("FAKE_REQUEST_LOG", &request_log);
         for (key, value) in step["env"].as_mapping().expect("env") {
-            let value = value
-                .as_str()
-                .expect("value")
-                .replace("${{ runner.temp }}", &temporary.display().to_string())
-                .replace(
-                    "${{ needs.release_automation_build_component_goreleaser.outputs.version }}",
-                    "1.2.3",
-                )
-                .replace(
-                    "${{ needs.release_automation_build_component_goreleaser.outputs.digest }}",
-                    &digest,
-                );
+            let value = value.as_str().expect("value");
+            let value = if value.contains(".outputs.version }}") {
+                "1.2.3".to_owned()
+            } else if value.contains(".outputs.digest }}") {
+                digest.clone()
+            } else {
+                value.replace("${{ runner.temp }}", &temporary.display().to_string())
+            };
             command.env(key.as_str().expect("key"), value);
         }
         command
@@ -1726,6 +1772,26 @@ fi
         assert!(run.succeeded);
         assert_eq!(run.observation.expect("observation").state, ObservationState::Present);
         assert!(run.waits.is_empty());
+    }
+
+    #[test]
+    fn cargo_archive_system_readback_records_its_own_packager_provenance() {
+        let workspace = cargo_system_package_workspace("cargo-archive-apt-provenance");
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-tool\"\nversion = \"1.2.3\"\ndescription = \"Sample utility\"\nauthors = [\"Release Maintainers <maintainers@example.invalid>\"]\nlicense = \"MIT\"\n",
+        );
+        let config_path = workspace.root().join(".intentional/config.yml");
+        let config = std::fs::read_to_string(&config_path)
+            .expect("configuration")
+            .replace("component: main", "component: section-a");
+        std::fs::write(config_path, config).expect("aligned APT fixture");
+        let run = run_apt_readback_in(workspace, "ok");
+        assert!(run.succeeded, "{}", run.stderr);
+        let observation = run.observation.expect("present observation");
+        let packager = observation.packager.expect("packager provenance");
+        assert_eq!(packager.id, "cargo-archive");
+        assert_eq!(packager.version, "1.2.3");
     }
 
     #[test]

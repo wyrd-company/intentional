@@ -548,6 +548,13 @@ fn accept_observation<'a>(
             "the observation of {identity} is not a complete present readback"
         )));
     };
+    if packager.id != selected.packager.as_str() {
+        return Err(Error::Validation(format!(
+            "publication {identity} was observed with packager {:?} instead of configured packager {:?}",
+            packager.id,
+            selected.packager.as_str()
+        )));
+    }
     if let Some(configured) = selected.destination.as_deref() {
         if destination.identity != configured {
             return Err(Error::Validation(format!(
@@ -1036,6 +1043,35 @@ destination-aliases:
             std::fs::read_to_string(&second).expect("second fragment"),
             "two runs over one observation are byte-identical"
         );
+    }
+
+    #[test]
+    fn an_observation_from_a_neighbouring_packager_is_rejected() {
+        let workspace = npm_workspace("verify-packager-binding");
+        workspace.write(
+            "observation.yml",
+            &present_document().replace("  id: npm", "  id: cargo"),
+        );
+        let observation = workspace.root().join("observation.yml");
+        let output = workspace.root().join("evidence.yml");
+        let error = verify_publication(&request(
+            &workspace,
+            PublisherKind::Npm,
+            None,
+            &observation,
+            &output,
+            &clock(),
+            &TestContext::new(),
+        ))
+        .expect_err("an observation from another configured packager is refused");
+
+        assert!(
+            error.to_string().contains(
+                "observed with packager \"cargo\" instead of configured packager \"npm\""
+            ),
+            "{error}"
+        );
+        assert!(!output.exists(), "a refused observation writes no evidence");
     }
 
     #[test]

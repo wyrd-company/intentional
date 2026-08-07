@@ -188,5 +188,9 @@ PY
 }
 
 "observe_$INTENTIONAL_PUBLISHER"
-INTENTIONAL_PACKAGER_VERSION=$(goreleaser --version | head -n1)
+case "$INTENTIONAL_PACKAGER_ID" in
+  goreleaser) INTENTIONAL_PACKAGER_VERSION=$(goreleaser --version | head -n1) ;;
+  cargo-archive) INTENTIONAL_PACKAGER_VERSION=$(intentional --version | awk '{print $2}') ;;
+  *) printf 'unsupported system-package packager: %s\n' "$INTENTIONAL_PACKAGER_ID" >&2; exit 1 ;;
+esac
 observe_present

@@ -727,7 +727,7 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Step
     let mut observation_inputs = portable_observation_inputs(
         context,
         "package",
-        "goreleaser",
+        context.publication.packager.as_str(),
         client,
         configured.base_url,
     );
