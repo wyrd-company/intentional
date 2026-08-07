@@ -128,7 +128,9 @@ adds the release-tag filter. It excludes every configured phase-tag template so
 a tag pushed during publication cannot start the protocol again. A comparison
 is blocked with `trigger-filter-conflict` if the emitted `push` event combines
 `branches`, `tags`, or `paths` with that filter's mutually exclusive `-ignore`
-form. Resolve the named pair before applying the comparison.
+form. It is blocked with `trigger-filter-positive-missing` if an include filter
+uses `!` exclusions without a positive pattern. Resolve the named filter before
+applying the comparison.
 
 ## Read the authority split in the maintained slice
 

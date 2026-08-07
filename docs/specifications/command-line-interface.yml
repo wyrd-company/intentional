@@ -579,7 +579,9 @@ commands:
           - >-
             The comparison refuses an emitted push event that combines an
             include filter with its mutually exclusive -ignore form and reports
-            the pair with a blocked trigger-filter-conflict diagnostic.
+            the pair with a blocked trigger-filter-conflict diagnostic. An
+            include filter that uses ! exclusions without a positive pattern is
+            refused with trigger-filter-positive-missing.
           - >-
             Without --apply the command is read-only. With --apply it changes
             only the selected workflow file.

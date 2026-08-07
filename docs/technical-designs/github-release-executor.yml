@@ -526,9 +526,10 @@ proposed-design:
     explicit all-branch filter without losing its path filters, while an
     existing branch filter stays exact. The emitted push mapping is refused if
     it combines any GitHub include filter with its mutually exclusive
-    `-ignore` form. Derived release-tag filters end with exclusions for every
-    configured phase-tag template, so tags pushed by a publication run cannot
-    trigger that protocol again.
+    `-ignore` form or uses `!` exclusions without a positive pattern. Derived
+    release-tag filters end with exclusions for every configured phase-tag
+    template, so tags pushed by a publication run cannot trigger that protocol
+    again.
 
   command-boundaries: |-
     The `intentional executor` command group manages executor integration only.

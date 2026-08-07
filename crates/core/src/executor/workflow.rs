@@ -966,6 +966,26 @@ fn validate_trigger_filters(parsed: &Value) -> std::result::Result<(), WorkflowD
                 &format!("on.push.{include}"),
             ));
         }
+        if push
+            .get(Value::String(include.to_owned()))
+            .and_then(Value::as_sequence)
+            .is_some_and(|patterns| {
+                !patterns.is_empty()
+                    && patterns.iter().all(|pattern| {
+                        pattern
+                            .as_str()
+                            .is_some_and(|pattern| pattern.starts_with('!'))
+                    })
+            })
+        {
+            return Err(WorkflowDiagnostic::at(
+                "trigger-filter-positive-missing",
+                format!(
+                    "GitHub requires on.push.{include} to contain a positive pattern when it uses ! exclusions; add one positive pattern or use on.push.{exclude}"
+                ),
+                &format!("on.push.{include}"),
+            ));
+        }
     }
     Ok(())
 }
@@ -7120,6 +7140,34 @@ exit 0
     }
 
     #[test]
+    fn refuses_negative_only_push_include_filters() {
+        for (include, _) in PUSH_FILTER_FAMILIES {
+            let workspace = workspace(&format!("workflow-negative-only-{include}"));
+            workspace.write(
+                ".github/workflows/release.yml",
+                &format!(
+                    "name: release\non:\n  push:\n    {include}:\n      - '!excluded/**'\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n"
+                ),
+            );
+
+            let comparison = compare_workflow(workspace.root(), WorkflowRole::Release, None)
+                .expect("comparison");
+            assert_eq!(comparison.status, ComparisonStatus::Blocked);
+            let diagnostic = comparison
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "trigger-filter-positive-missing")
+                .expect("the negative-only emitted filter is reported");
+            let expected_path = format!("on.push.{include}");
+            assert_eq!(diagnostic.path.as_deref(), Some(expected_path.as_str()));
+            assert!(
+                comparison.apply().is_err(),
+                "a workflow GitHub refuses is never written"
+            );
+        }
+    }
+
+    #[test]
     fn excludes_phase_tags_from_the_publish_trigger() {
         let workspace = workspace("workflow-publish-phase-tag-exclusion");
         workspace.write(
@@ -7150,6 +7198,28 @@ exit 0
             github_tag_filters_match(patterns, "1.2.3"),
             "the annotated global release tag still starts publication: {patterns:?}"
         );
+    }
+
+    #[test]
+    fn refuses_a_phase_tag_template_its_derived_exclusion_does_not_cover() {
+        let workspace = workspace("workflow-phase-tag-glob-overlap");
+        workspace.write(
+            ".intentional/config.yml",
+            &CONFIG.replace(
+                "template: '{id}@{version}'",
+                "template: '[sample]@{version}'",
+            ),
+        );
+
+        let comparison =
+            compare_workflow(workspace.root(), WorkflowRole::Publish, None).expect("comparison");
+        assert_eq!(comparison.status, ComparisonStatus::Blocked);
+        let diagnostic = comparison
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "phase-tag-trigger-overlap")
+            .expect("the phase-tag glob overlap is reported");
+        assert_eq!(diagnostic.path.as_deref(), Some("on.push.tags"));
     }
 
     #[test]
