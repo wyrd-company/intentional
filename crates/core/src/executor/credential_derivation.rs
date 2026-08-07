@@ -9,7 +9,7 @@
 //! in source. A mutation at the emission seam therefore reaches the witness.
 
 #[cfg(any(test, feature = "test-support"))]
-use crate::config::WorkflowRole;
+use crate::config::{PrefixNamespaces, WorkflowRole};
 #[cfg(any(test, feature = "test-support"))]
 use crate::executor::recipe::StoredCredentialKind;
 #[cfg(any(test, feature = "test-support"))]
@@ -393,6 +393,62 @@ pub fn standing_credential_usage_labels(workflows: &[(WorkflowRole, String)]) ->
         "unrecognized stored credentials in managed publish-workflow emission cannot be classified for the standing population: {unrecognized:?}"
     );
     order_standing_labels(labels)
+}
+
+/// Repository settings whose names derive from configured executor prefixes.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrefixDerivedRepositorySettings {
+    /// Protected environment guarding authority transitions.
+    pub environment: String,
+    /// Repository variable holding the GitHub App identifier.
+    pub app_id_variable: String,
+    /// Repository secret holding the GitHub App private key.
+    pub app_private_key_secret: String,
+    /// Repository secret holding the AUR SSH private key.
+    pub aur_key_secret: String,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn prefix_derived_repository_settings(
+    namespaces: &PrefixNamespaces,
+) -> PrefixDerivedRepositorySettings {
+    PrefixDerivedRepositorySettings {
+        environment: namespaces.environment.clone(),
+        app_id_variable: format!("{}GITHUB_APP_ID", namespaces.envvar),
+        app_private_key_secret: format!("{}GITHUB_APP_PRIVATE_KEY", namespaces.envvar),
+        aur_key_secret: format!("{}AUR_KEY", namespaces.envvar),
+    }
+}
+
+/// Managed job identifiers in one derived release workflow.
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn release_managed_job_ids(workflows: &[(WorkflowRole, String)]) -> Vec<String> {
+    let release = workflows
+        .iter()
+        .find(|(role, _)| *role == WorkflowRole::Release)
+        .expect("exhaustive fixture derives release workflow");
+    let document: Value =
+        serde_yaml::from_str(&release.1).expect("derived release workflow YAML parses");
+    let jobs = document["jobs"]
+        .as_mapping()
+        .expect("derived release workflow has jobs");
+    let mut ids = Vec::new();
+    for (job_id, body) in jobs {
+        let job_id = job_id.as_str().expect("release job id");
+        let managed = body["steps"].as_sequence().is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|step| step["id"].as_str() == Some(crate::executor::OWNERSHIP_SENTINEL))
+        });
+        if managed {
+            ids.push(job_id.to_owned());
+        }
+    }
+    ids.sort();
+    ids
 }
 
 #[cfg(any(test, feature = "test-support"))]

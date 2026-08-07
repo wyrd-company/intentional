@@ -378,6 +378,24 @@ pub fn selects_publications(release_unit: &ReleaseUnitConfig) -> bool {
         && !release_unit.publishers().is_empty()
 }
 
+/// Every configured publication identity declared on managed release units.
+#[must_use]
+pub fn configured_publication_identities(config: &Config) -> Vec<String> {
+    let mut identities = Vec::new();
+    for (id, release_unit) in &config.release_units {
+        if !selects_publications(release_unit) {
+            continue;
+        }
+        for (package_id, package) in &release_unit.packages {
+            for (publisher, target, _) in configured_targets(package) {
+                identities.push(format!("{id}/{package_id}/{publisher}/{target}"));
+            }
+        }
+    }
+    identities.sort();
+    identities
+}
+
 /// Resolve every configured publication, collecting each package and target
 /// failure instead of stopping at the first.
 pub fn resolve_publications(root: &Path, config: &Config) -> Result<PublicationSelection> {

@@ -4,8 +4,9 @@
 // ---
 
 use intentional_core::executor::fixture::{
-    long_lived_repository_write_credentials, standing_credential_usage_labels,
-    trusted_publishing_bootstrap_route_count,
+    long_lived_repository_write_credentials, managed_release_tag_namespace_patterns,
+    prefix_derived_repository_settings, release_managed_job_ids, resolved_publication_identities,
+    standing_credential_usage_labels, trusted_publishing_bootstrap_route_count,
 };
 use intentional_core::executor::recipe::StoredCredentialKind;
 
@@ -20,6 +21,26 @@ fn prepare_repository_section(usage: &str) -> &str {
         .1
         .split_once("## Publish to a registry for the first time")
         .expect("prepare section ends before the registry section")
+        .0
+}
+
+fn configure_executor_section(usage: &str) -> &str {
+    usage
+        .split_once("## Configure the GitHub executor")
+        .expect("executor guide has the configure section")
+        .1
+        .split_once("## Reconcile the managed workflow slices")
+        .expect("configure section ends before reconciliation")
+        .0
+}
+
+fn authority_split_section(usage: &str) -> &str {
+    usage
+        .split_once("## Read the authority split in the maintained slice")
+        .expect("executor guide has the authority split section")
+        .1
+        .split_once("## Prepare the repository")
+        .expect("authority split section ends before repository preparation")
         .0
 }
 
@@ -177,5 +198,92 @@ fn usage_standing_credential_sentence_matches_derived_destinations() {
     assert!(
         normalize_whitespace(standing_section).contains(&expected),
         "the standing-credential sentence names every derived destination: {expected}"
+    );
+}
+
+#[test]
+fn usage_executor_check_resolves_every_configured_publication_to_one_recipe() {
+    let usage = executor_guide();
+    let section = configure_executor_section(&usage);
+    let publications = resolved_publication_identities();
+
+    assert!(
+        normalize_whitespace(section).contains(
+            "The check resolves every configured publication to exactly one maintained recipe"
+        ),
+        "the configure section documents one-recipe resolution"
+    );
+    assert!(
+        !publications.is_empty(),
+        "the exhaustive fixture declares configured publications to resolve"
+    );
+}
+
+#[test]
+fn usage_release_workflow_derives_two_managed_jobs() {
+    let usage = executor_guide();
+    let section = authority_split_section(&usage);
+    let managed_jobs = release_managed_job_ids();
+
+    assert!(
+        normalize_whitespace(section).contains("The release workflow derives two managed jobs"),
+        "the authority split section names the managed job count"
+    );
+    assert_eq!(
+        managed_jobs.len(),
+        2,
+        "the derived release workflow owns exactly preparation and release jobs: {managed_jobs:?}"
+    );
+}
+
+#[test]
+fn usage_ruleset_bypass_claim_covers_every_managed_release_tag_namespace() {
+    let usage = executor_guide();
+    let configure = configure_executor_section(&usage);
+    let prepare = prepare_repository_section(&usage);
+    let namespaces = managed_release_tag_namespace_patterns();
+    let bypass_claim = "every managed release tag namespace";
+
+    assert!(
+        normalize_whitespace(configure).contains(bypass_claim),
+        "initialization reports bypass for every managed release tag namespace"
+    );
+    assert!(
+        normalize_whitespace(prepare).contains(bypass_claim),
+        "repository preparation reports bypass for every managed release tag namespace"
+    );
+    assert!(
+        !namespaces.is_empty(),
+        "the exhaustive fixture derives managed release tag namespaces to enumerate"
+    );
+}
+
+#[test]
+fn usage_prefix_derived_repository_setting_names_match_configuration() {
+    let usage = executor_guide();
+    let section = prepare_repository_section(&usage);
+    let settings = prefix_derived_repository_settings();
+
+    assert!(
+        normalize_whitespace(section).contains(
+            "the App private key secret and the AUR key secret all derive from the `envvar`"
+        ),
+        "the prepare section documents prefix-derived credential names"
+    );
+    assert!(
+        section.contains(&format!("`{}`", settings.environment)),
+        "the derived protected environment is named in the prepare section"
+    );
+    assert!(
+        section.contains(&format!("`{}`", settings.app_id_variable)),
+        "the derived App ID variable is named in the prepare section"
+    );
+    assert!(
+        section.contains(&format!("`{}`", settings.app_private_key_secret)),
+        "the derived App private key secret is named in the prepare section"
+    );
+    assert!(
+        usage.contains(&format!("`{}`", settings.aur_key_secret)),
+        "the derived AUR key secret is named in the executor guide"
     );
 }

@@ -28,9 +28,9 @@ pub use workflow::{
 };
 
 pub use recipe::{
-    capability_set, catalog, derive_capabilities, recipes_for, resolve_publications,
-    select_publications, Capability, CapabilityEvidence, Packager, PublicationSelection, Recipe,
-    SelectedPublication, PRIMARY_TARGET,
+    capability_set, catalog, configured_publication_identities, derive_capabilities, recipes_for,
+    resolve_publications, select_publications, Capability, CapabilityEvidence, Packager,
+    PublicationSelection, Recipe, SelectedPublication, PRIMARY_TARGET,
 };
 
 /// Workspace and workflow-derivation fixtures shared by executor tests.
@@ -451,6 +451,59 @@ release-units:
     pub fn trusted_publishing_bootstrap_route_count() -> usize {
         let workflows = derived_recipe_workflows("usage-claims-bootstrap-routes");
         super::credential_derivation::trusted_publishing_bootstrap_route_count(&workflows)
+    }
+
+    /// Managed job identifiers in the derived release workflow.
+    #[must_use]
+    pub fn release_managed_job_ids() -> Vec<String> {
+        let workflows = derived_workflows("usage-claims-release-jobs");
+        super::credential_derivation::release_managed_job_ids(&workflows)
+    }
+
+    /// Repository setting names derived from the default executor prefixes.
+    #[must_use]
+    pub fn prefix_derived_repository_settings(
+    ) -> super::credential_derivation::PrefixDerivedRepositorySettings {
+        let workspace = managed_workspace("usage-claims-prefix-settings");
+        let config = Config::load(workspace.root()).expect("fixture configuration loads");
+        let github = config.github.expect("fixture enables GitHub execution");
+        let namespaces = github.namespaces().expect("fixture namespaces resolve");
+        super::credential_derivation::prefix_derived_repository_settings(&namespaces)
+    }
+
+    /// GitHub ruleset tag namespace patterns from the exhaustive recipe fixture.
+    #[must_use]
+    pub fn managed_release_tag_namespace_patterns() -> Vec<String> {
+        let workspace = recipe_workspace("usage-claims-tag-namespaces");
+        Config::load(workspace.root())
+            .expect("fixture configuration loads")
+            .managed_release_tag_namespace_patterns()
+    }
+
+    /// Publication identities the exhaustive recipe fixture resolves.
+    #[must_use]
+    pub fn resolved_publication_identities() -> Vec<String> {
+        let workspace = recipe_workspace("usage-claims-publications");
+        let config = Config::load(workspace.root()).expect("fixture configuration loads");
+        let expected = super::recipe::configured_publication_identities(&config);
+        let selection = super::recipe::resolve_publications(workspace.root(), &config)
+            .expect("fixture publications resolve");
+        assert!(
+            selection.diagnostics.is_empty(),
+            "the exhaustive fixture resolves every configured publication: {:?}",
+            selection.diagnostics
+        );
+        let mut identities = selection
+            .selected
+            .iter()
+            .map(super::recipe::SelectedPublication::identity)
+            .collect::<Vec<_>>();
+        identities.sort();
+        assert_eq!(
+            identities, expected,
+            "resolved publications match every configured publication identity"
+        );
+        identities
     }
 
     /// Workspace whose release units are generated from the maintained catalog.
