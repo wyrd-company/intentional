@@ -30,7 +30,7 @@ jobs:
       - name: Install repository CI tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes gifsicle
+          sudo apt-get install --yes gifsicle ripgrep
           go install github.com/go-task/task/v3/cmd/task@v3.45.4
           go install github.com/mikefarah/yq/v4@v4.53.3
           cargo install ryl --version 0.21.0 --locked
