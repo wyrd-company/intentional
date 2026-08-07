@@ -115,20 +115,58 @@ pub(crate) fn cargo_binary_identity(
         .into_iter()
         .flat_map(|bins| bins.iter())
         .filter_map(|bin| bin.get("name").and_then(toml_edit::Item::as_str))
+        .map(str::to_owned)
         .collect::<Vec<_>>();
     let package_name = document
         .get("package")
         .and_then(|package| package.get("name"))
         .and_then(toml_edit::Item::as_str);
+    let autobins = document
+        .get("package")
+        .and_then(|package| package.get("autobins"))
+        .and_then(toml_edit::Item::as_bool)
+        .unwrap_or(true);
+    let mut automatic = Vec::new();
+    if autobins {
+        if absolute_directory.join("src/main.rs").is_file() {
+            automatic.extend(package_name.map(str::to_owned));
+        }
+        let bin_directory = absolute_directory.join("src/bin");
+        if let Ok(entries) = std::fs::read_dir(bin_directory) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|extension| extension == "rs") {
+                    if let Some(name) = path.file_stem().and_then(std::ffi::OsStr::to_str) {
+                        automatic.push(name.to_owned());
+                    }
+                } else if path.join("main.rs").is_file() {
+                    if let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) {
+                        automatic.push(name.to_owned());
+                    }
+                }
+            }
+        }
+        automatic.sort_unstable();
+    }
     let name = match explicit.as_slice() {
-        [name] => Some(*name),
-        [] if absolute_directory.join("src/main.rs").is_file() => package_name,
+        [name] => Some(name.as_str()),
+        [] if automatic.len() == 1 => automatic.first().map(String::as_str),
         _ => None,
     };
     let Some(name) = name else {
+        let found = explicit
+            .iter()
+            .map(String::as_str)
+            .chain(automatic.iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        let found = if found.is_empty() {
+            "none".to_owned()
+        } else {
+            found.join(", ")
+        };
         return Err(format!(
-            "publication {identity} cannot derive one native executable identity from {}; declare exactly one [[bin]].name or one package binary",
-            manifest.display()
+            "publication {identity} cannot derive one native executable identity from {}; found Cargo binary targets [{found}], but the maintained native packager requires exactly one [[bin]].name or Cargo auto-binary",
+            manifest.display(),
         ));
     };
     names::cargo_crate(&names::SuppliedName {

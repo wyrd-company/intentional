@@ -178,6 +178,47 @@
         );
     }
 
+    #[test]
+    fn discovers_one_cargo_auto_binary_under_src_bin() {
+        for (path, expected) in [
+            ("component/src/bin/sample-tool.rs", "sample-tool-bin"),
+            ("component/src/bin/sample-runner/main.rs", "sample-runner-bin"),
+        ] {
+            let workspace = Workspace::new("cargo-auto-binary");
+            workspace
+                .write(
+                    "component/Cargo.toml",
+                    "[package]\nname = \"sample-package\"\nversion = \"1.0.0\"\n",
+                )
+                .write(path, "fn main() {}\n");
+
+            let selected = select_publications(workspace.root(), &config("    aur: {}\n"))
+                .expect("one Cargo auto-binary selects the maintained native route");
+            assert_eq!(selected[0].destination.as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn names_the_auto_binaries_that_make_native_identity_ambiguous() {
+        let workspace = Workspace::new("cargo-auto-binary-ambiguity");
+        workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-package\"\nversion = \"1.0.0\"\n",
+            )
+            .write("component/src/bin/first-tool.rs", "fn main() {}\n")
+            .write("component/src/bin/second-tool/main.rs", "fn main() {}\n");
+
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("several auto-binaries are refused");
+        assert!(
+            error.to_string().contains(
+                "found Cargo binary targets [first-tool, second-tool], but the maintained native packager requires exactly one [[bin]].name or Cargo auto-binary"
+            ),
+            "{error}"
+        );
+    }
+
 
     /// The window the CLI handoff fixtures fell into, opened on purpose.
     #[test]

@@ -305,8 +305,9 @@ own repositories.
 
 A Rust package with one binary may publish Homebrew, RPM, APT, or AUR outputs
 alongside its Cargo publication. The binary identity comes from exactly one
-`[[bin]].name`, or from the package name when `src/main.rs` supplies the package
-binary. The maintained build creates Linux x86-64 and Linux Arm64 archives
+`[[bin]].name`, the package name when `src/main.rs` supplies the package binary,
+or one Cargo auto-binary under `src/bin/`. The maintained build creates Linux
+x86-64 and Linux Arm64 archives
 through the digest-pinned Cross 0.2.5 images and creates macOS Arm64 with Cargo.
 Its aggregate job creates only the configured descriptors and native packages
 inside the same sealed subject. Publisher jobs never invoke Cargo. A library or
@@ -325,6 +326,11 @@ distribution pipe each configured publisher promotes, `brews` for Homebrew,
 interpret GoReleaser templates. The command package is discovered from the same
 file's `builds[].main`, from the release-unit root, or from the conventional
 `cmd` directories beneath it.
+
+Each `brews[].repository.owner` and `brews[].repository.name` must also be
+literal and must match the configured Homebrew repository. Executor derivation
+is network-free and cannot resolve GoReleaser `{{ .Env.* }}` values, so a
+dynamic tap destination is refused instead of being accepted and then ignored.
 
 The build job installs a pinned GoReleaser rather than the newest release. These
 recipes read what the packager wrote, at paths and under names it decides, so

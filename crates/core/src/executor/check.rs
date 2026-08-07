@@ -130,9 +130,10 @@ fn native_packager_findings(
             let declared = match declared {
                 goreleaser::BrewRepository::Literal(declared) if declared != configured => declared,
                 goreleaser::BrewRepository::Incomplete => "no complete repository",
-                goreleaser::BrewRepository::Literal(_) | goreleaser::BrewRepository::Dynamic => {
-                    continue
+                goreleaser::BrewRepository::Dynamic => {
+                    "a runtime template that derivation cannot resolve"
                 }
+                goreleaser::BrewRepository::Literal(_) => continue,
             };
             findings.push(format!(
                     "{identity} publishes to configured tap {configured}, but brews[{index}].repository in {file} declares {declared}"
@@ -498,7 +499,7 @@ aur:
     }
 
     #[test]
-    fn accepts_a_templated_homebrew_repository_that_cannot_be_compared_statically() {
+    fn refuses_a_templated_homebrew_repository_that_cannot_be_resolved_during_derivation() {
         let workspace = go_workspace(
             "check-goreleaser-homebrew-template",
             "    homebrew: { repository: example-org/homebrew-tap }\n",
@@ -511,12 +512,9 @@ aur:
             ),
         );
         let findings = packager_findings(&workspace);
-        assert!(
-            findings
-                .iter()
-                .all(|finding| !finding.contains(".repository")),
-            "runtime template values are not literal disagreements: {findings:?}"
-        );
+        assert!(findings.iter().any(|finding| finding.contains(
+            "brews[0].repository in component/.goreleaser.yaml declares a runtime template that derivation cannot resolve"
+        )), "a runtime-only tap destination is refused before its generated formula can be pushed elsewhere: {findings:?}");
     }
 
     #[test]
