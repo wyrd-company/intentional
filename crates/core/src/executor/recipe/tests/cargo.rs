@@ -219,6 +219,54 @@
         );
     }
 
+    #[test]
+    fn refuses_an_explicit_cargo_binary_beside_an_unclaimed_auto_binary() {
+        let workspace = Workspace::new("cargo-mixed-binary-ambiguity");
+        workspace
+            .write(
+                "component/Cargo.toml",
+                "[package]\nname = \"sample-package\"\nversion = \"1.0.0\"\n\n[[bin]]\nname = \"first-tool\"\npath = \"src/first.rs\"\n",
+            )
+            .write("component/src/first.rs", "fn main() {}\n")
+            .write("component/src/bin/second-tool.rs", "fn main() {}\n");
+
+        let error = select_publications(workspace.root(), &config("    aur: {}\n"))
+            .expect_err("an explicit and an unclaimed auto-binary are several targets");
+        assert!(
+            error.to_string().contains(
+                "found Cargo binary targets [first-tool, second-tool], but the maintained native packager requires exactly one"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_explicit_cargo_path_claims_its_auto_discovered_file() {
+        for declaration in [
+            "name = \"renamed-tool\"\npath = \"src/bin/sample-tool.rs\"",
+            "name = \"sample-tool\"",
+        ] {
+            let workspace = Workspace::new("cargo-explicit-binary-claim");
+            workspace
+                .write(
+                    "component/Cargo.toml",
+                    &format!(
+                        "[package]\nname = \"sample-package\"\nversion = \"1.0.0\"\n\n[[bin]]\n{declaration}\n"
+                    ),
+                )
+                .write("component/src/bin/sample-tool.rs", "fn main() {}\n");
+
+            let selected = select_publications(workspace.root(), &config("    aur: {}\n"))
+                .expect("the explicit declaration and claimed auto path are one target");
+            let expected = if declaration.contains("renamed-tool") {
+                "renamed-tool-bin"
+            } else {
+                "sample-tool-bin"
+            };
+            assert_eq!(selected[0].destination.as_deref(), Some(expected));
+        }
+    }
+
 
     /// The window the CLI handoff fixtures fell into, opened on purpose.
     #[test]
