@@ -38,6 +38,8 @@ jobs:
           scripts/ci/install-workflow-test-tools.sh .ci-tools/bin
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           echo "$PWD/.ci-tools/bin" >> "$GITHUB_PATH"
+      - name: Allow Mermaid's Chromium sandbox
+        run: sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
       - name: Run the repository CI contract
         run: task ci
 
