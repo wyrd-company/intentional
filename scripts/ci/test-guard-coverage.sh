@@ -15,6 +15,23 @@ if ! "$root/scripts/ci/assert-hosted-task-ci.sh"; then
   exit 1
 fi
 
+cp "$root/.github/workflows/ci.yml" "$temporary/without-task-ci.yml"
+yq -i \
+  '(.jobs.repository-ci.steps[] | select(.run == "task ci").run) = "task test"' \
+  "$temporary/without-task-ci.yml"
+if "$root/scripts/ci/assert-hosted-task-ci.sh" \
+  "$temporary/without-task-ci.yml" \
+  >"$temporary/without-task-ci.stdout" \
+  2>"$temporary/without-task-ci.stderr"; then
+  echo "hosted CI without task ci passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq 'hosted CI must invoke task ci exactly once; found 0 calls' \
+  "$temporary/without-task-ci.stderr"; then
+  echo "hosted CI without task ci failed for the wrong reason" >&2
+  cat "$temporary/without-task-ci.stderr" >&2
+  exit 1
+fi
+
 cp "$root/.github/workflows/ci.yml" "$temporary/without-pull-request.yml"
 yq -i 'del(.on.pull_request)' "$temporary/without-pull-request.yml"
 if "$root/scripts/ci/assert-hosted-task-ci.sh" \
@@ -67,6 +84,41 @@ elif ! grep -Fq 'unclassified shipped RYL rules: truthy' \
   "$temporary/unclassified-ryl-rule.stderr"; then
   echo "the unclassified shipped RYL rule failed for the wrong reason" >&2
   cat "$temporary/unclassified-ryl-rule.stderr" >&2
+  exit 1
+fi
+
+cp "$root/.ryl.toml" "$temporary/unknown-ryl-rule.toml"
+printf '%s\n' \
+  '# excluded-rule: future-rule - Fixture for a rule absent from installed RYL.' \
+  >>"$temporary/unknown-ryl-rule.toml"
+if "$root/scripts/ci/assert-ryl-rule-baseline.sh" \
+  "$temporary/unknown-ryl-rule.toml" \
+  >"$temporary/unknown-ryl-rule.stdout" \
+  2>"$temporary/unknown-ryl-rule.stderr"; then
+  echo "an exclusion absent from installed RYL passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq \
+  'the RYL baseline classifies rules not shipped by this version: future-rule' \
+  "$temporary/unknown-ryl-rule.stderr"; then
+  echo "the exclusion absent from installed RYL failed for the wrong reason" >&2
+  cat "$temporary/unknown-ryl-rule.stderr" >&2
+  exit 1
+fi
+
+cp "$root/.ryl.toml" "$temporary/overlapping-ryl-rule.toml"
+printf '%s\n' \
+  '# excluded-rule: braces - Fixture for an enabled and excluded rule.' \
+  >>"$temporary/overlapping-ryl-rule.toml"
+if "$root/scripts/ci/assert-ryl-rule-baseline.sh" \
+  "$temporary/overlapping-ryl-rule.toml" \
+  >"$temporary/overlapping-ryl-rule.stdout" \
+  2>"$temporary/overlapping-ryl-rule.stderr"; then
+  echo "an enabled and excluded RYL rule passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq 'RYL rules cannot be both enabled and excluded: braces' \
+  "$temporary/overlapping-ryl-rule.stderr"; then
+  echo "the enabled and excluded RYL rule failed for the wrong reason" >&2
+  cat "$temporary/overlapping-ryl-rule.stderr" >&2
   exit 1
 fi
 
