@@ -244,6 +244,7 @@
     fn an_explicit_cargo_path_claims_its_auto_discovered_file() {
         for declaration in [
             "name = \"renamed-tool\"\npath = \"src/bin/sample-tool.rs\"",
+            "name = \"renamed-tool\"\npath = \"./src/bin/sample-tool.rs\"",
             "name = \"sample-tool\"",
         ] {
             let workspace = Workspace::new("cargo-explicit-binary-claim");

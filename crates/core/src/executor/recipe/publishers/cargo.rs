@@ -87,6 +87,12 @@ pub(super) fn cargo_registry(
     }
 }
 
+fn normalized_manifest_path(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|component| !matches!(component, std::path::Component::CurDir))
+        .collect()
+}
+
 /// One executable a Cargo package can distribute as a native archive.
 ///
 /// An explicit binary target owns its own name. When Cargo's conventional
@@ -119,7 +125,8 @@ pub(crate) fn cargo_binary_identity(
             let path = bin
                 .get("path")
                 .and_then(toml_edit::Item::as_str)
-                .map(PathBuf::from);
+                .map(Path::new)
+                .map(normalized_manifest_path);
             Some((name.to_owned(), path))
         })
         .collect::<Vec<_>>();
@@ -150,7 +157,7 @@ pub(crate) fn cargo_binary_identity(
             .flatten()
             .find(|path| absolute_directory.join(path).is_file())
         {
-            claimed_paths.insert(path);
+            claimed_paths.insert(normalized_manifest_path(&path));
         }
     }
     let mut automatic = Vec::new();
@@ -180,7 +187,7 @@ pub(crate) fn cargo_binary_identity(
                 }
             }
         }
-        automatic.retain(|(_, path)| !claimed_paths.contains(path));
+        automatic.retain(|(_, path)| !claimed_paths.contains(&normalized_manifest_path(path)));
         automatic.sort_unstable();
     }
     let targets = explicit
