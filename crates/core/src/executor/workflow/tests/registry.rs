@@ -1477,6 +1477,97 @@
         );
     }
 
+    #[test]
+    fn cargo_registry_token_secret_reaches_its_consumption_site() {
+        const SECRET: &str = "EXAMPLE_BOOTSTRAP_TOKEN";
+        const EXPRESSION: &str = "${{ secrets.EXAMPLE_BOOTSTRAP_TOKEN }}";
+
+        for (label, workspace) in [
+            (
+                "the crates.io primary",
+                workspace("workflow-cargo-token-resolution-primary"),
+            ),
+            (
+                "a configured alternate registry",
+                {
+                    let workspace = workspace("workflow-cargo-token-resolution-alternate");
+                    workspace.write(
+                        ".cargo/config.toml",
+                        "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+                    );
+                    workspace.write(
+                        "component/Cargo.toml",
+                        "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+                    );
+                    workspace
+                },
+            ),
+        ] {
+            let config = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
+                .expect("configuration reads")
+                .replace(
+                    "    cargo: { registry: {} }\n",
+                    &format!("    cargo: {{ registry: {{ token-secret: {SECRET} }} }}\n"),
+                );
+            workspace.write(".intentional/config.yml", &config);
+            converge(workspace.root(), WorkflowRole::Publish);
+
+            let publications = crate::executor::recipe::select_publications(
+                workspace.root(),
+                &Config::load(workspace.root()).expect("configuration loads"),
+            )
+            .expect("publications select");
+            let cargo_publications = publications
+                .iter()
+                .filter(|publication| publication.publisher == PublisherKind::Cargo)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                cargo_publications.len(),
+                1,
+                "{label} derives exactly one Cargo destination, so there is no npm-style peer for a token-secret to leak into"
+            );
+
+            let steps = publisher_steps(workspace.root(), PRIMARY_TARGET);
+            let authenticate = steps
+                .iter()
+                .find(|step| {
+                    step["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Authenticate"))
+                })
+                .expect("the Cargo publisher authenticates before publishing");
+            assert_eq!(
+                step_environment(authenticate)
+                    .get("INTENTIONAL_BOOTSTRAP_TOKEN")
+                    .map(String::as_str),
+                Some(EXPRESSION),
+                "{label} binds the configured token-secret to the bootstrap variable the recipe reads"
+            );
+            let body = authenticate["run"].as_str().expect("authenticate script");
+            assert!(
+                body.contains("${INTENTIONAL_BOOTSTRAP_TOKEN:-}"),
+                "{label} consumes the configured token-secret at its defensive read site"
+            );
+
+            let cargo_publisher =
+                format!("intentional_publish_component_package_cargo_{PRIMARY_TARGET}");
+            let leaked = publish_jobs(workspace.root())
+                .iter()
+                .filter_map(|(job, body)| {
+                    let job = job.as_str()?;
+                    (job != cargo_publisher
+                        && serde_yaml::to_string(body)
+                            .is_ok_and(|serialized| serialized.contains(SECRET)))
+                    .then(|| job.to_owned())
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                leaked.is_empty(),
+                "{label} token-secret leaked into other publish jobs: {leaked:?}"
+            );
+        }
+    }
+
     // The recipe fixes what its destination admits, and the observation it
     // writes has to say the same thing or `verify publication` refuses it. Both
     // sides are derived here, so a destination whose recipe changed one and not
