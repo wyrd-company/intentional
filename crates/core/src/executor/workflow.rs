@@ -7287,31 +7287,48 @@ exit 0
     }
 
     #[test]
-    fn refuses_non_sequence_repository_push_filters_outside_the_managed_trigger_slice() {
+    fn distinguishes_an_unhandled_filter_shape_from_a_satisfied_contract() {
+        let required = Value::Sequence(vec![Value::String("v*".to_owned())]);
+        assert!(
+            trigger_update(Some(&Value::String("v*".to_owned())), &required).is_err(),
+            "an unhandled shape is not reported as a satisfied contract"
+        );
+        assert_eq!(
+            trigger_update(Some(&required), &required),
+            Ok(None),
+            "an exact filter sequence already satisfies the contract"
+        );
+    }
+
+    #[test]
+    fn refuses_invalid_repository_push_filter_shapes_outside_the_managed_trigger_slice() {
         for (include, exclude) in PUSH_FILTER_FAMILIES {
             for filter in [include, exclude] {
-                let workspace = workspace(&format!("workflow-scalar-{filter}"));
-                workspace.write(
-                    ".github/workflows/release.yml",
-                    &format!(
-                        "name: release\non:\n  push:\n    {filter}: sample/**\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n"
-                    ),
-                );
+                for (shape, value) in [("scalar", "sample/**"), ("member", "[ sample/**, 1 ]")] {
+                    let workspace = workspace(&format!("workflow-{shape}-{filter}"));
+                    workspace.write(
+                        ".github/workflows/release.yml",
+                        &format!(
+                            "name: release\non:\n  push:\n    {filter}: {value}\njobs:\n  candidate_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n"
+                        ),
+                    );
 
-                let comparison = compare_workflow(workspace.root(), WorkflowRole::Release, None)
-                    .expect("comparison");
-                assert_eq!(comparison.status, ComparisonStatus::Blocked);
-                let diagnostic = comparison
-                    .diagnostics
-                    .iter()
-                    .find(|diagnostic| diagnostic.code == "trigger-filter-shape-invalid")
-                    .expect("the scalar filter is reported");
-                let expected_path = format!("on.push.{filter}");
-                assert_eq!(diagnostic.path.as_deref(), Some(expected_path.as_str()));
-                assert!(
-                    comparison.apply().is_err(),
-                    "a scalar {filter} filter is never written"
-                );
+                    let comparison =
+                        compare_workflow(workspace.root(), WorkflowRole::Release, None)
+                            .expect("comparison");
+                    assert_eq!(comparison.status, ComparisonStatus::Blocked);
+                    let diagnostic = comparison
+                        .diagnostics
+                        .iter()
+                        .find(|diagnostic| diagnostic.code == "trigger-filter-shape-invalid")
+                        .expect("the invalid filter shape is reported");
+                    let expected_path = format!("on.push.{filter}");
+                    assert_eq!(diagnostic.path.as_deref(), Some(expected_path.as_str()));
+                    assert!(
+                        comparison.apply().is_err(),
+                        "an invalid {shape} shape for {filter} is never written"
+                    );
+                }
             }
         }
     }
