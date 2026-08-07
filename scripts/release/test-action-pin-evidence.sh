@@ -657,6 +657,21 @@ if ! run_check "$directory" "$root/github-action-pins.yml"; then
   report "$directory"
 fi
 
+# Both Rust toolchain revisions used by repository workflows are branches, not
+# tags. Their declarations must retain that distinction so the online check
+# resolves the same Git references the workflows previously named.
+for constant in WORKFLOW_RUST_1_85_ACTION WORKFLOW_RUST_STABLE_ACTION; do
+  case_number=$((case_number + 1))
+  if ! awk -v constant="$constant" '
+    $1 == "-" && $2 == "constant:" { selected = ($3 == constant) }
+    selected && $1 == "kind:" && $2 == "branch" { found = 1 }
+    END { exit !found }
+  ' "$root/github-action-pins.yml"; then
+    echo "$constant must remain a branch-backed Action declaration" >&2
+    failures=$((failures + 1))
+  fi
+done
+
 # Every repository workflow bootstraps through external Actions before it can
 # run its own checks. A fixture added under a second supported extension proves
 # the roster is derived from the directory and that a new floating reference
