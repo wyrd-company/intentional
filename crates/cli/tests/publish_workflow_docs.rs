@@ -7,6 +7,9 @@ use serde_yaml::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
+use intentional_core::config::WorkflowRole;
+use intentional_core::executor::fixture::{derived_workflows, publish_workflow_mermaid};
+
 const WORKFLOW_SEED: &str =
     "name: Publish\n\non: {}\n\npermissions:\n  contents: read\n\njobs: {}\n";
 
@@ -87,6 +90,28 @@ fn job_kind(id: &str) -> &'static str {
     }
 }
 
+fn environment_boundaries(workflow: &str) -> BTreeMap<String, String> {
+    let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+    document["jobs"]
+        .as_mapping()
+        .expect("derived workflow has jobs")
+        .iter()
+        .filter_map(|(id, body)| {
+            let id = id.as_str().expect("job id is text");
+            if !id.starts_with("intentional_") {
+                return None;
+            }
+            let kind = job_kind(id).to_owned();
+            let environment = if body.get("environment").is_some() {
+                "protected"
+            } else {
+                "none"
+            };
+            Some((kind, environment.to_owned()))
+        })
+        .collect()
+}
+
 #[test]
 fn publish_workflow_page_leads_with_the_optional_executor_layer() {
     let schema: Value = serde_yaml::from_str(
@@ -155,8 +180,15 @@ fn publish_workflow_page_matches_the_repository_derivation() {
         page.split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .contains("derived publish workflow is 1,652 lines across 20 jobs"),
+            .contains("complete reconciled workflow file is 1,652 lines across 20 jobs"),
         "the page states the witnessed repository-scale values"
+    );
+
+    assert_eq!(
+        std::fs::read_to_string("../../docs/assets/publish-workflow.mmd")
+            .expect("publish workflow Mermaid source is readable"),
+        publish_workflow_mermaid(&workflow),
+        "the checked-in Mermaid source is generated from every derived job and needs edge"
     );
 
     for (id, body) in jobs {
@@ -181,34 +213,22 @@ fn publish_workflow_page_matches_the_repository_derivation() {
 
 #[test]
 fn publish_workflow_page_matches_derived_environment_boundaries() {
-    let workflow = derived_repository_workflow();
-    let document: Value = serde_yaml::from_str(&workflow).expect("derived workflow parses");
-    let jobs = document["jobs"]
-        .as_mapping()
-        .expect("derived workflow has jobs");
-    let protected = jobs
-        .iter()
-        .filter(|(_, body)| body.get("environment").is_some())
-        .map(|(id, _)| job_kind(id.as_str().expect("job id is text")))
-        .collect::<BTreeSet<_>>();
-    let unprotected = jobs
-        .iter()
-        .filter(|(_, body)| body.get("environment").is_none())
-        .map(|(id, _)| job_kind(id.as_str().expect("job id is text")))
-        .collect::<BTreeSet<_>>();
+    let mut boundaries = environment_boundaries(&derived_repository_workflow());
+    let conditional = derived_workflows("publish-docs-conditional-jobs")
+        .into_iter()
+        .find_map(|(role, workflow)| (role == WorkflowRole::Publish).then_some(workflow))
+        .expect("managed fixture derives a publish workflow");
+    for (kind, environment) in environment_boundaries(&conditional) {
+        if let Some(existing) = boundaries.insert(kind.clone(), environment.clone()) {
+            assert_eq!(existing, environment, "{kind} has one environment boundary");
+        }
+    }
+    let page = std::fs::read_to_string("../../docs/publish-workflow.md")
+        .expect("publish workflow page is readable");
 
     assert_eq!(
-        protected,
-        ["phase-before", "upload", "publisher", "close"]
-            .into_iter()
-            .collect(),
-        "the protected job-kind population is derived from emitted jobs"
-    );
-    assert_eq!(
-        unprotected,
-        ["verify-tag", "build", "verifier", "assemble"]
-            .into_iter()
-            .collect(),
-        "the unprotected job-kind population is derived from emitted jobs"
+        documented_environments(&page),
+        boundaries,
+        "every documented environment boundary is witnessed by a repository or conditional derivation"
     );
 }

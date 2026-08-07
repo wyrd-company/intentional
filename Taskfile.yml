@@ -153,11 +153,20 @@ tasks:
       - vhs docs/demo.tape
       - gifsicle --batch --optimize=3 --colors 256 docs/assets/demo.gif
 
-  # Public diagrams are hand-authored SVG. The file under docs/assets is both
-  # source and published output: wyrd.foo renders relative images but does not
-  # render diagram fences. Use the site's #24292e background while reviewing
-  # contrast, then list each SVG as an exact docs/docs.yml asset path.
+  # Public diagram sources are committed as Mermaid and rendered to SVG because
+  # wyrd.foo renders relative images but does not render diagram fences. The
+  # documentation check re-renders each published SVG and rejects drift.
+  docs:diagram:
+    desc: Regenerate the derived publish-workflow diagram and rendered asset
+    cmds:
+      - cargo run --quiet -p intentional-cli --example publish_workflow_diagram
+      - >-
+        npx -y @mermaid-js/mermaid-cli@11.16.0
+        -i docs/assets/publish-workflow.mmd
+        -o docs/assets/publish-workflow.svg
+        -b transparent
+
   docs:check:
-    desc: Validate public documentation and its generated demo
+    desc: Validate public documentation and generated assets
     cmds:
       - bash scripts/check-docs.sh

@@ -48,6 +48,70 @@ pub mod fixture {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
+    /// Render a derived publish workflow's complete job and dependency graph as Mermaid.
+    ///
+    /// Job ids and every `needs` edge come from the reconciled workflow. The
+    /// checked-in documentation source can therefore be compared with this
+    /// projection instead of maintaining a second graph roster by hand.
+    #[must_use]
+    pub fn publish_workflow_mermaid(workflow: &str) -> String {
+        let document: serde_yaml::Value =
+            serde_yaml::from_str(workflow).expect("derived publish workflow parses");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived publish workflow has jobs");
+        let mut source = String::from(
+            "%% Generated from the derived publish workflow; do not edit by hand.\n\
+%%{init: {\"theme\":\"dark\",\"htmlLabels\":false,\"deterministicIds\":true,\"deterministicIDSeed\":\"intentional-publish-workflow\",\"flowchart\":{\"curve\":\"basis\"},\"themeVariables\":{\"background\":\"#24292e\",\"primaryColor\":\"#30363d\",\"primaryTextColor\":\"#f0f6fc\",\"primaryBorderColor\":\"#8b949e\",\"lineColor\":\"#79c0ff\",\"fontFamily\":\"DejaVu Sans\"}}}%%\n\
+flowchart LR\n\
+  classDef protected fill:#3d2f1f,stroke:#d29922,color:#f0f6fc\n\
+  classDef terminal fill:#3b2344,stroke:#bc8cff,color:#f0f6fc\n",
+        );
+
+        for (id, _) in jobs {
+            let id = id.as_str().expect("managed job id is text");
+            assert!(
+                id.chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_'),
+                "managed job id {id} is a Mermaid identifier"
+            );
+            let label = id.strip_prefix("intentional_").unwrap_or(id);
+            source.push_str(&format!("  {id}[\"{label}\"]\n"));
+        }
+
+        for (id, body) in jobs {
+            let id = id.as_str().expect("managed job id is text");
+            match body.get("needs") {
+                None | Some(serde_yaml::Value::Null) => {}
+                Some(serde_yaml::Value::String(need)) => {
+                    source.push_str(&format!("  {need} --> {id}\n"));
+                }
+                Some(serde_yaml::Value::Sequence(needs)) => {
+                    for need in needs {
+                        let need = need.as_str().expect("managed job need is text");
+                        source.push_str(&format!("  {need} --> {id}\n"));
+                    }
+                }
+                Some(other) => panic!("managed job {id} has unsupported needs {other:?}"),
+            }
+        }
+
+        let protected = jobs
+            .iter()
+            .filter(|(_, body)| body.get("environment").is_some())
+            .map(|(id, _)| id.as_str().expect("managed job id is text"))
+            .collect::<Vec<_>>();
+        if !protected.is_empty() {
+            source.push_str(&format!("  class {} protected\n", protected.join(",")));
+        }
+        if jobs.contains_key(serde_yaml::Value::String(
+            "intentional_close_release".to_owned(),
+        )) {
+            source.push_str("  class intentional_close_release terminal\n");
+        }
+        source
+    }
+
     /// Directory name for one fixture workspace.
     ///
     /// The label says what the workspace is for; it is not an identity. Tests

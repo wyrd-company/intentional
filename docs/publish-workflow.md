@@ -28,9 +28,9 @@ page is the map for reading it.
 
 ![The publish workflow verifies the tag, fans out to builds, seals and uploads the built subjects, publishes each destination, verifies each publication, assembles evidence, and closes the release last](assets/publish-workflow.svg)
 
-Solid arrows are required dependencies. Dashed paths appear only when the
-release configuration needs them. A configured gate also joins the graph before
-evidence assembly and release closure.
+Every arrow is a direct required dependency in this repository's derived graph.
+A different configuration can add phase-tag, deliverable, publication, and gate
+jobs with their own direct dependencies.
 
 The managed job names use your configured job prefix. The default names begin
 with `intentional_`.
@@ -56,9 +56,10 @@ workflow has collected everything it must carry.
 
 ## Account for the workflow's size
 
-For this repository, the derived publish workflow is 1,652 lines across 20
-jobs. Those values come from this repository's configuration; another
-repository derives a different graph.
+For this repository, the complete reconciled workflow file is 1,652 lines
+across 20 jobs. That count includes the minimal repository-owned name, trigger,
+permission, and jobs scaffolding into which Intentional writes its managed
+slice. Another repository derives a different graph.
 
 The main costs buy separate guarantees:
 
