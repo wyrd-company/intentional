@@ -583,6 +583,14 @@ commands:
             include filter that uses ! exclusions without a positive pattern is
             refused with trigger-filter-positive-missing.
           - >-
+            The comparison validates every emitted push filter, including a
+            repository-authored filter outside the managed trigger slice. A
+            filter that is not a sequence of string patterns is refused with
+            trigger-filter-shape-invalid. A publish workflow carrying paths or
+            paths-ignore is refused with trigger-filter-conflict because GitHub
+            ANDs that repository filter with the owned release-tag filter and
+            can silently suppress publication.
+          - >-
             Without --apply the command is read-only. With --apply it changes
             only the selected workflow file.
       - name: check

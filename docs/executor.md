@@ -123,14 +123,21 @@ which is how Intentional recognizes generated slices after you change the
 configured prefix: sentinel-bearing jobs under the old prefix are replaced,
 and a job that merely happens to share the old prefix stays yours.
 
-The publish trigger preserves every repository branch and path filter while it
-adds the release-tag filter. It excludes every configured phase-tag template so
-a tag pushed during publication cannot start the protocol again. A comparison
-is blocked with `trigger-filter-conflict` if the emitted `push` event combines
-`branches`, `tags`, or `paths` with that filter's mutually exclusive `-ignore`
-form. It is blocked with `trigger-filter-positive-missing` if an include filter
-uses `!` exclusions without a positive pattern. Resolve the named filter before
-applying the comparison.
+The publish trigger preserves every repository branch filter while it adds the
+release-tag filter. Repository `paths` and `paths-ignore` filters would be ANDed
+with that owned filter and could silently suppress publication, so the
+comparison blocks them with `trigger-filter-conflict`. It excludes every
+configured phase-tag template so a tag pushed during publication cannot start
+the protocol again.
+
+Every emitted `push` event is validated, including repository-authored filters
+outside Intentional's managed trigger slice. A comparison is blocked with
+`trigger-filter-conflict` if it combines `branches`, `tags`, or `paths` with
+that filter's mutually exclusive `-ignore` form. It is blocked with
+`trigger-filter-positive-missing` if an include filter uses `!` exclusions
+without a positive pattern, and with `trigger-filter-shape-invalid` if a filter
+is not a sequence of strings. Resolve the named filter before applying the
+comparison.
 
 ## Read the authority split in the maintained slice
 

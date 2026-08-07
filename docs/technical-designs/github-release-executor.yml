@@ -514,22 +514,24 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured four-publication mix is 1,651 lines. Adding its Cargo-shaped AUR
-    publication produces a five-publication mix of 1,859 lines. Both fit. The
-    five-publication fixture plus 141 repository-owned lines lands exactly on
+    configured four-publication mix is 1,652 lines. Adding its Cargo-shaped AUR
+    publication produces a five-publication mix of 1,860 lines. Both fit. The
+    five-publication fixture plus 140 repository-owned lines lands exactly on
     the bound, and one more repository-owned line is refused.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
 
     Trigger shorthand and filter mappings keep their repository meaning when
     an owned filter is introduced. A push mapping with no ref filter gains an
-    explicit all-branch filter without losing its path filters, while an
-    existing branch filter stays exact. The emitted push mapping is refused if
-    it combines any GitHub include filter with its mutually exclusive
-    `-ignore` form or uses `!` exclusions without a positive pattern. Derived
-    release-tag filters end with exclusions for every configured phase-tag
-    template, so tags pushed by a publication run cannot trigger that protocol
-    again.
+    explicit all-branch filter, while an existing branch filter stays exact. A
+    repository path filter is refused because GitHub combines it with the owned
+    release-tag filter and can silently suppress publication. Every emitted
+    push mapping is refused if a filter is not a sequence of strings, combines
+    a GitHub include filter with its mutually exclusive `-ignore` form, or uses
+    `!` exclusions without a positive pattern. Derived release-tag filters
+    carry effective exclusions for every configured phase-tag template without
+    duplicating an exclusion that remains in force, so tags pushed by a
+    publication run cannot trigger that protocol again.
 
   command-boundaries: |-
     The `intentional executor` command group manages executor integration only.
