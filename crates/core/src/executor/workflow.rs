@@ -522,9 +522,9 @@ fn reconcile(
     contract: &WorkflowContract,
 ) -> std::result::Result<(String, Vec<WorkflowDiagnostic>), WorkflowDiagnostic> {
     let mut advisories = Vec::new();
-    // `on: push` and `on: [push, tag]` are shorthand for a trigger mapping.
-    // Expanding them first means adding a required trigger never discards the
-    // repository's own.
+    // `on: push`, `on: [push, tag]`, and an empty `push:` filter mapping are
+    // shorthand for a trigger mapping. Expanding them first means adding a
+    // required trigger never discards the repository's own.
     if let Some(current) = document.get(&["on"]).map_err(unparsable)? {
         if let Some(expanded) = expanded_triggers(&current, contract) {
             document.set(&["on"], &expanded).map_err(unparsable)?;
@@ -784,7 +784,11 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
         .any(|(path, _)| path.as_slice() == ["on", "push", "tags"]);
     if let Value::Mapping(current) = current {
         let push = Value::String("push".to_owned());
-        if adds_push_tag_filter && current.get(&push).is_some_and(Value::is_null) {
+        if adds_push_tag_filter
+            && current
+                .get(&push)
+                .is_some_and(push_mapping_needs_branch_expansion)
+        {
             let mut mapping = current.clone();
             mapping.insert(push, all_branch_pushes());
             return Some(Value::Mapping(mapping));
@@ -813,6 +817,10 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
         mapping.insert(Value::String(name), value);
     }
     Some(Value::Mapping(mapping))
+}
+
+fn push_mapping_needs_branch_expansion(value: &Value) -> bool {
+    value.is_null() || value.as_mapping().is_some_and(|mapping| mapping.is_empty())
 }
 
 fn all_branch_pushes() -> Value {
@@ -6438,6 +6446,60 @@ exit 0
                 .as_sequence()
                 .is_some_and(|tags| !tags.is_empty()),
             "the derived release-tag filter is still present"
+        );
+    }
+
+    #[test]
+    fn leaves_explicit_push_branch_filters_when_publish_derivation_adds_tag_filters() {
+        let workspace = workspace("workflow-publish-explicit-push-branches");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push:\n    branches:\n      - main\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+
+        assert_eq!(
+            document["on"]["push"]["branches"].as_sequence(),
+            Some(&vec![Value::String("main".to_owned())]),
+            "an explicit branch filter is not widened to every branch"
+        );
+        assert!(
+            document["on"]["push"]["tags"]
+                .as_sequence()
+                .is_some_and(|tags| !tags.is_empty()),
+            "the derived release-tag filter is still present"
+        );
+    }
+
+    #[test]
+    fn preserves_branch_pushes_from_empty_mapping_when_publish_derivation_adds_tag_filters() {
+        let workspace = workspace("workflow-publish-empty-push-mapping");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push: {}\n  workflow_dispatch:\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+
+        assert_eq!(
+            document["on"]["push"]["branches"].as_sequence(),
+            Some(&vec![Value::String("**".to_owned())]),
+            "an empty push filter mapping retains every branch push"
+        );
+        assert!(
+            document["on"]["push"]["tags"]
+                .as_sequence()
+                .is_some_and(|tags| !tags.is_empty()),
+            "the derived release-tag filter is still present"
+        );
+        assert!(
+            document["on"]["workflow_dispatch"].is_null(),
+            "the neighboring repository trigger survives normalization"
         );
     }
 
