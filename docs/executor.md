@@ -308,6 +308,16 @@ falls back.** An identity failure fails the publication rather than reaching for
 the token, so a misconfigured trusted publisher cannot silently revert to a
 long-lived credential.
 
+### Make a new GHCR package public before its first verification deadline
+
+GitHub Container Registry (GHCR) creates a package as private on its first push,
+while the maintained verifier reads GHCR through the anonymous consumer path.
+For a package that has never been published, watch the first publish run and
+change the new package's visibility to public in its GitHub package settings
+before the observation deadline expires. Leave the run active while changing
+visibility; the bounded verifier will retry. Later releases need no bootstrap
+step because package visibility persists.
+
 A Cargo registry other than crates.io has no trusted-publishing exchange to
 bootstrap into, so it keeps using `CARGO_REGISTRY_TOKEN` on every publication.
 It still probes the destination before submitting — that probe is not the
