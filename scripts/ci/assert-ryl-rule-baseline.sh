@@ -32,11 +32,38 @@ awk '
   }
 ' "$configuration" | sort -u >"$temporary/enabled"
 awk '
+  /^\[rules\.[a-z0-9-]+\]$/ {
+    rule = $0
+    sub(/^\[rules\./, "", rule)
+    sub(/\]$/, "", rule)
+    next
+  }
+  /^\[/ { rule = "" }
+  rule != "" {
+    setting = $0
+    sub(/#.*/, "", setting)
+    gsub(/[[:space:]]/, "", setting)
+    gsub(/"/, "", setting)
+    gsub(sprintf("%c", 39), "", setting)
+    if (setting == "level=disabled" || setting == "level=disable" ||
+        setting == "enabled=false" || setting == "enabled=disabled" ||
+        setting == "enabled=disable") {
+      print rule
+    }
+  }
+' "$configuration" | sort -u >"$temporary/disabled"
+awk '
   /^# excluded-rule: [a-z0-9-]+ - .+/ {
     rule = $3
     print rule
   }
 ' "$configuration" | sort -u >"$temporary/excluded"
+
+disabled="$(paste -sd, "$temporary/disabled")"
+if [[ -n "$disabled" ]]; then
+  echo "RYL rules disabled in configuration require exclusion rationale: $disabled" >&2
+  exit 1
+fi
 
 overlap="$(comm -12 "$temporary/enabled" "$temporary/excluded" | paste -sd, -)"
 if [[ -n "$overlap" ]]; then

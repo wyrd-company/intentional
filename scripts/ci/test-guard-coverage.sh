@@ -10,14 +10,21 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 
+task_ci_job() {
+  yq -r \
+    '.jobs | to_entries[] | select([.value.steps[]? | select(.run == "task ci")] | length == 1) | .key' \
+    "$1"
+}
+
 if ! "$root/scripts/ci/assert-hosted-task-ci.sh"; then
   echo "the repository hosted task ci contract failed" >&2
   exit 1
 fi
 
 cp "$root/.github/workflows/ci.yml" "$temporary/without-task-ci.yml"
-yq -i \
-  '(.jobs.repository-ci.steps[] | select(.run == "task ci").run) = "task test"' \
+contract_job="$(task_ci_job "$temporary/without-task-ci.yml")"
+CI_JOB="$contract_job" yq -i \
+  '(.jobs[strenv(CI_JOB)].steps[] | select(.run == "task ci").run) = "task test"' \
   "$temporary/without-task-ci.yml"
 if "$root/scripts/ci/assert-hosted-task-ci.sh" \
   "$temporary/without-task-ci.yml" \
@@ -47,12 +54,33 @@ elif ! grep -Fq 'hosted CI must declare the pull_request trigger' \
   exit 1
 fi
 
+for filter in branches branches-ignore paths paths-ignore; do
+  filtered_workflow="$temporary/pull-request-$filter-filtered.yml"
+  cp "$root/.github/workflows/ci.yml" "$filtered_workflow"
+  FILTER="$filter" yq -i \
+    '.on.pull_request[strenv(FILTER)] = ["never-selected"]' \
+    "$filtered_workflow"
+  if "$root/scripts/ci/assert-hosted-task-ci.sh" "$filtered_workflow" \
+    >"$temporary/pull-request-$filter-filtered.stdout" \
+    2>"$temporary/pull-request-$filter-filtered.stderr"; then
+    echo "hosted CI with a pull_request $filter filter passed its production assertion" >&2
+    exit 1
+  elif ! grep -Fq \
+    'hosted CI must not filter pull requests by branch, path, or activity' \
+    "$temporary/pull-request-$filter-filtered.stderr"; then
+    echo "the pull_request $filter filter failed for the wrong reason" >&2
+    cat "$temporary/pull-request-$filter-filtered.stderr" >&2
+    exit 1
+  fi
+done
+
 cp "$root/.github/workflows/ci.yml" "$temporary/pull-request-excluded.yml"
+contract_job="$(task_ci_job "$temporary/pull-request-excluded.yml")"
 # Preserve the GitHub expression literally in the mutated workflow.
 # shellcheck disable=SC2016
-yq -i \
-  '.jobs."shared-contract" = .jobs.repository-ci |
-   del(.jobs.repository-ci) |
+CI_JOB="$contract_job" yq -i \
+  '.jobs."shared-contract" = .jobs[strenv(CI_JOB)] |
+   del(.jobs[strenv(CI_JOB)]) |
    .jobs."shared-contract".if = "${{ github.event_name != '\''pull_request'\'' }}"' \
   "$temporary/pull-request-excluded.yml"
 if "$root/scripts/ci/assert-hosted-task-ci.sh" \
@@ -69,8 +97,48 @@ elif ! grep -Fq \
   exit 1
 fi
 
+cp "$root/.github/workflows/ci.yml" "$temporary/task-step-excludes-pull-request.yml"
+contract_job="$(task_ci_job "$temporary/task-step-excludes-pull-request.yml")"
+# Preserve the GitHub expression literally in the mutated workflow.
+# shellcheck disable=SC2016
+STEP_IF="\${{ github.event_name != 'pull_request' }}" \
+  CI_JOB="$contract_job" yq -i \
+  '(.jobs[strenv(CI_JOB)].steps[] | select(.run == "task ci")).if = strenv(STEP_IF)' \
+  "$temporary/task-step-excludes-pull-request.yml"
+if "$root/scripts/ci/assert-hosted-task-ci.sh" \
+  "$temporary/task-step-excludes-pull-request.yml" \
+  >"$temporary/task-step-excludes-pull-request.stdout" \
+  2>"$temporary/task-step-excludes-pull-request.stderr"; then
+  echo "a task ci step that excludes pull requests passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq \
+  "the hosted task ci step must remain unconditional for pull requests: $contract_job" \
+  "$temporary/task-step-excludes-pull-request.stderr"; then
+  echo "the pull-request-excluding task ci step failed for the wrong reason" >&2
+  cat "$temporary/task-step-excludes-pull-request.stderr" >&2
+  exit 1
+fi
+
 if ! "$root/scripts/ci/assert-ryl-rule-baseline.sh"; then
   echo "the repository RYL rule baseline is incomplete" >&2
+  exit 1
+fi
+
+sed '/^# excluded-rule: truthy - /d' "$root/.ryl.toml" \
+  >"$temporary/disabled-ryl-rule.toml"
+printf '\n[rules.truthy]\nlevel = "disabled"\n' \
+  >>"$temporary/disabled-ryl-rule.toml"
+if "$root/scripts/ci/assert-ryl-rule-baseline.sh" \
+  "$temporary/disabled-ryl-rule.toml" \
+  >"$temporary/disabled-ryl-rule.stdout" \
+  2>"$temporary/disabled-ryl-rule.stderr"; then
+  echo "a RYL rule disabled without rationale passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq \
+  'RYL rules disabled in configuration require exclusion rationale: truthy' \
+  "$temporary/disabled-ryl-rule.stderr"; then
+  echo "the RYL rule disabled without rationale failed for the wrong reason" >&2
+  cat "$temporary/disabled-ryl-rule.stderr" >&2
   exit 1
 fi
 

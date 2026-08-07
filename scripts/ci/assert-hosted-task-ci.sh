@@ -27,6 +27,11 @@ if ! yq -e '.on | has("pull_request")' "$workflow" >/dev/null; then
   echo "hosted CI must declare the pull_request trigger" >&2
   exit 1
 fi
+if ! yq -e '.on.pull_request == null or .on.pull_request == {}' \
+  "$workflow" >/dev/null; then
+  echo "hosted CI must not filter pull requests by branch, path, or activity" >&2
+  exit 1
+fi
 
 hosted_job="$(
   yq -r \
@@ -36,6 +41,13 @@ hosted_job="$(
 if ! CI_JOB="$hosted_job" yq -e \
   '.jobs[strenv(CI_JOB)] | has("if") | not' "$workflow" >/dev/null; then
   echo "the hosted task ci job must remain unconditional for pull requests: $hosted_job" >&2
+  exit 1
+fi
+if ! CI_JOB="$hosted_job" yq -e \
+  '.jobs[strenv(CI_JOB)].steps[] |
+   select(.run == "task ci") |
+   has("if") | not' "$workflow" >/dev/null; then
+  echo "the hosted task ci step must remain unconditional for pull requests: $hosted_job" >&2
   exit 1
 fi
 
