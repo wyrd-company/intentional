@@ -577,6 +577,10 @@ commands:
             configured path and a --workflow override alike, and refuses a
             larger one with a blocked workflow-too-large diagnostic.
           - >-
+            The comparison refuses an emitted push event that combines an
+            include filter with its mutually exclusive -ignore form and reports
+            the pair with a blocked trigger-filter-conflict diagnostic.
+          - >-
             Without --apply the command is read-only. With --apply it changes
             only the selected workflow file.
       - name: check

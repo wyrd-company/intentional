@@ -123,6 +123,13 @@ which is how Intentional recognizes generated slices after you change the
 configured prefix: sentinel-bearing jobs under the old prefix are replaced,
 and a job that merely happens to share the old prefix stays yours.
 
+The publish trigger preserves every repository branch and path filter while it
+adds the release-tag filter. It excludes every configured phase-tag template so
+a tag pushed during publication cannot start the protocol again. A comparison
+is blocked with `trigger-filter-conflict` if the emitted `push` event combines
+`branches`, `tags`, or `paths` with that filter's mutually exclusive `-ignore`
+form. Resolve the named pair before applying the comparison.
+
 ## Read the authority split in the maintained slice
 
 The release workflow derives two managed jobs, and the boundary between them is
