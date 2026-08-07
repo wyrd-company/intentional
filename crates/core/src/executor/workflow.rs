@@ -83,6 +83,17 @@ const MAX_WORKFLOW_LINES: usize = 2_000;
 /// behind the line-count limit.
 const MAX_WORKFLOW_LINE_BYTES: usize = 2_048;
 
+fn workflow_size_remedy(role: WorkflowRole) -> &'static str {
+    match role {
+        WorkflowRole::Release => {
+            "managed release jobs share the limit with repository-owned jobs; move unrelated jobs to another workflow"
+        }
+        WorkflowRole::Publish => {
+            "configured publications expand the managed slice; move unrelated jobs to another workflow or reduce configured publication destinations"
+        }
+    }
+}
+
 fn oversized_workflow_line(text: &str) -> Option<(usize, usize)> {
     text.lines().enumerate().find_map(|(index, line)| {
         (line.len() > MAX_WORKFLOW_LINE_BYTES).then_some((index + 1, line.len()))
@@ -311,8 +322,9 @@ pub fn compare_configured_workflow(
         let diagnostic = WorkflowDiagnostic::at(
             "workflow-too-large",
             format!(
-                "{} has {lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}",
-                relative.display()
+                "{} has {lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}; {}",
+                relative.display(),
+                workflow_size_remedy(role)
             ),
             &relative.display().to_string(),
         );
@@ -355,8 +367,9 @@ pub fn compare_configured_workflow(
         let diagnostic = WorkflowDiagnostic::at(
             "workflow-too-large",
             format!(
-                "the derived transformation for {} has {output_lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}",
-                relative.display()
+                "the derived transformation for {} has {output_lines} lines; the comparison reads at most {MAX_WORKFLOW_LINES}; {}",
+                relative.display(),
+                workflow_size_remedy(role)
             ),
             &relative.display().to_string(),
         );
@@ -9549,6 +9562,20 @@ release-units:
         .expect("comparison");
         assert_eq!(comparison.status, ComparisonStatus::Blocked);
         assert_eq!(comparison.diagnostics[0].code, "workflow-too-large");
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("managed release jobs share the limit"),
+            "the diagnostic names what consumes the release workflow budget: {:?}",
+            comparison.diagnostics[0]
+        );
+        assert!(
+            comparison.diagnostics[0]
+                .message
+                .contains("move unrelated jobs to another workflow"),
+            "the diagnostic gives the maintainer a remedy: {:?}",
+            comparison.diagnostics[0]
+        );
     }
 
     #[test]
@@ -9708,13 +9735,27 @@ release-units:
             compare_configured_workflow(workspace.root(), &config, WorkflowRole::Publish, None)
                 .expect("capacity-unsafe expanded contract compares");
         assert_eq!(exceeding.status, ComparisonStatus::Blocked);
+        let diagnostic = exceeding
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "workflow-too-large")
+            .unwrap_or_else(|| {
+                panic!(
+                    "one repository-owned line beyond the settled bound is refused: {:?}",
+                    exceeding.diagnostics
+                )
+            });
         assert!(
-            exceeding
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.code == "workflow-too-large"),
-            "one repository-owned line beyond the settled bound is refused: {:?}",
-            exceeding.diagnostics
+            diagnostic
+                .message
+                .contains("configured publications expand the managed slice"),
+            "the diagnostic names what consumes the publish workflow budget: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("reduce configured publication destinations"),
+            "the diagnostic gives the maintainer a managed-slice remedy: {diagnostic:?}"
         );
     }
 
