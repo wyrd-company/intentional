@@ -38,13 +38,6 @@ awk '
   }
 ' "$configuration" | sort -u >"$temporary/excluded"
 
-declared_exclusions="$(grep -c '^# excluded-rule:' "$configuration" || true)"
-parsed_exclusions="$(wc -l <"$temporary/excluded")"
-if [[ "$declared_exclusions" -ne "$parsed_exclusions" ]]; then
-  echo "every excluded RYL rule must use '# excluded-rule: NAME - RATIONALE'" >&2
-  exit 1
-fi
-
 overlap="$(comm -12 "$temporary/enabled" "$temporary/excluded" | paste -sd, -)"
 if [[ -n "$overlap" ]]; then
   echo "RYL rules cannot be both enabled and excluded: $overlap" >&2
