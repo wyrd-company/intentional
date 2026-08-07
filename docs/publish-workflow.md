@@ -20,9 +20,9 @@ repository and owning the result. Inspect the proposed slice with
 intentional executor diff publish --apply
 ```
 
-The workflow is large because the generated file keeps each authority boundary
-and destination-specific command visible in the repository where it runs. This
-page is the map for reading it.
+The generated file keeps each authority boundary and destination-specific
+command visible in the repository where it runs. This page is the map for
+reading it.
 
 ## Publish job graph
 
@@ -80,8 +80,8 @@ The main costs buy separate guarantees:
   observations for portable verification; they do not receive registry tokens
   or perform destination publication.
 
-Collapsing those jobs would remove a boundary, not just lines. Sharing one build
-between destinations is safe because both receive the same sealed subject.
+Combining those jobs would remove a boundary. Sharing one build between
+destinations is safe because both receive the same sealed subject.
 Sharing one publisher between destinations would combine credentials. Moving
 publication behind an opaque Action would hide the command that spends them.
 Skipping consumer readback would replace observed publication with a client's

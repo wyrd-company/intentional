@@ -90,7 +90,7 @@ publish workflows. You own the workflow documents. Compare a workflow with the
 contract derived from your configuration:
 
 Read the [derived publish workflow](publish-workflow.md) before applying the
-publish slice. It explains the job kinds, workflow size, and credential
+publish slice. It explains the job kinds, job separation, and credential
 boundaries.
 
 ```console
@@ -108,11 +108,6 @@ intentional executor diff release --apply
 Apply re-reads the workflow and refuses the transformation if the file changed
 after the patch was computed, so a stale patch never overwrites newer content.
 Use `--workflow PATH` to compare a candidate file instead of the configured one.
-
-The comparison reads workflows of at most 2000 lines, for configured and
-`--workflow` inputs alike, and refuses anything larger with a
-`workflow-too-large` diagnostic. The bound admits the complete managed release
-graph while refusing inputs large enough to make quadratic comparison costly.
 
 A comparison can also report advisories you should read before applying it. The
 safe top-level permission default withdraws workflow-level scopes such as
