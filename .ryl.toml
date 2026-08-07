@@ -1,0 +1,78 @@
+[files]
+yaml = ["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
+
+[rules.braces]
+level = "error"
+forbid = false
+min-spaces-inside = 1
+max-spaces-inside = 2
+min-spaces-inside-empty = 0
+max-spaces-inside-empty = 0
+
+[rules.brackets]
+level = "error"
+forbid = false
+min-spaces-inside = 1
+max-spaces-inside = 1
+min-spaces-inside-empty = 0
+max-spaces-inside-empty = 0
+
+[rules.colons]
+level = "error"
+max-spaces-before = 0
+max-spaces-after = 1
+
+[rules.commas]
+level = "error"
+max-spaces-before = 0
+min-spaces-after = 1
+max-spaces-after = 1
+
+[rules.empty-lines]
+level = "error"
+max = 1
+max-start = 0
+max-end = 0
+
+[rules.hyphens]
+level = "error"
+max-spaces-after = 1
+dash-on-own-line = false
+
+[rules.indentation]
+level = "error"
+spaces = 2
+indent-sequences = true
+check-multi-line-strings = true
+
+[rules.line-length]
+level = "warning"
+max = 100
+allow-non-breakable-words = true
+allow-non-breakable-inline-mappings = true
+
+[rules.new-line-at-end-of-file]
+level = "error"
+
+[rules.trailing-spaces]
+level = "error"
+
+[rules.document-end]
+level = "error"
+present = false
+
+[rules.document-start]
+level = "error"
+present = false
+
+[rules.empty-values]
+level = "error"
+forbid-in-block-mappings = false
+forbid-in-flow-mappings = true
+forbid-in-block-sequences = true
+
+[rules.key-duplicates]
+level = "error"
+forbid-duplicated-merge-keys = false
+check-canonical = false
+forbid-merge-key-shadowing = false

@@ -97,7 +97,7 @@ tasks:
     cmds:
       - actionlint .github/workflows/*.yml
       - >-
-        ryl check .github/workflows/*.yml Taskfile.yml
+        ryl check --config-file .ryl.toml .github/workflows/*.yml Taskfile.yml
         .intentional/config.yml github-action-pins.yml
       # Both lines are deliberate. The first attributes a regression to this
       # repository's own action documents; the second attributes it to the
