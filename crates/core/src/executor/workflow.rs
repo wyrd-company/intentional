@@ -1985,6 +1985,65 @@ mod tests {
         }
     }
 
+    /// Fixed stock-runner tools a portable observer fixture may execute.
+    ///
+    /// Materializing wrappers into one isolated directory keeps the test's
+    /// meaning independent of every other executable on the host `PATH`.
+    const OBSERVER_BASELINE_TOOLS: &[&str] = &[
+        "awk",
+        "bash",
+        "cat",
+        "cmp",
+        "cp",
+        "cut",
+        "dirname",
+        "find",
+        "grep",
+        "gzip",
+        "head",
+        "jq",
+        "ls",
+        "mkdir",
+        "mktemp",
+        "mv",
+        "python3",
+        "readlink",
+        "rm",
+        "sed",
+        "sha256sum",
+        "sort",
+        "tail",
+        "tar",
+        "tr",
+        "wc",
+        "xz",
+    ];
+
+    /// Build a `PATH` containing exactly the named baseline tools.
+    fn isolated_observer_baseline(directory: &Path) -> PathBuf {
+        let _ = std::fs::remove_dir_all(directory);
+        std::fs::create_dir_all(directory).expect("observer baseline directory");
+        let search = test_tool_path(&std::env::var("PATH").unwrap_or_default());
+        let search = std::env::split_paths(&search).collect::<Vec<_>>();
+        for tool in OBSERVER_BASELINE_TOOLS {
+            let executable = search
+                .iter()
+                .map(|candidate| candidate.join(tool))
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| panic!("observer baseline tool {tool} is available"));
+            let quoted = executable.display().to_string().replace('\'', "'\\''");
+            let wrapper = directory.join(tool);
+            std::fs::write(&wrapper, format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n"))
+                .unwrap_or_else(|error| panic!("{tool} baseline wrapper: {error}"));
+            let status = std::process::Command::new("chmod")
+                .args(["+x", wrapper.to_str().expect("baseline wrapper path")])
+                .status()
+                .expect("chmod baseline wrapper");
+            assert!(status.success(), "{tool} baseline wrapper is executable");
+        }
+        directory.to_owned()
+    }
+
     const CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
 workspace-tags:

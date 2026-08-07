@@ -323,7 +323,7 @@
         let observer = portable_observer_step(&verify).expect("portable observer");
         let temporary = workspace.root().join("runner-missing-client");
         let empty_path = temporary.join("path");
-        std::fs::create_dir_all(&empty_path).expect("empty PATH");
+        isolated_observer_baseline(&empty_path);
         let mut command = std::process::Command::new("/bin/bash");
         command
             .arg("-c")

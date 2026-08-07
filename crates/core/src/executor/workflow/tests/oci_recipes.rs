@@ -275,6 +275,8 @@
                 let mut output = publisher.output().expect("the publisher body runs");
                 if output.status.success() {
                     let observer_stubs = verification_stubs(&self.stubs, &temp, &step.installed);
+                    let observer_baseline =
+                        isolated_observer_baseline(&temp.join("observer-baseline"));
                     let mut observer = std::process::Command::new("bash");
                     observer
                         .arg("-c")
@@ -286,7 +288,7 @@
                             format!(
                                 "{}:{}",
                                 observer_stubs.display(),
-                                test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                                observer_baseline.display()
                             ),
                         )
                         .env("HOME", root)

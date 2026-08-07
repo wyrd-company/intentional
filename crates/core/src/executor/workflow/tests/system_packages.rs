@@ -1645,6 +1645,8 @@ fi
             &["curl", "gpg", "gpgv", "dpkg-deb", "apt", "apt-get", "sleep"],
             &installed,
         );
+        let observer_baseline =
+            isolated_observer_baseline(&temporary.join("observer-baseline"));
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -1656,7 +1658,7 @@ fi
                 format!(
                     "{}:{}",
                     verification_stubs.display(),
-                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                    observer_baseline.display()
                 ),
             )
             .env("FAKE_SCENARIO", scenario)
@@ -1982,6 +1984,8 @@ fi
             &["curl", "gpg", "gpgv", "sleep"],
             &installed,
         );
+        let observer_baseline =
+            isolated_observer_baseline(&temporary.join("observer-baseline"));
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -1993,7 +1997,7 @@ fi
                 format!(
                     "{}:{}",
                     verification_stubs.display(),
-                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                    observer_baseline.display()
                 ),
             )
             .env("FAKE_SCENARIO", scenario)
