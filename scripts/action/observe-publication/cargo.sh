@@ -42,7 +42,6 @@ mkdir -p "$INTENTIONAL_WORK"
 crate=$(find "$INTENTIONAL_SUBJECT" -maxdepth 1 -name '*.crate' -print -quit)
 test -n "$crate"
 local_digest=$(sha256sum < "$crate" | cut -d' ' -f1)
-INTENTIONAL_ELAPSED=0
 resolved=no
 while :; do
   if resolve "$INTENTIONAL_WORK/clean"; then resolved=yes; break; fi

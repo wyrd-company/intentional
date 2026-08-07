@@ -61,7 +61,6 @@ read_aur() {
   cmp --silent "$srcinfo" "$INTENTIONAL_WORK/.SRCINFO" || return 1
 }
 
-INTENTIONAL_ELAPSED=0
 while :; do
   if "read_$INTENTIONAL_PUBLISHER"; then break; fi
   if ! wait_again; then

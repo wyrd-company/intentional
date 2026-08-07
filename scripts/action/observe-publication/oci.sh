@@ -19,7 +19,6 @@ provenance_file="$INTENTIONAL_WORK/provenance.yml"
 : > "$aliases_file"
 : > "$metadata_file"
 : > "$provenance_file"
-INTENTIONAL_ELAPSED=0
 while ! published=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
   || ! index=$(crane manifest "$repository@$published" 2>/dev/null); do
   if ! wait_again; then

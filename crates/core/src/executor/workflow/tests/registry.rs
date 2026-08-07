@@ -1811,6 +1811,30 @@
         );
     }
 
+    #[test]
+    fn adapters_rely_on_common_elapsed_initialisation_except_at_phase_boundaries() {
+        let observer_directory =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/action/observe-publication");
+        for adapter in ["npm.sh", "cargo.sh", "repository.sh", "oci.sh"] {
+            let source = std::fs::read_to_string(observer_directory.join(adapter))
+                .unwrap_or_else(|error| panic!("{adapter}: {error}"));
+            assert!(
+                !source.lines().any(|line| line == "INTENTIONAL_ELAPSED=0"),
+                "{adapter} inherits elapsed initialization from common.sh"
+            );
+        }
+        let system = std::fs::read_to_string(observer_directory.join("system-package.sh"))
+            .expect("system package observer");
+        assert_eq!(
+            system
+                .lines()
+                .filter(|line| *line == "  INTENTIONAL_ELAPSED=0")
+                .count(),
+            2,
+            "APT and RPM each reset elapsed at the start of their own observation phase"
+        );
+    }
+
     // A workflow identity is a credential every step of the job it is granted
     // in can reach. Granting it to a destination whose recipe never presents
     // one costs nothing visible and is therefore exactly the kind of scope that

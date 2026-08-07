@@ -44,7 +44,6 @@ tarball=$(find "$INTENTIONAL_SUBJECT" -maxdepth 1 -name '*.tgz' -print -quit)
 test -n "$tarball"
 local_digest="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
 INTENTIONAL_DESTINATION_DIGEST=""
-INTENTIONAL_ELAPSED=0
 while :; do
   INTENTIONAL_DESTINATION_DIGEST=$(npm_holds \
     "$INTENTIONAL_SUBJECT_IDENTITY@$INTENTIONAL_VERSION" || true)

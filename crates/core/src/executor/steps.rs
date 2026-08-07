@@ -392,7 +392,6 @@ fn steps_for(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
 fn portable_observation_inputs(
     context: &RecipeContext<'_>,
     kind: &str,
-    packager: &str,
     client: &str,
     destination: &str,
 ) -> String {
@@ -407,7 +406,7 @@ fn portable_observation_inputs(
         scalar(context.subject_identity),
         context.build_job,
         context.build_job,
-        scalar(packager),
+        scalar(context.publication.packager.as_str()),
         scalar(destination),
         scalar(context.publication.retrieval.as_str()),
         scalar(client),
@@ -436,7 +435,6 @@ fn indent_observer(source: &str) -> String {
 fn inline_observation_step(
     context: &RecipeContext<'_>,
     kind: &str,
-    packager: &str,
     client: &str,
     destination: &str,
     adapter: &str,
@@ -459,7 +457,7 @@ fn inline_observation_step(
         scalar(context.subject_identity),
         context.build_job,
         context.build_job,
-        scalar(packager),
+        scalar(context.publication.packager.as_str()),
         scalar(destination),
         scalar(context.publication.retrieval.as_str()),
         scalar(client),
@@ -546,13 +544,7 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps
         scalar(&format!("Publish {identity}")),
         subject_environment(context),
     );
-    let observation_inputs = portable_observation_inputs(
-        context,
-        kind,
-        context.publication.packager.as_str(),
-        "git",
-        &destination,
-    );
+    let observation_inputs = portable_observation_inputs(context, kind, "git", &destination);
     Ok(RecipeSteps {
         publisher,
         retrieval: (context.publication.publisher == PublisherKind::Homebrew).then(String::new),
@@ -724,13 +716,8 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Step
     } else {
         "dnf"
     };
-    let mut observation_inputs = portable_observation_inputs(
-        context,
-        "package",
-        context.publication.packager.as_str(),
-        client,
-        configured.base_url,
-    );
+    let mut observation_inputs =
+        portable_observation_inputs(context, "package", client, configured.base_url);
     observation_inputs.push_str(&format!(
         "      public-key-url: {}\n",
         scalar(configured.public_key_url)
@@ -1154,7 +1141,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
             GITHUB_PACKAGES_DESTINATION
         });
     let mut observation_inputs =
-        portable_observation_inputs(context, "npm-package", "npm", "npm", observed_destination);
+        portable_observation_inputs(context, "npm-package", "npm", observed_destination);
     observation_inputs.push_str(&format!(
         "      registry: {}\n      scope: {}\n",
         scalar(registry),
@@ -1166,7 +1153,6 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         inline_observation_step(
             context,
             "npm-package",
-            "npm",
             "npm",
             observed_destination,
             NPM_OBSERVER,
@@ -1485,7 +1471,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     ));
 
     let mut observation_inputs =
-        portable_observation_inputs(context, "cargo-crate", "cargo", "cargo", registry);
+        portable_observation_inputs(context, "cargo-crate", "cargo", registry);
     observation_inputs.push_str(&format!(
         "      registry: {}\n      registry-name: {}\n      registry-index-variable: {}\n      registry-index-url: {}\n",
         scalar(registry),
@@ -1504,7 +1490,6 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         steps.push_str(&inline_observation_step(
             context,
             "cargo-crate",
-            "cargo",
             "cargo",
             registry,
             CARGO_OBSERVER,
@@ -1831,13 +1816,8 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
             )
         }
     });
-    let mut observation_inputs = portable_observation_inputs(
-        context,
-        kind,
-        publication.packager.as_str(),
-        "crane",
-        &observed_destination,
-    );
+    let mut observation_inputs =
+        portable_observation_inputs(context, kind, "crane", &observed_destination);
     let registry = if publication.target == "dockerhub" {
         "docker.io"
     } else {
