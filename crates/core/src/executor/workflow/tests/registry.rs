@@ -1770,6 +1770,47 @@
         );
     }
 
+    #[test]
+    fn common_observer_initialises_elapsed_before_any_adapter_waits() {
+        let common = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../scripts/action/observe-publication/common.sh"),
+        )
+        .expect("portable observer common script");
+        let body = format!("{common}\nif wait_again; then exit 9; fi\n");
+        let mut command = std::process::Command::new("bash");
+        command.arg("-c").arg(body);
+        for (name, value) in [
+            ("INPUT_RELEASE_UNIT", "sample-unit"),
+            ("INPUT_PACKAGE", "sample-package"),
+            ("INPUT_PUBLISHER", "cargo"),
+            ("INPUT_TARGET", "primary"),
+            ("INPUT_OBSERVATION", "observation.yml"),
+            ("INPUT_SUBJECT", "subject"),
+            ("INPUT_SUBJECT_KIND", "sample-kind"),
+            ("INPUT_SUBJECT_IDENTITY", "sample-subject"),
+            ("INPUT_SUBJECT_VERSION", "1.0.0"),
+            ("INPUT_SUBJECT_DIGEST", "sha256:00"),
+            ("INPUT_PACKAGER", "cargo"),
+            ("INPUT_DESTINATION", "sample-destination"),
+            ("INPUT_RETRIEVAL_MODE", "public"),
+            ("INPUT_RETRIEVAL_CLIENT", "cargo"),
+            ("INPUT_WORK", "work"),
+            ("INPUT_INTERVAL", "1"),
+            ("INPUT_BACKOFF", "2"),
+            ("INPUT_MAXIMUM_INTERVAL", "4"),
+            ("INPUT_DEADLINE", "0"),
+        ] {
+            command.env(name, value);
+        }
+        let output = command.output().expect("common observer runs");
+        assert!(
+            output.status.success(),
+            "an adapter may call wait_again without its own elapsed assignment: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     // A workflow identity is a credential every step of the job it is granted
     // in can reach. Granting it to a destination whose recipe never presents
     // one costs nothing visible and is therefore exactly the kind of scope that
