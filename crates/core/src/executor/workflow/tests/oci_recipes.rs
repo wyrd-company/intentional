@@ -937,7 +937,7 @@ fi
         }
 
         /// A prerelease publishes its exact version and advances nothing stable.
-        // intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/buildx
+        // intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/buildx=advances_no_stable_alias_for_a_prerelease
         #[test]
         fn advances_no_stable_alias_for_a_prerelease() {
             let recipe = Recipe::new("oci-alias-prerelease", DOCKERHUB_JOB);
@@ -1643,7 +1643,7 @@ fi
         }
 
         /// A prerelease that moved stable aliases records every move.
-        // intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/feature
+        // intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/feature=records_stable_aliases_a_prerelease_client_moved
         #[test]
         fn records_stable_aliases_a_prerelease_client_moved() {
             let recipe = Recipe::feature("oci-feature-prerelease");

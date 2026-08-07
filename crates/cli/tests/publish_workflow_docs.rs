@@ -77,6 +77,30 @@ fn feature_scenario_bindings(source: &str) -> BTreeSet<String> {
         .collect()
 }
 
+fn executable_feature_scenario_bindings(source: &str) -> BTreeSet<String> {
+    let lines = source.lines().collect::<Vec<_>>();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let binding = line.split_once("intentional-feature-scenario: ")?.1.trim();
+            let test = binding
+                .rsplit_once('=')
+                .map(|(_, test)| test)
+                .expect("feature scenario binding names its test function");
+            assert!(
+                lines
+                    .iter()
+                    .skip(index + 1)
+                    .take(4)
+                    .any(|line| line.trim_start().starts_with(&format!("fn {test}()"))),
+                "feature scenario binding {binding} annotates its named test function"
+            );
+            Some(binding.to_owned())
+        })
+        .collect()
+}
+
 fn job_kind(id: &str) -> &'static str {
     if id.ends_with("verify_tag") {
         "verify-tag"
@@ -358,7 +382,7 @@ fn feature_alias_scenario_is_bound_to_both_packager_recipes() {
     let recipes = std::fs::read_to_string("../core/src/executor/workflow/tests/oci_recipes.rs")
         .expect("OCI recipe tests are readable");
     let documented = feature_scenario_bindings(&feature);
-    let executable = feature_scenario_bindings(&recipes);
+    let executable = executable_feature_scenario_bindings(&recipes);
 
     assert_eq!(
         documented,
