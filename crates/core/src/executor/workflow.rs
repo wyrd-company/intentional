@@ -5024,11 +5024,21 @@ release-units:
     // this asserts the one the jobs actually share.
     #[test]
     fn binds_every_artifact_a_managed_job_consumes_to_the_job_that_produces_it() {
+        let alternate_cargo = workspace("workflow-artifact-binding-alternate-cargo");
+        alternate_cargo.write(
+            ".cargo/config.toml",
+            "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+        );
+        alternate_cargo.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+        );
         for workspace in [
             workspace("workflow-artifact-binding"),
             npm_workspace("workflow-artifact-binding-npm"),
             two_destination_workspace("workflow-artifact-binding-oci"),
             feature_workspace("workflow-artifact-binding-feature"),
+            alternate_cargo,
         ] {
             converge(workspace.root(), WorkflowRole::Publish);
             let jobs = publish_jobs(workspace.root());
