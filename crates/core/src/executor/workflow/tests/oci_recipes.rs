@@ -541,15 +541,20 @@
         ;;
       digest)
         printf '%s\n' "${DOCKER_CONFIG:-inherited}" >> "${registry}/docker-config.log"
-        if [ -n "${DOCKER_CONFIG:-}" ] && [[ "${2}" == *:"${INTENTIONAL_VERSION}" ]]; then
-          attempts="${registry}/clean-digest-attempts"
+        if [[ "${2}" == *:"${INTENTIONAL_VERSION}" ]]; then
+          attempts="${registry}/version-digest-attempts"
           attempt=0
           if [ -f "${attempts}" ]; then attempt=$(cat "${attempts}"); fi
           attempt=$((attempt + 1))
           printf '%s' "${attempt}" > "${attempts}"
+          # Without injected absence, attempt 1 is inline publisher verification,
+          # attempt 2 is observer retrieval, and attempt 3 is its clean-client
+          # re-read. Named drifts count retries; another exact-version probe moves
+          # these positions and fails their assertions rather than silently re-aiming.
           case "${FAKE_DRIFT:-}:${attempt}" in
-            initially-invisible:1|reread-invisible:2) exit 1 ;;
+            initially-invisible:2|reread-invisible:3|shared-budget:2|shared-budget:3) exit 1 ;;
           esac
+          if [ "${FAKE_DRIFT:-}" = "shared-budget" ] && [ "${attempt}" -ge 5 ]; then exit 1; fi
         fi
         if [ "${FAKE_DRIFT:-}" = "alias-read-error" ] && [[ "${2}" == *:latest ]]; then
           printf 'UNAVAILABLE: transient registry failure\n' >&2
@@ -1654,6 +1659,23 @@ fi
                     "{drift} consumes the first emitted interval"
                 );
             }
+        }
+
+        #[test]
+        fn shares_one_oci_policy_across_both_not_yet_visible_probes() {
+            let recipe = Recipe::new("oci-shared-readback-policy", DOCKERHUB_JOB);
+            let outcome = recipe.run_with_drift("1.2.3", "shared-budget");
+            assert!(outcome.status.success(), "{}", outcome.stderr);
+            assert_eq!(
+                outcome.observation().state,
+                ObservationState::Pending,
+                "the clean-client re-read exhausts only the policy remaining after initial retrieval"
+            );
+            assert_eq!(
+                outcome.waits,
+                [vec![3, 6, 12], vec![15; 18], vec![9]].concat(),
+                "both probes together spend exactly the one declared 300-second deadline"
+            );
         }
 
         /// A prerelease Feature publishes when its client leaves stable aliases alone.
