@@ -379,6 +379,7 @@ pub fn selects_publications(release_unit: &ReleaseUnitConfig) -> bool {
 }
 
 /// Every configured publication identity declared on managed release units.
+#[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub fn configured_publication_identities(config: &Config) -> Vec<String> {
     let mut identities = Vec::new();

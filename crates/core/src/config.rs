@@ -870,33 +870,6 @@ impl Config {
         unphased
     }
 
-    /// GitHub ruleset tag namespace patterns every configured tag template derives.
-    ///
-    /// Each pattern is the literal affix before `{version}` in one tag template,
-    /// with `{id}` rendered for release-unit tags, followed by `*`.
-    #[must_use]
-    pub fn managed_release_tag_namespace_patterns(&self) -> Vec<String> {
-        let mut patterns = BTreeSet::new();
-        for tag in self.workspace_tags.values() {
-            if let Some((prefix, _)) = tag.template.split_once("{version}") {
-                if !prefix.is_empty() {
-                    patterns.insert(format!("{prefix}*"));
-                }
-            }
-        }
-        for (release_unit_id, release_unit) in &self.release_units {
-            for tag in release_unit.tags.values() {
-                let template = tag.template.replace("{id}", release_unit_id);
-                if let Some((prefix, _)) = template.split_once("{version}") {
-                    if !prefix.is_empty() {
-                        patterns.insert(format!("{prefix}*"));
-                    }
-                }
-            }
-        }
-        patterns.into_iter().collect()
-    }
-
     /// Executor phases the configured tags declare, in phase order.
     ///
     /// A phase with no configured tag seals nothing, so the derived publication

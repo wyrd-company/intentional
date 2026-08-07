@@ -9,7 +9,7 @@
 //! in source. A mutation at the emission seam therefore reaches the witness.
 
 #[cfg(any(test, feature = "test-support"))]
-use crate::config::{PrefixNamespaces, WorkflowRole};
+use crate::config::WorkflowRole;
 #[cfg(any(test, feature = "test-support"))]
 use crate::executor::recipe::StoredCredentialKind;
 #[cfg(any(test, feature = "test-support"))]
@@ -412,13 +412,64 @@ pub struct PrefixDerivedRepositorySettings {
 #[cfg(any(test, feature = "test-support"))]
 #[must_use]
 pub fn prefix_derived_repository_settings(
-    namespaces: &PrefixNamespaces,
+    workflows: &[(WorkflowRole, String)],
 ) -> PrefixDerivedRepositorySettings {
+    let credentials = long_lived_repository_write_credentials(workflows);
+    let app_id_variable = credentials
+        .iter()
+        .find(|(kind, _)| *kind == StoredCredentialKind::RepositoryVariable)
+        .map(|(_, name)| name.clone())
+        .expect("derived workflows read one App ID repository variable");
+    let app_private_key_secret = credentials
+        .iter()
+        .find(|(kind, _)| *kind == StoredCredentialKind::RepositorySecret)
+        .map(|(_, name)| name.clone())
+        .expect("derived workflows read one App private key repository secret");
+
+    let mut environments = BTreeSet::new();
+    let mut aur_secrets = BTreeSet::new();
+    for (_, workflow) in workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived workflow jobs");
+        for (job_id, body) in jobs {
+            let job_id = job_id.as_str().expect("job id");
+            let managed = body["steps"].as_sequence().is_some_and(|steps| {
+                steps
+                    .iter()
+                    .any(|step| step["id"].as_str() == Some(crate::executor::OWNERSHIP_SENTINEL))
+            });
+            if !managed {
+                continue;
+            }
+            if let Some(environment) = body.get("environment").and_then(Value::as_str) {
+                environments.insert(environment.to_owned());
+            }
+            if job_id.ends_with("_aur_primary") {
+                aur_secrets.extend(
+                    secret_reads_in_step(body)
+                        .into_iter()
+                        .filter(|secret| secret.ends_with("_AUR_KEY") || secret == "AUR_KEY"),
+                );
+            }
+        }
+    }
+    assert_eq!(
+        environments.len(),
+        1,
+        "managed jobs that declare an environment agree on one protected environment: {environments:?}"
+    );
+    assert_eq!(
+        aur_secrets.len(),
+        1,
+        "the AUR publisher reads one repository AUR key secret: {aur_secrets:?}"
+    );
     PrefixDerivedRepositorySettings {
-        environment: namespaces.environment.clone(),
-        app_id_variable: format!("{}GITHUB_APP_ID", namespaces.envvar),
-        app_private_key_secret: format!("{}GITHUB_APP_PRIVATE_KEY", namespaces.envvar),
-        aur_key_secret: format!("{}AUR_KEY", namespaces.envvar),
+        environment: environments.into_iter().next().expect("one environment"),
+        app_id_variable,
+        app_private_key_secret,
+        aur_key_secret: aur_secrets.into_iter().next().expect("one AUR secret"),
     }
 }
 

@@ -3,15 +3,22 @@
 //   tests: github-release-executor
 // ---
 
+use intentional_core::config::{GithubConfig, GithubWorkflow, GithubWorkflows};
 use intentional_core::executor::fixture::{
-    long_lived_repository_write_credentials, managed_release_tag_namespace_patterns,
-    prefix_derived_repository_settings, release_managed_job_ids, resolved_publication_identities,
-    standing_credential_usage_labels, trusted_publishing_bootstrap_route_count,
+    executor_init_tag_namespace_reports, expected_publication_identities,
+    expected_tag_namespace_patterns, long_lived_repository_write_credentials,
+    prefix_derived_repository_settings, publication_resolution_diagnostics,
+    release_managed_job_ids, resolved_publication_identities, standing_credential_usage_labels,
+    trusted_publishing_bootstrap_route_count,
 };
 use intentional_core::executor::recipe::StoredCredentialKind;
 
 fn executor_guide() -> String {
     std::fs::read_to_string("../../docs/executor.md").expect("executor guide is readable")
+}
+
+fn config_guide() -> String {
+    std::fs::read_to_string("../../docs/config.md").expect("config guide is readable")
 }
 
 fn prepare_repository_section(usage: &str) -> &str {
@@ -61,6 +68,7 @@ fn sentences(text: &str) -> Vec<String> {
         .filter(|sentence| !sentence.is_empty())
         .collect()
 }
+
 fn join_usage_labels(labels: &[&str]) -> String {
     match labels {
         [] => String::new(),
@@ -72,6 +80,9 @@ fn join_usage_labels(labels: &[&str]) -> String {
         }
     }
 }
+
+const TAG_NAMESPACE_FIXTURE: &str = "usage-claims-tag-namespaces";
+const PUBLICATION_FIXTURE: &str = "usage-claims-publications";
 
 #[test]
 fn usage_splits_executor_guidance_and_states_consumer_ownership() {
@@ -203,19 +214,30 @@ fn usage_standing_credential_sentence_matches_derived_destinations() {
 
 #[test]
 fn usage_executor_check_resolves_every_configured_publication_to_one_recipe() {
-    let usage = executor_guide();
-    let section = configure_executor_section(&usage);
-    let publications = resolved_publication_identities();
+    let executor = executor_guide();
+    let config = config_guide();
+    let expected = expected_publication_identities(PUBLICATION_FIXTURE);
+    let resolved = resolved_publication_identities(PUBLICATION_FIXTURE);
+    let diagnostics = publication_resolution_diagnostics(PUBLICATION_FIXTURE);
+    let executor_claim =
+        "The check resolves every configured publication to exactly one maintained recipe";
+    let config_claim = "selects exactly one maintained recipe per configured target";
 
     assert!(
-        normalize_whitespace(section).contains(
-            "The check resolves every configured publication to exactly one maintained recipe"
-        ),
-        "the configure section documents one-recipe resolution"
+        normalize_whitespace(configure_executor_section(&executor)).contains(executor_claim),
+        "the executor guide documents one-recipe resolution"
     );
     assert!(
-        !publications.is_empty(),
-        "the exhaustive fixture declares configured publications to resolve"
+        normalize_whitespace(&config).contains(config_claim),
+        "the config guide documents one-recipe resolution"
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "the exhaustive fixture resolves every configured publication: {diagnostics:?}"
+    );
+    assert_eq!(
+        resolved, expected,
+        "executor check resolves every configured publication to exactly one maintained recipe"
     );
 }
 
@@ -238,37 +260,69 @@ fn usage_release_workflow_derives_two_managed_jobs() {
 
 #[test]
 fn usage_ruleset_bypass_claim_covers_every_managed_release_tag_namespace() {
-    let usage = executor_guide();
-    let configure = configure_executor_section(&usage);
-    let prepare = prepare_repository_section(&usage);
-    let namespaces = managed_release_tag_namespace_patterns();
+    let executor = executor_guide();
+    let config = config_guide();
+    let reports = executor_init_tag_namespace_reports(TAG_NAMESPACE_FIXTURE);
+    let expected = expected_tag_namespace_patterns(TAG_NAMESPACE_FIXTURE);
     let bypass_claim = "every managed release tag namespace";
 
     assert!(
-        normalize_whitespace(configure).contains(bypass_claim),
-        "initialization reports bypass for every managed release tag namespace"
+        normalize_whitespace(configure_executor_section(&executor)).contains(bypass_claim),
+        "the executor guide initialization section reports bypass for every managed release tag namespace"
     );
     assert!(
-        normalize_whitespace(prepare).contains(bypass_claim),
-        "repository preparation reports bypass for every managed release tag namespace"
+        normalize_whitespace(prepare_repository_section(&executor)).contains(bypass_claim),
+        "the executor guide preparation section reports bypass for every managed release tag namespace"
     );
     assert!(
-        !namespaces.is_empty(),
-        "the exhaustive fixture derives managed release tag namespaces to enumerate"
+        normalize_whitespace(&config).contains(bypass_claim),
+        "the config guide reports bypass for every managed release tag namespace"
+    );
+    assert_eq!(
+        reports, expected,
+        "executor init enumerates every managed release tag namespace the configuration derives"
     );
 }
 
 #[test]
-fn usage_prefix_derived_repository_setting_names_match_configuration() {
-    let usage = executor_guide();
-    let section = prepare_repository_section(&usage);
+fn usage_prefix_derived_repository_setting_names_match_emission() {
+    let executor = executor_guide();
+    let config = config_guide();
+    let section = prepare_repository_section(&executor);
     let settings = prefix_derived_repository_settings();
+    let defaults = GithubConfig {
+        workflows: GithubWorkflows {
+            release: GithubWorkflow {
+                path: ".github/workflows/release.yml".into(),
+                gates: Vec::new(),
+            },
+            publish: GithubWorkflow {
+                path: ".github/workflows/publish.yml".into(),
+                gates: Vec::new(),
+            },
+        },
+        prefix: None,
+        cargo_homebrew: Default::default(),
+        declined_publications: Default::default(),
+    }
+    .namespaces()
+    .expect("default namespaces resolve");
 
     assert!(
         normalize_whitespace(section).contains(
             "the App private key secret and the AUR key secret all derive from the `envvar`"
         ),
-        "the prepare section documents prefix-derived credential names"
+        "the executor guide documents prefix-derived credential names"
+    );
+    assert!(
+        normalize_whitespace(&config).contains("The default reserves"),
+        "the config guide documents the default reserved namespaces"
+    );
+    assert!(
+        config.contains(&format!("`{}`", defaults.job))
+            && config.contains(&format!("`{}`", defaults.envvar))
+            && config.contains(&format!("`{}`", defaults.environment)),
+        "the config guide names the default job, envvar, and environment namespaces"
     );
     assert!(
         section.contains(&format!("`{}`", settings.environment)),
@@ -283,7 +337,7 @@ fn usage_prefix_derived_repository_setting_names_match_configuration() {
         "the derived App private key secret is named in the prepare section"
     );
     assert!(
-        usage.contains(&format!("`{}`", settings.aur_key_secret)),
+        configure_executor_section(&executor).contains(&format!("`{}`", settings.aur_key_secret)),
         "the derived AUR key secret is named in the executor guide"
     );
 }

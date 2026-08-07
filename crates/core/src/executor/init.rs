@@ -391,7 +391,7 @@ pub fn initialize_executor(root: &Path) -> Result<ExecutorInitResult> {
             outstanding.push(report);
         }
     }
-    for prerequisite in prerequisites(&inferred_github)? {
+    for prerequisite in prerequisites(&inferred_github, &config)? {
         operations.push(prerequisite.clone());
         outstanding.push(prerequisite);
     }
@@ -444,10 +444,36 @@ fn edited_config(
     Ok((updated != text).then_some(updated))
 }
 
+/// GitHub ruleset tag namespace patterns every configured tag template derives.
+///
+/// Each pattern is the literal affix before `{version}` in one tag template,
+/// with `{id}` rendered for release-unit tags, followed by `*`.
+pub(crate) fn managed_release_tag_namespace_patterns(config: &Config) -> Vec<String> {
+    let mut patterns = BTreeSet::new();
+    for tag in config.workspace_tags.values() {
+        if let Some((prefix, _)) = tag.template.split_once("{version}") {
+            if !prefix.is_empty() {
+                patterns.insert(format!("{prefix}*"));
+            }
+        }
+    }
+    for (release_unit_id, release_unit) in &config.release_units {
+        for tag in release_unit.tags.values() {
+            let template = tag.template.replace("{id}", release_unit_id);
+            if let Some((prefix, _)) = template.split_once("{version}") {
+                if !prefix.is_empty() {
+                    patterns.insert(format!("{prefix}*"));
+                }
+            }
+        }
+    }
+    patterns.into_iter().collect()
+}
+
 /// Repository settings Intentional reports without mutating.
-fn prerequisites(github: &GithubConfig) -> Result<Vec<String>> {
+fn prerequisites(github: &GithubConfig, config: &Config) -> Result<Vec<String>> {
     let namespaces = github.namespaces()?;
-    Ok(vec![
+    let mut reports = vec![
         "report: the repository GitHub App must be a ruleset bypass actor for the default branch and every Intentional-managed release tag namespace; Intentional does not mutate repository settings".to_owned(),
         format!(
             "report: the repository must define repository variable {}GITHUB_APP_ID for the GitHub App ID and repository secret {}GITHUB_APP_PRIVATE_KEY for its private key",
@@ -457,7 +483,13 @@ fn prerequisites(github: &GithubConfig) -> Result<Vec<String>> {
             "report: the protected environment {} must guard the release authority transition",
             namespaces.environment
         ),
-    ])
+    ];
+    for pattern in managed_release_tag_namespace_patterns(config) {
+        reports.push(format!(
+            "report: the repository GitHub App must be a ruleset bypass actor for release tag namespace {pattern}"
+        ));
+    }
+    Ok(reports)
 }
 
 fn default_github() -> GithubConfig {
@@ -1379,7 +1411,7 @@ release-units:
             envvar: "SAMPLE".to_owned(),
         });
 
-        let credential_report = prerequisites(&github)
+        let credential_report = prerequisites(&github, &Config::default())
             .expect("prerequisites resolve")
             .into_iter()
             .find(|operation| operation.contains("GITHUB_APP_ID"))
@@ -1392,6 +1424,28 @@ release-units:
         assert!(
             credential_report.contains("repository secret SAMPLE_GITHUB_APP_PRIVATE_KEY"),
             "the private key is reported as a repository secret: {credential_report}"
+        );
+    }
+
+    #[test]
+    fn prerequisites_enumerate_every_managed_release_tag_namespace() {
+        let config = Config::from_yaml(
+            "contract: contract-2\nrelease-units:\n  component:\n    path: component\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n      probe: { role: projection, template: 'probe-{id}@{version}', require-phase: after-publication }\n",
+        )
+        .expect("configuration");
+        let reports = prerequisites(&default_github(), &config).expect("prerequisites resolve");
+        let namespaces = reports
+            .iter()
+            .filter_map(|report| {
+                report.strip_prefix(
+                    "report: the repository GitHub App must be a ruleset bypass actor for release tag namespace ",
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            namespaces,
+            vec!["component@*", "probe-component@*"],
+            "executor init enumerates every managed release tag namespace"
         );
     }
 
