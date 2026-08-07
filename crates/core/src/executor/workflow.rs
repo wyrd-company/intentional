@@ -3124,35 +3124,84 @@ jobs:
             };
             for action in steps.iter().filter(|step| {
                 intentional_action(step).is_some_and(|(name, _)| name == "verify-publication")
-                    && step["with"]["observe"].as_str() == Some("false")
             }) {
-                authenticated += 1;
                 let observation = action["with"]["observation"]
                     .as_str()
                     .expect("the verifier names its observation");
                 let observers = jobs
                     .iter()
-                    .flat_map(|(_, candidate)| {
-                        candidate["steps"].as_sequence().into_iter().flatten()
+                    .flat_map(|(candidate_id, candidate)| {
+                        candidate["steps"]
+                            .as_sequence()
+                            .into_iter()
+                            .flatten()
+                            .map(move |step| (candidate_id, step))
                     })
-                    .filter(|step| {
+                    .filter(|(_, step)| {
                         step.get("run").is_some()
                             && step_environment(step)
                                 .get("INPUT_OBSERVATION")
                                 .is_some_and(|path| path == observation)
                     })
                     .collect::<Vec<_>>();
+                let uploads = jobs
+                    .iter()
+                    .flat_map(|(candidate_id, candidate)| {
+                        candidate["steps"]
+                            .as_sequence()
+                            .into_iter()
+                            .flatten()
+                            .map(move |step| (candidate_id, step))
+                    })
+                    .filter(|(_, step)| {
+                        step.get("uses").and_then(Value::as_str) == Some(UPLOAD_ARTIFACT_ACTION)
+                            && step["with"]["path"].as_str() == Some(observation)
+                    })
+                    .collect::<Vec<_>>();
+
+                if action["with"]["observe"].as_str() != Some("false") {
+                    assert!(
+                        observers.is_empty() && uploads.is_empty(),
+                        "{job_id:?} leaves portable observation entirely to its Action"
+                    );
+                    continue;
+                }
+
+                authenticated += 1;
                 assert_eq!(
                     observers.len(),
                     1,
                     "{job_id:?} has one repository-visible writer for {observation}"
                 );
                 assert!(
-                    !destination_secret_names(observers[0]).is_empty()
-                        || step_environment(observers[0])
+                    !destination_secret_names(observers[0].1).is_empty()
+                        || step_environment(observers[0].1)
                             .values()
                             .any(|value| value.contains("secrets.GITHUB_TOKEN")),
                     "{job_id:?} derives inline observation only for an authenticated writer"
+                );
+                if observers[0].0 == job_id {
+                    assert!(
+                        uploads.is_empty(),
+                        "{job_id:?} needs no artifact when its observer and verifier share a job"
+                    );
+                    continue;
+                }
+
+                assert_eq!(
+                    uploads.len(),
+                    1,
+                    "{job_id:?} receives one transported observation from its separate writer"
+                );
+                let artifact = uploads[0].1["with"]["name"]
+                    .as_str()
+                    .expect("the observation upload names its artifact");
+                assert!(
+                    steps.iter().any(|step| {
+                        step.get("uses").and_then(Value::as_str) == Some(DOWNLOAD_ARTIFACT_ACTION)
+                            && step["with"]["name"].as_str() == Some(artifact)
+                    }),
+                    "{job_id:?} downloads the observation artifact {artifact}"
                 );
             }
         }
