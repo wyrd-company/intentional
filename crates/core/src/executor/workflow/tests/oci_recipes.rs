@@ -90,6 +90,7 @@
             observation: Option<PublicationObservation>,
             registry: PathBuf,
             verified: BTreeMap<String, String>,
+            waits: Vec<u64>,
         }
 
         impl Outcome {
@@ -292,6 +293,11 @@
                     observation,
                     registry: self.registry.clone(),
                     verified,
+                    waits: std::fs::read_to_string(self.registry.join("waits.log"))
+                        .unwrap_or_default()
+                        .lines()
+                        .map(|wait| wait.parse().expect("recorded wait is seconds"))
+                        .collect(),
                 }
             }
         }
@@ -487,6 +493,7 @@
                 ("docker", DOCKER_STUB),
                 ("npm", NPM_STUB),
                 ("devcontainer", DEV_CONTAINER_STUB),
+                ("sleep", SLEEP_STUB),
             ] {
                 let path = directory.join(name);
                 std::fs::write(&path, body).expect("stub written");
@@ -534,6 +541,16 @@
         ;;
       digest)
         printf '%s\n' "${DOCKER_CONFIG:-inherited}" >> "${registry}/docker-config.log"
+        if [ -n "${DOCKER_CONFIG:-}" ] && [[ "${2}" == *:"${INTENTIONAL_VERSION}" ]]; then
+          attempts="${registry}/clean-digest-attempts"
+          attempt=0
+          if [ -f "${attempts}" ]; then attempt=$(cat "${attempts}"); fi
+          attempt=$((attempt + 1))
+          printf '%s' "${attempt}" > "${attempts}"
+          case "${FAKE_DRIFT:-}:${attempt}" in
+            initially-invisible:1|reread-invisible:2) exit 1 ;;
+          esac
+        fi
         if [ "${FAKE_DRIFT:-}" = "alias-read-error" ] && [[ "${2}" == *:latest ]]; then
           printf 'UNAVAILABLE: transient registry failure\n' >&2
           exit 1
@@ -607,6 +624,11 @@
       *) printf 'unsupported crane invocation: %s\n' "$*" >&2; exit 2 ;;
     esac
     "#;
+
+        const SLEEP_STUB: &str = r#"#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >> "${FAKE_REGISTRY}/waits.log"
+"#;
 
         const COSIGN_STUB: &str = r#"#!/usr/bin/env bash
     set -euo pipefail
@@ -1159,6 +1181,7 @@ fi
                 ObservationState::Conflict,
                 "an index referencing other manifests is recorded as a conflict"
             );
+            assert!(outcome.waits.is_empty(), "a conflict is never retried");
         }
 
         /// The destination has to publish the name the release sealed.
@@ -1595,11 +1618,42 @@ fi
                 ObservationState::Pending,
                 "the publication was accepted; what has not happened is it becoming observable"
             );
+            assert_eq!(
+                outcome.waits,
+                [vec![3, 6, 12], vec![15; 18], vec![9]].concat(),
+                "OCI readback spends the emitted retry policy before reporting pending"
+            );
+            assert_eq!(outcome.verified("interval"), "3");
+            assert_eq!(outcome.verified("backoff"), "2");
+            assert_eq!(outcome.verified("maximum-interval"), "15");
+            assert_eq!(outcome.verified("deadline"), "300");
             assert!(
                 outcome.stderr.contains("public client"),
                 "the step says why, on the run's most likely first outcome: {}",
                 outcome.stderr
             );
+        }
+
+        #[test]
+        fn retries_each_not_yet_visible_probe_within_the_oci_policy() {
+            for (label, drift) in [
+                ("oci-initially-invisible", "initially-invisible"),
+                ("oci-reread-invisible", "reread-invisible"),
+            ] {
+                let recipe = Recipe::new(label, DOCKERHUB_JOB);
+                let outcome = recipe.run_with_drift("1.2.3", drift);
+                assert!(outcome.status.success(), "{}: {}", drift, outcome.stderr);
+                assert_eq!(
+                    outcome.observation().state,
+                    ObservationState::Present,
+                    "{drift} becomes visible within policy"
+                );
+                assert_eq!(
+                    outcome.waits,
+                    vec![3],
+                    "{drift} consumes the first emitted interval"
+                );
+            }
         }
 
         /// A prerelease Feature publishes when its client leaves stable aliases alone.

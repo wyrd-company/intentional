@@ -19,13 +19,16 @@ provenance_file="$INTENTIONAL_WORK/provenance.yml"
 : > "$aliases_file"
 : > "$metadata_file"
 : > "$provenance_file"
-if ! published=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
-  || ! index=$(crane manifest "$repository@$published" 2>/dev/null); then
-  printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
-    "$repository" "$INTENTIONAL_VERSION" >&2
-  observe_state pending
-  exit 0
-fi
+INTENTIONAL_ELAPSED=0
+while ! published=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
+  || ! index=$(crane manifest "$repository@$published" 2>/dev/null); do
+  if ! wait_again; then
+    printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
+      "$repository" "$INTENTIONAL_VERSION" >&2
+    observe_state pending
+    exit 0
+  fi
+done
 
 if [[ "$INTENTIONAL_PACKAGER_ID" == buildx ]]; then
   layout="$INTENTIONAL_WORK/layout"
@@ -161,14 +164,16 @@ done
 
 rm -rf "$clean_client"
 mkdir -p "$clean_client"
-if ! retrieved=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
+while ! retrieved=$(crane digest "$repository:$INTENTIONAL_VERSION" 2>/dev/null) \
   || ! crane manifest "$repository@$retrieved" \
-    > "$clean_client/subject.json" 2>/dev/null; then
-  printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
-    "$repository" "$INTENTIONAL_VERSION" >&2
-  observe_state pending
-  exit 0
-fi
+    > "$clean_client/subject.json" 2>/dev/null; do
+  if ! wait_again; then
+    printf '%s carries version %s but no public client can retrieve it; an OCI package is observable to its consumers only while it is public, and a package is private when it is first pushed\n' \
+      "$repository" "$INTENTIONAL_VERSION" >&2
+    observe_state pending
+    exit 0
+  fi
+done
 test "$retrieved" = "$published"
 test "sha256:$(sha256sum < "$clean_client/subject.json" | cut -d' ' -f1)" = "$retrieved"
 INTENTIONAL_DESTINATION_DIGEST=$published
