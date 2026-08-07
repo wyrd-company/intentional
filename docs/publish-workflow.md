@@ -143,6 +143,6 @@ A workflow comparison reads at most 2,000 lines. The limit covers the complete
 workflow after Intentional derives its managed slice, so configured
 publications consume the same budget as repository-owned jobs. A
 `workflow-too-large` diagnostic reports the measured line count and identifies
-the relevant remedy. Move unrelated repository jobs to another workflow, or
+the relevant remedy. Move unrelated jobs to another workflow or
 reduce configured publication destinations when the managed publication slice
 exceeds the limit.

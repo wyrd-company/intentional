@@ -5,6 +5,28 @@
 
 use std::collections::BTreeSet;
 
+fn feature_scenario_keys(source: &str) -> BTreeSet<String> {
+    let document = serde_yaml::from_str::<serde_yaml::Value>(source)
+        .expect("publication feature is valid YAML");
+    document["rules"]
+        .as_sequence()
+        .expect("publication feature declares rules")
+        .iter()
+        .flat_map(|rule| {
+            rule["scenarios"]
+                .as_mapping()
+                .expect("each publication rule declares scenarios")
+                .keys()
+        })
+        .map(|scenario| {
+            scenario
+                .as_str()
+                .expect("publication scenario keys are strings")
+                .to_owned()
+        })
+        .collect()
+}
+
 fn feature_scenario_bindings(source: &str) -> BTreeSet<String> {
     let lines = source.lines().collect::<Vec<_>>();
     lines
@@ -53,8 +75,20 @@ fn feature_alias_scenario_is_bound_to_both_packager_recipes() {
         .expect("publication feature is readable");
     let recipes = std::fs::read_to_string("../core/src/executor/workflow/tests/oci_recipes.rs")
         .expect("OCI recipe tests are readable");
+    let scenario_keys = feature_scenario_keys(&feature);
     let documented = feature_scenario_bindings(&feature);
     let executable = executable_feature_scenario_bindings(&recipes);
+
+    for binding in &documented {
+        let scenario = binding
+            .split_once('/')
+            .map(|(scenario, _)| scenario)
+            .expect("a feature scenario binding names its packager branch");
+        assert!(
+            scenario_keys.contains(scenario),
+            "feature scenario binding {binding} names a scenario key in the publication feature"
+        );
+    }
 
     assert_eq!(
         documented,
