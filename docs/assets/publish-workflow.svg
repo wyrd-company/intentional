@@ -24,9 +24,9 @@ relationships:
   </defs>
 
   <path d="M190 320 H250" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
-  <path d="M430 320 C480 320 470 190 520 190" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M430 320 C480 320 470 190 520 190" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
   <path d="M430 320 C480 320 470 450 520 450" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
-  <path d="M700 190 C750 190 740 320 790 320" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M700 190 C750 190 740 320 790 320" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
   <path d="M700 450 C750 450 740 340 790 340" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
   <path d="M970 320 H1030" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
   <path d="M1120 260 V180 H1180" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
