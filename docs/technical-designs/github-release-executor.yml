@@ -522,10 +522,11 @@ proposed-design:
     proves it fits instead of inferring capacity from that count.
 
     Trigger shorthand and filter mappings keep their repository meaning when
-    an owned filter is introduced. A push mapping with no ref filter gains an
-    explicit all-branch filter, while an existing branch filter stays exact. A
-    repository path filter is refused because GitHub combines it with the owned
-    release-tag filter and can silently suppress publication. Every emitted
+    an owned filter is introduced. A push mapping with neither a ref filter nor
+    a path filter gains an explicit all-branch filter, while an existing branch
+    filter stays exact. A repository path filter is refused because GitHub
+    combines it with the owned release-tag filter and can silently suppress
+    publication. Every emitted
     push mapping is refused if a filter is not a sequence of strings, combines
     a GitHub include filter with its mutually exclusive `-ignore` form, or uses
     `!` exclusions without a positive pattern. Derived release-tag filters
