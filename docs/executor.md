@@ -174,14 +174,10 @@ short-lived token it mints, which is why the declared permission stays read-only
 even in the job that publishes.
 
 Every managed checkout requests `fetch-depth: 0` and `fetch-tags: true`.
-Verification rebuilds the candidate from the accepted source commit and derives
-versions from annotated tags, so a shallow or tagless checkout fails
-verification rather than producing a wrong release. Publisher and retrieval
-jobs keep the same requirement even though they promote an already-built
-subject: after delivery, `intentional verify publication` loads the released
-configuration, reconstructs the planned release from the annotated global tag,
-and reads phase tags before it accepts the publication observation. A shallow
-publisher checkout would therefore remove evidence the verification step uses.
+Verification, build, tag, assembly, and closure jobs read release identity or
+version authority from repository tags. Upload, publisher, and retrieval jobs
+use the same checkout contract. Moving a portable command between managed job
+roles therefore preserves its view of the released commit and tags.
 
 ## Prepare the repository
 
@@ -210,18 +206,14 @@ write to the repository or Release and every job that publishes to an external
 destination. Requiring a reviewer, a wait timer or a branch restriction there
 gates the step that spends each credential.
 
-Store destination credentials as environment secrets and variables. For an
-existing repository, copy each destination credential under the same name from
-repository settings to `intentional-release`. Apply the regenerated workflow.
-Prove one protected publication. Then remove the repository-level copy. The
-repository-level value remains a working fallback during the migration, but any
-workflow in the repository can still read it until it is removed. This
-repository's migration set is `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN`; its
-Homebrew publisher continues to mint a tap-scoped token from the release App
-credentials.
+Store destination credentials as environment secrets and variables. To migrate
+an existing repository-level value, copy it under the same name to
+`intentional-release`, apply the derived workflow, and prove one protected
+publication. Remove the repository-level value after that proof. Any workflow
+in the repository can read a repository-level secret until it is removed.
 
 The environment also becomes part of each publisher's OpenID Connect claim set
-and default subject. Before applying the regenerated workflow, update the
+and default subject. Before applying the derived workflow, update the
 npmjs and crates.io trusted-publisher records to name `intentional-release`, or
 the identity exchange will no longer match. Under a configured prefix, name the
 environment that prefix derives instead. This registry-record migration covers

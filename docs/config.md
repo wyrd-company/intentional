@@ -267,7 +267,7 @@ release-units:
 | `cargo.registry` | Native registry | The manifest selects crates.io or one alternate registry. |
 | `homebrew` | Tap repository | `repository` is required, so this publisher is configured directly. |
 | `aur` | Arch User Repository | Package name comes from native packager configuration; GoReleaser resolves an unnamed entry to the project name and suffixes every name with `-bin`. |
-| `rpm`, `apt` | Native packager | Configuration stays in native packager files. Publication is reported until the managed job that uploads GitHub-hosted deliverables to the draft Release exists. |
+| `rpm`, `apt` | Native packager and repository delivery Action | Intentional derives the package build, draft Release upload, delivery, and verification jobs. |
 | `oci` | `dockerhub`, `ghcr` | At least one peer target; there is no implicit primary. Docker Hub requires `repository`. |
 
 Configuration stores GitHub variable and secret **names** through
@@ -295,12 +295,13 @@ project evidence and selects exactly one maintained recipe per configured
 target. A combination with no maintained recipe, or one that matches more than
 one, is a configuration error.
 
-An `rpm` or `apt` deliverable is the released package itself, which consumers
-resolve from the GitHub Release. The managed job that uploads GitHub-hosted
-deliverables to the draft is not derived yet, so configuring either publisher is
-reported by `intentional executor diff` and `intentional executor check` rather
-than deriving a publisher job that would publish nothing. Homebrew and AUR
-publish descriptors into their own repositories and are derived today.
+An `rpm` or `apt` deliverable is the released package itself. The managed upload
+job places the package on the draft GitHub Release. The publisher job passes the
+sealed package identity and configured repository coordinates to the
+repository-owned delivery Action. The verification job reads the signed public
+index through its consumer path and compares the retrieved package with the
+sealed subject. Homebrew and AUR publisher jobs promote descriptors into their
+own repositories.
 
 A Rust package with one binary may publish Homebrew, RPM, APT, or AUR outputs
 alongside its Cargo publication. The binary identity comes from exactly one

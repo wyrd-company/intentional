@@ -1,7 +1,7 @@
 ---
 docs: true
 title: Derived publish workflow
-order: 5
+order: 6
 relationships:
   implements: github-release-executor
 ---
@@ -138,3 +138,11 @@ and inspect `intentional executor diff publish`. The diff shows the complete
 managed slice before you apply it. Repository settings and protected
 environment policy remain operator work; the executor reports them but never
 changes them.
+
+A workflow comparison reads at most 2,000 lines. The limit covers the complete
+workflow after Intentional derives its managed slice, so configured
+publications consume the same budget as repository-owned jobs. A
+`workflow-too-large` diagnostic reports the measured line count and identifies
+the relevant remedy. Move unrelated repository jobs to another workflow, or
+reduce configured publication destinations when the managed publication slice
+exceeds the limit.

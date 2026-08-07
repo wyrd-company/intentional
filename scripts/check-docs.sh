@@ -42,6 +42,16 @@ for page in docs/*.md; do
   yq --front-matter=extract -e '.order | type == "!!int"' "$page" >/dev/null
 done
 
+duplicate_orders="$({
+  for page in docs/*.md; do
+    yq --front-matter=extract -r '.order' "$page"
+  done
+} | sort -n | uniq -d)"
+if [[ -n "$duplicate_orders" ]]; then
+  echo "Documentation page order values must be unique; duplicated: $duplicate_orders" >&2
+  exit 1
+fi
+
 test -f docs/assets/demo.gif
 gifsicle --info docs/assets/demo.gif >/dev/null
 test "$(wc -c < docs/assets/demo.gif)" -le 3145728

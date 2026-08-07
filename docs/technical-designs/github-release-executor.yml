@@ -560,12 +560,15 @@ proposed-design:
 
     - `assemble-evidence`: no outputs.
     - `contribute`: no outputs.
-    - `prepare-release`: `candidate-path`, `source-sha`, `release-sha`, `global-tag`, and `plan-digest`.
+    - `prepare-release`: `candidate-path`, `source-sha`, `release-sha`,
+    `global-tag`, and `plan-digest`.
     - `record-built-subject`: `built-subject-path`, `digest`, and `version`.
     - `seal-phase-tags`: `sealed-phase-evidence`.
-    - `verify-handoff`: `source-sha`, `release-sha`, `global-tag`, and `plan-digest`.
+    - `verify-handoff`: `source-sha`, `release-sha`, `global-tag`, and
+    `plan-digest`.
     - `verify-publication`: `evidence-path`.
-    - `verify-release-tag`: `source-sha`, `release-sha`, `global-tag`, `global-tag-object`, and `plan-digest`.
+    - `verify-release-tag`: `source-sha`, `release-sha`, `global-tag`,
+    `global-tag-object`, and `plan-digest`.
 
     The seal-phase-tags Action never pushes, because tag creation is local and
     the repository-owned job that consumes it holds the push authority.
