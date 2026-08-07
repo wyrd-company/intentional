@@ -2522,9 +2522,9 @@ retrieval:
     #[test]
     fn an_attestation_ignores_runs_segments_outside_the_actions_path() {
         assert_eq!(
-            run_identifier("https://example.test/runs/sample/actions/runs/42/attempts/7")
+            run_identifier("https://example.test/runs/42/actions/runs/18234567891/attempts/1",)
                 .expect("the workflow run is read"),
-            42
+            18_234_567_891
         );
     }
 
