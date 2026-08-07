@@ -2603,6 +2603,43 @@ jobs:
         Some(Value::Mapping(expanded))
     }
 
+    /// Non-baseline observer client one emitted installer actually provides.
+    ///
+    /// This reads the Action reference or command rather than the step id, so
+    /// an id claiming one client while its body installs another is a mismatch
+    /// instead of a self-confirming declaration.
+    fn observer_client_installed_by(step: &Value) -> Option<String> {
+        let client = match step["uses"].as_str() {
+            Some(SETUP_CRANE_ACTION) => "crane",
+            Some(COSIGN_INSTALLER_ACTION) => "cosign",
+            Some(SETUP_BUILDX_ACTION) => "docker-buildx",
+            Some(GORELEASER_INSTALL_ACTION) => "goreleaser",
+            _ => {
+                let run = step["run"].as_str()?;
+                if run.contains(
+                    "npm install --global --no-fund --no-audit --ignore-scripts @devcontainers/cli@",
+                ) {
+                    "devcontainer"
+                } else {
+                    run.lines()
+                        .find_map(|line| {
+                            line.trim()
+                                .strip_prefix("sudo apt-get install --yes ")
+                        })?
+                }
+            }
+        };
+        let id = step["id"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("intentional_install_"))?
+            .replace('_', "-");
+        assert_eq!(
+            id, client,
+            "installer id names the client its body provides"
+        );
+        Some(client.to_owned())
+    }
+
     /// Remainder beneath `wyrd-company/intentional/actions/` when the reference is first-party.
     fn intentional_actions_path(action: &str) -> Option<&str> {
         action

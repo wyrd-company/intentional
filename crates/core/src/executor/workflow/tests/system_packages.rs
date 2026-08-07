@@ -20,9 +20,7 @@
         let (_, steps, _) = publication_verification(jobs, publisher);
         steps
             .iter()
-            .filter_map(|step| step["id"].as_str())
-            .filter_map(|id| id.strip_prefix("intentional_install_"))
-            .map(|id| id.replace('_', "-"))
+            .filter_map(observer_client_installed_by)
             .collect()
     }
 

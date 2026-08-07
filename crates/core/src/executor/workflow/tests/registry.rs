@@ -282,9 +282,7 @@
                     .collect::<BTreeSet<_>>();
                 let installed = steps[..verify_position]
                     .iter()
-                    .filter_map(|step| step["id"].as_str())
-                    .filter_map(|id| id.strip_prefix("intentional_install_"))
-                    .map(|id| id.replace('_', "-"))
+                    .filter_map(observer_client_installed_by)
                     .collect::<BTreeSet<_>>();
                 assert_eq!(
                     installed,
