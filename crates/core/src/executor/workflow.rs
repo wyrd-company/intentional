@@ -85,9 +85,6 @@ const PUSH_FILTER_FAMILIES: [(&str, &str); 3] = [
     ("paths", "paths-ignore"),
 ];
 
-/// `push` filters that explicitly choose which refs receive the event.
-const PUSH_REF_FILTERS: [&str; 4] = ["branches", "branches-ignore", "tags", "tags-ignore"];
-
 /// Largest single workflow line the comparison will read or propose.
 ///
 /// This companion bound prevents line compaction from hiding unbounded input
@@ -897,8 +894,9 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
 fn push_mapping_needs_branch_expansion(value: &Value) -> bool {
     value.is_null()
         || value.as_mapping().is_some_and(|mapping| {
-            PUSH_REF_FILTERS
+            PUSH_FILTER_FAMILIES
                 .iter()
+                .flat_map(|(include, exclude)| [include, exclude])
                 .all(|filter| !mapping.contains_key(Value::String((*filter).to_owned())))
         })
 }
@@ -7083,6 +7081,22 @@ exit 0
             document["on"]["workflow_dispatch"].is_null(),
             "the neighboring repository trigger survives normalization"
         );
+    }
+
+    #[test]
+    fn does_not_expand_path_filtered_push_mappings_to_all_branches() {
+        for filter in ["paths", "paths-ignore"] {
+            let mut push = serde_yaml::Mapping::new();
+            push.insert(
+                Value::String(filter.to_owned()),
+                Value::Sequence(vec![Value::String("sample/**".to_owned())]),
+            );
+
+            assert!(
+                !push_mapping_needs_branch_expansion(&Value::Mapping(push)),
+                "{filter} is an explicit push filter, not all-branch shorthand"
+            );
+        }
     }
 
     #[test]
