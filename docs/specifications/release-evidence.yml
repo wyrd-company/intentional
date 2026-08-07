@@ -1,5 +1,6 @@
 $schema: https://refinery.systems/ontology/specification
-relationships: {}
+relationships:
+  implements: github-release-executor
 format: json-schema
 description: >-
   `intentional-evidence.yml` is the durable, human-readable release-wide
@@ -24,7 +25,9 @@ description: >-
   contribution values appear unchanged under their isolated namespaces without
   interpretation by Intentional. The separate
   `contribution-attachments` inventory binds every accepted contributed Release
-  asset's flat name and SHA-256 digest to its contributor namespace.
+  asset's flat name and SHA-256 digest to its contributor namespace. The
+  `intentional-evidence.yml` asset name is reserved for the release-wide
+  statement and cannot be claimed by a contributed attachment.
 validation-criteria: >-
   A statement conforms when it validates against
   `release-evidence.json-schema.yml`, its artifact attestation verifies the

@@ -191,10 +191,7 @@ pub(super) fn publication_jobs(
     } else {
         String::new()
     };
-    let packages_permission = if matches!(
-        (publication.publisher, publication.target.as_str()),
-        (PublisherKind::Npm, "github")
-    ) {
+    let packages_permission = if uses_github_packages(publication) {
         "  packages: read\n"
     } else {
         ""
@@ -235,17 +232,21 @@ pub(super) fn publication_jobs(
 /// never presents is a credential sitting in reach of every step in it.
 fn publisher_permissions(publication: &SelectedPublication) -> String {
     let mut scopes = vec!["  contents: read\n".to_owned()];
-    let packages = matches!(
-        (publication.publisher, publication.target.as_str()),
-        (PublisherKind::Npm, "github") | (PublisherKind::Oci, "ghcr")
-    );
-    if packages {
+    if uses_github_packages(publication) {
         scopes.push("  packages: write\n".to_owned());
     }
     if presents_a_workflow_identity(publication) {
         scopes.push("  id-token: write\n".to_owned());
     }
     scopes.concat()
+}
+
+/// Whether one publication writes and subsequently reads GitHub Packages.
+fn uses_github_packages(publication: &SelectedPublication) -> bool {
+    matches!(
+        (publication.publisher, publication.target.as_str()),
+        (PublisherKind::Npm, "github") | (PublisherKind::Oci, "ghcr")
+    )
 }
 
 /// Whether one publication's recipe presents the run's workflow identity.

@@ -334,15 +334,22 @@ fn attestation_from_json(name: &str, value: &serde_json::Value) -> Result<Attest
 
 /// Extract the workflow run identifier from an attested invocation reference.
 fn run_identifier(invocation: &str) -> Result<u64> {
-    invocation
-        .split('/')
-        .filter_map(|segment| segment.parse::<u64>().ok())
-        .next_back()
-        .ok_or_else(|| {
-            Error::Validation(format!(
-                "attested invocation {invocation:?} names no workflow run identifier"
-            ))
-        })
+    let mut segments = invocation.split('/');
+    while let Some(segment) = segments.next() {
+        if segment == "runs" {
+            return segments
+                .next()
+                .and_then(|run_id| run_id.parse().ok())
+                .ok_or_else(|| {
+                    Error::Validation(format!(
+                        "attested invocation {invocation:?} names no workflow run identifier"
+                    ))
+                });
+        }
+    }
+    Err(Error::Validation(format!(
+        "attested invocation {invocation:?} names no workflow run identifier"
+    )))
 }
 
 /// The document one fresh live observation produces.
@@ -2491,7 +2498,10 @@ retrieval:
     fn an_attestation_reports_the_workflow_repository_its_statement_carries() {
         let attestation = attestation_from_json(
             RELEASE_EVIDENCE_FILE,
-            &attestation_statement(Some("https://github.com/other-owner/other-repository")),
+            &attestation_statement(
+                Some("https://github.com/other-owner/other-repository"),
+                "https://github.com/other-owner/other-repository/actions/runs/42/attempts/7",
+            ),
         )
         .expect("the statement is read");
         assert_eq!(attestation.repository, "other-owner/other-repository");
@@ -2499,9 +2509,28 @@ retrieval:
     }
 
     #[test]
+    fn an_attestation_without_an_attempt_suffix_still_reports_its_workflow_run() {
+        let attestation = attestation_from_json(
+            RELEASE_EVIDENCE_FILE,
+            &attestation_statement(
+                Some("https://github.com/other-owner/other-repository"),
+                "https://github.com/other-owner/other-repository/actions/runs/42",
+            ),
+        )
+        .expect("the statement is read");
+        assert_eq!(attestation.run_id, 42);
+    }
+
+    #[test]
     fn an_attestation_carrying_no_workflow_repository_is_reported_rather_than_assumed() {
-        let error = attestation_from_json(RELEASE_EVIDENCE_FILE, &attestation_statement(None))
-            .expect_err("the missing repository is reported");
+        let error = attestation_from_json(
+            RELEASE_EVIDENCE_FILE,
+            &attestation_statement(
+                None,
+                "https://github.com/other-owner/other-repository/actions/runs/42/attempts/7",
+            ),
+        )
+        .expect_err("the missing repository is reported");
         assert!(
             error
                 .to_string()
@@ -2511,7 +2540,7 @@ retrieval:
     }
 
     /// One verified attestation statement, with or without its repository.
-    fn attestation_statement(repository: Option<&str>) -> serde_json::Value {
+    fn attestation_statement(repository: Option<&str>, invocation: &str) -> serde_json::Value {
         let mut workflow = serde_json::json!({ "path": ".github/workflows/publish.yml" });
         if let Some(repository) = repository {
             workflow["repository"] = serde_json::Value::String(repository.to_owned());
@@ -2524,7 +2553,7 @@ retrieval:
                         "buildDefinition": { "externalParameters": { "workflow": workflow } },
                         "runDetails": {
                             "metadata": {
-                                "invocationId": "https://github.com/other-owner/other-repository/actions/runs/42"
+                                "invocationId": invocation
                             }
                         }
                     }

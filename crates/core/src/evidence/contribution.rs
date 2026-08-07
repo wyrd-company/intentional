@@ -6,6 +6,7 @@
 //! Repository-owned evidence contributions and their workflow transport.
 
 use crate::error::{Error, Result};
+use crate::evidence::assemble::RELEASE_EVIDENCE_FILE;
 use crate::evidence::{
     copy_and_digest, digest_bytes, is_digest, is_flat_name, is_namespace, write_bundle,
     DIGEST_PREFIX,
@@ -102,6 +103,12 @@ impl ContributionManifest {
                 ));
                 continue;
             }
+            if attachment.name == RELEASE_EVIDENCE_FILE {
+                findings.push(format!(
+                    "{label} inventories reserved release evidence asset name {RELEASE_EVIDENCE_FILE}"
+                ));
+                continue;
+            }
             if !names.insert(attachment.name.as_str()) {
                 findings.push(format!(
                     "{label} inventories Release asset {} more than once",
@@ -194,6 +201,13 @@ pub fn contribute(request: &ContributionRequest<'_>) -> Result<ContributionBundl
         if !is_flat_name(name) {
             findings.push(format!(
                 "attachment {} has an unusable Release asset name {name:?}",
+                attachment.display()
+            ));
+            continue;
+        }
+        if name == RELEASE_EVIDENCE_FILE {
+            findings.push(format!(
+                "attachment {} claims reserved release evidence asset name {RELEASE_EVIDENCE_FILE}",
                 attachment.display()
             ));
             continue;
@@ -526,6 +540,48 @@ mod tests {
         assert!(
             error.to_string().contains("contributed more than once"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_an_attachment_claiming_the_release_evidence_asset_name() {
+        let workspace = Workspace::new("contribute-reserved-evidence-name");
+        workspace.write(RELEASE_EVIDENCE_FILE, "displacing bytes");
+        let attachments = vec![workspace.root().join(RELEASE_EVIDENCE_FILE)];
+        let output = workspace.root().join("bundle");
+        let error = contribute(&request(
+            &workspace,
+            "assessment",
+            None,
+            &attachments,
+            &output,
+        ))
+        .expect_err("the release evidence asset name is reserved");
+        assert!(
+            error
+                .to_string()
+                .contains("claims reserved release evidence asset name intentional-evidence.yml"),
+            "{error}"
+        );
+        assert!(!output.exists(), "a rejected contribution writes nothing");
+    }
+
+    #[test]
+    fn rejects_a_received_manifest_claiming_the_release_evidence_asset_name() {
+        let manifest = ContributionManifest {
+            schema: CONTRIBUTION_SCHEMA.to_owned(),
+            namespace: "assessment".to_owned(),
+            value: None,
+            attachments: vec![ContributionAttachment {
+                name: RELEASE_EVIDENCE_FILE.to_owned(),
+                file: format!("{ATTACHMENTS_DIRECTORY}/{RELEASE_EVIDENCE_FILE}"),
+                sha256: digest_bytes(b"displacing bytes"),
+            }],
+        };
+        let findings = manifest.findings("received contribution");
+        assert_eq!(
+            findings,
+            ["received contribution inventories reserved release evidence asset name intentional-evidence.yml"]
         );
     }
 

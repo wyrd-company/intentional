@@ -4627,6 +4627,30 @@ release-units:
     }
 
     #[test]
+    fn derives_package_permissions_for_both_sides_of_each_github_packages_route() {
+        let workspace = two_destination_workspace("workflow-github-package-permissions");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+
+        for role in ["publish", "verify"] {
+            let ghcr = format!("intentional_{role}_component_package_oci_ghcr");
+            assert_eq!(
+                jobs[&Value::String(ghcr.clone())]["permissions"]["packages"].as_str(),
+                Some(if role == "publish" { "write" } else { "read" }),
+                "{ghcr} receives the package scope its side of the route requires"
+            );
+
+            let dockerhub = format!("intentional_{role}_component_package_oci_dockerhub");
+            assert!(
+                jobs[&Value::String(dockerhub.clone())]["permissions"]
+                    .get("packages")
+                    .is_none(),
+                "{dockerhub} receives no GitHub Packages scope"
+            );
+        }
+    }
+
+    #[test]
     fn resolves_each_native_identity_from_its_declared_owner() {
         let workspace = two_package_feature_workspace("workflow-subject-owner-census");
         workspace

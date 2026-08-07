@@ -30,6 +30,7 @@
 //! managed jobs are emitted comment-free by construction.
 
 use crate::config::PrefixNamespaces;
+use crate::evidence::assemble::RELEASE_EVIDENCE_FILE;
 use crate::executor::recipe::Packager;
 use serde_yaml::Value;
 
@@ -511,6 +512,7 @@ pub(super) fn job(
         .replace("@UPLOAD@", UPLOAD_ARTIFACT_ACTION)
         .replace("@DOWNLOAD@", DOWNLOAD_ARTIFACT_ACTION)
         .replace("@ATTEST_BUILD_PROVENANCE@", ATTEST_BUILD_PROVENANCE_ACTION)
+        .replace("@RELEASE_EVIDENCE_FILE@", RELEASE_EVIDENCE_FILE)
         .replace("@APP_TOKEN@", APP_TOKEN_ACTION)
         .replace("@GORELEASER_INSTALL@", GORELEASER_INSTALL_ACTION)
         .replace("@CROSS_INSTALL@", CROSS_INSTALL_ACTION)
@@ -1290,7 +1292,7 @@ steps:
           "${@ENVVAR@GLOBAL_TAG}" "${targeted}" "${GITHUB_SHA}" >&2
         exit 1
       fi
-      assets=("${@ENVVAR@RELEASE}/intentional-evidence.yml")
+      assets=("${@ENVVAR@RELEASE}/@RELEASE_EVIDENCE_FILE@")
       if test -d "${@ENVVAR@RELEASE}/attachments"; then
         attachment_list="${RUNNER_TEMP}/@JOB@closure-attachments"
         if ! find "${@ENVVAR@RELEASE}/attachments" -mindepth 1 -maxdepth 1 \
@@ -1318,7 +1320,7 @@ steps:
     uses: @ATTEST_BUILD_PROVENANCE@
     with:
       subject-path: |
-        ${{ runner.temp }}/@JOB@release/intentional-evidence.yml
+        ${{ runner.temp }}/@JOB@release/@RELEASE_EVIDENCE_FILE@
         ${{ runner.temp }}/@JOB@release/attachments/*
   - name: Freeze the attested GitHub Release
     env:
