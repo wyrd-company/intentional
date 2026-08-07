@@ -139,6 +139,18 @@ fn managed_job_kinds(jobs: &serde_yaml::Mapping) -> BTreeMap<String, &'static st
         .collect()
 }
 
+fn direct_needs(body: &Value) -> Vec<&str> {
+    match body.get("needs") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(need)) => vec![need.as_str()],
+        Some(Value::Sequence(needs)) => needs
+            .iter()
+            .map(|need| need.as_str().expect("job need is text"))
+            .collect(),
+        Some(other) => panic!("job has unsupported needs {other:?}"),
+    }
+}
+
 fn mermaid_kind_id(kind: &str) -> &'static str {
     match kind {
         "verify-tag" => "verify_tag",
@@ -194,6 +206,26 @@ fn publish_workflow_page_leads_with_the_optional_executor_layer() {
             "the page names the executor-free core capability {core_capability}"
         );
     }
+    assert_eq!(
+        page.lines()
+            .filter(|line| line.starts_with("## "))
+            .collect::<Vec<_>>(),
+        [
+            "## Publish job graph",
+            "## Job separation",
+            "## Authority and credentials",
+            "## Generated workflow maintenance",
+        ],
+        "the publish page uses plain descriptive section titles"
+    );
+    let normalized_page = page.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized_page.contains("You own the complete workflow document")
+            && normalized_page
+                .contains("Intentional generates the jobs marked by its sentinel step")
+            && !page.contains("Intentional owns"),
+        "the page assigns workflow ownership to the consumer and generation to Intentional"
+    );
 }
 
 #[test]
@@ -244,15 +276,15 @@ fn publish_workflow_diagram_matches_every_derived_kind_and_need() {
             let body = jobs
                 .get(Value::String(id.clone()))
                 .expect("managed job remains in its derivation");
-            let needs = match body.get("needs") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(Value::String(need)) => vec![need.as_str()],
-                Some(Value::Sequence(needs)) => needs
-                    .iter()
-                    .map(|need| need.as_str().expect("job need is text"))
-                    .collect(),
-                Some(other) => panic!("job {id} has unsupported needs {other:?}"),
-            };
+            let needs = direct_needs(body);
+            if matches!(*kind, "publisher" | "verifier") {
+                assert!(
+                    needs
+                        .iter()
+                        .any(|need| job_kinds.get(*need) == Some(&"build")),
+                    "derived {kind} job {id} directly needs its subject build"
+                );
+            }
             for need in needs {
                 if let Some(need_kind) = job_kinds.get(need) {
                     expected_edges.insert((mermaid_kind_id(need_kind), mermaid_kind_id(kind)));

@@ -53,6 +53,26 @@ fn join_usage_labels(labels: &[&str]) -> String {
 }
 
 #[test]
+fn usage_splits_executor_guidance_and_states_consumer_ownership() {
+    let usage = std::fs::read_to_string("../../docs/usage.md").expect("usage guide is readable");
+    let executor = executor_guide();
+
+    assert!(
+        !usage.contains("## Configure the GitHub executor")
+            && executor.contains("## Configure the GitHub executor"),
+        "executor operation lives in its own guide rather than core usage"
+    );
+    let normalized_executor = normalize_whitespace(&executor);
+    assert!(
+        normalized_executor.contains("You own the workflow documents")
+            && normalized_executor
+                .contains("Intentional generates complete authority-bearing slices")
+            && !executor.contains("Intentional owns"),
+        "the executor guide assigns workflow ownership to the consumer"
+    );
+}
+
+#[test]
 fn usage_names_the_derived_long_lived_repository_write_credentials() {
     let usage = executor_guide();
     let credentials = long_lived_repository_write_credentials();
