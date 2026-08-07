@@ -639,15 +639,16 @@ fi
 # is not evidence.
 case_number=$((case_number + 1))
 verifier_workflow="$root/.github/workflows/github-action-pins.yml"
+verifier_uses_file="$temporary/verifier-workflow-uses.txt"
+yq_stderr="$temporary/verifier-workflow-yq.stderr"
 if ! command -v yq >/dev/null 2>&1; then
   echo "the verifier workflow pin census requires yq, but it is unavailable" >&2
   failures=$((failures + 1))
-elif ! verifier_uses="$(
-  yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' "$verifier_workflow" 2>&1
-)"; then
-  echo "the verifier workflow pin census could not extract uses entries with yq: $verifier_uses" >&2
+elif ! yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' \
+  "$verifier_workflow" >"$verifier_uses_file" 2>"$yq_stderr"; then
+  echo "the verifier workflow pin census could not extract uses entries with yq: $(cat "$yq_stderr")" >&2
   failures=$((failures + 1))
-elif [[ -z "$verifier_uses" ]]; then
+elif [[ ! -s "$verifier_uses_file" ]]; then
   echo "the verifier workflow pin census extracted zero uses entries" >&2
   failures=$((failures + 1))
 else
@@ -669,7 +670,7 @@ else
       echo "the verifier workflow use $use does not match declared commit $declared_commit" >&2
       failures=$((failures + 1))
     fi
-  done <<<"$verifier_uses"
+  done <"$verifier_uses_file"
 fi
 
 # ---------------------------------------------------------------------------
