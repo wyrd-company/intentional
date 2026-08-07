@@ -27,7 +27,7 @@ fi
 
 while IFS= read -r workflow; do
   uses_file="$temporary/$(basename "$workflow").uses"
-  if ! yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' \
+  if ! yq -r '.jobs[] | (.uses, .steps[]?.uses) | select(. != null)' \
     "$workflow" >"$uses_file" 2>"$temporary/yq.stderr"; then
     echo "the workflow pin census could not extract uses entries from $workflow with yq: $(cat "$temporary/yq.stderr")" >&2
     failures=$((failures + 1))

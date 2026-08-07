@@ -10,12 +10,63 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 temporary="$(mktemp -d)"
 trap 'rm -rf "$temporary"' EXIT
 
-hosted_task_calls="$(
-  yq -r '[.jobs[] | .steps[]? | select(.run == "task ci")] | length' \
-    "$root/.github/workflows/ci.yml"
-)"
-if [[ "$hosted_task_calls" -ne 1 ]]; then
-  echo "hosted CI must invoke task ci exactly once; found $hosted_task_calls calls" >&2
+if ! "$root/scripts/ci/assert-hosted-task-ci.sh"; then
+  echo "the repository hosted task ci contract failed" >&2
+  exit 1
+fi
+
+cp "$root/.github/workflows/ci.yml" "$temporary/without-pull-request.yml"
+yq -i 'del(.on.pull_request)' "$temporary/without-pull-request.yml"
+if "$root/scripts/ci/assert-hosted-task-ci.sh" \
+  "$temporary/without-pull-request.yml" \
+  >"$temporary/without-pull-request.stdout" \
+  2>"$temporary/without-pull-request.stderr"; then
+  echo "hosted CI without a pull_request trigger passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq 'hosted CI must declare the pull_request trigger' \
+  "$temporary/without-pull-request.stderr"; then
+  echo "hosted CI without a pull_request trigger failed for the wrong reason" >&2
+  cat "$temporary/without-pull-request.stderr" >&2
+  exit 1
+fi
+
+cp "$root/.github/workflows/ci.yml" "$temporary/pull-request-excluded.yml"
+# Preserve the GitHub expression literally in the mutated workflow.
+# shellcheck disable=SC2016
+yq -i \
+  '.jobs.repository-ci.if = "${{ github.event_name != '\''pull_request'\'' }}"' \
+  "$temporary/pull-request-excluded.yml"
+if "$root/scripts/ci/assert-hosted-task-ci.sh" \
+  "$temporary/pull-request-excluded.yml" \
+  >"$temporary/pull-request-excluded.stdout" \
+  2>"$temporary/pull-request-excluded.stderr"; then
+  echo "a task ci job that excludes pull requests passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq \
+  'the hosted task ci job must remain unconditional for pull requests: repository-ci' \
+  "$temporary/pull-request-excluded.stderr"; then
+  echo "the pull-request-excluding task ci job failed for the wrong reason" >&2
+  cat "$temporary/pull-request-excluded.stderr" >&2
+  exit 1
+fi
+
+if ! "$root/scripts/ci/assert-ryl-rule-baseline.sh"; then
+  echo "the repository RYL rule baseline is incomplete" >&2
+  exit 1
+fi
+
+sed '/^# excluded-rule: truthy - /d' "$root/.ryl.toml" \
+  >"$temporary/unclassified-ryl-rule.toml"
+if "$root/scripts/ci/assert-ryl-rule-baseline.sh" \
+  "$temporary/unclassified-ryl-rule.toml" \
+  >"$temporary/unclassified-ryl-rule.stdout" \
+  2>"$temporary/unclassified-ryl-rule.stderr"; then
+  echo "an unclassified shipped RYL rule passed its production assertion" >&2
+  exit 1
+elif ! grep -Fq 'unclassified shipped RYL rules: truthy' \
+  "$temporary/unclassified-ryl-rule.stderr"; then
+  echo "the unclassified shipped RYL rule failed for the wrong reason" >&2
+  cat "$temporary/unclassified-ryl-rule.stderr" >&2
   exit 1
 fi
 
@@ -46,4 +97,4 @@ if ! grep -Fxq 'scripts/action/observe-publication/common.sh' \
   exit 1
 fi
 
-echo "Hosted CI reuses task ci, and shell:lint reaches every shell script."
+echo "Hosted CI reaches task ci on pull requests, RYL rule coverage is closed, and shell:lint reaches every shell script."

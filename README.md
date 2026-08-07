@@ -608,9 +608,11 @@ task cargo-homebrew:compatibility
 task ci
 ```
 
-`task ci` is local preflight. It does not reproduce GitHub runner images,
-architecture matrices, or pull-request state. Before starting work from an
-integration branch, and after each change lands there, query its pull request:
+Hosted CI invokes the same `task ci` guard contract for every pull request.
+Running it locally is the matching preflight. GitHub runner images, architecture
+matrices, and pull-request state remain hosted-only concerns. Before starting
+work from an integration branch, and after each change lands there, query its
+pull request:
 
 ```console
 task hosted:check PR=<pull-request-number>

@@ -709,6 +709,37 @@ elif ! grep -Fq 'new-floating.yaml uses other-owner/other-action@v4 instead of a
   report "$directory"
 fi
 
+# A reusable workflow is invoked at job level rather than through a step. The
+# same census must refuse its floating external identity while allowing local
+# reusable workflows, which carry no external repository identity to declare.
+case_number=$((case_number + 1))
+directory="$(new_case job-level-reusable-workflow-census)"
+mkdir -p "$directory/workflows"
+declaration >"$directory/pins.yml"
+cat >"$directory/workflows/reusable-workflows.yml" <<'YAML'
+name: Reusable workflow fixtures
+on: push
+jobs:
+  local:
+    uses: ./.github/workflows/local.yml
+  floating-external:
+    uses: other-owner/other-repo/.github/workflows/build.yml@v1
+YAML
+if "$root/scripts/release/assert-workflow-action-pins.sh" \
+  "$directory/workflows" "$directory/pins.yml" \
+  >"$directory/stdout" 2>"$directory/stderr"; then
+  echo "a floating job-level reusable workflow passed the pin census" >&2
+  report "$directory"
+elif ! grep -Fq \
+  'reusable-workflows.yml uses other-owner/other-repo/.github/workflows/build.yml@v1 instead of a complete commit' \
+  "$directory/stderr"; then
+  echo "the floating job-level reusable workflow was refused for the wrong reason" >&2
+  report "$directory"
+elif grep -Fq 'local.yml' "$directory/stderr"; then
+  echo "the local reusable workflow was treated as an external identity" >&2
+  report "$directory"
+fi
+
 case_number=$((case_number + 1))
 if ! "$root/scripts/release/assert-workflow-action-pins.sh" \
   "$root/.github/workflows" "$root/github-action-pins.yml"; then

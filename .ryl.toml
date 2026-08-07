@@ -1,5 +1,22 @@
+# ---
+# relationships:
+#   implements: intent-driven-polyglot-release
+# ---
+#
+# RYL 0.21.0 rule baseline. Every rule shipped by the installed version is
+# enabled below or excluded here. scripts/ci/assert-ryl-rule-baseline.sh keeps
+# this census closed when the pinned RYL version changes.
+# excluded-rule: block-scalar-chomping - Existing command blocks use YAML's clip default.
+# excluded-rule: comments - Existing workflow pin annotations use one separating space.
+# excluded-rule: key-ordering - Domain and GitHub mappings use reader-first key order.
+# excluded-rule: quoted-strings - Plain scalars keep workflow and Taskfile source readable.
+# excluded-rule: truthy - Workflow source keeps plain `on`, which YAML 1.1 treats as truthy.
+
 [files]
 yaml = ["*.yml", "*.yaml", "**/*.yml", "**/*.yaml"]
+
+[rules.anchors]
+level = "error"
 
 [rules.braces]
 level = "error"
@@ -27,6 +44,9 @@ level = "error"
 max-spaces-before = 0
 min-spaces-after = 1
 max-spaces-after = 1
+
+[rules.comments-indentation]
+level = "error"
 
 [rules.empty-lines]
 level = "error"
@@ -71,8 +91,26 @@ forbid-in-block-mappings = false
 forbid-in-flow-mappings = true
 forbid-in-block-sequences = true
 
+[rules.float-values]
+level = "error"
+
 [rules.key-duplicates]
 level = "error"
 forbid-duplicated-merge-keys = false
 check-canonical = false
 forbid-merge-key-shadowing = false
+
+[rules.merge-keys]
+level = "error"
+
+[rules.new-lines]
+level = "error"
+
+[rules.octal-values]
+level = "error"
+
+[rules.tags]
+level = "error"
+
+[rules.unicode-line-breaks]
+level = "error"
