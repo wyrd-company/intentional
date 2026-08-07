@@ -186,6 +186,29 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
 }
 
 #[test]
+fn usage_warns_that_first_ghcr_publication_needs_public_visibility() {
+    let usage = executor_guide();
+    let section = registry_section(&usage)
+        .split_once("### Make a new GHCR package public before its first verification deadline")
+        .expect("registry section warns about the first GHCR publication")
+        .1
+        .split_once("A Cargo registry other than crates.io")
+        .expect("GHCR bootstrap guidance stays before Cargo registry guidance")
+        .0;
+    let section = normalize_whitespace(section);
+
+    assert!(
+        section.contains("creates a package as private on its first push"),
+        "the adopter-visible condition names GitHub Container Registry's private default"
+    );
+    assert!(
+        section.contains("change the new package's visibility to public")
+            && section.contains("before the observation deadline expires"),
+        "the guidance names the visibility remedy and when to apply it"
+    );
+}
+
+#[test]
 fn usage_standing_credential_sentence_matches_derived_destinations() {
     let usage = executor_guide();
     let labels = standing_credential_usage_labels();
