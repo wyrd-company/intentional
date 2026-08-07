@@ -5,6 +5,14 @@
 
 // RPM and APT route derivation tests moved from `executor::workflow::tests`.
 
+    fn publication_observer(jobs: &serde_yaml::Mapping, publisher: &str) -> Value {
+        let (_, steps, _) = publication_verification(jobs, publisher);
+        steps
+            .iter()
+            .find_map(portable_observer_step)
+            .unwrap_or_else(|| panic!("{publisher} derives its portable observer"))
+    }
+
     const SYSTEM_PACKAGE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
 workspace-tags:
@@ -324,14 +332,8 @@ printf 'conflicts=%s\n' "${conflicts[@]}"
                 "intentional_publish_component_utility_{}_primary",
                 route.publisher.as_str()
             );
-            let steps = job_steps(&jobs, &job)
-                .into_iter()
-                .flat_map(|step| {
-                    [Some(step.clone()), portable_observer_step(&step)]
-                        .into_iter()
-                        .flatten()
-                })
-                .collect::<Vec<_>>();
+            let mut steps = job_steps(&jobs, &job);
+            steps.push(publication_observer(&jobs, &job));
             let publisher_body = job_run_bodies(&jobs, &job);
             assert!(!steps.is_empty(), "the {} route derives {job}", route.publisher);
             if matches!(route.publisher, PublisherKind::Rpm | PublisherKind::Apt) {
@@ -841,17 +843,7 @@ release-units:
             );
             assert!(step["with"].get("intentional-package-path").is_none());
             assert_eq!(step["uses"].as_str(), Some(action));
-            let readback = jobs[job]["steps"]
-                .as_sequence()
-                .expect("steps")
-                .iter()
-                .filter_map(portable_observer_step)
-                .find(|step| {
-                    step["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("Read back "))
-                })
-                .expect("readback step");
+            let readback = publication_observer(jobs, job);
             assert_eq!(
                 readback["env"]["INPUT_DESTINATION"].as_str(),
                 Some(base_url),
@@ -862,18 +854,10 @@ release-units:
                 Some(key_url)
             );
         }
-        let apt_readback = jobs["release_automation_publish_component_package_apt_primary"]
-            ["steps"]
-            .as_sequence()
-            .expect("steps")
-            .iter()
-            .filter_map(portable_observer_step)
-            .find(|step| {
-                step["name"]
-                    .as_str()
-                    .is_some_and(|name| name.starts_with("Read back "))
-            })
-            .expect("readback step");
+        let apt_readback = publication_observer(
+            jobs,
+            "release_automation_publish_component_package_apt_primary",
+        );
         assert_eq!(
             apt_readback["env"]["INPUT_APT_COMPONENT"].as_str(),
             Some("section-a"),
@@ -1477,18 +1461,11 @@ release-units:
         let document: Value =
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow");
-        let step = document["jobs"]["release_automation_publish_component_package_apt_primary"]
-            ["steps"]
-            .as_sequence()
-            .expect("steps")
-            .iter()
-            .filter_map(portable_observer_step)
-            .find(|step| {
-                step["name"]
-                    .as_str()
-                    .is_some_and(|name| name.starts_with("Read back "))
-            })
-            .expect("readback step");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        let step = publication_observer(
+            jobs,
+            "release_automation_publish_component_package_apt_primary",
+        );
         let temporary = workspace.root().join("runner-readback");
         let subject = PathBuf::from(
             step["env"]
@@ -1838,18 +1815,11 @@ fi
         let document: Value =
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow");
-        let step = document["jobs"]["release_automation_publish_component_package_rpm_primary"]
-            ["steps"]
-            .as_sequence()
-            .expect("steps")
-            .iter()
-            .filter_map(portable_observer_step)
-            .find(|step| {
-                step["name"]
-                    .as_str()
-                    .is_some_and(|name| name.starts_with("Read back "))
-            })
-            .expect("readback step");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        let step = publication_observer(
+            jobs,
+            "release_automation_publish_component_package_rpm_primary",
+        );
         let temporary = workspace.root().join("runner-rpm-readback");
         let subject = PathBuf::from(
             step["env"]

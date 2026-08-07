@@ -12,16 +12,10 @@ use super::*;
 pub(super) struct PublicationJobs {
     /// Destination mutation under the authority publication requires.
     pub(super) publisher: Value,
+    /// Stable identity of the credential-separated verification job.
+    pub(super) verification_id: String,
     /// Evidence verification after destination authority has left the runner.
-    pub(super) verification: PublicationVerification,
-}
-
-/// Verification shape one publication's consumer path requires.
-pub(super) enum PublicationVerification {
-    /// Steps collected into the shared credential-free verification job.
-    Shared(String),
-    /// A dedicated retrieval job under its narrower consumer authority.
-    Retrieval(Value),
+    pub(super) verification: Value,
 }
 
 /// Publisher job and credential-separated verification for one publication.
@@ -83,6 +77,7 @@ pub(super) fn publication_jobs(
         WorkflowDiagnostic::at(refusal.code, refusal.message, &path)
     })?;
     let observation_inputs = recipe.observation_inputs.clone();
+    let observation_inline = recipe.observation_inline;
     let verification = |handoff: &str| {
         PUBLISH_VERIFY_STEPS
             .replace(
@@ -129,15 +124,15 @@ pub(super) fn publication_jobs(
         )
     });
     let observation_artifact = format!("{}observation-{slug}", namespaces.job);
-    let observation_upload_step = if split_retrieval {
-        String::new()
-    } else {
+    let observation_upload_step = if observation_inline && !split_retrieval {
         format!(
             "  - name: {}\n    uses: @UPLOAD@\n    with:\n      name: {}\n      path: {}\n      retention-days: 1\n",
             scalar(&format!("Upload the {identity} publication observation")),
             observation_artifact,
             scalar(&observation),
         )
+    } else {
+        String::new()
     };
     substitutions.extend([
         // Recipe-emitted steps are repository-derived text and are substituted
@@ -164,33 +159,47 @@ pub(super) fn publication_jobs(
     ];
     let verifier_needs = render_list(&verifier_needs);
     let verifier_verification = verification(&handoff);
-    let verification = if let Some(retrieval_steps) = retrieval_steps {
-        PublicationVerification::Retrieval(job(
-            PUBLISH_VERIFICATION_JOB,
-            namespaces,
-            &[
-                ("@NEEDS@", verifier_needs.as_str()),
-                ("@SUBJECT_SLUG@", subject.slug.as_str()),
-                ("@SUBJECT_NAME@", subject_name.as_str()),
-                ("@HANDOFF_STEP@", handoff_step.as_str()),
-                ("@OBSERVATION_STEP@", ""),
-                ("@RETRIEVAL_STEPS@", retrieval_steps.as_str()),
-                ("@VERIFY_STEPS@", verifier_verification.as_str()),
-            ],
-        )?)
+    let verification_id = if split_retrieval {
+        retrieval_job_id(namespaces, publication)
     } else {
-        let shared_handoff_step = handoff_slug.map_or_else(String::new, |slug| {
-            format!(
-                "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: {}\n",
-                scalar(&format!("Download the {identity} draft-asset handoff")),
-                handoff_artifact(namespaces, slug),
-                handoff_directory(namespaces, slug),
-            )
-        });
-        PublicationVerification::Shared(format!("{shared_handoff_step}{verifier_verification}"))
+        format!("{}verify_{slug}", namespaces.job)
     };
+    let observation_step = if observation_inline && !split_retrieval {
+        format!(
+            "  - name: {}\n    uses: @DOWNLOAD@\n    with:\n      name: {}\n      path: ${{{{ runner.temp }}}}/{}observation\n",
+            scalar(&format!("Download the {identity} publication observation")),
+            observation_artifact,
+            namespaces.job,
+        )
+    } else {
+        String::new()
+    };
+    let packages_permission = if matches!(
+        (publication.publisher, publication.target.as_str()),
+        (PublisherKind::Npm, "github")
+    ) {
+        "  packages: read\n"
+    } else {
+        ""
+    };
+    let retrieval_steps = retrieval_steps.unwrap_or_default();
+    let verification = job(
+        PUBLISH_VERIFICATION_JOB,
+        namespaces,
+        &[
+            ("@NEEDS@", verifier_needs.as_str()),
+            ("@PACKAGES_PERMISSION@", packages_permission),
+            ("@SUBJECT_SLUG@", subject.slug.as_str()),
+            ("@SUBJECT_NAME@", subject_name.as_str()),
+            ("@HANDOFF_STEP@", handoff_step.as_str()),
+            ("@OBSERVATION_STEP@", observation_step.as_str()),
+            ("@RETRIEVAL_STEPS@", retrieval_steps.as_str()),
+            ("@VERIFY_STEPS@", verifier_verification.as_str()),
+        ],
+    )?;
     Ok(PublicationJobs {
         publisher,
+        verification_id,
         verification,
     })
 }

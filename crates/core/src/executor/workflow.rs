@@ -39,9 +39,9 @@ mod templates;
 use templates::{
     build_command, job, nfpm_toolchain_steps, render_list, toolchain_steps, OCI_TITLE_LABEL,
     PUBLISH_ASSEMBLE_JOB, PUBLISH_BUILD_JOB, PUBLISH_CLOSE_JOB, PUBLISH_HANDOFF_STEP,
-    PUBLISH_PHASE_TAG_JOB, PUBLISH_PUBLICATIONS_VERIFY_JOB, PUBLISH_PUBLISHER_JOB,
-    PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP, PUBLISH_VERIFICATION_JOB, PUBLISH_VERIFY_JOB,
-    PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB, RELEASE_PREPARE_JOB,
+    PUBLISH_PHASE_TAG_JOB, PUBLISH_PUBLISHER_JOB, PUBLISH_UPLOAD_JOB, PUBLISH_UPLOAD_STEP,
+    PUBLISH_VERIFICATION_JOB, PUBLISH_VERIFY_JOB, PUBLISH_VERIFY_STEPS, RELEASE_AUTHORITY_JOB,
+    RELEASE_PREPARE_JOB,
 };
 
 /// Pinned identities and the scalar renderer the recipe modules share.
@@ -55,7 +55,7 @@ mod build;
 mod publishers;
 
 use build::{build_environment, cargo_archive_platforms};
-use publishers::{publication_jobs, PublicationVerification};
+use publishers::publication_jobs;
 
 /// Step id every managed job carries, independently of the configurable prefix.
 pub const OWNERSHIP_SENTINEL: &str = "intentional_executor_contract";
@@ -1152,8 +1152,6 @@ fn publish_contract(
 
     let publisher_upstream = before.clone().unwrap_or_else(|| verify.clone());
     let mut publication_completion_jobs = Vec::new();
-    let mut shared_verification_needs = Vec::new();
-    let mut shared_verification_steps = String::new();
     let mut identities = BTreeSet::new();
     for publication in &selection.selected {
         let id = publication_job_id(namespaces, publication);
@@ -1209,43 +1207,18 @@ fn publish_contract(
         )
         .map_err(|diagnostic| vec![diagnostic])?;
         jobs.push((id.clone(), Ok(derived.publisher)));
-        match derived.verification {
-            PublicationVerification::Shared(steps) => {
-                shared_verification_needs.push(id);
-                shared_verification_steps.push_str(&steps);
-            }
-            PublicationVerification::Retrieval(retrieval) => {
-                let retrieval_id = retrieval_job_id(namespaces, publication);
-                if !identities.insert(retrieval_id.clone()) {
-                    return Err(vec![WorkflowDiagnostic::at(
-                        "job-identifier-collision",
-                        format!(
-                            "publication {} derives managed job {retrieval_id}, which another publication already claims",
-                            publication.identity()
-                        ),
-                        &format!("jobs.{retrieval_id}"),
-                    )]);
-                }
-                publication_completion_jobs.push(retrieval_id.clone());
-                jobs.push((retrieval_id, Ok(retrieval)));
-            }
+        if !identities.insert(derived.verification_id.clone()) {
+            return Err(vec![WorkflowDiagnostic::at(
+                "job-identifier-collision",
+                format!(
+                    "publication {} derives managed job {}, which another publication already claims",
+                    publication.identity(), derived.verification_id
+                ),
+                &format!("jobs.{}", derived.verification_id),
+            )]);
         }
-    }
-
-    if !shared_verification_steps.is_empty() {
-        let id = format!("{}verify_publications", namespaces.job);
-        publication_completion_jobs.push(id.clone());
-        jobs.push((
-            id,
-            job(
-                PUBLISH_PUBLICATIONS_VERIFY_JOB,
-                namespaces,
-                &[
-                    ("@NEEDS@", &render_list(&shared_verification_needs)),
-                    ("@VERIFY_STEPS@", &shared_verification_steps),
-                ],
-            ),
-        ));
+        publication_completion_jobs.push(derived.verification_id.clone());
+        jobs.push((derived.verification_id, Ok(derived.verification)));
     }
 
     // The after-publication tag seals the completed fragments, so it follows
@@ -2923,6 +2896,8 @@ jobs:
         }
 
         let workspace = repository_scale_workspace("workflow-credential-reachability");
+        let mut actions_swept = 0_usize;
+        let mut jobs_reached = BTreeSet::new();
         for role in WorkflowRole::ALL {
             converge(workspace.root(), role);
             let document: Value =
@@ -2936,6 +2911,8 @@ jobs:
                     if intentional_action(step).is_none() {
                         continue;
                     }
+                    actions_swept += 1;
+                    jobs_reached.insert(format!("{role}:{id}"));
                     let prior = Value::Sequence(steps[..index].to_vec());
                     assert!(
                         secret_names(&prior).is_empty(),
@@ -2955,6 +2932,14 @@ jobs:
                 }
             }
         }
+        assert!(
+            actions_swept > 0,
+            "the reachability population contains Intentional-owned Actions"
+        );
+        assert!(
+            !jobs_reached.is_empty(),
+            "the reachability population contains managed jobs"
+        );
     }
 
     // The authority transition pushes to the protected default branch using
@@ -3227,6 +3212,45 @@ release-units:
                 "{publisher} performs irreversible external publication behind the configured environment"
             );
         }
+    }
+
+    #[test]
+    fn binds_every_trusted_publishing_identity_to_the_protected_environment() {
+        let workspace = repository_scale_workspace("workflow-trusted-publisher-environment");
+        let namespaces = Config::load(workspace.root())
+            .expect("repository configuration loads")
+            .github
+            .expect("repository enables GitHub execution")
+            .namespaces()
+            .expect("repository namespace resolves");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let mut identity_routes = BTreeSet::new();
+        for (id, body) in &jobs {
+            if body["permissions"]["id-token"].as_str() != Some("write") {
+                continue;
+            }
+            let text = serde_yaml::to_string(body).expect("job serializes");
+            let route = if text.contains("trusted_publishing/tokens") {
+                "crates.io"
+            } else if text.contains("Prepare the npm client for trusted publishing") {
+                "npmjs"
+            } else {
+                continue;
+            };
+            let id = id.as_str().expect("job id");
+            assert_eq!(
+                body["environment"].as_str(),
+                Some(namespaces.environment.as_str()),
+                "{id} presents its {route} identity from the protected environment named in the registry's trusted-publisher claim set"
+            );
+            identity_routes.insert(route);
+        }
+        assert_eq!(
+            identity_routes,
+            ["crates.io", "npmjs"].into_iter().collect(),
+            "the fixture covers both maintained trusted-publishing claim sets"
+        );
     }
 
     // The authority the upload job takes is the authority every publisher job is
@@ -4715,7 +4739,8 @@ release-units:
         publisher: &str,
     ) -> (String, Vec<Value>, Value) {
         let suffix = publisher
-            .strip_prefix("intentional_publish_")
+            .rsplit_once("_publish_")
+            .map(|(_, suffix)| suffix)
             .expect("publisher job identity");
         for (id, body) in jobs {
             let Some(steps) = body["steps"].as_sequence() else {
@@ -5091,14 +5116,7 @@ release-units:
                         format!("intentional_subject-{slug}"),
                         "{publisher} promotes the subject {build} produced"
                     );
-                    let evidence_owner =
-                        publisher.replace("intentional_publish_", "intentional_retrieve_");
-                    let evidence_owner = if jobs.contains_key(Value::String(evidence_owner.clone()))
-                    {
-                        evidence_owner.as_str()
-                    } else {
-                        "intentional_verify_publications"
-                    };
+                    let (evidence_owner, _, _) = publication_verification(&jobs, publisher);
                     let fragment = format!(
                         "intentional_evidence-{}",
                         publisher
@@ -5107,7 +5125,7 @@ release-units:
                     );
                     assert_eq!(
                         uploads.get(&fragment).map(String::as_str),
-                        Some(evidence_owner),
+                        Some(evidence_owner.as_str()),
                         "{evidence_owner} uploads {fragment}"
                     );
                     fragment
@@ -5217,9 +5235,12 @@ release-units:
     }
 
     // The phases exist to state what was true before and after publication, so
-    // their position in the graph is the whole claim: a before-publication tag
-    // sealed after a publisher job would seal what already shipped, and an
-    // after-publication tag sealed before one would seal what had not.
+    // their position in the graph is the whole claim. Publication completes at
+    // its verifier, which owns the accepted fragment; making the tag depend on
+    // both verifier and publisher directly would add a redundant edge without
+    // strengthening that boundary. Transitive reachability is therefore the
+    // intended publisher ordering, while verifier membership is asserted by the
+    // completion graph tests.
     #[test]
     fn orders_each_phase_tag_between_the_work_it_seals_and_the_work_it_gates() {
         let workspace = two_destination_workspace("workflow-phase-order");
@@ -7411,7 +7432,6 @@ release-units:
                 "publish_rtwzlf_package_oci_ghcr",
                 "publish_wpdklc_package_aur_primary",
                 "publish_wpdklc_package_homebrew_primary",
-                "retrieve_qhwzru_rust_cargo_primary",
                 "retrieve_qhwzru_rust_homebrew_primary",
                 "retrieve_qhwzru_node_npm_github",
                 "retrieve_wpdklc_package_homebrew_primary",
@@ -7424,8 +7444,13 @@ release-units:
                 // managed job joins the swept set the moment it is derived and
                 // fails this enumeration until it is written down.
                 "upload_deliverables",
-                "verify_publications",
+                "verify_jdmcvx_package_oci_dockerhub",
+                "verify_jdmcvx_package_oci_ghcr",
+                "verify_qhwzru_node_npm_primary",
+                "verify_qhwzru_rust_cargo_primary",
+                "verify_rtwzlf_package_oci_ghcr",
                 "verify_tag",
+                "verify_wpdklc_package_aur_primary",
             ],
         ),
     ];
@@ -8672,7 +8697,9 @@ release-units:
             ),
         ] {
             let steps = document["jobs"][job]["steps"].as_sequence().expect("steps");
-            let readback = steps
+            let jobs = document["jobs"].as_mapping().expect("jobs");
+            let (_, verification_steps, _) = publication_verification(jobs, job);
+            let readback = verification_steps
                 .iter()
                 .find_map(portable_observer_step)
                 .expect("portable readback step");
@@ -9238,7 +9265,7 @@ release-units:
         );
         assert_eq!(
             output.lines().count(),
-            1_626,
+            1_651,
             "the real four-publication fixture pins the measured line count"
         );
         assert!(
@@ -9274,7 +9301,7 @@ release-units:
         let output = comparison.output.expect("expanded comparison has output");
         assert_eq!(
             output.lines().count(),
-            1_818,
+            1_859,
             "the five-publication fixture pins the measured line count"
         );
 

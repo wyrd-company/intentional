@@ -407,20 +407,10 @@ aur:
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
-            let retrieval = job.replacen("intentional_publish_", "intentional_retrieve_", 1);
-            let observer_steps = document["jobs"]
-                .get(&retrieval)
-                .and_then(|retrieval_job| retrieval_job["steps"].as_sequence())
-                .unwrap_or(steps);
-            let verify = observer_steps
-                .iter()
-                .find(|candidate| {
-                    candidate["uses"]
-                        .as_str()
-                        .is_some_and(|uses| uses.contains("/verify-publication@"))
-                })
-                .expect("the publication is verified");
-            let observer = portable_observer_step(verify).expect("the Action carries an observer");
+            let jobs = document["jobs"].as_mapping().expect("jobs");
+            let (_, _, verify) = publication_verification(jobs, job);
+            let observer =
+                portable_observer_step(&verify).expect("the Action carries an observer");
             env.extend(
                 observer["env"]
                     .as_mapping()

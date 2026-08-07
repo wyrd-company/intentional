@@ -514,9 +514,9 @@ proposed-design:
 
     Recipe shapes have different line costs, so the 2,000-line document limit
     is the portable contract and publication count alone is not. Intentional's
-    configured four-publication mix is 1,626 lines. Adding its Cargo-shaped AUR
-    publication produces a five-publication mix of 1,818 lines. Both fit. The
-    five-publication fixture plus 182 repository-owned lines lands exactly on
+    configured four-publication mix is 1,651 lines. Adding its Cargo-shaped AUR
+    publication produces a five-publication mix of 1,859 lines. Both fit. The
+    five-publication fixture plus 141 repository-owned lines lands exactly on
     the bound, and one more repository-owned line is refused.
     Any prospective publication expansion derives the complete workflow and
     proves it fits instead of inferring capacity from that count.
@@ -754,8 +754,9 @@ proposed-design:
     `intentional tag --phase`. The before-publication job depends on every build
     job, so it seals the subjects that exist and the destinations the release
     intends before any publication has occurred. The after-publication job
-    depends on every publisher job, so it seals the accepted fragments only once
-    they exist. Tag creation is local and credential-free; each tag job then
+    depends on every publication-completion verifier and therefore transitively
+    on every publisher job, so it seals the accepted fragments only once they
+    exist. Tag creation is local and credential-free; each tag job then
     mints the short-lived installation token and pushes the annotated tags that
     point at R through the repository-owned privileged step, so no
     Intentional-owned Action holds repository-write authority. All tags target R
@@ -779,13 +780,20 @@ proposed-design:
     observation to the Action. The Action contains no publication or
     destination-mutation command and receives no publisher credential.
 
-    GitHub Package Registry separates publication and retrieval
-    into a downstream retrieval job. Its job-scoped `GITHUB_TOKEN` has
-    `packages: read`, while the publisher job retains `packages: write`, so the
-    client that reads the package cannot publish one. The retrieval job depends
-    directly on both the publisher and build jobs, and consumes the version and
-    digest the build projected. Other recipes keep readback in the publisher job
-    when no separate authority boundary is required. Every value an inline body
+    Authenticated observation uses a separate job only when the destination
+    supplies a maintained read-only identity. GitHub Package Registry does: its
+    downstream retrieval job's `GITHUB_TOKEN` has `packages: read`, while the
+    publisher job retains `packages: write`, so the client that reads the
+    package cannot publish one. The retrieval job depends directly on both the
+    publisher and build jobs and consumes the version and digest the build
+    projected. An alternate Cargo registry supplies no standard read-only token
+    or identity mint. Its authenticated observer therefore stays inline in the
+    protected publisher job and reuses the credential already present there;
+    derivation neither copies that write-capable secret into a second job nor
+    passes it to the first-party Action. Its credential-free downstream verifier
+    receives the completed observation with observation disabled and only
+    adjudicates it. Public observers run in the corresponding credential-free
+    verifier after it downloads that publication's sealed subject. Every value an inline body
     reads arrives through `env:` because an expression expanded inside a script
     is substitution into shell source. A name a repository supplies is
     substitution into shell source for the same reason, so a configured registry
@@ -835,14 +843,16 @@ proposed-design:
   privileged-execution-boundary: >-
     Intentional-owned reusable Actions perform credential-free plumbing and
     preparation, including destination observation where the destination
-    permits credential-free retrieval. Credential-free means that the Action cannot reach a
+    permits credential-free retrieval. Credential-free means that the Action
+    cannot reach a
     destination secret, destination-write workflow token, OpenID Connect
     identity, or minted repository token; it does not mean a GitHub runner has
     no read-only runtime or artifact credential. Repository-mutating,
     secret-bearing, and OpenID Connect-enabled commands are materialized in
     repository-local reserved jobs. A publisher writes its schema-backed
     observation to a short-lived artifact after the repository-local recipe
-    finishes. Intentional verifies those observations in a later job that has
+    finishes. Intentional verifies each observation in that publication's
+    downstream job, which has
     read-only contents permission and no protected environment, destination
     secret, package-write scope, or identity-mint scope. A destination whose
     consumer read requires narrower read authority performs that retrieval and
@@ -864,7 +874,12 @@ proposed-design:
     the environment, applies the derived workflow, proves one protected
     publication, and then removes the repository-level copy. Repository-level
     fallback during that sequence keeps the workflow runnable, but retains the
-    broader read surface until removal. External Actions are
+    broader read surface until removal. Declaring the environment also adds its
+    name to the OpenID Connect claim set and changes the default subject of each
+    publisher identity. The npmjs and crates.io trusted-publisher records name
+    that exact environment before the regenerated workflow is applied; an
+    existing record created for a job with no environment no longer matches.
+    External Actions are
     pinned to complete commit identities. Intentional's own Actions are pinned
     to the released version that derived the workflow, because derivation must
     name a revision carrying the release this build belongs to and that commit
@@ -1603,8 +1618,9 @@ proposed-design:
     supplied, so a run that supplies none would agree with everything. For the
     same reason a fragment naming a subject identity no sealed subject of its
     release unit names is a failure rather than a comparison against nothing.
-    Closure depends on every publisher job, and a publisher job that did not
-    complete prevents closure. Removing that dependency would let any
+    Closure depends transitively on every publisher job through the job that
+    verifies its observation, and a publisher job that did not complete prevents
+    closure. Removing that dependency would let any
     repository-owned job supply a fragment for a publication that never ran.
 
   repository-evidence-contributions: |-

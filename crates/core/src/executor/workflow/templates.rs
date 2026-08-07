@@ -923,7 +923,7 @@ needs:
 runs-on: ubuntu-latest
 permissions:
   contents: read
-  packages: read
+@PACKAGES_PERMISSION@
 env:
   @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
 steps:
@@ -940,31 +940,6 @@ steps:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
 @HANDOFF_STEP@@OBSERVATION_STEP@@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
-
-/// Verification shared by publications whose consumer readback ran beside publication.
-pub(super) const PUBLISH_PUBLICATIONS_VERIFY_JOB: &str = r#"
-needs:
-@NEEDS@
-runs-on: ubuntu-latest
-permissions:
-  contents: read
-env:
-  @ENVVAR@WORKFLOW_CONTRACT: @CONTRACT@
-steps:
-  - id: @SENTINEL@
-    name: Check out the released commit
-    uses: @CHECKOUT@
-    with:
-      fetch-depth: 0
-      fetch-tags: true
-      persist-credentials: false
-  - name: Download the publication observations
-    uses: @DOWNLOAD@
-    with:
-      pattern: @JOB@observation-*
-      path: ${{ runner.temp }}/@JOB@observation
-      merge-multiple: true
-@VERIFY_STEPS@"#;
 
 /// Verify one observation and upload the resulting publisher-evidence fragment.
 pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@

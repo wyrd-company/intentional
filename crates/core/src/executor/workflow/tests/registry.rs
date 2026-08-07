@@ -31,14 +31,24 @@
 
     /// Publication and retrieval steps for one managed destination.
     fn publisher_steps(root: &Path, target: &str) -> Vec<Value> {
-        managed_steps(root, WorkflowRole::Publish)
+        let managed = managed_steps(root, WorkflowRole::Publish);
+        let publisher = managed
+            .iter()
+            .find(|(id, _)| id.ends_with(target) && id.starts_with("intentional_publish_"))
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| panic!("the {target} publisher is derived"));
+        let jobs = publish_jobs(root);
+        let (_, verifier_steps, _) = publication_verification(&jobs, &publisher);
+        let observer_steps = verifier_steps
+            .iter()
+            .filter_map(portable_observer_step)
+            .collect::<Vec<_>>();
+        managed
             .into_iter()
-            .filter(|(id, _)| {
-                id.ends_with(target)
-                    && (id.starts_with("intentional_publish_")
-                        || id.starts_with("intentional_retrieve_"))
-            })
+            .filter(|(id, _)| id == &publisher)
             .flat_map(|(_, steps)| steps)
+            .chain(observer_steps)
+            .chain(verifier_steps)
             .collect()
     }
 
@@ -879,6 +889,72 @@
                 "retrieval reads the subject {output} the build job projected"
             );
         }
+    }
+
+    // Authenticated observation uses the narrowest authority the destination
+    // offers. GitHub Package Registry supplies a read-only job token, so its
+    // inline observer runs in a separate packages:read job. An alternate Cargo
+    // registry supplies no maintained read-only mint, so its inline observer
+    // stays beside publication and the write credential is never copied into a
+    // second job or handed to the first-party Action.
+    #[test]
+    fn keeps_authenticated_observers_at_the_narrowest_available_boundary() {
+        let npm = npm_workspace("workflow-authenticated-observer-npm");
+        converge(npm.root(), WorkflowRole::Publish);
+        let npm_jobs = publish_jobs(npm.root());
+        let npm_publisher = "intentional_publish_component_package_npm_github";
+        let (npm_verifier, npm_steps, npm_action) =
+            publication_verification(&npm_jobs, npm_publisher);
+        assert_eq!(
+            npm_jobs[&Value::String(npm_verifier.clone())]["permissions"]["packages"].as_str(),
+            Some("read"),
+            "GitHub Package Registry observation receives a read-only job token"
+        );
+        assert!(
+            npm_steps.iter().any(|step| {
+                step_environment(step).get("INPUT_REGISTRY_TOKEN").map(String::as_str)
+                    == Some("${{ secrets.GITHUB_TOKEN }}")
+            }),
+            "the read-only token reaches only repository-visible observer shell"
+        );
+        assert_eq!(npm_action["with"]["observe"].as_str(), Some("false"));
+        assert!(npm_action["with"]["registry-token"].is_null());
+
+        let cargo = workspace("workflow-authenticated-observer-cargo");
+        cargo.write(
+            ".cargo/config.toml",
+            "[registries.example-registry]\nindex = \"sparse+https://registry.example/index/\"\n",
+        );
+        cargo.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"example-component\"\nversion = \"1.0.0\"\npublish = [\"example-registry\"]\n",
+        );
+        converge(cargo.root(), WorkflowRole::Publish);
+        let cargo_jobs = publish_jobs(cargo.root());
+        let cargo_publisher = "intentional_publish_component_package_cargo_primary";
+        assert!(
+            !cargo_jobs.contains_key(Value::String(
+                "intentional_retrieve_component_package_cargo_primary".to_owned()
+            )),
+            "no second job receives the alternate registry's write-capable token"
+        );
+        assert!(
+            job_steps(&cargo_jobs, cargo_publisher).iter().any(|step| {
+                step_environment(step)
+                    .values()
+                    .any(|value| value == "${{ secrets.CARGO_REGISTRY_TOKEN }}")
+                    && step_environment(step).contains_key("INPUT_OBSERVATION")
+            }),
+            "authenticated Cargo observation spends the publisher's existing credential inline"
+        );
+        let (cargo_verifier, _, cargo_action) =
+            publication_verification(&cargo_jobs, cargo_publisher);
+        assert_eq!(
+            cargo_verifier,
+            "intentional_verify_component_package_cargo_primary"
+        );
+        assert_eq!(cargo_action["with"]["observe"].as_str(), Some("false"));
+        assert!(cargo_action["with"]["carried-token"].is_null());
     }
 
     /// Witness: the read-scoped job for `@example-owner/example-component`

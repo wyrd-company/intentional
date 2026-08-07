@@ -78,6 +78,8 @@ pub(super) struct RecipeSteps {
     pub retrieval: Option<String>,
     /// Inputs the portable verification Action needs to perform readback.
     pub observation_inputs: String,
+    /// Whether repository-visible shell has already written the observation.
+    pub observation_inline: bool,
 }
 
 /// Every process variable a maintained recipe's probe inherits.
@@ -269,6 +271,7 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
             .retrieval
             .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
         observation_inputs: steps.observation_inputs,
+        observation_inline: steps.observation_inline,
     })
 }
 
@@ -478,6 +481,7 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps
         publisher,
         retrieval: (context.publication.publisher == PublisherKind::Homebrew).then(String::new),
         observation_inputs,
+        observation_inline: false,
     })
 }
 
@@ -658,6 +662,7 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Step
         publisher,
         retrieval: None,
         observation_inputs,
+        observation_inline: false,
     })
 }
 
@@ -1091,6 +1096,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         // repository-visible shell and only its completed document reaches the Action.
         retrieval: if primary { None } else { Some(retrieval) },
         observation_inputs,
+        observation_inline: !primary,
     })
 }
 
@@ -1401,11 +1407,9 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         }),
         scalar(&index),
     ));
-    let retrieval = if crates_io {
-        String::new()
-    } else {
+    if !crates_io {
         observation_inputs.push_str("      observe: 'false'\n");
-        inline_observation_step(
+        steps.push_str(&inline_observation_step(
             context,
             "cargo-crate",
             "cargo",
@@ -1424,12 +1428,17 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
                 scalar(&carried),
                 carried,
             ),
-        )
-    };
+        ));
+    }
     Ok(RecipeSteps {
         publisher: steps,
-        retrieval: if crates_io { None } else { Some(retrieval) },
+        // An alternate registry has no maintained read-only identity to mint.
+        // Its authenticated observer therefore spends the existing publisher
+        // credential inline rather than copying write authority to another job
+        // or handing it to the first-party Action.
+        retrieval: None,
         observation_inputs,
+        observation_inline: !crates_io,
     })
 }
 
@@ -1746,6 +1755,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
         publisher: steps,
         retrieval: None,
         observation_inputs,
+        observation_inline: false,
     })
 }
 

@@ -11,7 +11,10 @@
 
 use intentional_core::config::WorkflowRole;
 use intentional_core::executor::{
-    fixture::{derived_recipe_workflows, derived_recipes, underived_recipes},
+    fixture::{
+        derived_recipe_workflows, derived_recipes, prefixed_derived_recipe_workflows,
+        underived_recipes,
+    },
     OWNERSHIP_SENTINEL,
 };
 use serde_yaml::Value;
@@ -580,7 +583,9 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
 /// proving nothing.
 #[test]
 fn places_only_authority_spending_jobs_in_the_protected_environment() {
-    let workflows = derived_recipe_workflows("derived-workflow-environments");
+    let (job_prefix, workflows) =
+        prefixed_derived_recipe_workflows("derived-workflow-environments", "release-automation");
+    let publisher_prefix = format!("{job_prefix}publish_");
     let mut managed = 0usize;
     let mut with_environment = 0usize;
     let mut without_environment = 0usize;
@@ -608,7 +613,7 @@ fn places_only_authority_spending_jobs_in_the_protected_environment() {
                     .as_str()
                     .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))
             });
-            let publishes = job.starts_with("intentional_publish_");
+            let publishes = job.starts_with(&publisher_prefix);
             let spends_authority = mints || publishes;
             if environment.is_some() {
                 with_environment += 1;

@@ -424,6 +424,13 @@ own repository migration set is `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN`; its
 Homebrew publisher continues to mint a tap-scoped token from the release App
 credentials.
 
+The environment also becomes part of each publisher's OpenID Connect claim set
+and default subject. Before applying the regenerated workflow, update the
+npmjs and crates.io trusted-publisher records to name `intentional-release`, or
+the identity exchange will no longer match. Under a configured prefix, name the
+environment that prefix derives instead. This registry-record migration covers
+the identity routes that store no repository secret.
+
 Verify it against your own derived slice rather than against this paragraph:
 
 ```console
@@ -501,6 +508,12 @@ A Cargo registry other than crates.io has no trusted-publishing exchange to
 bootstrap into, so it keeps using `CARGO_REGISTRY_TOKEN` on every publication.
 It still probes the destination before submitting — that probe is not the
 bootstrap probe, and it refuses to submit when the registry does not answer.
+No maintained read-only identity can be minted for an arbitrary Cargo
+registry, so authenticated observation stays in the protected publisher job
+and reuses its existing credential. GitHub Package Registry differs: its
+downstream observer uses a job token limited to `packages: read`. In both cases,
+only the completed observation reaches Intentional's Action; no registry token
+is passed to it.
 
 ### Standing credentials
 

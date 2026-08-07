@@ -244,6 +244,31 @@ fn standing_labels_from_job(job_id: &str, body: &Value) -> (BTreeSet<String>, BT
     let mut labels = BTreeSet::new();
     let mut unrecognized = BTreeSet::new();
     let job_text = emission_text(body);
+    let job_level = body.as_mapping().map(|mapping| {
+        let mut mapping = mapping.clone();
+        mapping.remove(Value::String("steps".to_owned()));
+        Value::Mapping(mapping)
+    });
+    if let Some(job_level) = job_level {
+        let job_level_text = step_emission_text(&job_level);
+        for secret_name in secret_reads_in_step(&job_level) {
+            match classify_standing_secret_read(
+                &secret_name,
+                &job_level,
+                &job_level_text,
+                &job_text,
+                job_id,
+            ) {
+                StandingSecretClass::Excluded => {}
+                StandingSecretClass::Label(label) => {
+                    labels.insert(label);
+                }
+                StandingSecretClass::Unrecognized => {
+                    unrecognized.insert(secret_name);
+                }
+            }
+        }
+    }
     let Some(steps) = body.get("steps").and_then(Value::as_sequence) else {
         return (labels, unrecognized);
     };
@@ -351,7 +376,12 @@ pub fn standing_credential_usage_labels(workflows: &[(WorkflowRole, String)]) ->
     let mut unrecognized = BTreeSet::new();
     for (job_id, body) in jobs {
         let job_id = job_id.as_str().expect("publish job id");
-        if !job_id.starts_with("intentional_publish_") {
+        let managed = body["steps"].as_sequence().is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|step| step["id"].as_str() == Some(crate::executor::OWNERSHIP_SENTINEL))
+        });
+        if !managed {
             continue;
         }
         let (job_labels, job_unrecognized) = standing_labels_from_job(job_id, body);
@@ -360,7 +390,7 @@ pub fn standing_credential_usage_labels(workflows: &[(WorkflowRole, String)]) ->
     }
     assert!(
         unrecognized.is_empty(),
-        "unrecognized stored credentials in publish job emission cannot be classified for the standing population: {unrecognized:?}"
+        "unrecognized stored credentials in managed publish-workflow emission cannot be classified for the standing population: {unrecognized:?}"
     );
     order_standing_labels(labels)
 }
@@ -404,6 +434,30 @@ mod tests {
                 .map(str::to_owned)
                 .collect(),
             "every secret expression is visible to the standing-credential census"
+        );
+    }
+
+    #[test]
+    fn finds_secret_reads_at_job_level_and_outside_publisher_jobs() {
+        let publisher: Value = serde_yaml::from_str(
+            "env:\n  TOKEN: ${{ secrets.DELIVERY_TOKEN }}\nsteps:\n  - id: intentional_executor_contract\n",
+        )
+        .expect("publisher parses");
+        let (labels, unrecognized) =
+            standing_labels_from_job("custom_publish_package_oci_dockerhub", &publisher);
+        assert_eq!(labels, [LABEL_DOCKER_HUB.to_owned()].into_iter().collect());
+        assert!(unrecognized.is_empty());
+
+        let verifier: Value = serde_yaml::from_str(
+            "env:\n  TOKEN: prefix-${{secrets.UNEXPECTED_TOKEN}}\nsteps:\n  - id: custom_executor_contract\n",
+        )
+        .expect("verifier parses");
+        let (labels, unrecognized) =
+            standing_labels_from_job("custom_verify_publications", &verifier);
+        assert!(labels.is_empty());
+        assert_eq!(
+            unrecognized,
+            ["UNEXPECTED_TOKEN".to_owned()].into_iter().collect()
         );
     }
 

@@ -1025,9 +1025,9 @@ fi
             let document: Value =
                 serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                     .expect("workflow parses");
-            let components = document["jobs"][GHCR_JOB]["steps"]
-                .as_sequence()
-                .expect("steps")
+            let jobs = document["jobs"].as_mapping().expect("jobs");
+            let (_, verification_steps, _) = publication_verification(jobs, GHCR_JOB);
+            let components = verification_steps
                 .iter()
                 .filter_map(|step| step["with"]["components"].as_str())
                 .collect::<Vec<_>>();

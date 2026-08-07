@@ -42,6 +42,7 @@ pub use recipe::{
 /// enabled only by dev-dependencies, so nothing here reaches a released binary.
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixture {
+    use crate::config::Config;
     use crate::executor::recipe::{catalog, Capability, Recipe, PRIMARY_TARGET};
     use crate::model::PublisherKind;
     use std::collections::BTreeSet;
@@ -171,12 +172,39 @@ release-units:
     /// second roster having to remember it.
     #[must_use]
     pub fn derived_recipe_workflows(label: &str) -> Vec<(crate::config::WorkflowRole, String)> {
-        let workspace = if label == "usage-claims-credential-populations" {
+        let workspace = recipe_fixture_workspace(label);
+        derive_workflows_under(workspace.root())
+    }
+
+    /// Derive the recipe workflows under a non-default managed namespace.
+    #[must_use]
+    pub fn prefixed_derived_recipe_workflows(
+        label: &str,
+        prefix: &str,
+    ) -> (String, Vec<(crate::config::WorkflowRole, String)>) {
+        let workspace = recipe_fixture_workspace(label);
+        let path = workspace.root().join(".intentional/config.yml");
+        let config = std::fs::read_to_string(&path).expect("recipe fixture configuration reads");
+        let config = config.replacen("github:\n", &format!("github:\n  prefix: {prefix}\n"), 1);
+        workspace.write(".intentional/config.yml", &config);
+        let action = RECIPE_DELIVERY_ACTION.replace("intentional-", &format!("{prefix}-"));
+        workspace.write(".github/actions/deliver/action.yml", &action);
+        let job = Config::load(workspace.root())
+            .expect("recipe fixture configuration loads")
+            .github
+            .expect("recipe fixture enables GitHub execution")
+            .namespaces()
+            .expect("recipe fixture namespace resolves")
+            .job;
+        (job, derive_workflows_under(workspace.root()))
+    }
+
+    fn recipe_fixture_workspace(label: &str) -> Workspace {
+        if label == "usage-claims-credential-populations" {
             credential_population_workspace(label)
         } else {
             recipe_workspace(label)
-        };
-        derive_workflows_under(workspace.root())
+        }
     }
 
     /// Exhaustive recipe workspace plus the alternate Cargo registry partition whose

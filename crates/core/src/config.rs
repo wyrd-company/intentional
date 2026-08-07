@@ -307,7 +307,8 @@ pub struct PrefixNamespaces {
     pub job: String,
     /// Prefix reserved for managed environment variables.
     pub envvar: String,
-    /// Protected GitHub environment guarding the release authority transition.
+    /// Protected GitHub environment guarding repository, Release, and external
+    /// publication mutation.
     pub environment: String,
 }
 
