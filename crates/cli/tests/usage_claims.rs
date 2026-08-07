@@ -203,8 +203,13 @@ fn usage_warns_that_first_ghcr_publication_needs_public_visibility() {
     );
     assert!(
         section.contains("change the new package's visibility to public")
-            && section.contains("before the observation deadline expires"),
+            && section.contains("before the default five-minute observation deadline expires"),
         "the guidance names the visibility remedy and when to apply it"
+    );
+    assert!(
+        section.contains("make the package public and rerun the publish workflow")
+            && section.contains("matching digest already at the destination"),
+        "the guidance gives a resumable recovery when the default deadline expires"
     );
 }
 

@@ -314,9 +314,12 @@ GitHub Container Registry (GHCR) creates a package as private on its first push,
 while the maintained verifier reads GHCR through the anonymous consumer path.
 For a package that has never been published, watch the first publish run and
 change the new package's visibility to public in its GitHub package settings
-before the observation deadline expires. Leave the run active while changing
-visibility; the bounded verifier will retry. Later releases need no bootstrap
-step because package visibility persists.
+before the default five-minute observation deadline expires. Leave the run active
+while changing visibility; the bounded verifier will retry. Later releases need
+no bootstrap step because package visibility persists. If the first run reaches
+its deadline, make the package public and rerun the publish workflow. The
+publisher accepts the matching digest already at the destination, and anonymous
+verification then resumes without another push.
 
 A Cargo registry other than crates.io has no trusted-publishing exchange to
 bootstrap into, so it keeps using `CARGO_REGISTRY_TOKEN` on every publication.
