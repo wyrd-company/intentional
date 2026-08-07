@@ -609,8 +609,10 @@ rules:
               sealed_evidence_reused: true
               publication_resubmitted: false
               evidence_verifies: true
-      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/buildx=advances_no_stable_alias_for_a_prerelease
-      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/feature=records_stable_aliases_a_prerelease_client_moved
+      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/buildx
+      # intentional-feature-test: advances_no_stable_alias_for_a_prerelease
+      # intentional-feature-scenario: do-not-advance-stable-alias-for-prerelease/feature
+      # intentional-feature-test: records_stable_aliases_a_prerelease_client_moved
       do-not-advance-stable-alias-for-prerelease:
         addresses: OCI alias safety
         steps:
@@ -622,7 +624,7 @@ rules:
             world:
               alias_advanced: false
           - when: The Dev Container Feature recipe observes aliases applied by the native client
-          - then: Stable alias moves remain visible in release evidence without overriding the native client policy
+          - then: Stable alias moves are recorded without overriding the native client policy
       prevent-backward-alias-movement:
         addresses: Monotonic OCI aliases
         steps:

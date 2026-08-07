@@ -6,11 +6,18 @@
 use std::collections::BTreeSet;
 
 fn feature_scenario_bindings(source: &str) -> BTreeSet<String> {
-    source
-        .lines()
-        .filter_map(|line| {
-            line.split_once("intentional-feature-scenario: ")
-                .map(|(_, binding)| binding.trim().to_owned())
+    let lines = source.lines().collect::<Vec<_>>();
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let scenario = line.split_once("intentional-feature-scenario: ")?.1.trim();
+            let test = lines
+                .get(index + 1)
+                .and_then(|line| line.split_once("intentional-feature-test: "))
+                .map(|(_, test)| test.trim())
+                .unwrap_or_else(|| panic!("feature scenario {scenario} names its test"));
+            Some(format!("{scenario}={test}"))
         })
         .collect()
 }
@@ -21,20 +28,21 @@ fn executable_feature_scenario_bindings(source: &str) -> BTreeSet<String> {
         .iter()
         .enumerate()
         .filter_map(|(index, line)| {
-            let binding = line.split_once("intentional-feature-scenario: ")?.1.trim();
-            let test = binding
-                .rsplit_once('=')
-                .map(|(_, test)| test)
-                .expect("feature scenario binding names its test function");
+            let scenario = line.split_once("intentional-feature-scenario: ")?.1.trim();
+            let test = lines
+                .get(index + 1)
+                .and_then(|line| line.split_once("intentional-feature-test: "))
+                .map(|(_, test)| test.trim())
+                .unwrap_or_else(|| panic!("feature scenario {scenario} names its test"));
             assert!(
                 lines
                     .iter()
-                    .skip(index + 1)
-                    .take(4)
+                    .skip(index + 2)
+                    .take(3)
                     .any(|line| line.trim_start().starts_with(&format!("fn {test}()"))),
-                "feature scenario binding {binding} annotates its named test function"
+                "feature scenario {scenario} annotates its named test function {test}"
             );
-            Some(binding.to_owned())
+            Some(format!("{scenario}={test}"))
         })
         .collect()
 }
