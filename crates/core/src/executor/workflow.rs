@@ -522,9 +522,9 @@ fn reconcile(
     contract: &WorkflowContract,
 ) -> std::result::Result<(String, Vec<WorkflowDiagnostic>), WorkflowDiagnostic> {
     let mut advisories = Vec::new();
-    // `on: push`, `on: [push, tag]`, and an empty `push:` filter mapping are
-    // shorthand for a trigger mapping. Expanding them first means adding a
-    // required trigger never discards the repository's own.
+    // `on: push`, `on: [push, tag]`, a null `push:` entry, and an empty `push: {}`
+    // filter mapping are shorthand for a trigger mapping. Expanding them first
+    // means adding a required trigger never discards the repository's own.
     if let Some(current) = document.get(&["on"]).map_err(unparsable)? {
         if let Some(expanded) = expanded_triggers(&current, contract) {
             document.set(&["on"], &expanded).map_err(unparsable)?;
