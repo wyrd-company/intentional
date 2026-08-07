@@ -512,13 +512,8 @@ state: pending
         let workspace = Workspace::new("observe-missing-deadline");
         let path = workspace.root().join("observation.yml");
         let clock = TestClock::new();
-        let error = observe(
-            &path,
-            "component/package/npm/primary",
-            &policy(),
-            &clock,
-        )
-        .expect_err("a never-written observation exhausts the deadline");
+        let error = observe(&path, "component/package/npm/primary", &policy(), &clock)
+            .expect_err("a never-written observation exhausts the deadline");
         let message = error.to_string();
         assert!(
             message.contains("remained pending past its 60 second observation deadline"),
