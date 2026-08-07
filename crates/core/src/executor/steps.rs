@@ -83,8 +83,17 @@ pub(super) struct RecipeSteps {
     pub observation_inputs: String,
     /// Credential-free clients the portable observer requires in its own job.
     pub observer_clients: Vec<ObserverClient>,
-    /// Whether repository-visible shell has already written the observation.
-    pub observation_inline: bool,
+    /// Where the publication observation is written.
+    pub observation_mode: ObservationMode,
+}
+
+/// Authority boundary at which one recipe writes its observation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ObservationMode {
+    /// The credential-free first-party Action performs observation.
+    Portable,
+    /// Authenticated repository-visible shell has already written it.
+    AuthenticatedInline,
 }
 
 /// One non-baseline client a maintained portable observer executes.
@@ -322,16 +331,23 @@ impl StepsRefusal {
 /// and a shared arm makes one edit each of them has to make into one edit they
 /// have to make together.
 pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, StepsRefusal> {
-    steps_for(context).map(|steps| RecipeSteps {
-        publisher: steps
-            .publisher
-            .replace("@INHERITED@", &inherited_environment()),
-        retrieval: steps
-            .retrieval
-            .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
-        observation_inputs: steps.observation_inputs,
-        observer_clients: steps.observer_clients,
-        observation_inline: steps.observation_inline,
+    steps_for(context).map(|mut steps| {
+        if steps.observation_mode == ObservationMode::AuthenticatedInline {
+            steps
+                .observation_inputs
+                .push_str("      observe: 'false'\n");
+        }
+        RecipeSteps {
+            publisher: steps
+                .publisher
+                .replace("@INHERITED@", &inherited_environment()),
+            retrieval: steps
+                .retrieval
+                .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
+            observation_inputs: steps.observation_inputs,
+            observer_clients: steps.observer_clients,
+            observation_mode: steps.observation_mode,
+        }
     })
 }
 
@@ -545,7 +561,7 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps
             .then_some(ObserverClient::GoReleaser)
             .into_iter()
             .collect(),
-        observation_inline: false,
+        observation_mode: ObservationMode::Portable,
     })
 }
 
@@ -735,7 +751,7 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Step
         .into_iter()
         .flatten()
         .collect(),
-        observation_inline: false,
+        observation_mode: ObservationMode::Portable,
     })
 }
 
@@ -1147,7 +1163,6 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
     let retrieval = if primary {
         String::new()
     } else {
-        observation_inputs.push_str("      observe: 'false'\n");
         inline_observation_step(
             context,
             "npm-package",
@@ -1170,7 +1185,11 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         retrieval: if primary { None } else { Some(retrieval) },
         observation_inputs,
         observer_clients: Vec::new(),
-        observation_inline: !primary,
+        observation_mode: if primary {
+            ObservationMode::Portable
+        } else {
+            ObservationMode::AuthenticatedInline
+        },
     })
 }
 
@@ -1482,7 +1501,6 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         scalar(&index),
     ));
     if !crates_io {
-        observation_inputs.push_str("      observe: 'false'\n");
         steps.push_str(&inline_observation_step(
             context,
             "cargo-crate",
@@ -1513,7 +1531,11 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         retrieval: None,
         observation_inputs,
         observer_clients: Vec::new(),
-        observation_inline: !crates_io,
+        observation_mode: if crates_io {
+            ObservationMode::Portable
+        } else {
+            ObservationMode::AuthenticatedInline
+        },
     })
 }
 
@@ -1839,7 +1861,7 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
         .into_iter()
         .flatten()
         .collect(),
-        observation_inline: false,
+        observation_mode: ObservationMode::Portable,
     })
 }
 

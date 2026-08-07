@@ -94,7 +94,8 @@ pub(super) fn publication_jobs(
         .iter()
         .map(|client| client.installer())
         .collect::<String>();
-    let observation_inline = recipe.observation_inline;
+    let observation_inline =
+        recipe.observation_mode == crate::executor::steps::ObservationMode::AuthenticatedInline;
     let verification = |handoff: &str| {
         PUBLISH_VERIFY_STEPS
             .replace(

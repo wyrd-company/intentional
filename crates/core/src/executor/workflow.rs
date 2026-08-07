@@ -2976,6 +2976,52 @@ jobs:
         );
     }
 
+    /// Non-workflow secrets named anywhere beneath a workflow value.
+    fn destination_secret_names(value: &Value) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        fn visit(value: &Value, names: &mut BTreeSet<String>) {
+            match value {
+                Value::Mapping(mapping) => {
+                    for child in mapping.values() {
+                        visit(child, names);
+                    }
+                }
+                Value::Sequence(sequence) => {
+                    for child in sequence {
+                        visit(child, names);
+                    }
+                }
+                Value::String(text) => {
+                    for tail in text.split("secrets.").skip(1) {
+                        let name = tail
+                            .chars()
+                            .take_while(|character| {
+                                character.is_ascii_alphanumeric() || *character == '_'
+                            })
+                            .collect::<String>();
+                        if !name.is_empty() && name != "GITHUB_TOKEN" {
+                            names.insert(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        visit(value, &mut names);
+        names
+    }
+
+    /// Destination secrets visible when one Action step begins.
+    fn destination_secrets_reaching_action(
+        job: &Value,
+        steps: &[Value],
+        index: usize,
+    ) -> BTreeSet<String> {
+        let mut reachable = destination_secret_names(&Value::Sequence(steps[..=index].to_vec()));
+        reachable.extend(destination_secret_names(&job["env"]));
+        reachable
+    }
+
     // A repository-local recipe can read a destination secret, persist client
     // authentication, or receive a workflow identity. Once that happens, an
     // Intentional-owned Action in the same job can reach publication authority
@@ -2984,40 +3030,6 @@ jobs:
     // never shares a job with an identity that can be exchanged or written with.
     #[test]
     fn isolates_every_intentional_action_from_publisher_credentials() {
-        fn secret_names(value: &Value) -> BTreeSet<String> {
-            let mut names = BTreeSet::new();
-            fn visit(value: &Value, names: &mut BTreeSet<String>) {
-                match value {
-                    Value::Mapping(mapping) => {
-                        for child in mapping.values() {
-                            visit(child, names);
-                        }
-                    }
-                    Value::Sequence(sequence) => {
-                        for child in sequence {
-                            visit(child, names);
-                        }
-                    }
-                    Value::String(text) => {
-                        for tail in text.split("secrets.").skip(1) {
-                            let name = tail
-                                .chars()
-                                .take_while(|character| {
-                                    character.is_ascii_alphanumeric() || *character == '_'
-                                })
-                                .collect::<String>();
-                            if !name.is_empty() && name != "GITHUB_TOKEN" {
-                                names.insert(name);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            visit(value, &mut names);
-            names
-        }
-
         let workspace = repository_scale_workspace("workflow-credential-reachability");
         let mut actions_swept = 0_usize;
         let mut jobs_reached = BTreeSet::new();
@@ -3036,11 +3048,10 @@ jobs:
                     }
                     actions_swept += 1;
                     jobs_reached.insert(format!("{role}:{id}"));
-                    let prior = Value::Sequence(steps[..index].to_vec());
+                    let reachable = destination_secrets_reaching_action(body, steps, index);
                     assert!(
-                        secret_names(&prior).is_empty(),
-                        "{id} resolves an Intentional Action after a destination secret became reachable: {:?}",
-                        secret_names(&prior)
+                        reachable.is_empty(),
+                        "{id} resolves an Intentional Action while a destination secret is reachable: {reachable:?}"
                     );
                     assert_ne!(
                         body["permissions"]["id-token"].as_str(),
@@ -3062,6 +3073,92 @@ jobs:
         assert!(
             !jobs_reached.is_empty(),
             "the reachability population contains managed jobs"
+        );
+    }
+
+    #[test]
+    fn refuses_a_destination_secret_on_an_intentional_action_input() {
+        let job: Value = serde_yaml::from_str(&format!(
+            "steps:\n  - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n    with:\n      registry-password: ${{{{ secrets.PUBLISH_TOKEN }}}}\n"
+        ))
+        .expect("fixture parses");
+        let steps = job["steps"].as_sequence().expect("steps");
+        assert_eq!(
+            destination_secrets_reaching_action(&job, steps, 0),
+            BTreeSet::from(["PUBLISH_TOKEN".to_owned()])
+        );
+    }
+
+    #[test]
+    fn refuses_a_job_level_destination_secret_reaching_an_intentional_action() {
+        let job: Value = serde_yaml::from_str(&format!(
+            "env:\n  PUBLISH_TOKEN: ${{{{ secrets.PUBLISH_TOKEN }}}}\nsteps:\n  - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n"
+        ))
+        .expect("fixture parses");
+        let steps = job["steps"].as_sequence().expect("steps");
+        assert_eq!(
+            destination_secrets_reaching_action(&job, steps, 0),
+            BTreeSet::from(["PUBLISH_TOKEN".to_owned()])
+        );
+    }
+
+    // An Action whose recipe already wrote the observation must not run its
+    // portable observer over that same path. The subject set comes from the
+    // emitted `observe: false` inputs, and each is joined back to the shell step
+    // that writes the same observation while holding authentication. A new
+    // adapter therefore joins the sweep by choosing inline observation rather
+    // than by adding its destination or credential input name to this test.
+    #[test]
+    fn derives_every_authenticated_observer_from_inline_observation_mode() {
+        let workspace = sentinel_workspace("workflow-authenticated-observer-census", None);
+        materialize_contract_for_structural_sweep(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+        let jobs = document["jobs"].as_mapping().expect("jobs");
+        let mut authenticated = 0_usize;
+
+        for (job_id, body) in jobs {
+            let Some(steps) = body["steps"].as_sequence() else {
+                continue;
+            };
+            for action in steps.iter().filter(|step| {
+                intentional_action(step).is_some_and(|(name, _)| name == "verify-publication")
+                    && step["with"]["observe"].as_str() == Some("false")
+            }) {
+                authenticated += 1;
+                let observation = action["with"]["observation"]
+                    .as_str()
+                    .expect("the verifier names its observation");
+                let observers = jobs
+                    .iter()
+                    .flat_map(|(_, candidate)| {
+                        candidate["steps"].as_sequence().into_iter().flatten()
+                    })
+                    .filter(|step| {
+                        step.get("run").is_some()
+                            && step_environment(step)
+                                .get("INPUT_OBSERVATION")
+                                .is_some_and(|path| path == observation)
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    observers.len(),
+                    1,
+                    "{job_id:?} has one repository-visible writer for {observation}"
+                );
+                assert!(
+                    !destination_secret_names(observers[0]).is_empty()
+                        || step_environment(observers[0])
+                            .values()
+                            .any(|value| value.contains("secrets.GITHUB_TOKEN")),
+                    "{job_id:?} derives inline observation only for an authenticated writer"
+                );
+            }
+        }
+        assert!(
+            authenticated > 0,
+            "the structural contract contains authenticated observation"
         );
     }
 
