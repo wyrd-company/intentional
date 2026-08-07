@@ -29,8 +29,9 @@ cmp docs/specifications/tag-record.json-schema.yml schemas/tag-record.yml
 cmp docs/specifications/workflow-diff.json-schema.yml schemas/workflow-diff.yml
 
 test "$(yq -r '.name' docs/docs.yml)" = "intentional"
-test "$(yq -r '.assets | length' docs/docs.yml)" = "1"
+test "$(yq -r '.assets | length' docs/docs.yml)" = "2"
 test "$(yq -r '.assets[0]' docs/docs.yml)" = "assets/demo.gif"
+test "$(yq -r '.assets[1]' docs/docs.yml)" = "assets/publish-workflow.svg"
 
 for page in docs/*.md; do
   test "$(yq --front-matter=extract -r '.docs' "$page")" = "true"
@@ -41,11 +42,14 @@ done
 test -f docs/assets/demo.gif
 gifsicle --info docs/assets/demo.gif >/dev/null
 test "$(wc -c < docs/assets/demo.gif)" -le 3145728
+test -f docs/assets/publish-workflow.svg
+test "$(rg -c 'viewBox="0 0 1440 720"' docs/assets/publish-workflow.svg)" = "1"
+test "$(rg -c '#24292e|#30363d|#3d2f1f|#3b2344' docs/assets/publish-workflow.svg)" -ge "3"
 
 test "$(rg -c '^Output docs/assets/demo.gif$' docs/demo.tape)" = "1"
 test "$(rg -c '^Set (Shell|FontSize|Width|Height|Theme|Padding|TypingSpeed)' docs/demo.tape)" -ge "7"
 
-if rg -n '\]\((?!https?://|assets/demo\.gif)[^)]+\)' docs/*.md --pcre2; then
+if rg -n '\]\((?!https?://|assets/(?:demo\.gif|publish-workflow\.svg)|publish-workflow\.md|usage\.md#publish-to-a-registry-for-the-first-time)[^)]+\)' docs/*.md --pcre2; then
   echo "Unexpected local documentation link; add it to the validator." >&2
   exit 1
 fi

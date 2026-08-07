@@ -153,6 +153,10 @@ tasks:
       - vhs docs/demo.tape
       - gifsicle --batch --optimize=3 --colors 256 docs/assets/demo.gif
 
+  # Public diagrams are hand-authored SVG. The file under docs/assets is both
+  # source and published output: wyrd.foo renders relative images but does not
+  # render diagram fences. Use the site's #24292e background while reviewing
+  # contrast, then list each SVG as an exact docs/docs.yml asset path.
   docs:check:
     desc: Validate public documentation and its generated demo
     cmds:

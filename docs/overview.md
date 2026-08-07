@@ -46,6 +46,19 @@ Intentional never creates commits, pushes branches or tags, publishes to a
 registry, opens pull requests, or operates a forge. `tag` is its only
 Git-writing command. Tag templates do not add a `v` prefix.
 
+## Optional GitHub release executor
+
+Intentional's versioning, projection, planning, and annotated release records
+do not require the GitHub release executor. Repositories may add the executor
+when they want Intentional to derive the release and publication choreography
+around those core records.
+
+The executor adds managed workflow slices for repository transitions, external
+publication, consumer-path verification, evidence assembly, and immutable
+GitHub Release closure. Read the [derived publish workflow](publish-workflow.md)
+before adopting that layer; it maps the generated jobs and the authority each
+one can reach.
+
 ## Supported ecosystems
 
 Intentional discovers and projects versions across package formats without

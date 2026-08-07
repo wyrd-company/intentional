@@ -1,0 +1,83 @@
+<!--
+---
+relationships:
+  illustrates: github-release-executor
+---
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title description">
+  <title id="title">Derived publish workflow job graph</title>
+  <desc id="description">The verified global tag fans out to subject builds. Before-publication tags and deliverable upload gate destination publishers. Credential-separated verifiers feed optional after-publication tags and evidence assembly. Release closure happens last.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" style="fill:#79c0ff"/>
+    </marker>
+    <style>
+      .edge { fill: none; stroke: #79c0ff; stroke-width: 4; marker-end: url(#arrow); }
+      .optional { stroke-dasharray: 10 8; }
+      .job { fill: #30363d; stroke: #8b949e; stroke-width: 2; rx: 12; }
+      .authority { fill: #3d2f1f; stroke: #d29922; }
+      .final { fill: #3b2344; stroke: #d2a8ff; }
+      .label { fill: #f0f6fc; font-family: "DejaVu Sans", sans-serif; font-size: 22px; font-weight: 600; text-anchor: middle; }
+      .detail { fill: #c9d1d9; font-family: "DejaVu Sans", sans-serif; font-size: 17px; text-anchor: middle; }
+      .legend { fill: #c9d1d9; font-family: "DejaVu Sans", sans-serif; font-size: 17px; }
+    </style>
+  </defs>
+
+  <path d="M190 320 H250" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M430 320 C480 320 470 190 520 190" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M430 320 C480 320 470 450 520 450" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <path d="M700 190 C750 190 740 320 790 320" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M700 450 C750 450 740 340 790 340" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <path d="M970 320 H1030" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M1120 260 V180 H1180" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <path d="M1270 240 V400" fill="none" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8" marker-end="url(#arrow)"/>
+  <path d="M1120 380 V450 H1180" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M1270 500 V560" fill="none" stroke="#79c0ff" stroke-width="4" marker-end="url(#arrow)"/>
+
+  <rect class="job" x="20" y="270" width="170" height="100"/>
+  <text class="label" x="105" y="312">verify_tag</text>
+  <text class="detail" x="105" y="342">verify once</text>
+
+  <rect class="job" x="250" y="250" width="180" height="140"/>
+  <text class="label" x="340" y="300">build_*</text>
+  <text class="detail" x="340" y="330">one per subject</text>
+  <text class="detail" x="340" y="356">and platform</text>
+
+  <rect class="authority" x="520" y="130" width="180" height="120" rx="12"/>
+  <text class="label" x="610" y="177">tag_before_</text>
+  <text class="label" x="610" y="205">publication</text>
+  <text class="detail" x="610" y="232">when declared</text>
+
+  <rect class="authority" x="520" y="390" width="180" height="120" rx="12"/>
+  <text class="label" x="610" y="438">upload_</text>
+  <text class="label" x="610" y="466">deliverables</text>
+  <text class="detail" x="610" y="493">when hosted</text>
+
+  <rect class="authority" x="790" y="260" width="180" height="120" rx="12"/>
+  <text class="label" x="880" y="308">publish_*</text>
+  <text class="detail" x="880" y="338">one per</text>
+  <text class="detail" x="880" y="363">destination</text>
+
+  <rect class="job" x="1030" y="260" width="180" height="120"/>
+  <text class="label" x="1120" y="308">verify_* or</text>
+  <text class="label" x="1120" y="336">retrieve_*</text>
+  <text class="detail" x="1120" y="363">consumer proof</text>
+
+  <rect class="authority" x="1180" y="120" width="180" height="120" rx="12"/>
+  <text class="label" x="1270" y="167">tag_after_</text>
+  <text class="label" x="1270" y="195">publication</text>
+  <text class="detail" x="1270" y="222">when declared</text>
+
+  <rect class="job" x="1180" y="400" width="180" height="100"/>
+  <text class="label" x="1270" y="442">assemble_</text>
+  <text class="label" x="1270" y="470">evidence</text>
+
+  <rect class="final" x="1180" y="560" width="180" height="100" rx="12"/>
+  <text class="label" x="1270" y="602">close_release</text>
+  <text class="detail" x="1270" y="632">immutable, last</text>
+
+  <rect class="authority" x="30" y="600" width="28" height="28" rx="5"/>
+  <text class="legend" x="72" y="621">protected environment or destination authority</text>
+  <line x1="500" y1="614" x2="570" y2="614" stroke="#79c0ff" stroke-width="4" stroke-dasharray="10 8"/>
+  <text class="legend" x="590" y="621">conditional path</text>
+</svg>

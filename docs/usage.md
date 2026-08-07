@@ -292,6 +292,12 @@ Intentional owns complete authority-bearing slices of your release and publish
 workflows without owning the documents. Compare a workflow with the contract
 derived from your configuration:
 
+The executor is optional. Intentional's intent-driven versioning, manifest
+projection, deterministic planning, and annotated release records work without
+it. The executor adds derived repository and publication choreography. Read the
+[derived publish workflow](publish-workflow.md) before applying the publish
+slice; it explains the job graph, its size, and its credential boundaries.
+
 ```console
 intentional executor diff release
 ```
