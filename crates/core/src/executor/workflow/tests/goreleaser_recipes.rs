@@ -242,14 +242,14 @@ aur:
                 let root = self.workspace.root();
                 let step = publish_step(root, &self.job, &self.temp);
                 let pinned = step
-                    .env
+                    .publisher_env
                     .get("INTENTIONAL_AUR_HOST_FINGERPRINT")
                     .cloned()
                     .unwrap_or_default();
-                let mut command = std::process::Command::new("bash");
-                command
+                let mut publisher = std::process::Command::new("bash");
+                publisher
                     .arg("-c")
-                    .arg(&step.run)
+                    .arg(&step.publisher_run)
                     .current_dir(root)
                     .env_clear()
                     .env(
@@ -267,28 +267,58 @@ aur:
                     // the host answered with, so the recipe's comparison against
                     // its own pinned value is what decides the outcome.
                     .env("FAKE_HOST_FINGERPRINT", fingerprint.unwrap_or(&pinned));
-                for (name, value) in &step.env {
-                    command.env(name, value);
+                for (name, value) in &step.publisher_env {
+                    publisher.env(name, value);
                 }
                 let readback_work = step
-                    .env
+                    .observer_env
                     .get("INPUT_WORK")
                     .expect("readback work directory");
-                command
-                    .env("FAKE_READBACK_WORK", readback_work)
-                    .env("FAKE_READBACK_MISSES", readback_misses.to_string())
-                    .env("FAKE_READBACK_COUNT", self.temp.join("readback-count"))
-                    .env("FAKE_SLEEP_LOG", self.temp.join("sleep-log"));
                 let subject = self.temp.join("intentional_subject/bytes");
-                if subject.is_dir() {
-                    command.env(
-                        "INPUT_SUBJECT_DIGEST",
-                        subject_digest
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| digest_tree(&subject)),
+                let subject_digest = subject.is_dir().then(|| {
+                    subject_digest
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| digest_tree(&subject))
+                });
+                let mut output = publisher.output().expect("the promotion body runs");
+                if output.status.success() {
+                    let observer_stubs = repository_verification_stubs(
+                        &self.stubs,
+                        &self.temp,
+                        &step.installed,
                     );
+                    let mut observer = std::process::Command::new("bash");
+                    observer
+                        .arg("-c")
+                        .arg(&step.observer_run)
+                        .current_dir(root)
+                        .env_clear()
+                        .env(
+                            "PATH",
+                            format!(
+                                "{}:{}",
+                                observer_stubs.display(),
+                                test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                            ),
+                        )
+                        .env("HOME", root)
+                        .env("RUNNER_TEMP", &self.temp)
+                        .env("FAKE_REMOTES", &self.remotes)
+                        .env("FAKE_READBACK_WORK", readback_work)
+                        .env("FAKE_READBACK_MISSES", readback_misses.to_string())
+                        .env("FAKE_READBACK_COUNT", self.temp.join("readback-count"))
+                        .env("FAKE_SLEEP_LOG", self.temp.join("sleep-log"));
+                    for (name, value) in &step.observer_env {
+                        observer.env(name, value);
+                    }
+                    if let Some(digest) = subject_digest {
+                        observer.env("INPUT_SUBJECT_DIGEST", digest);
+                    }
+                    let observed = observer.output().expect("the readback body runs");
+                    output.stderr.extend(observed.stderr);
+                    output.stdout.extend(observed.stdout);
+                    output.status = observed.status;
                 }
-                let output = command.output().expect("the promotion body runs");
                 Outcome {
                     status: output.status,
                     stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -342,7 +372,9 @@ aur:
 
             fn observation(&self) -> PublicationObservation {
                 let step = publish_step(self.workspace.root(), &self.job, &self.temp);
-                PublicationObservation::load(Path::new(&step.env["INPUT_OBSERVATION"]))
+                PublicationObservation::load(Path::new(
+                    &step.observer_env["INPUT_OBSERVATION"],
+                ))
                     .expect("the repository readback writes a loadable observation")
             }
         }
@@ -373,8 +405,11 @@ aur:
         }
 
         struct PublishStep {
-            run: String,
-            env: BTreeMap<String, String>,
+            publisher_run: String,
+            publisher_env: BTreeMap<String, String>,
+            observer_run: String,
+            observer_env: BTreeMap<String, String>,
+            installed: BTreeSet<String>,
         }
 
         /// Read the derived publish step rather than restating it.
@@ -396,7 +431,7 @@ aur:
                         .is_some_and(|name| name.starts_with("Publish "))
                 })
                 .unwrap_or_else(|| panic!("{job} has a publish step"));
-            let mut env = step["env"]
+            let publisher_env = step["env"]
                 .as_mapping()
                 .expect("the publish step routes its values through env")
                 .iter()
@@ -408,11 +443,10 @@ aur:
                 })
                 .collect::<BTreeMap<_, _>>();
             let jobs = document["jobs"].as_mapping().expect("jobs");
-            let (_, _, verify) = publication_verification(jobs, job);
+            let (_, verification_steps, verify) = publication_verification(jobs, job);
             let observer =
                 portable_observer_step(&verify).expect("the Action carries an observer");
-            env.extend(
-                observer["env"]
+            let observer_env = observer["env"]
                     .as_mapping()
                     .expect("observer environment")
                     .iter()
@@ -421,16 +455,40 @@ aur:
                             name.as_str().expect("env name").to_owned(),
                             expression(value.as_str().expect("env value"), temp),
                         )
-                    }),
-            );
+                    })
+                    .collect();
+            let installed = verification_steps
+                .iter()
+                .filter_map(|step| step["id"].as_str())
+                .filter_map(|id| id.strip_prefix("intentional_install_"))
+                .map(|id| id.replace('_', "-"))
+                .collect();
             PublishStep {
-                run: format!(
-                    "{}\n{}",
-                    step["run"].as_str().expect("publish body"),
-                    observer["run"].as_str().expect("observer body")
-                ),
-                env,
+                publisher_run: step["run"].as_str().expect("publish body").to_owned(),
+                publisher_env,
+                observer_run: observer["run"].as_str().expect("observer body").to_owned(),
+                observer_env,
+                installed,
             }
+        }
+
+        fn repository_verification_stubs(
+            source: &Path,
+            temp: &Path,
+            installed: &BTreeSet<String>,
+        ) -> PathBuf {
+            let destination = temp.join("verification-stubs");
+            let _ = std::fs::remove_dir_all(&destination);
+            std::fs::create_dir_all(&destination).expect("verification stub directory");
+            for baseline in ["git", "intentional", "sleep"] {
+                std::fs::copy(source.join(baseline), destination.join(baseline))
+                    .unwrap_or_else(|error| panic!("{baseline} baseline stub: {error}"));
+            }
+            for client in installed {
+                std::fs::copy(source.join(client), destination.join(client))
+                    .unwrap_or_else(|error| panic!("{client} installer provides its stub: {error}"));
+            }
+            destination
         }
 
         /// Stand in for the workflow expressions a runner would have resolved.

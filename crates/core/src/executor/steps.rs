@@ -44,7 +44,10 @@ use crate::config::{AptPublisher, ReleaseUnitConfig, RpmPublisher};
 use crate::executor::goreleaser::nfpm_format;
 use crate::executor::names::{self, SuppliedName};
 use crate::executor::recipe::{Packager, SelectedPublication, PRIMARY_TARGET};
-use crate::executor::workflow::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
+use crate::executor::workflow::{
+    scalar, COSIGN_INSTALLER_ACTION, GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION,
+    SETUP_CRANE_ACTION,
+};
 use crate::model::{AttachedComponent, PublisherKind};
 use crate::publication::observation::ConsistencyPolicy;
 
@@ -78,8 +81,64 @@ pub(super) struct RecipeSteps {
     pub retrieval: Option<String>,
     /// Inputs the portable verification Action needs to perform readback.
     pub observation_inputs: String,
+    /// Credential-free clients the portable observer requires in its own job.
+    pub observer_clients: Vec<ObserverClient>,
     /// Whether repository-visible shell has already written the observation.
     pub observation_inline: bool,
+}
+
+/// One non-baseline client a maintained portable observer executes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ObserverClient {
+    Crane,
+    Cosign,
+    DockerBuildx,
+    DevContainer,
+    GoReleaser,
+    Rpm,
+    Dnf,
+}
+
+impl ObserverClient {
+    /// Stable preflight name carried into the verification Action.
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::Crane => "crane",
+            Self::Cosign => "cosign",
+            Self::DockerBuildx => "docker-buildx",
+            Self::DevContainer => "devcontainer",
+            Self::GoReleaser => "goreleaser",
+            Self::Rpm => "rpm",
+            Self::Dnf => "dnf",
+        }
+    }
+
+    /// Pinned or distribution-backed installer emitted into the observer job.
+    pub(super) fn installer(self) -> String {
+        let id = self.name().replace('-', "_");
+        match self {
+            Self::Crane => format!(
+                "  - id: intentional_install_{id}\n    name: Install the registry observation client\n    uses: {SETUP_CRANE_ACTION}\n"
+            ),
+            Self::Cosign => format!(
+                "  - id: intentional_install_{id}\n    name: Install the keyless signing observation client\n    uses: {COSIGN_INSTALLER_ACTION}\n"
+            ),
+            Self::DockerBuildx => format!(
+                "  - id: intentional_install_{id}\n    name: Install the Buildx observation client\n    uses: {SETUP_BUILDX_ACTION}\n"
+            ),
+            Self::DevContainer => format!(
+                "  - id: intentional_install_{id}\n    name: Install the Dev Container observation client\n    run: npm install --global --no-fund --no-audit --ignore-scripts {DEV_CONTAINER_CLI}\n"
+            ),
+            Self::GoReleaser => format!(
+                "  - id: intentional_install_{id}\n    name: Install the GoReleaser observation client\n    uses: {GORELEASER_INSTALL_ACTION}\n    with:\n      install-only: true\n      version: @GORELEASER_VERSION@\n"
+            ),
+            Self::Rpm | Self::Dnf => format!(
+                "  - id: intentional_install_{id}\n    name: Install the {} observation client\n    run: |\n      sudo apt-get update\n      sudo apt-get install --yes {}\n",
+                self.name().to_uppercase(),
+                self.name(),
+            ),
+        }
+    }
 }
 
 /// Every process variable a maintained recipe's probe inherits.
@@ -271,6 +330,7 @@ pub(super) fn recipe_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, S
             .retrieval
             .map(|retrieval| retrieval.replace("@INHERITED@", &inherited_environment())),
         observation_inputs: steps.observation_inputs,
+        observer_clients: steps.observer_clients,
         observation_inline: steps.observation_inline,
     })
 }
@@ -481,6 +541,10 @@ fn descriptor_promotion_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps
         publisher,
         retrieval: (context.publication.publisher == PublisherKind::Homebrew).then(String::new),
         observation_inputs,
+        observer_clients: (context.publication.packager == Packager::GoReleaser)
+            .then_some(ObserverClient::GoReleaser)
+            .into_iter()
+            .collect(),
         observation_inline: false,
     })
 }
@@ -662,6 +726,15 @@ fn system_package_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Step
         publisher,
         retrieval: None,
         observation_inputs,
+        observer_clients: [
+            (context.publication.packager == Packager::GoReleaser)
+                .then_some(ObserverClient::GoReleaser),
+            (context.publication.publisher == PublisherKind::Rpm).then_some(ObserverClient::Rpm),
+            (context.publication.publisher == PublisherKind::Rpm).then_some(ObserverClient::Dnf),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         observation_inline: false,
     })
 }
@@ -1096,6 +1169,7 @@ fn npm_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         // repository-visible shell and only its completed document reaches the Action.
         retrieval: if primary { None } else { Some(retrieval) },
         observation_inputs,
+        observer_clients: Vec::new(),
         observation_inline: !primary,
     })
 }
@@ -1438,6 +1512,7 @@ fn cargo_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, String> {
         // or handing it to the first-party Action.
         retrieval: None,
         observation_inputs,
+        observer_clients: Vec::new(),
         observation_inline: !crates_io,
     })
 }
@@ -1755,6 +1830,15 @@ fn oci_destination_steps(context: &RecipeContext<'_>) -> Result<RecipeSteps, Str
         publisher: steps,
         retrieval: None,
         observation_inputs,
+        observer_clients: [
+            Some(ObserverClient::Crane),
+            signed.then_some(ObserverClient::Cosign),
+            (!feature).then_some(ObserverClient::DockerBuildx),
+            feature.then_some(ObserverClient::DevContainer),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         observation_inline: false,
     })
 }

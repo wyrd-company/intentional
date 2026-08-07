@@ -46,7 +46,7 @@ pub(super) const ATTEST_BUILD_PROVENANCE_ACTION: &str =
     "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373";
 
 /// Action installing the GoReleaser command a stock runner does not carry.
-pub(super) const GORELEASER_INSTALL_ACTION: &str =
+pub(in crate::executor) const GORELEASER_INSTALL_ACTION: &str =
     "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94";
 /// Installer for the Cross version bound to the Linux GNU baseline.
 pub(super) const CROSS_INSTALL_ACTION: &str =
@@ -56,7 +56,7 @@ pub(super) const CROSS_INSTALL_ACTION: &str =
 pub(super) const SETUP_QEMU_ACTION: &str =
     "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8";
 /// Container-driver Buildx builder, which a stock runner does not start with.
-pub(super) const SETUP_BUILDX_ACTION: &str =
+pub(in crate::executor) const SETUP_BUILDX_ACTION: &str =
     "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
 /// Registry client every OCI recipe reads and promotes with.
 pub(in crate::executor) const SETUP_CRANE_ACTION: &str =
@@ -939,7 +939,7 @@ steps:
     with:
       name: @JOB@subject-@SUBJECT_SLUG@
       path: ${{ runner.temp }}/@JOB@subject
-@HANDOFF_STEP@@OBSERVATION_STEP@@RETRIEVAL_STEPS@@VERIFY_STEPS@"#;
+@HANDOFF_STEP@@OBSERVATION_STEP@@RETRIEVAL_STEPS@@OBSERVATION_CLIENT_STEPS@@VERIFY_STEPS@"#;
 
 /// Verify one observation and upload the resulting publisher-evidence fragment.
 pub(super) const PUBLISH_VERIFY_STEPS: &str = r#"  - name: @VERIFY_NAME@

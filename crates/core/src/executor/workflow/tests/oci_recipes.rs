@@ -251,10 +251,10 @@
 
                 let step = publish_step(root, &self.job, &temp, version, digest);
                 let verified = step.verified.clone();
-                let mut command = std::process::Command::new("bash");
-                command
+                let mut publisher = std::process::Command::new("bash");
+                publisher
                     .arg("-c")
-                    .arg(step.run)
+                    .arg(&step.publisher_run)
                     .current_dir(root.join("component"))
                     .env_clear()
                     .env(
@@ -269,10 +269,38 @@
                     .env("RUNNER_TEMP", &temp)
                     .env("FAKE_REGISTRY", &self.registry)
                     .env("FAKE_DRIFT", drift);
-                for (name, value) in step.env {
-                    command.env(name, value);
+                for (name, value) in &step.publisher_env {
+                    publisher.env(name, value);
                 }
-                let output = command.output().expect("the recipe body runs");
+                let mut output = publisher.output().expect("the publisher body runs");
+                if output.status.success() {
+                    let observer_stubs = verification_stubs(&self.stubs, &temp, &step.installed);
+                    let mut observer = std::process::Command::new("bash");
+                    observer
+                        .arg("-c")
+                        .arg(&step.observer_run)
+                        .current_dir(root.join("component"))
+                        .env_clear()
+                        .env(
+                            "PATH",
+                            format!(
+                                "{}:{}",
+                                observer_stubs.display(),
+                                test_tool_path(&std::env::var("PATH").unwrap_or_default())
+                            ),
+                        )
+                        .env("HOME", root)
+                        .env("RUNNER_TEMP", &temp)
+                        .env("FAKE_REGISTRY", &self.registry)
+                        .env("FAKE_DRIFT", drift);
+                    for (name, value) in &step.observer_env {
+                        observer.env(name, value);
+                    }
+                    let observed = observer.output().expect("the observer body runs");
+                    output.stderr.extend(observed.stderr);
+                    output.stdout.extend(observed.stdout);
+                    output.status = observed.status;
+                }
                 let observation = temp
                     .join("intentional_observation")
                     .join(format!(
@@ -304,8 +332,11 @@
 
         /// One publisher step's shell body and the environment it is given.
         struct PublishStep {
-            run: String,
-            env: BTreeMap<String, String>,
+            publisher_run: String,
+            publisher_env: BTreeMap<String, String>,
+            observer_run: String,
+            observer_env: BTreeMap<String, String>,
+            installed: BTreeSet<String>,
             /// Inputs the verification step of the same job is given.
             ///
             /// The publication this job performs is named twice by the
@@ -341,7 +372,7 @@
                         .is_some_and(|name| name.starts_with("Publish "))
                 })
                 .unwrap_or_else(|| panic!("{job} has a publish step"));
-            let mut env = step["env"]
+            let publisher_env = step["env"]
                 .as_mapping()
                 .expect("the publish step routes its values through env")
                 .iter()
@@ -353,11 +384,10 @@
                 })
                 .collect::<BTreeMap<_, _>>();
             let jobs = document["jobs"].as_mapping().expect("jobs");
-            let (_, _, verify) = publication_verification(jobs, job);
+            let (_, verification_steps, verify) = publication_verification(jobs, job);
             let observer =
                 portable_observer_step(&verify).expect("the Action carries an observer");
-            env.extend(
-                observer["env"]
+            let observer_env = observer["env"]
                     .as_mapping()
                     .expect("observer environment")
                     .iter()
@@ -371,8 +401,14 @@
                                 digest,
                             ),
                         )
-                    }),
-            );
+                    })
+                    .collect();
+            let installed = verification_steps
+                .iter()
+                .filter_map(|step| step["id"].as_str())
+                .filter_map(|id| id.strip_prefix("intentional_install_"))
+                .map(|id| id.replace('_', "-"))
+                .collect();
             let verified = verify["with"]
                 .as_mapping()
                 .expect("the verification step is given inputs")
@@ -385,14 +421,32 @@
                 })
                 .collect();
             PublishStep {
-                run: format!(
-                    "{}\n{}",
-                    step["run"].as_str().expect("publish body"),
-                    observer["run"].as_str().expect("observer body")
-                ),
-                env,
+                publisher_run: step["run"].as_str().expect("publish body").to_owned(),
+                publisher_env,
+                observer_run: observer["run"].as_str().expect("observer body").to_owned(),
+                observer_env,
+                installed,
                 verified,
             }
+        }
+
+        /// Materialize only clients whose installer occurs in the verifier.
+        fn verification_stubs(source: &Path, temp: &Path, installed: &BTreeSet<String>) -> PathBuf {
+            let destination = temp.join("verification-stubs");
+            let _ = std::fs::remove_dir_all(&destination);
+            std::fs::create_dir_all(&destination).expect("verification stub directory");
+            std::fs::copy(source.join("sleep"), destination.join("sleep"))
+                .expect("test clock is available");
+            for client in installed {
+                let executable = if client == "docker-buildx" {
+                    "docker"
+                } else {
+                    client.as_str()
+                };
+                std::fs::copy(source.join(executable), destination.join(executable))
+                    .unwrap_or_else(|error| panic!("{client} installer provides its stub: {error}"));
+            }
+            destination
         }
 
         /// Stand in for the workflow expressions a runner would have resolved.
@@ -669,6 +723,7 @@ set -euo pipefail
         /// The Dev Container CLI, which repackages the source and tags it itself.
         const DEV_CONTAINER_STUB: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = version ]; then printf 'devcontainer 0.88.0\n'; exit 0; fi
 registry="${FAKE_REGISTRY}"
 slug() { printf '%s' "${1}" | tr '/' '_'; }
 version="${INTENTIONAL_VERSION}"
@@ -1101,14 +1156,14 @@ fi
                 SUBJECT_DIGEST,
             );
             assert_eq!(
-                step.env
+                step.publisher_env
                     .get("INTENTIONAL_REGISTRY_USER")
                     .map(String::as_str),
                 Some("example-account"),
                 "Docker Hub reads its account from the conventional variable"
             );
             assert_eq!(
-                step.env
+                step.publisher_env
                     .get("INTENTIONAL_REGISTRY_TOKEN")
                     .map(String::as_str),
                 Some("example-token")
@@ -1123,7 +1178,7 @@ fi
                 SUBJECT_DIGEST,
             );
             assert_eq!(
-                step.env
+                step.publisher_env
                     .get("INTENTIONAL_REGISTRY_TOKEN")
                     .map(String::as_str),
                 Some("example-github-token"),
@@ -1414,16 +1469,16 @@ fi
                 SUBJECT_DIGEST,
             );
             assert_eq!(
-                step.env
+                step.publisher_env
                     .get("INTENTIONAL_SUBJECT_IDENTITY")
                     .map(String::as_str),
                 Some("example-image"),
                 "the identity reaches the body through env like every other value"
             );
             assert!(
-                !step.run.contains("example-image"),
+                !step.publisher_run.contains("example-image"),
                 "and never as text in the body itself: {}",
-                step.run
+                step.publisher_run
             );
             let jobs = publish_jobs(accepted.workspace.root());
             let build_step = jobs[&Value::String("intentional_build_component_buildx".to_owned())]
@@ -1462,7 +1517,7 @@ fi
                 SUBJECT_DIGEST,
             );
             assert_eq!(
-                step.env
+                step.publisher_env
                     .get("INTENTIONAL_SUBJECT_IDENTITY")
                     .map(String::as_str),
                 Some("example-image"),

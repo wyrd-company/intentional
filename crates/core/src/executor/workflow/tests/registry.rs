@@ -244,6 +244,115 @@
         }
     }
 
+    /// A portable observer and the client installers it depends on are derived
+    /// from one recipe value, then emitted into one verification job. Reading
+    /// the completed workflow keeps the assertion on the production boundary:
+    /// an installer moved back into the credential-bearing publisher is absent
+    /// here even if the recipe still names the client.
+    #[test]
+    fn binds_every_observer_client_requirement_to_its_verification_job_installer() {
+        let workspaces = [
+            sentinel_workspace("workflow-observer-client-sentinel", None),
+            system_package_workspace("workflow-observer-client-system"),
+            cargo_system_package_workspace("workflow-observer-client-cargo-system"),
+        ];
+        let mut witnessed = BTreeSet::new();
+        for workspace in workspaces {
+            materialize_contract_for_structural_sweep(workspace.root(), WorkflowRole::Publish);
+            let document: Value = serde_yaml::from_str(&workflow(
+                workspace.root(),
+                WorkflowRole::Publish,
+            ))
+            .expect("workflow parses");
+            for (job, body) in document["jobs"].as_mapping().expect("jobs") {
+                let Some(steps) = body["steps"].as_sequence() else {
+                    continue;
+                };
+                let Some((verify_position, verify)) = steps.iter().enumerate().find(|(_, step)| {
+                    intentional_action(step)
+                        .is_some_and(|(name, _)| name == "verify-publication")
+                }) else {
+                    continue;
+                };
+                let required = verify["with"]["required-clients"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<BTreeSet<_>>();
+                let installed = steps[..verify_position]
+                    .iter()
+                    .filter_map(|step| step["id"].as_str())
+                    .filter_map(|id| id.strip_prefix("intentional_install_"))
+                    .map(|id| id.replace('_', "-"))
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    installed,
+                    required,
+                    "{} installs exactly the clients its observer declares before observation",
+                    job.as_str().expect("job id")
+                );
+                witnessed.extend(required);
+            }
+        }
+        assert_eq!(
+            witnessed,
+            [
+                "cosign",
+                "crane",
+                "devcontainer",
+                "dnf",
+                "docker-buildx",
+                "goreleaser",
+                "rpm",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+            "the derived fixtures force every non-baseline observer client through the job agreement"
+        );
+    }
+
+    #[test]
+    fn missing_observer_client_fails_immediately_and_names_the_client() {
+        let workspace = two_destination_workspace("workflow-observer-client-missing");
+        converge(workspace.root(), WorkflowRole::Publish);
+        let jobs = publish_jobs(workspace.root());
+        let (_, _, verify) = publication_verification(
+            &jobs,
+            "intentional_publish_component_package_oci_ghcr",
+        );
+        let observer = portable_observer_step(&verify).expect("portable observer");
+        let temporary = workspace.root().join("runner-missing-client");
+        let empty_path = temporary.join("path");
+        std::fs::create_dir_all(&empty_path).expect("empty PATH");
+        let mut command = std::process::Command::new("/bin/bash");
+        command
+            .arg("-c")
+            .arg(observer["run"].as_str().expect("observer body"))
+            .env_clear()
+            .env("PATH", &empty_path);
+        for (name, value) in observer["env"].as_mapping().expect("observer environment") {
+            command.env(
+                name.as_str().expect("environment name"),
+                value
+                    .as_str()
+                    .expect("environment value")
+                    .replace("${{ runner.temp }}", &temporary.display().to_string()),
+            );
+        }
+        let output = command.output().expect("observer starts");
+        assert_eq!(output.status.code(), Some(127));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "required observation client crane is missing from this verification job\n"
+        );
+        assert!(
+            !temporary.join("intentional_observation").exists(),
+            "client preflight fails before observation polling can write pending"
+        );
+    }
+
     // Every observation a recipe writes is written by shell. A misspelled
     // member, a state carrying detail it may not carry, or a schema identity
     // edited in one copy and not another is a defect nothing in a Rust test

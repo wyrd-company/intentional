@@ -76,7 +76,24 @@ pub(super) fn publication_jobs(
             .unwrap_or_else(|| format!("release-units.{}", publication.release_unit));
         WorkflowDiagnostic::at(refusal.code, refusal.message, &path)
     })?;
-    let observation_inputs = recipe.observation_inputs.clone();
+    let mut observation_inputs = recipe.observation_inputs.clone();
+    let required_clients = recipe
+        .observer_clients
+        .iter()
+        .map(|client| client.name())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !required_clients.is_empty() {
+        observation_inputs.push_str(&format!(
+            "      required-clients: {}\n",
+            scalar(&required_clients)
+        ));
+    }
+    let observation_client_steps = recipe
+        .observer_clients
+        .iter()
+        .map(|client| client.installer())
+        .collect::<String>();
     let observation_inline = recipe.observation_inline;
     let verification = |handoff: &str| {
         PUBLISH_VERIFY_STEPS
@@ -193,6 +210,10 @@ pub(super) fn publication_jobs(
             ("@SUBJECT_NAME@", subject_name.as_str()),
             ("@HANDOFF_STEP@", handoff_step.as_str()),
             ("@OBSERVATION_STEP@", observation_step.as_str()),
+            (
+                "@OBSERVATION_CLIENT_STEPS@",
+                observation_client_steps.as_str(),
+            ),
             ("@RETRIEVAL_STEPS@", retrieval_steps.as_str()),
             ("@VERIFY_STEPS@", verifier_verification.as_str()),
         ],

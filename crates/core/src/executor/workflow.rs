@@ -49,7 +49,10 @@ use templates::{
 /// The recipe steps are written beside the templates they are spliced into, so
 /// they reach the same pinned Actions and the same scalar rendering through the
 /// derivation module rather than through a second path into the templates.
-pub(super) use templates::{scalar, COSIGN_INSTALLER_ACTION, SETUP_CRANE_ACTION};
+pub(super) use templates::{
+    scalar, COSIGN_INSTALLER_ACTION, GORELEASER_INSTALL_ACTION, SETUP_BUILDX_ACTION,
+    SETUP_CRANE_ACTION,
+};
 
 mod build;
 mod publishers;
@@ -2052,7 +2055,13 @@ release-units:
             source_names
         );
         for name in source_names {
-            let visibility = if matches!(name, "SETUP_CRANE_ACTION" | "COSIGN_INSTALLER_ACTION") {
+            let visibility = if matches!(
+                name,
+                "SETUP_CRANE_ACTION"
+                    | "COSIGN_INSTALLER_ACTION"
+                    | "SETUP_BUILDX_ACTION"
+                    | "GORELEASER_INSTALL_ACTION"
+            ) {
                 "pub(in crate::executor)"
             } else {
                 "pub(super)"

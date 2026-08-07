@@ -123,6 +123,10 @@ inputs:
     description: "Space-separated attached OCI components selected for this destination"
     required: false
     default: ""
+  required-clients:
+    description: "Space-separated credential-free clients the derived observer executes"
+    required: false
+    default: ""
   intentional-version:
     description: "Released intentional version without a v prefix, or latest"
     required: false
@@ -178,8 +182,20 @@ runs:
         INPUT_APT_COMPONENT: ${{ inputs.apt-component }}
         INPUT_RPM_CHANNEL: ${{ inputs.rpm-channel }}
         INPUT_COMPONENTS: ${{ inputs.components }}
+        INPUT_REQUIRED_CLIENTS: ${{ inputs.required-clients }}
       run: |
         set -euo pipefail
+        for client in $INPUT_REQUIRED_CLIENTS; do
+          if [[ "$client" == docker-buildx ]]; then
+            docker buildx version >/dev/null 2>&1 || {
+              printf 'required observation client docker buildx is missing from this verification job\n' >&2
+              exit 127
+            }
+          elif ! command -v "$client" >/dev/null 2>&1; then
+            printf 'required observation client %s is missing from this verification job\n' "$client" >&2
+            exit 127
+          fi
+        done
         "$GITHUB_ACTION_PATH/../../scripts/action/observe-publication.sh"
 
     - name: Verify the publication

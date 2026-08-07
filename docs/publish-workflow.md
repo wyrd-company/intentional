@@ -43,7 +43,7 @@ with `intentional_`.
 | `tag_before_publication` <!-- intentional-job-kind: phase-before --><!-- intentional-environment: protected --> | Seals the built-subject evidence and pushes the configured `before-publication` tags. | Runs in the protected environment. It mints a short-lived App token only for the tag push. |
 | `upload_deliverables` <!-- intentional-job-kind: upload --><!-- intentional-environment: protected --> | Places GitHub-hosted deliverables on the draft Release and writes any draft-asset handoffs publishers need. | Runs in the protected environment. It mints a short-lived App token for the draft Release and cannot publish it. |
 | `publish_*` <!-- intentional-job-kind: publisher --><!-- intentional-environment: protected --> | Promotes one sealed subject to one configured destination and records the destination response. | Runs in the protected environment. It receives only that destination's credential and scopes. It cannot write release tags or the GitHub Release. |
-| `verify_*` or `retrieve_*` <!-- intentional-job-kind: verifier --><!-- intentional-environment: none --> | Observes one destination through its consumer path, retrieves the published subject with a clean client when the route supports a separate reader, and turns the observation into a verified evidence fragment. | Runs outside the protected environment with read-only repository access. GitHub Package Registry retrieval adds only `packages: read`. An alternate Cargo registry keeps authenticated observation in its publisher job because no maintained read-only credential can be minted. |
+| `verify_*` or `retrieve_*` <!-- intentional-job-kind: verifier --><!-- intentional-environment: none --> | Installs the credential-free clients its recipe declares, observes one destination through its consumer path, retrieves the published subject with a clean client when the route supports a separate reader, and turns the observation into a verified evidence fragment. | Runs outside the protected environment with read-only repository access. GitHub Package Registry retrieval adds only `packages: read`. An alternate Cargo registry keeps authenticated observation in its publisher job because no maintained read-only credential can be minted. |
 | `tag_after_publication` <!-- intentional-job-kind: phase-after --><!-- intentional-environment: protected --> | Seals verified publication fragments and pushes configured `after-publication` tags. | Derived only when a tag declares that phase. It uses the same protected, short-lived App-token boundary as the before-publication tag job. |
 | `assemble_evidence` <!-- intentional-job-kind: assemble --><!-- intentional-environment: none --> | Collects verified publication fragments, sealed phase documents, and configured gate contributions into the release evidence. | Read-only. It has no protected environment and no destination or repository-write credential. |
 | `close_release` <!-- intentional-job-kind: close --><!-- intentional-environment: protected --> | Uploads and reads back the assembled evidence, attests it, then changes the draft GitHub Release to immutable published state. | Runs in the protected environment. It mints a short-lived App token and holds only the workflow scopes required for attestation. This is the final authority transition. |
@@ -72,8 +72,10 @@ The main costs buy separate guarantees:
   can be retried and reviewed without lending its credential to another route.
 - **Verification uses the consumer path.** A publisher's successful command is
   not accepted as proof that consumers can retrieve the result. The verifier
-  observes destination state and, where the destination offers a narrower read
-  identity, retrieves the subject in a separate clean-client job.
+  installs the non-baseline clients derived by that destination's recipe,
+  checks that each is present before polling, and observes destination state.
+  Where the destination offers a narrower read identity, it retrieves the
+  subject in a separate clean-client job.
 - **Secret-bearing commands remain repository-visible.** Authentication and
   irreversible publication run as derived commands in the repository-local
   publisher job. Intentional's Actions receive sealed paths and schema-backed

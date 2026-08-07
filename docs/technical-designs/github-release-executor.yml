@@ -793,7 +793,12 @@ proposed-design:
     passes it to the first-party Action. Its credential-free downstream verifier
     receives the completed observation with observation disabled and only
     adjudicates it. Public observers run in the corresponding credential-free
-    verifier after it downloads that publication's sealed subject. Every value an inline body
+    verifier after it downloads that publication's sealed subject. Each recipe
+    derives the portable observer's non-baseline client requirements and the
+    credential-free installer steps from one typed list. Those installers run
+    in that verifier before the first-party Action checks that every required
+    client is present. A missing client therefore fails immediately with its
+    name rather than entering the destination-consistency retry policy. Every value an inline body
     reads arrives through `env:` because an expression expanded inside a script
     is substitution into shell source. A name a repository supplies is
     substitution into shell source for the same reason, so a configured registry

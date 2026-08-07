@@ -13,6 +13,39 @@
             .unwrap_or_else(|| panic!("{publisher} derives its portable observer"))
     }
 
+    fn observer_installed_clients(
+        jobs: &serde_yaml::Mapping,
+        publisher: &str,
+    ) -> BTreeSet<String> {
+        let (_, steps, _) = publication_verification(jobs, publisher);
+        steps
+            .iter()
+            .filter_map(|step| step["id"].as_str())
+            .filter_map(|id| id.strip_prefix("intentional_install_"))
+            .map(|id| id.replace('_', "-"))
+            .collect()
+    }
+
+    fn system_verification_stubs(
+        source: &Path,
+        temporary: &Path,
+        baseline: &[&str],
+        installed: &BTreeSet<String>,
+    ) -> PathBuf {
+        let destination = temporary.join("verification-stubs");
+        let _ = std::fs::remove_dir_all(&destination);
+        std::fs::create_dir_all(&destination).expect("verification stub directory");
+        for client in baseline
+            .iter()
+            .copied()
+            .chain(installed.iter().map(String::as_str))
+        {
+            std::fs::copy(source.join(client), destination.join(client))
+                .unwrap_or_else(|error| panic!("{client} is present in the verifier: {error}"));
+        }
+        destination
+    }
+
     const SYSTEM_PACKAGE_CONFIG: &str = r#"$schema: https://intentional.foo/schemas/config.yml
 contract: contract-2
 workspace-tags:
@@ -1462,10 +1495,9 @@ release-units:
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        let step = publication_observer(
-            jobs,
-            "release_automation_publish_component_package_apt_primary",
-        );
+        let publisher = "release_automation_publish_component_package_apt_primary";
+        let installed = observer_installed_clients(jobs, publisher);
+        let step = publication_observer(jobs, publisher);
         let temporary = workspace.root().join("runner-readback");
         let subject = PathBuf::from(
             step["env"]
@@ -1609,6 +1641,12 @@ fi
             let status = std::process::Command::new("chmod").args(["+x", path.to_str().expect("path")]).status().expect("chmod");
             assert!(status.success());
         }
+        let verification_stubs = system_verification_stubs(
+            &stubs,
+            &temporary,
+            &["curl", "gpg", "gpgv", "dpkg-deb", "apt", "apt-get", "sleep"],
+            &installed,
+        );
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -1619,7 +1657,7 @@ fi
                 "PATH",
                 format!(
                     "{}:{}",
-                    stubs.display(),
+                    verification_stubs.display(),
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
@@ -1816,10 +1854,9 @@ fi
             serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
                 .expect("workflow");
         let jobs = document["jobs"].as_mapping().expect("jobs");
-        let step = publication_observer(
-            jobs,
-            "release_automation_publish_component_package_rpm_primary",
-        );
+        let publisher = "release_automation_publish_component_package_rpm_primary";
+        let installed = observer_installed_clients(jobs, publisher);
+        let step = publication_observer(jobs, publisher);
         let temporary = workspace.root().join("runner-rpm-readback");
         let subject = PathBuf::from(
             step["env"]
@@ -1941,6 +1978,12 @@ fi
                 .expect("chmod");
             assert!(status.success());
         }
+        let verification_stubs = system_verification_stubs(
+            &stubs,
+            &temporary,
+            &["curl", "gpg", "gpgv", "sleep"],
+            &installed,
+        );
         let mut command = std::process::Command::new("bash");
         command
             .arg("-c")
@@ -1951,7 +1994,7 @@ fi
                 "PATH",
                 format!(
                     "{}:{}",
-                    stubs.display(),
+                    verification_stubs.display(),
                     test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
