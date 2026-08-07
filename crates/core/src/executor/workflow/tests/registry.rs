@@ -1482,10 +1482,11 @@
         const SECRET: &str = "EXAMPLE_BOOTSTRAP_TOKEN";
         const EXPRESSION: &str = "${{ secrets.EXAMPLE_BOOTSTRAP_TOKEN }}";
 
-        for (label, workspace) in [
+        for (label, workspace, alternate) in [
             (
                 "the crates.io primary",
                 workspace("workflow-cargo-token-resolution-primary"),
+                false,
             ),
             (
                 "a configured alternate registry",
@@ -1501,6 +1502,7 @@
                     );
                     workspace
                 },
+                true,
             ),
         ] {
             let config = std::fs::read_to_string(workspace.root().join(".intentional/config.yml"))
@@ -1512,30 +1514,44 @@
             workspace.write(".intentional/config.yml", &config);
             converge(workspace.root(), WorkflowRole::Publish);
 
-            let publications = crate::executor::recipe::select_publications(
-                workspace.root(),
-                &Config::load(workspace.root()).expect("configuration loads"),
-            )
-            .expect("publications select");
-            let cargo_publications = publications
-                .iter()
-                .filter(|publication| publication.publisher == PublisherKind::Cargo)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                cargo_publications.len(),
-                1,
-                "{label} derives exactly one Cargo destination, so there is no npm-style peer for a token-secret to leak into"
-            );
-
             let steps = publisher_steps(workspace.root(), PRIMARY_TARGET);
-            let authenticate = steps
+            let holders = steps
                 .iter()
-                .find(|step| {
-                    step["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("Authenticate"))
+                .filter(|step| {
+                    step_environment(step)
+                        .values()
+                        .any(|value| value == EXPRESSION)
                 })
-                .expect("the Cargo publisher authenticates before publishing");
+                .collect::<Vec<_>>();
+            let authenticate = if alternate {
+                let [authenticate, observe] = holders.as_slice() else {
+                    panic!(
+                        "{label} reads its token-secret from exactly the authenticate and inline observation steps"
+                    );
+                };
+                assert!(
+                    authenticate["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Authenticate")),
+                    "the first holder authenticates before publishing"
+                );
+                assert!(
+                    observe["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("Read ")),
+                    "the second holder is the inline observation step"
+                );
+                assert!(
+                    step_environment(observe).contains_key("INPUT_OBSERVATION"),
+                    "the inline observation step spends the publisher credential beside publication"
+                );
+                authenticate
+            } else {
+                let [authenticate] = holders.as_slice() else {
+                    panic!("exactly one {label} step reads its configured token-secret");
+                };
+                authenticate
+            };
             assert_eq!(
                 step_environment(authenticate)
                     .get("INTENTIONAL_BOOTSTRAP_TOKEN")

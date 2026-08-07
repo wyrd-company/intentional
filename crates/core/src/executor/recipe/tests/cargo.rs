@@ -60,6 +60,27 @@
     }
 
     #[test]
+    fn refuses_a_manifest_that_names_more_than_one_cargo_registry() {
+        let workspace = Workspace::new("cargo-multi-registry");
+        workspace.write(
+            ".cargo/config.toml",
+            "[registries.one]\nindex = \"sparse+https://one.example/\"\n[registries.two]\nindex = \"sparse+https://two.example/\"\n",
+        );
+        workspace.write(
+            "component/Cargo.toml",
+            "[package]\nname = \"component\"\nversion = \"1.0.0\"\npublish = [\"one\", \"two\"]\n",
+        );
+        let error = select_publications(workspace.root(), &config("    cargo: { registry: {} }\n"))
+            .expect_err("multiple registries rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("exactly one primary destination"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn open_catalog_selects_each_non_go_system_package_route() {
         let routes = catalog()
             .iter()
