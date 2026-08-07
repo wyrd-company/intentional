@@ -184,13 +184,6 @@ fn publish_workflow_page_matches_the_repository_derivation() {
         "the page states the witnessed repository-scale values"
     );
 
-    assert_eq!(
-        std::fs::read_to_string("../../docs/assets/publish-workflow.mmd")
-            .expect("publish workflow Mermaid source is readable"),
-        publish_workflow_mermaid(&workflow),
-        "the checked-in Mermaid source is generated from every derived job and needs edge"
-    );
-
     for (id, body) in jobs {
         let id = id.as_str().expect("job id is text");
         let kind = job_kind(id);
@@ -209,6 +202,52 @@ fn publish_workflow_page_matches_the_repository_derivation() {
             "managed job {id} has the documented environment boundary"
         );
     }
+}
+
+#[test]
+fn publish_workflow_diagram_matches_every_derived_need() {
+    let workflow = derived_repository_workflow();
+    let document: Value = serde_yaml::from_str(&workflow).expect("derived workflow parses");
+    let jobs = document["jobs"]
+        .as_mapping()
+        .expect("derived workflow has jobs");
+    let expected_edges = jobs
+        .iter()
+        .flat_map(|(id, body)| {
+            let id = id.as_str().expect("job id is text").to_owned();
+            match body.get("needs") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::String(need)) => vec![(need.clone(), id)],
+                Some(Value::Sequence(needs)) => needs
+                    .iter()
+                    .map(|need| {
+                        (
+                            need.as_str().expect("job need is text").to_owned(),
+                            id.clone(),
+                        )
+                    })
+                    .collect(),
+                Some(other) => panic!("job {id} has unsupported needs {other:?}"),
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    let mermaid = std::fs::read_to_string("../../docs/assets/publish-workflow.mmd")
+        .expect("publish workflow Mermaid source is readable");
+    let actual_edges = mermaid
+        .lines()
+        .filter_map(|line| line.trim().split_once(" --> "))
+        .map(|(need, id)| (need.to_owned(), id.to_owned()))
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        actual_edges, expected_edges,
+        "the Mermaid graph carries exactly every direct derived need"
+    );
+    assert_eq!(
+        mermaid,
+        publish_workflow_mermaid(&workflow),
+        "the checked-in Mermaid source is the generated projection"
+    );
 }
 
 #[test]
