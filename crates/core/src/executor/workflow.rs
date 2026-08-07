@@ -28,6 +28,7 @@ use crate::model::{PublisherKind, TagPhase};
 use crate::plan::canonical_json;
 use crate::textdiff;
 use crate::yaml_edit::Document;
+use glob::{MatchOptions, Pattern};
 use serde::Serialize;
 use serde_yaml::Value;
 use sha2::{Digest, Sha256};
@@ -76,6 +77,16 @@ pub const WORKFLOW_DIFF_SCHEMA: &str = "https://intentional.foo/schemas/workflow
 /// Reconciliation applies the same bound to its output so every workflow it
 /// writes remains readable by the next comparison.
 const MAX_WORKFLOW_LINES: usize = 2_000;
+
+/// GitHub `push` filter pairs whose positive and `-ignore` forms are mutually exclusive.
+const PUSH_FILTER_FAMILIES: [(&str, &str); 3] = [
+    ("branches", "branches-ignore"),
+    ("tags", "tags-ignore"),
+    ("paths", "paths-ignore"),
+];
+
+/// `push` filters that explicitly choose which refs receive the event.
+const PUSH_REF_FILTERS: [&str; 4] = ["branches", "branches-ignore", "tags", "tags-ignore"];
 
 /// Largest single workflow line the comparison will read or propose.
 ///
@@ -645,6 +656,7 @@ fn reconcile(
             format!("the derived transformation is not valid YAML: {error}"),
         )
     })?;
+    validate_trigger_filters(&parsed)?;
     carries_contract(&parsed, contract)?;
     preserves_repository_content(&input, &parsed, contract)?;
     Ok((output, advisories))
@@ -707,12 +719,6 @@ fn preserves_repository_content(
     let Some(top_level) = input.as_mapping() else {
         return Ok(());
     };
-    let owned_triggers = contract
-        .triggers
-        .iter()
-        .filter_map(|(path, _)| path.get(1).cloned())
-        .collect::<BTreeSet<_>>();
-
     for (key, value) in top_level {
         let Some(key) = key.as_str() else { continue };
         match key {
@@ -720,8 +726,6 @@ fn preserves_repository_content(
             // default outright, and both are proved by the contract check.
             "concurrency" | "permissions" => {}
             "on" => {
-                // Trigger entries the contract names are its own; every other
-                // trigger the repository wrote must survive untouched.
                 let Some(triggers) = value.as_mapping() else {
                     continue;
                 };
@@ -730,11 +734,52 @@ fn preserves_repository_content(
                     let Some(trigger) = trigger.as_str() else {
                         continue;
                     };
-                    if owned_triggers.iter().any(|owned| owned == trigger) {
+                    let owned_fields = contract
+                        .triggers
+                        .iter()
+                        .filter(|(path, _)| path.get(1).is_some_and(|owned| owned == trigger))
+                        .filter_map(|(path, _)| path.get(2).cloned())
+                        .collect::<BTreeSet<_>>();
+                    let owns_trigger = contract.triggers.iter().any(|(path, _)| {
+                        path.get(1).is_some_and(|owned| owned == trigger) && path.len() == 2
+                    });
+                    if owns_trigger {
                         continue;
                     }
-                    if emitted.and_then(|on| on.get(trigger)) != Some(configured) {
+                    let proposed = emitted.and_then(|on| on.get(trigger));
+                    if owned_fields.is_empty() {
+                        if proposed == Some(configured) {
+                            continue;
+                        }
                         return Err(discarded(&format!("on.{trigger}")));
+                    }
+                    let Some(configured) = configured.as_mapping() else {
+                        return Err(discarded(&format!("on.{trigger}")));
+                    };
+                    let Some(proposed) = proposed.and_then(Value::as_mapping) else {
+                        return Err(discarded(&format!("on.{trigger}")));
+                    };
+                    for (field, configured) in configured {
+                        let Some(field) = field.as_str() else {
+                            continue;
+                        };
+                        let proposed = proposed.get(Value::String(field.to_owned()));
+                        let preserved = if owned_fields.contains(field) {
+                            match (
+                                configured.as_sequence(),
+                                proposed.and_then(Value::as_sequence),
+                            ) {
+                                (Some(configured), Some(proposed)) => {
+                                    configured.iter().all(|value| proposed.contains(value))
+                                }
+                                _ => proposed == Some(configured),
+                            }
+                        } else {
+                            proposed == Some(configured)
+                        };
+                        if !preserved {
+                            return Err(discarded(&format!("on.{trigger}.{field}")));
+                        }
                     }
                 }
             }
@@ -806,7 +851,16 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
                 .is_some_and(push_mapping_needs_branch_expansion)
         {
             let mut mapping = current.clone();
-            mapping.insert(push, all_branch_pushes());
+            let mut filters = current
+                .get(&push)
+                .and_then(Value::as_mapping)
+                .cloned()
+                .unwrap_or_default();
+            filters.insert(
+                Value::String("branches".to_owned()),
+                Value::Sequence(vec![Value::String("**".to_owned())]),
+            );
+            mapping.insert(push, Value::Mapping(filters));
             return Some(Value::Mapping(mapping));
         }
         return None;
@@ -836,7 +890,12 @@ fn expanded_triggers(current: &Value, contract: &WorkflowContract) -> Option<Val
 }
 
 fn push_mapping_needs_branch_expansion(value: &Value) -> bool {
-    value.is_null() || value.as_mapping().is_some_and(|mapping| mapping.is_empty())
+    value.is_null()
+        || value.as_mapping().is_some_and(|mapping| {
+            PUSH_REF_FILTERS
+                .iter()
+                .all(|filter| !mapping.contains_key(Value::String((*filter).to_owned())))
+        })
 }
 
 fn all_branch_pushes() -> Value {
@@ -852,18 +911,82 @@ fn all_branch_pushes() -> Value {
 fn trigger_update(current: Option<&Value>, required: &Value) -> Option<Value> {
     match (current, required) {
         (None, _) => Some(required.clone()),
-        // Additional repository patterns are preserved; only missing ones are added.
+        // Additional repository patterns are preserved; missing owned patterns
+        // are appended in their contract order.
         (Some(Value::Sequence(present)), Value::Sequence(needed)) => {
             let mut merged = present.clone();
-            for pattern in needed {
+            let exclusions = needed
+                .iter()
+                .filter(|pattern| {
+                    pattern
+                        .as_str()
+                        .is_some_and(|pattern| pattern.starts_with('!'))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for pattern in needed
+                .iter()
+                .filter(|pattern| !exclusions.contains(pattern))
+            {
                 if !merged.contains(pattern) {
                     merged.push(pattern.clone());
                 }
+            }
+            // GitHub evaluates `!` patterns in order. Repeat Intentional's
+            // owned phase exclusions as a stable suffix when necessary so a
+            // later repository positive pattern cannot re-enable the phase
+            // tag. Existing repository pattern order remains untouched.
+            if !exclusions.is_empty() && !merged.ends_with(&exclusions) {
+                merged.extend(exclusions);
             }
             (merged != *present).then_some(Value::Sequence(merged))
         }
         (Some(_), _) => None,
     }
+}
+
+/// Validate the filter combinations GitHub accepts for the event Intentional extends.
+fn validate_trigger_filters(parsed: &Value) -> std::result::Result<(), WorkflowDiagnostic> {
+    let Some(push) = parsed
+        .get("on")
+        .and_then(|triggers| triggers.get("push"))
+        .and_then(Value::as_mapping)
+    else {
+        return Ok(());
+    };
+    for (include, exclude) in PUSH_FILTER_FAMILIES {
+        if push.contains_key(Value::String(include.to_owned()))
+            && push.contains_key(Value::String(exclude.to_owned()))
+        {
+            return Err(WorkflowDiagnostic::at(
+                "trigger-filter-conflict",
+                format!(
+                    "GitHub does not allow on.push.{include} and on.push.{exclude} in the same event filter; keep one form"
+                ),
+                &format!("on.push.{include}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate GitHub's ordered positive and `!`-negative tag filter patterns.
+fn github_tag_filters_match(patterns: &[Value], tag: &str) -> bool {
+    let options = MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let mut included = false;
+    for pattern in patterns.iter().filter_map(Value::as_str) {
+        let (negative, pattern) = pattern
+            .strip_prefix('!')
+            .map_or((false, pattern), |pattern| (true, pattern));
+        if Pattern::new(pattern).is_ok_and(|pattern| pattern.matches_with(tag, options)) {
+            included = !negative;
+        }
+    }
+    included
 }
 
 /// Whether a top-level permission block already defaults to read-only.
@@ -989,10 +1112,16 @@ fn publish_contract(
     let global_tag = unphased
         .first()
         .map_or_else(String::new, |tag| tag.template.clone());
-    let patterns = unphased
+    let mut patterns = unphased
         .iter()
         .map(|tag| Value::String(tag.template.replace("{version}", "*")))
         .collect::<Vec<_>>();
+    let phased_templates = phased_tag_templates(config);
+    patterns.extend(
+        phased_templates
+            .iter()
+            .map(|template| Value::String(format!("!{}", template.replace("{version}", "*")))),
+    );
     if unphased.len() != 1 {
         match unphased.len() {
             0 => {
@@ -1027,6 +1156,18 @@ fn publish_contract(
                 ),
                 "workspace-tags",
             )),
+        }
+    }
+    for template in &phased_templates {
+        let rendered = template.replace("{version}", "1.2.3");
+        if github_tag_filters_match(&patterns, &rendered) {
+            diagnostics.push(WorkflowDiagnostic::at(
+                "phase-tag-trigger-overlap",
+                format!(
+                    "the derived publish trigger matches phase tag {rendered}; exclude every configured phase-tag template so a publication run cannot trigger itself"
+                ),
+                "on.push.tags",
+            ));
         }
     }
     let selection = resolve_publications(root, config).map_err(|error| {
@@ -1303,6 +1444,24 @@ fn publish_contract(
         )),
         jobs: rendered_jobs(jobs)?,
     })
+}
+
+/// Configured phase-tag templates with release-unit ids already rendered.
+fn phased_tag_templates(config: &Config) -> Vec<String> {
+    let mut templates = BTreeSet::new();
+    for tag in config.workspace_tags.values() {
+        if tag.require_phase.is_some() {
+            templates.insert(tag.template.clone());
+        }
+    }
+    for (release_unit_id, release_unit) in &config.release_units {
+        for tag in release_unit.tags.values() {
+            if tag.require_phase.is_some() {
+                templates.insert(tag.template.replace("{id}", release_unit_id));
+            }
+        }
+    }
+    templates.into_iter().collect()
 }
 
 /// One publishable subject and the publications that distribute it.
@@ -2572,10 +2731,11 @@ jobs:
             "the configured publish gate governs closure: {closure:?}"
         );
         let tags = document["on"]["push"]["tags"].as_sequence().expect("tags");
+        let config = Config::load(workspace.root()).expect("config loads");
         assert_eq!(
             tags.len(),
-            2,
-            "the global release tag joins the repository's own: {tags:?}"
+            2 + phased_tag_templates(&config).len(),
+            "the global release tag and phase exclusions join the repository's own: {tags:?}"
         );
     }
 
@@ -6842,6 +7002,157 @@ exit 0
     }
 
     #[test]
+    fn preserves_branch_pushes_from_path_filters_when_publish_derivation_adds_tag_filters() {
+        let workspace = workspace("workflow-publish-path-filter");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push:\n    paths:\n      - src/**\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+
+        assert_eq!(
+            document["on"]["push"]["branches"].as_sequence(),
+            Some(&vec![Value::String("**".to_owned())]),
+            "a path-only push mapping still accepts every branch after the tag filter is added"
+        );
+    }
+
+    #[test]
+    fn preserves_branch_pushes_for_every_platform_filter_shape_that_carries_them() {
+        let choices = [None, Some(0_usize), Some(1_usize)];
+        let branch_family = PUSH_FILTER_FAMILIES
+            .iter()
+            .copied()
+            .find(|(include, _)| *include == "branches")
+            .expect("branch filters belong to the platform vocabulary");
+        let path_family = PUSH_FILTER_FAMILIES
+            .iter()
+            .copied()
+            .find(|(include, _)| *include == "paths")
+            .expect("path filters belong to the platform vocabulary");
+        let mut checked = 0;
+        for branch_choice in choices {
+            for path_choice in choices {
+                let workspace = workspace(&format!(
+                    "workflow-publish-filter-shape-{branch_choice:?}-{path_choice:?}"
+                ));
+                let mut push = serde_yaml::Mapping::new();
+                for (family, choice) in [(branch_family, branch_choice), (path_family, path_choice)]
+                {
+                    if let Some(choice) = choice {
+                        let filter = [family.0, family.1][choice];
+                        push.insert(
+                            Value::String(filter.to_owned()),
+                            Value::Sequence(vec![Value::String("sample/**".to_owned())]),
+                        );
+                    }
+                }
+                let mut authored: Value = serde_yaml::from_str(
+                    "name: publish\non: { push: {} }\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+                )
+                .expect("fixture parses");
+                authored["on"]["push"] = Value::Mapping(push.clone());
+                workspace.write(
+                    ".github/workflows/publish.yml",
+                    &serde_yaml::to_string(&authored).expect("fixture renders"),
+                );
+
+                converge(workspace.root(), WorkflowRole::Publish);
+                let emitted: Value =
+                    serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                        .expect("result parses");
+                let emitted = emitted["on"]["push"].as_mapping().expect("push mapping");
+                for (filter, configured) in &push {
+                    assert_eq!(
+                        emitted.get(filter),
+                        Some(configured),
+                        "repository filter {filter:?} survives in shape {push:?}"
+                    );
+                }
+                if branch_choice.is_none() {
+                    assert_eq!(
+                        emitted
+                            .get(Value::String("branches".to_owned()))
+                            .and_then(Value::as_sequence),
+                        Some(&vec![Value::String("**".to_owned())]),
+                        "shape {push:?} keeps the branch pushes it accepted before reconciliation"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked,
+            choices.len() * choices.len(),
+            "the sweep derives every none/include/exclude branch-and-path shape from the platform filter families"
+        );
+    }
+
+    #[test]
+    fn refuses_push_filters_github_treats_as_mutually_exclusive() {
+        for (include, exclude) in PUSH_FILTER_FAMILIES {
+            let workspace = workspace(&format!("workflow-publish-conflicting-{include}"));
+            workspace.write(
+                ".github/workflows/publish.yml",
+                &format!(
+                    "name: publish\non:\n  push:\n    {include}:\n      - sample/**\n    {exclude}:\n      - excluded/**\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n"
+                ),
+            );
+
+            let comparison = compare_workflow(workspace.root(), WorkflowRole::Publish, None)
+                .expect("comparison");
+            assert_eq!(comparison.status, ComparisonStatus::Blocked);
+            let diagnostic = comparison
+                .diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.code == "trigger-filter-conflict")
+                .expect("the incompatible emitted filter pair is reported");
+            let expected_path = format!("on.push.{include}");
+            assert_eq!(diagnostic.path.as_deref(), Some(expected_path.as_str()));
+            assert!(
+                comparison.apply().is_err(),
+                "an unloadable workflow is never written"
+            );
+        }
+    }
+
+    #[test]
+    fn excludes_phase_tags_from_the_publish_trigger() {
+        let workspace = workspace("workflow-publish-phase-tag-exclusion");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push:\n    tags:\n      - '!component@*'\n      - 'component@*'\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        converge(workspace.root(), WorkflowRole::Publish);
+        let document: Value =
+            serde_yaml::from_str(&workflow(workspace.root(), WorkflowRole::Publish))
+                .expect("result parses");
+        let patterns = document["on"]["push"]["tags"]
+            .as_sequence()
+            .expect("tag filters");
+
+        let config = Config::load(workspace.root()).expect("config loads");
+        let phase_tags = phased_tag_templates(&config)
+            .into_iter()
+            .map(|template| template.replace("{version}", "1.2.3"))
+            .collect::<Vec<_>>();
+        assert!(!phase_tags.is_empty(), "the fixture declares phase tags");
+        for phase_tag in phase_tags {
+            assert!(
+                !github_tag_filters_match(patterns, &phase_tag),
+                "phase tag {phase_tag} cannot start another publication run: {patterns:?}"
+            );
+        }
+        assert!(
+            github_tag_filters_match(patterns, "1.2.3"),
+            "the annotated global release tag still starts publication: {patterns:?}"
+        );
+    }
+
+    #[test]
     fn refuses_to_derive_dependencies_on_missing_configured_gates() {
         let workspace = workspace("workflow-missing-gate");
         workspace.write(
@@ -7029,6 +7340,52 @@ exit 0
             .remove(Value::String("intentional_prepare".to_owned()));
         preserves_repository_content(&input, &retired, &contract)
             .expect("retiring a reserved job is not repository-content loss");
+    }
+
+    #[test]
+    fn proves_repository_owned_push_filters_survive_the_owned_tag_update() {
+        let workspace = workspace("workflow-push-preservation");
+        workspace.write(
+            ".github/workflows/publish.yml",
+            "name: publish\non:\n  push:\n    branches: [ main ]\n    paths: [ 'sample/**' ]\n    tags: [ 'legacy-*' ]\njobs:\n  artifact_check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: 'true'\n",
+        );
+        let config = Config::load(workspace.root()).expect("config loads");
+        let github = config.github.as_ref().expect("github config");
+        let namespaces = github.namespaces().expect("namespaces");
+        let contract = publish_contract(
+            workspace.root(),
+            &config,
+            github,
+            &namespaces,
+            &["artifact_check".to_owned()],
+        )
+        .expect("contract derives");
+        let text = workflow(workspace.root(), WorkflowRole::Publish);
+        let input: Value = serde_yaml::from_str(&text).expect("input parses");
+        let (output, _) =
+            reconcile(Document::parse(&text).expect("parses"), &contract).expect("reconciles");
+        let parsed: Value = serde_yaml::from_str(&output).expect("output parses");
+        preserves_repository_content(&input, &parsed, &contract)
+            .expect("the complete push mapping survives the owned update");
+
+        for field in ["branches", "paths", "tags"] {
+            let mut damaged = parsed.clone();
+            let filters = damaged["on"]["push"]
+                .as_mapping_mut()
+                .expect("push filters");
+            if field == "tags" {
+                filters[&Value::String(field.to_owned())]
+                    .as_sequence_mut()
+                    .expect("tag filters")
+                    .retain(|pattern| pattern.as_str() != Some("legacy-*"));
+            } else {
+                filters.remove(Value::String(field.to_owned()));
+            }
+            let diagnostic = preserves_repository_content(&input, &damaged, &contract)
+                .expect_err("lost push-filter content is refused");
+            let expected_path = format!("on.push.{field}");
+            assert_eq!(diagnostic.path.as_deref(), Some(expected_path.as_str()));
+        }
     }
 
     #[test]
@@ -9660,7 +10017,7 @@ release-units:
         );
         assert_eq!(
             output.lines().count(),
-            1_651,
+            1_652,
             "the real four-publication fixture pins the measured line count"
         );
         assert!(
@@ -9696,7 +10053,7 @@ release-units:
         let output = comparison.output.expect("expanded comparison has output");
         assert_eq!(
             output.lines().count(),
-            1_859,
+            1_860,
             "the five-publication fixture pins the measured line count"
         );
 
