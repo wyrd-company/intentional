@@ -1,7 +1,7 @@
 ---
 docs: true
 title: Derived publish workflow
-order: 4
+order: 5
 relationships:
   implements: github-release-executor
 ---
@@ -24,13 +24,14 @@ The workflow is large because the generated file keeps each authority boundary
 and destination-specific command visible in the repository where it runs. This
 page is the map for reading it.
 
-## Follow the job graph
+## Publish job graph
 
 ![The publish workflow verifies the tag, fans out to builds, seals and uploads the built subjects, publishes each destination, verifies each publication, assembles evidence, and closes the release last](assets/publish-workflow.svg)
 
-Every arrow is a direct required dependency in this repository's derived graph.
-A different configuration can add phase-tag, deliverable, publication, and gate
-jobs with their own direct dependencies.
+Each node represents one generated job kind. Every arrow is a direct required
+dependency present in the derived workflows used to cover the complete kind
+set. A repository configuration determines how many jobs of each kind it needs
+and which conditional kinds appear.
 
 The managed job names use your configured job prefix. The default names begin
 with `intentional_`.
@@ -54,12 +55,11 @@ each destination verifier. Release closure waits for assembled evidence and
 configured gates, so the GitHub Release becomes immutable only after the
 workflow has collected everything it must carry.
 
-## Account for the workflow's size
+## Job separation
 
-For this repository, the complete reconciled workflow file is 1,652 lines
-across 20 jobs. That count includes the minimal repository-owned name, trigger,
-permission, and jobs scaffolding into which Intentional writes its managed
-slice. Another repository derives a different graph.
+A repository derives jobs for its configured subjects, platforms, and
+destinations. Conditional phase tags and deliverable uploads add jobs only when
+the configuration requires them.
 
 The main costs buy separate guarantees:
 
@@ -87,7 +87,7 @@ publication behind an opaque Action would hide the command that spends them.
 Skipping consumer readback would replace observed publication with a client's
 success status.
 
-## Provision the authority boundaries
+## Authority and credentials
 
 The derived environment name defaults to `intentional-release` and follows a
 configured prefix. Create the exact name reported by `intentional executor
@@ -122,14 +122,14 @@ credentials at the point that spends them.
 Run `intentional executor init` for the exact environment, variable, secret,
 and destination credential names derived from your prefixes and publication
 configuration. The complete destination-by-destination credential table is in
-the [usage guide](usage.md#publish-to-a-registry-for-the-first-time).
+the [GitHub executor guide](executor.md#publish-to-a-registry-for-the-first-time).
 
-## Own the generated file
+## Generated workflow maintenance
 
-Treat the applied workflow as reviewed repository code. Intentional owns the
-managed jobs marked by its sentinel step, but it does not own the workflow
-document. Your triggers, repository jobs, comments, and unrelated metadata stay
-yours.
+Treat the applied workflow as reviewed repository code. You own the complete
+workflow document. Intentional generates the jobs marked by its sentinel step
+and suggests replacements when the derived contract changes. Your triggers,
+repository jobs, comments, and unrelated metadata remain unchanged.
 
 After configuration or Intentional changes, run `intentional executor check`
 and inspect `intentional executor diff publish`. The diff shows the complete

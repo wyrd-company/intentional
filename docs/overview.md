@@ -53,11 +53,12 @@ do not require the GitHub release executor. Repositories may add the executor
 when they want Intentional to derive the release and publication choreography
 around those core records.
 
-The executor adds managed workflow slices for repository transitions, external
-publication, consumer-path verification, evidence assembly, and immutable
-GitHub Release closure. Read the [derived publish workflow](publish-workflow.md)
-before adopting that layer; it maps the generated jobs and the authority each
-one can reach.
+The executor adds generated workflow slices for repository transitions,
+external publication, consumer-path verification, evidence assembly, and
+immutable GitHub Release closure. Read the [GitHub executor guide](executor.md)
+for setup and operation, then read the
+[derived publish workflow](publish-workflow.md) for its job kinds and authority
+boundaries.
 
 ## Supported ecosystems
 

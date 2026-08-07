@@ -1,75 +1,37 @@
-%% Generated from the derived publish workflow; do not edit by hand.
-%%{init: {"theme":"dark","htmlLabels":false,"deterministicIds":true,"deterministicIDSeed":"intentional-publish-workflow","flowchart":{"curve":"basis"},"themeVariables":{"background":"#24292e","primaryColor":"#30363d","primaryTextColor":"#f0f6fc","primaryBorderColor":"#8b949e","lineColor":"#79c0ff","fontFamily":"DejaVu Sans"}}}%%
+%% Generated from derived publish workflows; do not edit by hand.
+%%{init: {"theme":"dark","htmlLabels":false,"deterministicIds":true,"deterministicIDSeed":"intentional-publish-workflow","flowchart":{"curve":"basis"},"themeVariables":{"background":"#24292e","primaryTextColor":"#f0f6fc","lineColor":"#79c0ff","fontFamily":"DejaVu Sans"}}}%%
 flowchart LR
+classDef standard fill:#30363d,stroke:#8b949e,color:#f0f6fc
 classDef protected fill:#3d2f1f,stroke:#d29922,color:#f0f6fc
 classDef terminal fill:#3b2344,stroke:#bc8cff,color:#f0f6fc
-  intentional_verify_tag["verify_tag"]
-  intentional_build_intentional_cli_cargo["build_intentional_cli_cargo"]
-  intentional_build_intentional_cargo_archive_linux_x86_64["build_intentional_cargo_archive_linux_x86_64"]
-  intentional_build_intentional_cargo_archive_linux_arm64["build_intentional_cargo_archive_linux_arm64"]
-  intentional_build_intentional_cargo_archive_macos_arm64["build_intentional_cargo_archive_macos_arm64"]
-  intentional_build_intentional_cargo_archive["build_intentional_cargo_archive"]
-  intentional_build_intentional_core_cargo["build_intentional_core_cargo"]
-  intentional_build_intentional_npm["build_intentional_npm"]
-  intentional_tag_before_publication["tag_before_publication"]
-  intentional_upload_deliverables["upload_deliverables"]
-  intentional_publish_intentional_cli_cargo_primary["publish_intentional_cli_cargo_primary"]
-  intentional_verify_intentional_cli_cargo_primary["verify_intentional_cli_cargo_primary"]
-  intentional_publish_intentional_cli_homebrew_primary["publish_intentional_cli_homebrew_primary"]
-  intentional_retrieve_intentional_cli_homebrew_primary["retrieve_intentional_cli_homebrew_primary"]
-  intentional_publish_intentional_core_cargo_primary["publish_intentional_core_cargo_primary"]
-  intentional_verify_intentional_core_cargo_primary["verify_intentional_core_cargo_primary"]
-  intentional_publish_intentional_launcher_npm_primary["publish_intentional_launcher_npm_primary"]
-  intentional_verify_intentional_launcher_npm_primary["verify_intentional_launcher_npm_primary"]
-  intentional_assemble_evidence["assemble_evidence"]
-  intentional_close_release["close_release"]
-  intentional_verify_tag --> intentional_build_intentional_cli_cargo
-  intentional_verify_tag --> intentional_build_intentional_cargo_archive_linux_x86_64
-  intentional_verify_tag --> intentional_build_intentional_cargo_archive_linux_arm64
-  intentional_verify_tag --> intentional_build_intentional_cargo_archive_macos_arm64
-  intentional_verify_tag --> intentional_build_intentional_cargo_archive
-  intentional_build_intentional_cargo_archive_linux_x86_64 --> intentional_build_intentional_cargo_archive
-  intentional_build_intentional_cargo_archive_linux_arm64 --> intentional_build_intentional_cargo_archive
-  intentional_build_intentional_cargo_archive_macos_arm64 --> intentional_build_intentional_cargo_archive
-  intentional_verify_tag --> intentional_build_intentional_core_cargo
-  intentional_verify_tag --> intentional_build_intentional_npm
-  intentional_verify_tag --> intentional_tag_before_publication
-  intentional_build_intentional_cli_cargo --> intentional_tag_before_publication
-  intentional_build_intentional_cargo_archive --> intentional_tag_before_publication
-  intentional_build_intentional_core_cargo --> intentional_tag_before_publication
-  intentional_build_intentional_npm --> intentional_tag_before_publication
-  intentional_verify_tag --> intentional_upload_deliverables
-  intentional_build_intentional_cli_cargo --> intentional_upload_deliverables
-  intentional_build_intentional_cargo_archive --> intentional_upload_deliverables
-  intentional_build_intentional_core_cargo --> intentional_upload_deliverables
-  intentional_build_intentional_npm --> intentional_upload_deliverables
-  intentional_tag_before_publication --> intentional_publish_intentional_cli_cargo_primary
-  intentional_build_intentional_cli_cargo --> intentional_publish_intentional_cli_cargo_primary
-  intentional_upload_deliverables --> intentional_publish_intentional_cli_cargo_primary
-  intentional_publish_intentional_cli_cargo_primary --> intentional_verify_intentional_cli_cargo_primary
-  intentional_build_intentional_cli_cargo --> intentional_verify_intentional_cli_cargo_primary
-  intentional_tag_before_publication --> intentional_publish_intentional_cli_homebrew_primary
-  intentional_build_intentional_cargo_archive --> intentional_publish_intentional_cli_homebrew_primary
-  intentional_upload_deliverables --> intentional_publish_intentional_cli_homebrew_primary
-  intentional_publish_intentional_cli_homebrew_primary --> intentional_retrieve_intentional_cli_homebrew_primary
-  intentional_build_intentional_cargo_archive --> intentional_retrieve_intentional_cli_homebrew_primary
-  intentional_tag_before_publication --> intentional_publish_intentional_core_cargo_primary
-  intentional_build_intentional_core_cargo --> intentional_publish_intentional_core_cargo_primary
-  intentional_upload_deliverables --> intentional_publish_intentional_core_cargo_primary
-  intentional_publish_intentional_core_cargo_primary --> intentional_verify_intentional_core_cargo_primary
-  intentional_build_intentional_core_cargo --> intentional_verify_intentional_core_cargo_primary
-  intentional_tag_before_publication --> intentional_publish_intentional_launcher_npm_primary
-  intentional_build_intentional_npm --> intentional_publish_intentional_launcher_npm_primary
-  intentional_upload_deliverables --> intentional_publish_intentional_launcher_npm_primary
-  intentional_publish_intentional_launcher_npm_primary --> intentional_verify_intentional_launcher_npm_primary
-  intentional_build_intentional_npm --> intentional_verify_intentional_launcher_npm_primary
-  intentional_verify_tag --> intentional_assemble_evidence
-  intentional_verify_intentional_cli_cargo_primary --> intentional_assemble_evidence
-  intentional_retrieve_intentional_cli_homebrew_primary --> intentional_assemble_evidence
-  intentional_verify_intentional_core_cargo_primary --> intentional_assemble_evidence
-  intentional_verify_intentional_launcher_npm_primary --> intentional_assemble_evidence
-  intentional_tag_before_publication --> intentional_assemble_evidence
-  intentional_verify_tag --> intentional_close_release
-  intentional_assemble_evidence --> intentional_close_release
-  class intentional_tag_before_publication,intentional_upload_deliverables,intentional_publish_intentional_cli_cargo_primary,intentional_publish_intentional_cli_homebrew_primary,intentional_publish_intentional_core_cargo_primary,intentional_publish_intentional_launcher_npm_primary,intentional_close_release protected
-  class intentional_close_release terminal
+  assemble["assemble_evidence"]
+  build["build_*"]
+  close["close_release"]
+  phase_after["tag_after_publication"]
+  phase_before["tag_before_publication"]
+  publisher["publish_*"]
+  upload["upload_deliverables"]
+  verifier["verify_* / retrieve_*"]
+  verify_tag["verify_tag"]
+  assemble --> close
+  build --> build
+  build --> phase_before
+  build --> publisher
+  build --> upload
+  build --> verifier
+  phase_after --> assemble
+  phase_before --> assemble
+  phase_before --> publisher
+  publisher --> verifier
+  upload --> publisher
+  verifier --> assemble
+  verifier --> phase_after
+  verify_tag --> assemble
+  verify_tag --> build
+  verify_tag --> close
+  verify_tag --> phase_after
+  verify_tag --> phase_before
+  verify_tag --> upload
+  class assemble,build,verifier,verify_tag standard
+  class close,phase_after,phase_before,publisher,upload protected
+  class close terminal

@@ -9,14 +9,14 @@ use intentional_core::executor::fixture::{
 };
 use intentional_core::executor::recipe::StoredCredentialKind;
 
-fn usage_guide() -> String {
-    std::fs::read_to_string("../../docs/usage.md").expect("usage guide is readable")
+fn executor_guide() -> String {
+    std::fs::read_to_string("../../docs/executor.md").expect("executor guide is readable")
 }
 
 fn prepare_repository_section(usage: &str) -> &str {
     usage
         .split_once("## Prepare the repository")
-        .expect("usage guide has the prepare section")
+        .expect("executor guide has the prepare section")
         .1
         .split_once("## Publish to a registry for the first time")
         .expect("prepare section ends before the registry section")
@@ -26,7 +26,7 @@ fn prepare_repository_section(usage: &str) -> &str {
 fn registry_section(usage: &str) -> &str {
     usage
         .split_once("## Publish to a registry for the first time")
-        .expect("usage guide has the registry section")
+        .expect("executor guide has the registry section")
         .1
 }
 
@@ -54,7 +54,7 @@ fn join_usage_labels(labels: &[&str]) -> String {
 
 #[test]
 fn usage_names_the_derived_long_lived_repository_write_credentials() {
-    let usage = usage_guide();
+    let usage = executor_guide();
     let credentials = long_lived_repository_write_credentials();
     let section = prepare_repository_section(&usage);
     let variable = credentials
@@ -92,7 +92,7 @@ fn usage_names_the_derived_long_lived_repository_write_credentials() {
 
 #[test]
 fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
-    let usage = usage_guide();
+    let usage = executor_guide();
     let section = registry_section(&usage);
     let bootstrap_section = section
         .split_once("### npmjs and crates.io start with a token and stop using it")
@@ -135,7 +135,7 @@ fn usage_documents_bootstrap_properties_without_exhaustive_counts() {
 
 #[test]
 fn usage_standing_credential_sentence_matches_derived_destinations() {
-    let usage = usage_guide();
+    let usage = executor_guide();
     let labels = standing_credential_usage_labels();
     let standing_section = registry_section(&usage)
         .split_once("### Standing credentials")

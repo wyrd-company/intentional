@@ -565,7 +565,7 @@ fn every_derived_github_app_token_uses_variable_id_and_secret_key() {
 
 /// Put every authority-spending job, and only those jobs, in the protected environment.
 ///
-/// The usage documentation says the preparation job "runs in no environment,
+/// The executor guide says the preparation job "runs in no environment,
 /// mints no token, and checks out without persisting credentials, so nothing it
 /// does can reach the repository". The mint half is held by the test above and
 /// the checkout options by the test below; this one holds the environment half,

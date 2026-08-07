@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
 use intentional_core::config::WorkflowRole;
-use intentional_core::executor::fixture::{derived_workflows, publish_workflow_mermaid};
+use intentional_core::executor::fixture::{derived_workflows, publish_workflow_kind_mermaid};
+use intentional_core::executor::OWNERSHIP_SENTINEL;
 
 const WORKFLOW_SEED: &str =
     "name: Publish\n\non: {}\n\npermissions:\n  contents: read\n\njobs: {}\n";
@@ -112,6 +113,47 @@ fn environment_boundaries(workflow: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn diagram_derivations() -> Vec<String> {
+    let mut workflows = vec![derived_repository_workflow()];
+    workflows.extend(
+        derived_workflows("publish-docs-conditional-jobs")
+            .into_iter()
+            .filter_map(|(role, workflow)| (role == WorkflowRole::Publish).then_some(workflow)),
+    );
+    workflows
+}
+
+fn managed_job_kinds(jobs: &serde_yaml::Mapping) -> BTreeMap<String, &'static str> {
+    jobs.iter()
+        .filter_map(|(id, body)| {
+            let managed = body["steps"].as_sequence().is_some_and(|steps| {
+                steps
+                    .iter()
+                    .any(|step| step["id"].as_str() == Some(OWNERSHIP_SENTINEL))
+            });
+            managed.then(|| {
+                let id = id.as_str().expect("managed job id is text");
+                (id.to_owned(), job_kind(id))
+            })
+        })
+        .collect()
+}
+
+fn mermaid_kind_id(kind: &str) -> &'static str {
+    match kind {
+        "verify-tag" => "verify_tag",
+        "build" => "build",
+        "phase-before" => "phase_before",
+        "upload" => "upload",
+        "publisher" => "publisher",
+        "verifier" => "verifier",
+        "phase-after" => "phase_after",
+        "assemble" => "assemble",
+        "close" => "close",
+        other => panic!("documented publish kind {other} has no Mermaid id"),
+    }
+}
+
 #[test]
 fn publish_workflow_page_leads_with_the_optional_executor_layer() {
     let schema: Value = serde_yaml::from_str(
@@ -124,7 +166,7 @@ fn publish_workflow_page_leads_with_the_optional_executor_layer() {
     let page = std::fs::read_to_string("../../docs/publish-workflow.md")
         .expect("publish workflow page is readable");
     let introduction = page
-        .split_once("## Follow the job graph")
+        .split_once("## Publish job graph")
         .expect("page introduces the layer before its graph")
         .0
         .split_whitespace()
@@ -166,24 +208,6 @@ fn publish_workflow_page_matches_the_repository_derivation() {
     let kinds = documented_job_kinds(&page);
     let environments = documented_environments(&page);
 
-    assert_eq!(
-        workflow.lines().count(),
-        1_652,
-        "the repository's derived publish workflow line count remains witnessed"
-    );
-    assert_eq!(
-        jobs.len(),
-        20,
-        "the repository's derived publish workflow job count remains witnessed"
-    );
-    assert!(
-        page.split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .contains("complete reconciled workflow file is 1,652 lines across 20 jobs"),
-        "the page states the witnessed repository-scale values"
-    );
-
     for (id, body) in jobs {
         let id = id.as_str().expect("job id is text");
         let kind = job_kind(id);
@@ -205,48 +229,61 @@ fn publish_workflow_page_matches_the_repository_derivation() {
 }
 
 #[test]
-fn publish_workflow_diagram_matches_every_derived_need() {
-    let workflow = derived_repository_workflow();
-    let document: Value = serde_yaml::from_str(&workflow).expect("derived workflow parses");
-    let jobs = document["jobs"]
-        .as_mapping()
-        .expect("derived workflow has jobs");
-    let expected_edges = jobs
-        .iter()
-        .flat_map(|(id, body)| {
-            let id = id.as_str().expect("job id is text").to_owned();
-            match body.get("needs") {
+fn publish_workflow_diagram_matches_every_derived_kind_and_need() {
+    let workflows = diagram_derivations();
+    let mut expected_kinds = BTreeSet::new();
+    let mut expected_edges = BTreeSet::new();
+    for workflow in &workflows {
+        let document: Value = serde_yaml::from_str(workflow).expect("derived workflow parses");
+        let jobs = document["jobs"]
+            .as_mapping()
+            .expect("derived workflow has jobs");
+        let job_kinds = managed_job_kinds(jobs);
+        expected_kinds.extend(job_kinds.values().map(|kind| mermaid_kind_id(kind)));
+        for (id, kind) in &job_kinds {
+            let body = jobs
+                .get(Value::String(id.clone()))
+                .expect("managed job remains in its derivation");
+            let needs = match body.get("needs") {
                 None | Some(Value::Null) => Vec::new(),
-                Some(Value::String(need)) => vec![(need.clone(), id)],
+                Some(Value::String(need)) => vec![need.as_str()],
                 Some(Value::Sequence(needs)) => needs
                     .iter()
-                    .map(|need| {
-                        (
-                            need.as_str().expect("job need is text").to_owned(),
-                            id.clone(),
-                        )
-                    })
+                    .map(|need| need.as_str().expect("job need is text"))
                     .collect(),
                 Some(other) => panic!("job {id} has unsupported needs {other:?}"),
+            };
+            for need in needs {
+                if let Some(need_kind) = job_kinds.get(need) {
+                    expected_edges.insert((mermaid_kind_id(need_kind), mermaid_kind_id(kind)));
+                }
             }
-        })
-        .collect::<BTreeSet<_>>();
+        }
+    }
     let mermaid = std::fs::read_to_string("../../docs/assets/publish-workflow.mmd")
         .expect("publish workflow Mermaid source is readable");
+    let actual_kinds = mermaid
+        .lines()
+        .filter_map(|line| line.trim().split_once("[\"").map(|(id, _)| id))
+        .collect::<BTreeSet<_>>();
     let actual_edges = mermaid
         .lines()
         .filter_map(|line| line.trim().split_once(" --> "))
-        .map(|(need, id)| (need.to_owned(), id.to_owned()))
         .collect::<BTreeSet<_>>();
 
     assert_eq!(
+        actual_kinds, expected_kinds,
+        "the Mermaid graph carries exactly every derived publish job kind"
+    );
+    assert_eq!(actual_kinds.len(), 9, "the derivations emit nine job kinds");
+    assert_eq!(
         actual_edges, expected_edges,
-        "the Mermaid graph carries exactly every direct derived need"
+        "the Mermaid graph carries exactly every direct derived kind need"
     );
     assert_eq!(
         mermaid,
-        publish_workflow_mermaid(&workflow),
-        "the checked-in Mermaid source is the generated projection"
+        publish_workflow_kind_mermaid(&workflows),
+        "the checked-in Mermaid source is the generated kind projection"
     );
 }
 

@@ -4,7 +4,10 @@
 // ---
 
 use intentional_core::config::WorkflowRole;
-use intentional_core::executor::{compare_workflow, fixture::publish_workflow_mermaid};
+use intentional_core::executor::{
+    compare_workflow,
+    fixture::{derived_workflows, publish_workflow_kind_mermaid},
+};
 use std::io::Write;
 
 const WORKFLOW_SEED: &str =
@@ -22,7 +25,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tempfile_in(&root)?;
     workflow.write_all(WORKFLOW_SEED.as_bytes())?;
     compare_workflow(&root, WorkflowRole::Publish, Some(workflow.path()))?.apply()?;
-    let derived = std::fs::read_to_string(workflow.path())?;
-    std::fs::write(output, publish_workflow_mermaid(&derived))?;
+    let mut derivations = vec![std::fs::read_to_string(workflow.path())?];
+    derivations.extend(
+        derived_workflows("publish-docs-conditional-jobs")
+            .into_iter()
+            .filter_map(|(role, workflow)| (role == WorkflowRole::Publish).then_some(workflow)),
+    );
+    std::fs::write(output, publish_workflow_kind_mermaid(&derivations))?;
     Ok(())
 }

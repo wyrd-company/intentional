@@ -7,10 +7,11 @@ use intentional_core::executor::fixture::configured_target_identities;
 
 #[test]
 fn credential_table_covers_every_configured_destination() {
-    let usage = std::fs::read_to_string("../../docs/usage.md").expect("usage guide is readable");
+    let usage =
+        std::fs::read_to_string("../../docs/executor.md").expect("executor guide is readable");
     let section = usage
         .split_once("## Publish to a registry for the first time")
-        .expect("usage guide has the registry section")
+        .expect("executor guide has the registry section")
         .1;
     let table = section
         .split_once("| Publisher | Destination | Credential |")

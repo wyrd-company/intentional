@@ -58,12 +58,13 @@ if rg -q '<foreignObject' docs/assets/publish-workflow.svg; then
   echo "Published diagrams must use portable SVG text." >&2
   exit 1
 fi
-test "$(rg -o '<text' docs/assets/publish-workflow.svg | wc -l)" -ge 20
+test "$(rg -o 'class=\"node ' docs/assets/publish-workflow.svg | wc -l)" -eq 9
+test "$(rg -o '#30363d' docs/assets/publish-workflow.svg | wc -l)" -ge 1
 
 test "$(rg -c '^Output docs/assets/demo.gif$' docs/demo.tape)" = "1"
 test "$(rg -c '^Set (Shell|FontSize|Width|Height|Theme|Padding|TypingSpeed)' docs/demo.tape)" -ge "7"
 
-if rg -n '\]\((?!https?://|assets/(?:demo\.gif|publish-workflow\.svg)|publish-workflow\.md|usage\.md#publish-to-a-registry-for-the-first-time)[^)]+\)' docs/*.md --pcre2; then
+if rg -n '\]\((?!https?://|assets/(?:demo\.gif|publish-workflow\.svg)|executor\.md(?:#publish-to-a-registry-for-the-first-time)?|publish-workflow\.md)[^)]+\)' docs/*.md --pcre2; then
   echo "Unexpected local documentation link; add it to the validator." >&2
   exit 1
 fi

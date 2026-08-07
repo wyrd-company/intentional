@@ -45,71 +45,166 @@ pub mod fixture {
     use crate::config::Config;
     use crate::executor::recipe::{catalog, Capability, Recipe, PRIMARY_TARGET};
     use crate::model::PublisherKind;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
 
-    /// Render a derived publish workflow's complete job and dependency graph as Mermaid.
+    /// Render the managed publish job kinds and their direct dependency graph as Mermaid.
     ///
-    /// Job ids and every `needs` edge come from the reconciled workflow. The
-    /// checked-in documentation source can therefore be compared with this
-    /// projection instead of maintaining a second graph roster by hand.
+    /// Multiple derivations supply conditional kinds and edges without turning
+    /// any one repository configuration into the public diagram. The checked-in
+    /// source can therefore be compared with this projection instead of carrying
+    /// a second hand-maintained graph roster.
     #[must_use]
-    pub fn publish_workflow_mermaid(workflow: &str) -> String {
-        let document: serde_yaml::Value =
-            serde_yaml::from_str(workflow).expect("derived publish workflow parses");
-        let jobs = document["jobs"]
-            .as_mapping()
-            .expect("derived publish workflow has jobs");
-        let mut source = String::from(
-            "%% Generated from the derived publish workflow; do not edit by hand.\n\
-%%{init: {\"theme\":\"dark\",\"htmlLabels\":false,\"deterministicIds\":true,\"deterministicIDSeed\":\"intentional-publish-workflow\",\"flowchart\":{\"curve\":\"basis\"},\"themeVariables\":{\"background\":\"#24292e\",\"primaryColor\":\"#30363d\",\"primaryTextColor\":\"#f0f6fc\",\"primaryBorderColor\":\"#8b949e\",\"lineColor\":\"#79c0ff\",\"fontFamily\":\"DejaVu Sans\"}}}%%\n\
-flowchart LR\n\
-  classDef protected fill:#3d2f1f,stroke:#d29922,color:#f0f6fc\n\
-  classDef terminal fill:#3b2344,stroke:#bc8cff,color:#f0f6fc\n",
-        );
+    pub fn publish_workflow_kind_mermaid(workflows: &[String]) -> String {
+        let mut kinds = BTreeMap::<&str, bool>::new();
+        let mut edges = BTreeSet::<(&str, &str)>::new();
 
-        for (id, _) in jobs {
-            let id = id.as_str().expect("managed job id is text");
-            assert!(
-                id.chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '_'),
-                "managed job id {id} is a Mermaid identifier"
-            );
-            let label = id.strip_prefix("intentional_").unwrap_or(id);
-            source.push_str(&format!("  {id}[\"{label}\"]\n"));
-        }
+        for workflow in workflows {
+            let document: serde_yaml::Value =
+                serde_yaml::from_str(workflow).expect("derived publish workflow parses");
+            let jobs = document["jobs"]
+                .as_mapping()
+                .expect("derived publish workflow has jobs");
+            let job_kinds = jobs
+                .iter()
+                .filter_map(|(id, body)| {
+                    let id = id.as_str().expect("publish job id is text");
+                    publish_job_kind(id, body).map(|kind| (id, kind))
+                })
+                .collect::<BTreeMap<_, _>>();
 
-        for (id, body) in jobs {
-            let id = id.as_str().expect("managed job id is text");
-            match body.get("needs") {
-                None | Some(serde_yaml::Value::Null) => {}
-                Some(serde_yaml::Value::String(need)) => {
-                    source.push_str(&format!("  {need} --> {id}\n"));
+            for (id, kind) in &job_kinds {
+                let body = jobs
+                    .get(serde_yaml::Value::String((*id).to_owned()))
+                    .expect("managed publish job remains in its derivation");
+                let protected = body.get("environment").is_some();
+                if let Some(existing) = kinds.insert(kind, protected) {
+                    assert_eq!(
+                        existing, protected,
+                        "publish job kind {kind} has one environment boundary"
+                    );
                 }
-                Some(serde_yaml::Value::Sequence(needs)) => {
-                    for need in needs {
-                        let need = need.as_str().expect("managed job need is text");
-                        source.push_str(&format!("  {need} --> {id}\n"));
+                for need in job_needs(body) {
+                    if let Some(need_kind) = job_kinds.get(need) {
+                        edges.insert((need_kind, kind));
                     }
                 }
-                Some(other) => panic!("managed job {id} has unsupported needs {other:?}"),
             }
         }
 
-        let protected = jobs
-            .iter()
-            .filter(|(_, body)| body.get("environment").is_some())
-            .map(|(id, _)| id.as_str().expect("managed job id is text"))
-            .collect::<Vec<_>>();
-        if !protected.is_empty() {
-            source.push_str(&format!("  class {} protected\n", protected.join(",")));
+        let mut source = String::from(
+            "%% Generated from derived publish workflows; do not edit by hand.\n\
+%%{init: {\"theme\":\"dark\",\"htmlLabels\":false,\"deterministicIds\":true,\"deterministicIDSeed\":\"intentional-publish-workflow\",\"flowchart\":{\"curve\":\"basis\"},\"themeVariables\":{\"background\":\"#24292e\",\"primaryTextColor\":\"#f0f6fc\",\"lineColor\":\"#79c0ff\",\"fontFamily\":\"DejaVu Sans\"}}}%%\n\
+flowchart LR\n\
+  classDef standard fill:#30363d,stroke:#8b949e,color:#f0f6fc\n\
+  classDef protected fill:#3d2f1f,stroke:#d29922,color:#f0f6fc\n\
+  classDef terminal fill:#3b2344,stroke:#bc8cff,color:#f0f6fc\n",
+        );
+        for kind in kinds.keys() {
+            source.push_str(&format!(
+                "  {}[\"{}\"]\n",
+                mermaid_kind_id(kind),
+                publish_kind_label(kind)
+            ));
         }
-        if jobs.contains_key(serde_yaml::Value::String(
-            "intentional_close_release".to_owned(),
-        )) {
-            source.push_str("  class intentional_close_release terminal\n");
+        for (need, job) in &edges {
+            source.push_str(&format!(
+                "  {} --> {}\n",
+                mermaid_kind_id(need),
+                mermaid_kind_id(job)
+            ));
+        }
+
+        let standard = kinds
+            .iter()
+            .filter(|(_, protected)| !**protected)
+            .map(|(kind, _)| mermaid_kind_id(kind))
+            .collect::<Vec<_>>();
+        let protected = kinds
+            .iter()
+            .filter(|(_, protected)| **protected)
+            .map(|(kind, _)| mermaid_kind_id(kind))
+            .collect::<Vec<_>>();
+        source.push_str(&format!("  class {} standard\n", standard.join(",")));
+        source.push_str(&format!("  class {} protected\n", protected.join(",")));
+        if kinds.contains_key("close") {
+            source.push_str("  class close terminal\n");
         }
         source
+    }
+
+    fn publish_job_kind(id: &str, body: &serde_yaml::Value) -> Option<&'static str> {
+        let managed = body["steps"].as_sequence().is_some_and(|steps| {
+            steps
+                .iter()
+                .any(|step| step["id"].as_str() == Some(crate::executor::OWNERSHIP_SENTINEL))
+        });
+        if !managed {
+            return None;
+        }
+        Some(if id.ends_with("verify_tag") {
+            "verify-tag"
+        } else if id.contains("_build_") {
+            "build"
+        } else if id.ends_with("tag_before_publication") {
+            "phase-before"
+        } else if id.ends_with("upload_deliverables") {
+            "upload"
+        } else if id.contains("_publish_") {
+            "publisher"
+        } else if id.contains("_verify_") || id.contains("_retrieve_") {
+            "verifier"
+        } else if id.ends_with("tag_after_publication") {
+            "phase-after"
+        } else if id.ends_with("assemble_evidence") {
+            "assemble"
+        } else if id.ends_with("close_release") {
+            "close"
+        } else {
+            panic!("managed publish job {id} has no diagram kind")
+        })
+    }
+
+    fn job_needs(body: &serde_yaml::Value) -> Vec<&str> {
+        match body.get("needs") {
+            None | Some(serde_yaml::Value::Null) => Vec::new(),
+            Some(serde_yaml::Value::String(need)) => vec![need],
+            Some(serde_yaml::Value::Sequence(needs)) => needs
+                .iter()
+                .map(|need| need.as_str().expect("managed job need is text"))
+                .collect(),
+            Some(other) => panic!("managed publish job has unsupported needs {other:?}"),
+        }
+    }
+
+    fn mermaid_kind_id(kind: &str) -> &str {
+        match kind {
+            "verify-tag" => "verify_tag",
+            "build" => "build",
+            "phase-before" => "phase_before",
+            "upload" => "upload",
+            "publisher" => "publisher",
+            "verifier" => "verifier",
+            "phase-after" => "phase_after",
+            "assemble" => "assemble",
+            "close" => "close",
+            other => panic!("publish job kind {other} has no Mermaid id"),
+        }
+    }
+
+    fn publish_kind_label(kind: &str) -> &str {
+        match kind {
+            "verify-tag" => "verify_tag",
+            "build" => "build_*",
+            "phase-before" => "tag_before_publication",
+            "upload" => "upload_deliverables",
+            "publisher" => "publish_*",
+            "verifier" => "verify_* / retrieve_*",
+            "phase-after" => "tag_after_publication",
+            "assemble" => "assemble_evidence",
+            "close" => "close_release",
+            other => panic!("publish job kind {other} has no diagram label"),
+        }
     }
 
     /// Directory name for one fixture workspace.
