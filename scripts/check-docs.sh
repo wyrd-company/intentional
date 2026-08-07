@@ -32,6 +32,8 @@ test "$(yq -r '.name' docs/docs.yml)" = "intentional"
 test "$(yq -r '.assets | length' docs/docs.yml)" = "2"
 test "$(yq -r '.assets[0]' docs/docs.yml)" = "assets/demo.gif"
 test "$(yq -r '.assets[1]' docs/docs.yml)" = "assets/publish-workflow.svg"
+test -f docs/publish-workflow.md
+test "$(rg -c '\]\(assets/publish-workflow\.svg\)' docs/publish-workflow.md)" = "1"
 
 for page in docs/*.md; do
   test "$(yq --front-matter=extract -r '.docs' "$page")" = "true"

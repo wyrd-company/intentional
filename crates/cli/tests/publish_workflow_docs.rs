@@ -88,6 +88,48 @@ fn job_kind(id: &str) -> &'static str {
 }
 
 #[test]
+fn publish_workflow_page_leads_with_the_optional_executor_layer() {
+    let schema: Value = serde_yaml::from_str(
+        &std::fs::read_to_string("../../schemas/config.yml").expect("config schema is readable"),
+    )
+    .expect("config schema parses");
+    let required = schema["required"]
+        .as_sequence()
+        .expect("config schema has required fields");
+    let page = std::fs::read_to_string("../../docs/publish-workflow.md")
+        .expect("publish workflow page is readable");
+    let introduction = page
+        .split_once("## Follow the job graph")
+        .expect("page introduces the layer before its graph")
+        .0
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(
+        required
+            .iter()
+            .all(|field| field.as_str() != Some("github")),
+        "the GitHub executor remains optional in the published config schema"
+    );
+    assert!(
+        introduction.contains("The GitHub release executor is optional"),
+        "a direct reader meets the optional-executor statement first"
+    );
+    for core_capability in [
+        "intent-driven versioning",
+        "format-preserving manifest projection",
+        "deterministic release planning",
+        "verifiable annotated release records",
+    ] {
+        assert!(
+            introduction.contains(core_capability),
+            "the page names the executor-free core capability {core_capability}"
+        );
+    }
+}
+
+#[test]
 fn publish_workflow_page_matches_the_repository_derivation() {
     let workflow = derived_repository_workflow();
     let document: Value = serde_yaml::from_str(&workflow).expect("derived workflow parses");
