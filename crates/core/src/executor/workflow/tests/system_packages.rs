@@ -1656,7 +1656,7 @@ fi
                 format!(
                     "{}:{}",
                     verification_stubs.display(),
-                    std::env::var("PATH").unwrap_or_default()
+                    test_tool_path(&std::env::var("PATH").unwrap_or_default())
                 ),
             )
             .env("FAKE_SCENARIO", scenario)
