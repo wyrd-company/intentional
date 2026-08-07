@@ -3011,15 +3011,46 @@ jobs:
         names
     }
 
-    /// Destination secrets visible when one Action step begins.
-    fn destination_secrets_reaching_action(
-        job: &Value,
-        steps: &[Value],
-        index: usize,
-    ) -> BTreeSet<String> {
-        let mut reachable = destination_secret_names(&Value::Sequence(steps[..=index].to_vec()));
-        reachable.extend(destination_secret_names(&job["env"]));
-        reachable
+    /// Assert every managed Action in one parsed workflow is credential-isolated.
+    fn assert_workflow_action_credential_isolation(
+        document: &Value,
+        role: WorkflowRole,
+    ) -> (usize, BTreeSet<String>) {
+        let workflow_secrets = destination_secret_names(&document["env"]);
+        let mut actions_swept = 0_usize;
+        let mut jobs_reached = BTreeSet::new();
+        for (id, body) in document["jobs"].as_mapping().expect("jobs") {
+            let Some(id) = id.as_str().filter(|id| id.starts_with("intentional_")) else {
+                continue;
+            };
+            let steps = body["steps"].as_sequence().expect("steps");
+            for (index, step) in steps.iter().enumerate() {
+                if intentional_action(step).is_none() {
+                    continue;
+                }
+                actions_swept += 1;
+                jobs_reached.insert(format!("{role}:{id}"));
+                let mut reachable =
+                    destination_secret_names(&Value::Sequence(steps[..=index].to_vec()));
+                reachable.extend(destination_secret_names(&body["env"]));
+                reachable.extend(workflow_secrets.iter().cloned());
+                assert!(
+                    reachable.is_empty(),
+                    "{id} resolves an Intentional Action while a destination secret is reachable: {reachable:?}"
+                );
+                assert_ne!(
+                    body["permissions"]["id-token"].as_str(),
+                    Some("write"),
+                    "{id} resolves an Intentional Action while OIDC mint authority is reachable"
+                );
+                assert_ne!(
+                    body["permissions"]["packages"].as_str(),
+                    Some("write"),
+                    "{id} resolves an Intentional Action while package-write authority is reachable"
+                );
+            }
+        }
+        (actions_swept, jobs_reached)
     }
 
     // A repository-local recipe can read a destination secret, persist client
@@ -3027,7 +3058,8 @@ jobs:
     // Intentional-owned Action in the same job can reach publication authority
     // even when no input passes it the credential. The boundary is reachability:
     // an Action runs before every step that reads a non-workflow secret, and it
-    // never shares a job with an identity that can be exchanged or written with.
+    // never shares a workflow or job with an environment secret, or a job with
+    // an identity that can be exchanged or written with.
     #[test]
     fn isolates_every_intentional_action_from_publisher_credentials() {
         let workspace = repository_scale_workspace("workflow-credential-reachability");
@@ -3037,34 +3069,9 @@ jobs:
             converge(workspace.root(), role);
             let document: Value =
                 serde_yaml::from_str(&workflow(workspace.root(), role)).expect("result parses");
-            for (id, body) in document["jobs"].as_mapping().expect("jobs") {
-                let Some(id) = id.as_str().filter(|id| id.starts_with("intentional_")) else {
-                    continue;
-                };
-                let steps = body["steps"].as_sequence().expect("steps");
-                for (index, step) in steps.iter().enumerate() {
-                    if intentional_action(step).is_none() {
-                        continue;
-                    }
-                    actions_swept += 1;
-                    jobs_reached.insert(format!("{role}:{id}"));
-                    let reachable = destination_secrets_reaching_action(body, steps, index);
-                    assert!(
-                        reachable.is_empty(),
-                        "{id} resolves an Intentional Action while a destination secret is reachable: {reachable:?}"
-                    );
-                    assert_ne!(
-                        body["permissions"]["id-token"].as_str(),
-                        Some("write"),
-                        "{id} resolves an Intentional Action while OIDC mint authority is reachable"
-                    );
-                    assert_ne!(
-                        body["permissions"]["packages"].as_str(),
-                        Some("write"),
-                        "{id} resolves an Intentional Action while package-write authority is reachable"
-                    );
-                }
-            }
+            let (swept, reached) = assert_workflow_action_credential_isolation(&document, role);
+            actions_swept += swept;
+            jobs_reached.extend(reached);
         }
         assert!(
             actions_swept > 0,
@@ -3077,29 +3084,33 @@ jobs:
     }
 
     #[test]
+    #[should_panic(expected = "PUBLISH_TOKEN")]
     fn refuses_a_destination_secret_on_an_intentional_action_input() {
-        let job: Value = serde_yaml::from_str(&format!(
-            "steps:\n  - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n    with:\n      registry-password: ${{{{ secrets.PUBLISH_TOKEN }}}}\n"
+        let document: Value = serde_yaml::from_str(&format!(
+            "jobs:\n  intentional_verify:\n    steps:\n      - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n        with:\n          registry-password: ${{{{ secrets.PUBLISH_TOKEN }}}}\n"
         ))
         .expect("fixture parses");
-        let steps = job["steps"].as_sequence().expect("steps");
-        assert_eq!(
-            destination_secrets_reaching_action(&job, steps, 0),
-            BTreeSet::from(["PUBLISH_TOKEN".to_owned()])
-        );
+        assert_workflow_action_credential_isolation(&document, WorkflowRole::Publish);
     }
 
     #[test]
+    #[should_panic(expected = "PUBLISH_TOKEN")]
     fn refuses_a_job_level_destination_secret_reaching_an_intentional_action() {
-        let job: Value = serde_yaml::from_str(&format!(
-            "env:\n  PUBLISH_TOKEN: ${{{{ secrets.PUBLISH_TOKEN }}}}\nsteps:\n  - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n"
+        let document: Value = serde_yaml::from_str(&format!(
+            "jobs:\n  intentional_verify:\n    env:\n      PUBLISH_TOKEN: ${{{{ secrets.PUBLISH_TOKEN }}}}\n    steps:\n      - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n"
         ))
         .expect("fixture parses");
-        let steps = job["steps"].as_sequence().expect("steps");
-        assert_eq!(
-            destination_secrets_reaching_action(&job, steps, 0),
-            BTreeSet::from(["PUBLISH_TOKEN".to_owned()])
-        );
+        assert_workflow_action_credential_isolation(&document, WorkflowRole::Publish);
+    }
+
+    #[test]
+    #[should_panic(expected = "PUBLISH_TOKEN")]
+    fn refuses_a_workflow_level_destination_secret_reaching_an_intentional_action() {
+        let document: Value = serde_yaml::from_str(&format!(
+            "env:\n  PUBLISH_TOKEN: ${{{{ secrets.PUBLISH_TOKEN }}}}\njobs:\n  intentional_verify:\n    steps:\n      - uses: {ACTION_REPOSITORY}/actions/verify-publication@1.0.0\n"
+        ))
+        .expect("fixture parses");
+        assert_workflow_action_credential_isolation(&document, WorkflowRole::Publish);
     }
 
     // An Action whose recipe already wrote the observation must not run its
