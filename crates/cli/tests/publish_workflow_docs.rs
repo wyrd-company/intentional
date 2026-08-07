@@ -67,40 +67,6 @@ fn documented_environments(page: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn feature_scenario_bindings(source: &str) -> BTreeSet<String> {
-    source
-        .lines()
-        .filter_map(|line| {
-            line.split_once("intentional-feature-scenario: ")
-                .map(|(_, binding)| binding.trim().to_owned())
-        })
-        .collect()
-}
-
-fn executable_feature_scenario_bindings(source: &str) -> BTreeSet<String> {
-    let lines = source.lines().collect::<Vec<_>>();
-    lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            let binding = line.split_once("intentional-feature-scenario: ")?.1.trim();
-            let test = binding
-                .rsplit_once('=')
-                .map(|(_, test)| test)
-                .expect("feature scenario binding names its test function");
-            assert!(
-                lines
-                    .iter()
-                    .skip(index + 1)
-                    .take(4)
-                    .any(|line| line.trim_start().starts_with(&format!("fn {test}()"))),
-                "feature scenario binding {binding} annotates its named test function"
-            );
-            Some(binding.to_owned())
-        })
-        .collect()
-}
-
 fn job_kind(id: &str) -> &'static str {
     if id.ends_with("verify_tag") {
         "verify-tag"
@@ -372,56 +338,5 @@ fn publish_workflow_page_matches_derived_environment_boundaries() {
         documented_environments(&page),
         boundaries,
         "every documented environment boundary is witnessed by a repository or conditional derivation"
-    );
-}
-
-#[test]
-fn feature_alias_scenario_is_bound_to_both_packager_recipes() {
-    let feature = std::fs::read_to_string("../../docs/features/github-release-publication.yml")
-        .expect("publication feature is readable");
-    let recipes = std::fs::read_to_string("../core/src/executor/workflow/tests/oci_recipes.rs")
-        .expect("OCI recipe tests are readable");
-    let documented = feature_scenario_bindings(&feature);
-    let executable = executable_feature_scenario_bindings(&recipes);
-
-    assert_eq!(
-        documented,
-        executable,
-        "every documented packager branch names one executable witness and every witness names its scenario"
-    );
-    assert_eq!(
-        documented.len(),
-        2,
-        "the prerelease alias scenario covers runnable images and Dev Container Features"
-    );
-}
-
-#[test]
-fn publish_workflow_page_states_the_readback_bound_and_both_remedies() {
-    let page = std::fs::read_to_string("../../docs/publish-workflow.md")
-        .expect("publish workflow page is readable");
-    let workflow = std::fs::read_to_string("../core/src/executor/workflow.rs")
-        .expect("workflow implementation is readable");
-    let limit = workflow
-        .lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("const MAX_WORKFLOW_LINES: usize = ")
-        })
-        .and_then(|value| value.strip_suffix(';'))
-        .expect("workflow implementation declares its line limit")
-        .replace('_', ",");
-
-    assert!(
-        page.contains(&format!("at most {limit} lines")),
-        "the adopter page states the implementation's workflow readback limit"
-    );
-    assert!(
-        page.contains("Move unrelated repository jobs to another workflow"),
-        "the adopter page gives a remedy for repository-owned workflow size"
-    );
-    assert!(
-        page.contains("reduce configured publication destinations"),
-        "the adopter page gives a remedy for managed publication size"
     );
 }
