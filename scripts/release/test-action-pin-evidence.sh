@@ -634,28 +634,43 @@ fi
 
 # The verifier workflow bootstraps through external Actions before it can read
 # the declaration. Every such dependency participates in the same census: each
-# use must name a complete commit that agrees with the declaration.
+# use must name a complete commit that agrees with the declaration. A missing
+# or failing `yq`, or an empty extraction, fails closed — vacuous enumeration
+# is not evidence.
 case_number=$((case_number + 1))
-while IFS= read -r use; do
-  repository="${use%@*}"
-  workflow_commit="${use##*@}"
-  declared_commit="$(awk -v repository="$repository" '
-    $1 == "repository:" && $2 == repository { found = 1; next }
-    found && $1 == "commit:" { print $2; exit }
-    found && $1 == "-" { exit }
-  ' "$root/github-action-pins.yml")"
-  if [[ ! "$workflow_commit" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "the verifier workflow uses $use instead of a complete commit" >&2
-    failures=$((failures + 1))
-  elif [[ -z "$declared_commit" ]]; then
-    echo "the verifier workflow uses undeclared Action $repository" >&2
-    failures=$((failures + 1))
-  elif [[ "$workflow_commit" != "$declared_commit" ]]; then
-    echo "the verifier workflow use $use does not match declared commit $declared_commit" >&2
-    failures=$((failures + 1))
-  fi
-done < <(yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' \
-  "$root/.github/workflows/github-action-pins.yml")
+verifier_workflow="$root/.github/workflows/github-action-pins.yml"
+if ! command -v yq >/dev/null 2>&1; then
+  echo "the verifier workflow pin census requires yq, but it is unavailable" >&2
+  failures=$((failures + 1))
+elif ! verifier_uses="$(
+  yq -r '.jobs[] | .steps[]? | select(has("uses")) | .uses' "$verifier_workflow" 2>&1
+)"; then
+  echo "the verifier workflow pin census could not extract uses entries with yq: $verifier_uses" >&2
+  failures=$((failures + 1))
+elif [[ -z "$verifier_uses" ]]; then
+  echo "the verifier workflow pin census extracted zero uses entries" >&2
+  failures=$((failures + 1))
+else
+  while IFS= read -r use; do
+    repository="${use%@*}"
+    workflow_commit="${use##*@}"
+    declared_commit="$(awk -v repository="$repository" '
+      $1 == "repository:" && $2 == repository { found = 1; next }
+      found && $1 == "commit:" { print $2; exit }
+      found && $1 == "-" { exit }
+    ' "$root/github-action-pins.yml")"
+    if [[ ! "$workflow_commit" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "the verifier workflow uses $use instead of a complete commit" >&2
+      failures=$((failures + 1))
+    elif [[ -z "$declared_commit" ]]; then
+      echo "the verifier workflow uses undeclared Action $repository" >&2
+      failures=$((failures + 1))
+    elif [[ "$workflow_commit" != "$declared_commit" ]]; then
+      echo "the verifier workflow use $use does not match declared commit $declared_commit" >&2
+      failures=$((failures + 1))
+    fi
+  done <<<"$verifier_uses"
+fi
 
 # ---------------------------------------------------------------------------
 # Resilience
