@@ -190,6 +190,25 @@
                 "the exhaustive fixture emits a {publisher} publisher"
             );
             for (job, steps) in publications {
+                let subject = steps
+                    .iter()
+                    .find_map(|step| {
+                        intentional_action(step)
+                            .is_some_and(|(name, _)| name == "verify-publication")
+                            .then(|| step["with"]["subject"].as_str())
+                            .flatten()
+                    })
+                    .expect("publication verification names its sealed subject");
+                let subject_directory = subject
+                    .strip_suffix("/bytes")
+                    .expect("the subject is the downloaded subject directory's bytes member");
+                assert!(
+                    steps.iter().any(|step| {
+                        step["uses"].as_str() == Some(DOWNLOAD_ARTIFACT_ACTION)
+                            && step["with"]["path"].as_str() == Some(subject_directory)
+                    }),
+                    "{job} downloads its sealed subject to the directory its observer reads"
+                );
                 let verified = steps
                     .iter()
                     .find_map(|step| {
