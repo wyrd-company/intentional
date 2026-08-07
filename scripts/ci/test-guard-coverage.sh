@@ -22,6 +22,11 @@ if ! "$root/scripts/ci/assert-hosted-task-ci.sh"; then
 fi
 
 cp "$root/.github/workflows/ci.yml" "$temporary/without-task-ci.yml"
+source_job="$(task_ci_job "$temporary/without-task-ci.yml")"
+SOURCE_JOB="$source_job" yq -i \
+  '.jobs."renamed-contract" = .jobs[strenv(SOURCE_JOB)] |
+   del(.jobs[strenv(SOURCE_JOB)])' \
+  "$temporary/without-task-ci.yml"
 contract_job="$(task_ci_job "$temporary/without-task-ci.yml")"
 CI_JOB="$contract_job" yq -i \
   '(.jobs[strenv(CI_JOB)].steps[] | select(.run == "task ci").run) = "task test"' \
