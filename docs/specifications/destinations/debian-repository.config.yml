@@ -1,0 +1,27 @@
+# ---
+# relationships: { realizes: debian-repository }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/destinations/debian-repository.config.yml
+title: Debian Repository recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [delivery-action]
+    properties:
+      {
+        delivery-action:
+          {
+            type: string,
+            pattern: '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?:/(?!\.{1,2}(?:/|@))(?!.*\/\.{1,2}(?:/|@))(?!.*//)(?!.*[*?\[\]{}])[^/@]+(?:/[^/@]+)*)?@[0-9a-f]{40}$',
+          },
+      }
+  destination-version-1:
+    type: object
+    additionalProperties: false
+    required: [base-url, suite, component]
+    properties:
+      base-url: { type: string, format: uri, pattern: "^https://" }
+      suite: { type: string, pattern: "^[a-z0-9][a-z0-9._-]*$" }
+      component: { type: string, pattern: "^[a-z0-9][a-z0-9._-]*$" }

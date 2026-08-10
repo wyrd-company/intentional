@@ -1,0 +1,12 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [dart, ecosystem-recipes, recipe-catalog]
+  models: intentional
+description: >-
+  Defines Dart package discovery, planning, deterministic pub archive creation,
+  validation, and Release Artifact recording.
+format: json-schema
+validation-criteria: >-
+  Native package identity and version equal the Release Plan. The selected Dart
+  toolchain satisfies the SDK constraint. The archive contains exactly the
+  publishable pub inventory, has safe normalized paths, and reproduces byte for byte.

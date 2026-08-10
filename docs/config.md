@@ -23,6 +23,8 @@ produces explicit candidates before it writes canonical configuration.
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
+workflow:
+  adoption: declined
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility
@@ -46,7 +48,6 @@ release-units:
       pub:
         role: projection
         template: "sample-library-pub@{version}"
-        require-phase: before-publication
   sample-application:
     path: packages/application
     depends-on: [ sample-library ]
@@ -66,6 +67,7 @@ release-units:
 | --- | --- |
 | `$schema` | Schema URL for editor validation. |
 | `contract` | Versioned interpretation semantics used by plans and tags. |
+| `workflow` | Explicit adoption or decline of generated managed workflow. |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
 | `workspace-tags` | Repository-level release records and triggers. |
@@ -125,8 +127,10 @@ units in different ecosystems release together, put them in a `fixed` or
 
 Each release unit has one tag with `role: primary` and may have tags with
 `role: projection`. Named workspace tags live under `workspace-tags`. Every
-template contains `{version}`, may contain `{id}` where supported, and must not
-prefix the version with `v`.
+template contains `{version}` and may contain `{id}` where supported. Primary
+and workspace tags do not prefix the version with `v`. A projection tag may use
+a `v` prefix when its ecosystem requires it. For example, a Go module can pair
+primary `{id}@{version}` with projection `v{version}`.
 
 Common templates are:
 
@@ -134,7 +138,7 @@ Common templates are:
   `sample-library@1.4.0`;
 - `{version}` for a single-release-unit repository or workspace release record.
 
-Set `require-phase` to `before-publication` or `after-publication` when the
+Set `require-phase` to `before-distribution` or `after-distribution` when the
 executor must declare the external phase before creating a tag. Set
 `tag-after` to tag ids that must already exist and agree with the planned
 commit, version, contract, and digest. Intentional rejects cycles and emits the

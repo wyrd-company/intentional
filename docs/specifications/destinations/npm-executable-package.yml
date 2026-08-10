@@ -1,0 +1,19 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  {
+    realizes: [npm-executable, ecosystem-recipes, recipe-catalog],
+    models: intentional,
+  }
+description: >-
+  Defines credential-free derivation of an npm executable wrapper from sealed
+  executable archives.
+format: json-schema
+validation-criteria: >-
+  The package identity and command name equal the Release Plan. Every supported
+  Node platform and architecture pair maps to exactly one executable-archive
+  prerequisite. Generated release-asset URLs, archive names, executable names,
+  archive layouts, and SHA-256 digests agree with the consumed Release Artifact
+  records. The npm tarball contains only the generated manifest, maintained
+  installer, maintained launcher, declared documentation, and license files.
+  npm's pack report agrees with the exact tarball inventory, modes, size, name,
+  version, and integrity. Provenance references every consumed artifact record.

@@ -1,0 +1,158 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: intent-driven-polyglot-release
+  realizes: intentional
+objective: >-
+  Seal deterministic release decisions, materialize them, establish observable
+  tag-backed release authority, and define the per-Release Unit records used by
+  managed workflow.
+proposed-design:
+  release-plan: >-
+    A Release Plan is canonical structured data derived from Release Workspace
+    configuration, authoritative tags, pending Change Intents, and the selected
+    release channel. It records the interpretation contract, plan-generator name
+    and version, source identity, Release Unit versions, contributing intent,
+    release notes, tag records and prerequisites, and Packages. When managed
+    workflow is adopted, it also records the security-posture identifier, profile
+    version, required GitHub settings, removed controls, remaining guarantees,
+    Distribution Targets, their qualified
+    `distribution/<release-unit-id>/<package-id>/<target-id>` identities, their
+    prerequisite Distribution graph, Release Artifact expectations, Release Unit
+    record expectations, and Custom Release Gate requirements.
+    Its digest is computed over the complete canonical payload
+    excluding the digest field. A computed plan is a digest-bound candidate until
+    authoritative release identity binds it to a commit and annotated tag set.
+
+  release-creation: >-
+    Local plan computation and materialization are candidate operations. A
+    Release comes into existence when the verified materialized commit and its
+    annotated identity tags become authoritative repository objects. This
+    authority transition seals the candidate plan as durable Release state. It
+    consumes contributing Change Intents for a channel-less Release and retains
+    them for a channel Release. Every later command accepts the sealed plan or an
+    authority record that embeds its digest.
+
+  materialization: >-
+    Materialization writes computed versions into committed projections, updates
+    native internal dependency requirements, and creates deterministic changelog
+    sections. A channel-less materialization removes contributing intent files
+    from the candidate tree; a channel materialization retains them. It calculates
+    the complete operation set before mutation and supports dry-run. The resulting
+    tree is a witness of the candidate plan. File removal does not consume Change
+    Intent in domain state until annotated tags establish the Release. A mismatch
+    between materialized values and a recomputed plan blocks release authority.
+
+  release-identity: >-
+    Release identity binds the plan digest, interpretation contract, source
+    commit, and complete configured set of core annotated identity tags. Creating
+    the verified core tags against the materialized commit establishes the
+    Release and seals the plan. Managed-workflow adoption adds a global workspace
+    tag as a separate managed handoff record. Publishing this protected tag
+    through workflow authority triggers managed processing. Each affected
+    Release Unit tag identifies the draft GitHub Release that becomes that unit's
+    durable managed record.
+
+  portable-release-protocol: >-
+    `intentional plan` computes the digest-bound candidate. `intentional apply`
+    materializes its tree. The surrounding harness creates the commit.
+    `intentional tag --plan` verifies that commit against the saved candidate and
+    creates the exact annotated tag records, which establishes the Release in the
+    repository. The harness owns any push. This protocol remains available when
+    managed workflow generation is declined. It provides versioning, changelog,
+    final-release intent consumption, and tag-backed Release records. Maintained
+    builds, Release Unit records, and Distribution belong to the managed GitHub
+    protocol. When managed workflow is
+    adopted, the portable harness does not publish the protected global workspace
+    tag; that trigger remains owned by the App-authorized release workflow.
+
+  annotated-tag-records: >-
+    Every Intentional-created tag is annotated. Its canonical message records
+    tag role, version, interpretation contract, generator identity, Release Plan
+    digest, target identity, baseline status, and
+    verified prerequisite tags. Intentional derives tagger identity from a fixed
+    product identity and tagger time from the target commit's committer timestamp
+    and offset. Ambient Git configuration, runner timezone, wall-clock time,
+    randomness, and network state cannot change the tag object.
+
+  tag-prerequisites: >-
+    A tag can require other canonical tag records. Before creating it,
+    Intentional resolves every prerequisite
+    expected by the sealed plan and verifies target commit, version, contract,
+    plan digest, and tag role. The plan contains the deterministic topological
+    order. An exact existing tag satisfies its operation; an incompatible object
+    is a conflict.
+
+  release-artifacts: >-
+    A Release Artifact is immutable publishable content identified by its
+    cryptographic digest and bound to one Release, Package, version, platform or
+    variant, and build provenance. The Release accepts a Release Artifact only
+    when its identity is expected by the sealed plan and its provenance resolves
+    to the authoritative source. A Signing transformation creates a distinct
+    expected artifact whose record binds the unsigned input artifact and its
+    record digest. One sealed artifact can supply several compatible Distribution
+    Targets. One Distribution Target can consume a recipe-declared set of sealed
+    artifact variants while retaining one destination identity qualified by its
+    owning Release Unit and Package.
+
+  managed-evidence-and-closure: >-
+    Each affected Release Unit closes independently. Its Release Evidence embeds
+    the complete global Release Plan and includes only that unit's identity tags,
+    Release Artifact records, accepted Evidence Contributions, attachment
+    inventory, security posture, and closure manifest. Assembly derives global
+    Release identity and Release Unit identity independently from authoritative
+    tags and source, then rejects missing, duplicate, unexpected, foreign, or
+    disagreeing inputs. Destination availability is not a closure input.
+
+  managed-durable-record: >-
+    Each affected Release Unit's draft GitHub Release holds its release
+    deliverables, Release Evidence statement, and accepted attachments under the
+    unit's consumer-facing tag and version. Closure uploads and reads back the
+    exact assets, creates required attestations for their digests, verifies the
+    complete unit-specific set, and changes that GitHub Release to immutable
+    published state. Annotated tags, immutable release assets, and attestations
+    provide independent verification paths. The immutable Release Record becomes
+    the source consumed by external Distribution.
+
+  managed-post-closure-remediation: >-
+    An immutable Release Record and its evidence never change. Corrections use a
+    new Release. Destination operators can hide, unlist, yank, or remove a
+    Distribution without changing the Release Record. Live status reports the
+    resulting consumer-visible state.
+
+  recovery: >-
+    Recovery reconstructs an established Release from Git history, the sealed
+    plan, prior tag records, and the materialized tree. It reads deleted Change
+    Intents from the release commit's parent when plan bytes are unavailable
+    locally and recomputes the expected release under the recorded interpretation
+    contract. The witnessed release set holds each Release Unit whose leading
+    changelog section is newer than its latest primary tag, or equal to it while
+    that tag already marks the commit being tagged; a Release Unit whose leading
+    section equals a tag on an earlier commit did not move and is outside the
+    comparison, so a Release may move any subset of Release Units. Self-hosted
+    releases can reproduce a plan generated by an earlier
+    supported Intentional binary by retaining that plan-generator identity in
+    canonical reconstruction.
+
+  idempotency-and-conflict: >-
+    Every mutating operation computes an expected immutable result before
+    writing. An exact existing commit, tag, Release Artifact, destination object,
+    or evidence record satisfies the operation. An object at the same identity
+    with another target, digest, version, contract, plan, or prerequisite is a
+    conflict and remains unchanged. Partial execution can therefore rerun the
+    same protocol without a separate recovery mode.
+
+  channel-records: >-
+    Channel Releases carry the same sealed-plan and tag-record guarantees as
+    final Releases. Their iteration derives from existing authoritative tags and
+    their materialization retains Change Intents. The channel records remain
+    independently verifiable. The final channel-less Release consumes the intent
+    and materializes the consolidated changelog.
+
+  verification: >-
+    `intentional verify <tag>` checks annotated tags, canonical plan
+    reconstruction, and the materialized source without hosting-platform
+    credentials. Its managed mode additionally checks each selected Release
+    Unit's immutable GitHub Release state, asset digests, attestations, and
+    embedded Release Evidence without destination credentials. Live mode observes
+    current Distribution Targets through maintained consumer paths and reports
+    current state without changing the Release Record.

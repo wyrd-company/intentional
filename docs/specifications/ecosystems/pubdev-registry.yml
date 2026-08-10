@@ -1,0 +1,14 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [dart, ecosystem-recipes, recipe-catalog]
+  models: intentional
+description: >-
+  Defines trusted distribution of one sealed Dart package archive to pub.dev and
+  public consumer verification of the resulting immutable version.
+format: json-schema
+validation-criteria: >-
+  Destination is pub.dev. Distribution uses OpenID Connect and no named secret.
+  The package already exists and its automated-publishing policy matches the
+  repository and published Release Unit tag. The Release Unit tag version equals
+  the package version, as required by pub.dev's tag-bound authorization. Public
+  observation agrees on package, version, archive digest, and contents.

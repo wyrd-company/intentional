@@ -1,0 +1,83 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: arch-user-repository, part-of: arch }
+role: distribution
+versions:
+  1:
+    configuration: ./arch-user-repository.config.yml#/$defs/version-1
+    destination: ./arch-user-repository.config.yml#/$defs/destination-version-1
+    primitives:
+      [
+        { id: git-file-preflight, version: 1 },
+        { id: aur-promote, version: 1 },
+        { id: git-public-observe, version: 1 },
+        { id: arch-verify-package, version: 1 },
+      ]
+    tools: []
+    accepted-artifact-kinds: [arch-package]
+    credentials: [{ id: ssh-key, process-variable: INTENTIONAL_AUR_SSH_KEY }]
+    github-permissions:
+      { distribute: { contents: read }, observe: { contents: read } }
+    preflight:
+      [
+        {
+          id: probe-aur,
+          uses: { id: git-file-preflight, version: 1 },
+          with: { agreement: [pkgbuild, srcinfo] },
+        },
+      ]
+    distribute:
+      [
+        {
+          id: promote-aur,
+          uses: { id: aur-promote, version: 1 },
+          with: { commit: deterministic, force: false },
+        },
+      ]
+    observe:
+      - {
+          id: observe-aur,
+          uses: { id: git-public-observe, version: 1 },
+          with: { retrieval: public-client, deadline-seconds: 300 },
+        }
+    verify:
+      - {
+          id: verify-aur,
+          uses: { id: arch-verify-package, version: 1 },
+          with:
+            {
+              compare:
+                [commit-object, name, version, sources, checksums, branch-head],
+            },
+        }
+    requirements:
+      [
+        { id: aur-ssh-authority, class: authority },
+        { id: public-git-readback, class: security-control },
+      ]
+    control-subtractions: []
+    guarantees:
+      - {
+          id: exact-aur-descriptors,
+          statement: Public PKGBUILD and SRCINFO agree with the sealed bundle.,
+        }
+      - {
+          id: isolated-aur-authority,
+          statement: Only the Arch publisher receives the SSH key.,
+        }
+    conformance:
+      cases:
+        - {
+            id: aur-promotion,
+            fixture: fixtures/aur/promotion,
+            asserts: [exact-bundle, deterministic-commit, public-readback],
+          }
+        - {
+            id: aur-conflict,
+            fixture: fixtures/aur/conflict,
+            asserts: [conflict-rejection, no-force],
+          }
+      live:
+        {
+          operation: aur-live-conformance,
+          proves: [isolated-secret, public-readback, idempotent-retry],
+        }

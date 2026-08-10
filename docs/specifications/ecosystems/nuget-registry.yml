@@ -1,0 +1,10 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [dotnet, ecosystem-recipes, recipe-catalog]
+  models: intentional
+description: Defines distribution and consumer verification of sealed NuGet package files.
+format: json-schema
+validation-criteria: >-
+  Destination is nuget.org. Publisher requests `id-token: write`, exchanges the
+  repository-bound identity for a one-use temporary key, and receives no named secret.
+  Registration metadata and downloaded package bytes agree with the sealed set.

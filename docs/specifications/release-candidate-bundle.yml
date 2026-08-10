@@ -1,0 +1,26 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - release
+    - release-planning-and-records
+  models:
+    - intentional
+description: >-
+  Defines the prepare job's complete handoff to the Custom Candidate Release Gate,
+  materialization, and authority jobs. The bundle carries the candidate Release
+  Plan, accepted source identity, exact materialization operations, expected
+  annotated tag identities and order, generated release notes, and one transport
+  manifest covering every file. It contains no credential or authority.
+  `release-candidate-bundle.schema.yml` is the machine-readable semantic
+  manifest; its files are inventoried by the shared transport manifest.
+format: json-schema
+validation-criteria: >-
+  A conforming candidate manifest validates against
+  `docs/specifications/release-candidate-bundle.schema.yml` as canonical JSON
+  under JSON Schema Draft 2020-12. Its plan is a complete valid Release Plan and
+  its plan digest agrees with candidate identity. Source commit and tree agree
+  with the accepted checkout. Materialization operations are ordered, typed, and
+  limited to files owned by plan projections, changelogs, and consumed Change
+  Intents. Expected tag IDs and order equal the plan. Release-note entries cover
+  every releasing Release Unit exactly once. The enclosing transport manifest
+  inventories this manifest and all referenced files by digest.

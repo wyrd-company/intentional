@@ -1,0 +1,39 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: ecosystem-recipes
+  realizes: intentional
+objective: >-
+  Derive Debian packages from sealed executable archives and distribute them to a
+  configured Debian repository.
+proposed-design:
+  artifact: >-
+    The debian-package Package recipe selects one sealed executable archive per
+    architecture and emits exact Debian package bytes whose identity, stable
+    version, architecture, dependencies, installed paths, and scripts agree with
+    the sealed Release Plan.
+  authority: >-
+    The distributor receives only the configured target delivery secret. A
+    repository-owned delivery Action is allowed only through the maintained
+    pinned-Action extension contract and receives no release App token, signing
+    credential, or other destination credential.
+  distribution: >-
+    Preflight reads the configured suite and component indexes. Absence permits
+    delivery, exact package identity and SHA-256 agreement satisfy retry, and a
+    differing existing package is conflict. The pinned Action receives the exact
+    sealed package and closed destination inputs at the fixed submission point.
+  observation: >-
+    An independent public client polls the suite and component indexes, downloads
+    the package through the consumer path, and verifies index metadata and exact
+    bytes against the sealed artifact.
+  operational-result: >-
+    Public index and downloaded-byte agreement makes the Distribution job
+    succeed and its live status green. Failure leaves the immutable Release
+    Record unchanged.
+  conformance: >-
+    Fixtures cover native package validation, root and subpath Action pins,
+    target-secret isolation, absent and agreeing packages, conflict rejection,
+    public index propagation, downloaded-byte agreement, and idempotent retry.
+  specification-topology: >-
+    debian-package defines credential-free derivation and debian-repository
+    defines credential-isolated distribution. Each uses colocated prose, config,
+    and recipe assets.

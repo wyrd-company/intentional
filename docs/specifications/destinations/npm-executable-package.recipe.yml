@@ -1,0 +1,123 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: npm-executable-package, part-of: npm-executable }
+role: package
+versions:
+  1:
+    package-configuration: ./npm-executable-package.config.yml#/$defs/version-1
+    artifact-configuration: ./npm-executable-package.config.yml#/$defs/artifact-version-1
+    primitives:
+      - { id: verify-input-artifacts, version: 1 }
+      - { id: resolve-node-platform-map, version: 1 }
+      - { id: render-npm-executable-package, version: 1 }
+      - { id: npm-pack, version: 1 }
+      - { id: validate-npm-executable-package, version: 1 }
+      - { id: write-release-artifact, version: 1 }
+    tools:
+      - id: node
+        resolution: { default: 24.18.0 }
+        install: { id: install-node, version: 1 }
+      - id: npm
+        resolution: { default: 11.16.0 }
+        install: { id: install-node-package-manager, version: 1 }
+    matrix: []
+    accepted-input-artifact-kinds: [executable-archive]
+    artifact-kinds:
+      - id: npm-package-tarball
+        content: file
+        asset-name-source: native
+        native-kinds: [npm-executable-package]
+        configuration:
+          extension: .tgz
+          target-independent: true
+    discovery:
+      - id: discover-npm-executable-inputs
+        uses: { id: verify-input-artifacts, version: 1 }
+        with: { inputs: configured, kind: executable-archive }
+    planning:
+      - id: resolve-npm-executable-platforms
+        uses: { id: resolve-node-platform-map, version: 1 }
+        with:
+          source: sealed-prerequisite-artifacts
+          identity: node-platform-and-architecture
+          urls: github-release-assets
+          cardinality: unique-and-complete
+    build:
+      - id: render-npm-executable-wrapper
+        uses: { id: render-npm-executable-package, version: 1 }
+        with:
+          templates: maintained
+          platform-map: release-plan
+          lifecycle: postinstall
+          node-engine: ">=18"
+      - id: pack-npm-executable-wrapper
+        uses: { id: npm-pack, version: 1 }
+        with:
+          lifecycle-scripts: denied
+          report: json
+          destination: isolated-staging
+    collection:
+      - id: collect-npm-executable-tarball
+        uses: { id: validate-npm-executable-package, version: 1 }
+        with: { cardinality: exactly-one, inventory: npm-json-report }
+    validation:
+      - id: validate-npm-executable-tarball
+        uses: { id: validate-npm-executable-package, version: 1 }
+        with:
+          compare:
+            - package-identity
+            - version
+            - command-name
+            - platform-map
+            - asset-urls
+            - asset-digests
+            - inventory
+            - modes
+            - npm-integrity
+      - id: record-npm-executable-artifact
+        uses: { id: write-release-artifact, version: 1 }
+        with:
+          schema: https://intentional.foo/schemas/release-artifact.yml
+    requirements:
+      - { id: verified-sealed-inputs, class: operational }
+      - { id: complete-node-platform-map, class: operational }
+      - { id: stable-release-version, class: operational }
+      - { id: credential-free-derivation, class: authority }
+    control-subtractions: []
+    guarantees:
+      - id: exact-executable-archive-binding
+        statement: The generated platform map binds every consumed archive URL, layout, executable identity, and SHA-256 digest.
+      - id: maintained-consumer-boundary
+        statement: The generated installer and launcher enforce maintained retrieval, extraction, and process-forwarding behavior.
+      - id: lifecycle-authority-isolation
+        statement: Derivation and registry publication do not execute the generated consumer postinstall script.
+    conformance:
+      cases:
+        - id: package-generation
+          fixture: fixtures/npm-executable/package-generation
+          asserts:
+            - scoped-and-unscoped-identities
+            - exact-platform-map
+            - exact-generated-inventory
+            - exact-provenance
+        - id: consumer-installation
+          fixture: fixtures/npm-executable/consumer-installation
+          asserts:
+            - platform-selection
+            - bounded-https-retrieval
+            - digest-verification
+            - safe-extraction
+            - canonical-permissions
+        - id: command-launcher
+          fixture: fixtures/npm-executable/command-launcher
+          asserts:
+            - argument-forwarding
+            - standard-stream-inheritance
+            - signal-forwarding
+            - exit-status-preservation
+        - id: consumer-rejection
+          fixture: fixtures/npm-executable/consumer-rejection
+          asserts:
+            - unsupported-platform
+            - digest-conflict
+            - unsafe-archive
+            - missing-executable

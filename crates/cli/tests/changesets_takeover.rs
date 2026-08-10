@@ -1696,6 +1696,7 @@ fn baseline_requires_agreeing_projection_evidence_and_explicit_tag_only_versions
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -1789,6 +1790,7 @@ fn baseline_retry_rejects_conflicting_existing_records_without_creating_tags() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -1858,6 +1860,7 @@ fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -1867,15 +1870,15 @@ release-units:
       primary:
         role: primary
         template: 'package-a@{version}'
-        require-phase: before-publication
+        require-phase: before-distribution
       witness:
         role: projection
         template: 'witness@{version}'
-        require-phase: before-publication
+        require-phase: before-distribution
       mirror:
         role: projection
         template: 'mirror@{version}'
-        require-phase: after-publication
+        require-phase: after-distribution
         tag-after: [release-unit/package-a/primary]
 "#,
     );
@@ -1920,42 +1923,42 @@ release-units:
         .stderr(predicate::str::contains("no unphased release tags"));
     repository
         .cli()
-        .args(["tag", "--phase", "after-publication"])
+        .args(["tag", "--phase", "after-distribution"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("missing prerequisite tag"));
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication"])
+        .args(["tag", "--phase", "before-distribution"])
         .assert()
         .success();
     repository
         .cli()
-        .args(["tag", "--phase", "after-publication"])
+        .args(["tag", "--phase", "after-distribution"])
         .assert()
         .success();
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication", "--dry-run"])
+        .args(["tag", "--phase", "before-distribution", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication"])
+        .args(["tag", "--phase", "before-distribution"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     repository
         .cli()
-        .args(["tag", "--phase", "after-publication"])
+        .args(["tag", "--phase", "after-distribution"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     git(&repository.root, &["tag", "-d", "witness@1.1.0"]);
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication", "--dry-run"])
+        .args(["tag", "--phase", "before-distribution", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -1964,7 +1967,7 @@ release-units:
         .stdout(predicate::str::contains("package-a@1.1.0").not());
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication"])
+        .args(["tag", "--phase", "before-distribution"])
         .assert()
         .success();
     assert_eq!(
@@ -1985,7 +1988,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication"])
+        .args(["tag", "--phase", "before-distribution"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -2003,6 +2006,7 @@ fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   package-a:
     path: packages/package-a
@@ -2012,7 +2016,7 @@ release-units:
       primary:
         role: primary
         template: 'package-a@{version}'
-        require-phase: before-publication
+        require-phase: before-distribution
   package-b:
     path: packages/package-b
     projections:
@@ -2021,7 +2025,7 @@ release-units:
       primary:
         role: primary
         template: 'package-b@{version}'
-        require-phase: after-publication
+        require-phase: after-distribution
 "#,
     );
     for id in ["package-a", "package-b"] {
@@ -2050,7 +2054,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "before-publication"])
+        .args(["tag", "--phase", "before-distribution"])
         .assert()
         .success();
     assert_eq!(
@@ -2059,7 +2063,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "after-publication"])
+        .args(["tag", "--phase", "after-distribution"])
         .assert()
         .success();
     assert_eq!(

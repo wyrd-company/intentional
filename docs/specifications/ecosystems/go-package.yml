@@ -1,0 +1,14 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  { realizes: [go, ecosystem-recipes, recipe-catalog], models: intentional }
+description: >-
+  Defines maintained Go module discovery and production of the shared
+  executable-archive artifact kind.
+format: json-schema
+validation-criteria: >-
+  Module state and go.sum are current. Each configured command and platform
+  produces exactly one safe deterministic executable archive whose inventory,
+  permissions, platform identity, and executable identity satisfy the shared
+  artifact contract and whose executable reports the planned version. The
+  primary Release Unit tag satisfies the maintained Go module tag contract for
+  its module root and semantic major version.

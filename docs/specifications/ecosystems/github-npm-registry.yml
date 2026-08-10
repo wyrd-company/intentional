@@ -1,0 +1,20 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [node, ecosystem-recipes, recipe-catalog]
+  models: [intentional]
+description: >-
+  Defines GitHub npm package distribution for sealed `npm-package-tarball`
+  artifacts. Version 1 publishes with the job-scoped GitHub token, verifies the
+  immutable package version through a separate packages-read consumer role, and
+  records planned dist-tags. Config and recipe assets share the
+  `github-npm-registry` stem.
+format: json-schema
+validation-criteria: >-
+  Destination names one exact owner and repository and requires a scoped npm
+  package name owned by that account. Distributor permission is `packages: write`
+  with `contents: read`; observer permission is `packages: read` with
+  `contents: read`. No named secret is routed. The exact sealed tarball is
+  published with scripts disabled. Existing state agrees only when registry
+  integrity and authenticated normal-client download bytes match. Planned
+  dist-tags update after immutable agreement and are verified before the
+  Distribution job succeeds.

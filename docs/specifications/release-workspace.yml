@@ -1,0 +1,58 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - repository-initialization
+    - intent-and-versioning
+    - managed-workflow
+    - ecosystem-recipes
+  models:
+    - intentional
+description: >-
+  Defines the normative `.intentional/config.yml` contract for one Release
+  Workspace. The document records Release Units, Packages, managed artifacts,
+  Signing recipes, Distribution Targets, artifact exclusions, version
+  projections, dependency and release groups, tag streams, discovery receipts,
+  and the durable choice to adopt or decline managed GitHub workflow.
+  Workspace-tag mappings use bare stable keys. Cross-record references qualify
+  those keys as `workspace/<key>`; release-unit tag references use
+  `release-unit/<release-unit>/<tag>`.
+  Package and Distribution Target keys are local to their containing mappings.
+  A Distribution Target has the qualified protocol identity
+  `distribution/<release-unit-id>/<package-id>/<target-id>`.
+  Interpretation-contract references resolve through the maintained
+  interpretation catalog; managed security-posture references resolve through
+  the maintained posture catalog.
+  `docs/specifications/release-workspace.schema.yml` is the machine-readable
+  definition.
+format: json-schema
+validation-criteria: >-
+  A conforming configuration validates against
+  `docs/specifications/release-workspace.schema.yml` as YAML interpreted by JSON
+  Schema Draft 2020-12, passes Intentional's semantic
+  validation, and produces the same normalized model regardless of mapping key
+  order. Unknown fields are rejected. Semantic validation proves Release Unit,
+  Package, artifact, Signing recipe, Distribution Target, exclusion, group,
+  dependency, tag, discovery-receipt, and workflow-posture references;
+  qualified Distribution identity and graph acyclicity; exactly one
+  primary tag per Release Unit; and recipe support. When managed workflow is
+  adopted, validation also proves that every Package retains at least one
+  managed artifact and that removing `workspace/` from the qualified global tag
+  yields a configured workspace-tag key whose template is exactly `{version}`.
+  Recipe-specific
+  configuration is validated by the
+  maintained producing recipe selected by its stable identifier and version.
+  Every configured native selector resolves exactly one artifact candidate under
+  that producing recipe. A derived artifact names a non-empty unique set of
+  Release Unit-qualified Package and artifact identities whose kinds its
+  Package recipe accepts; dependencies are acyclic.
+  Every Signing selection references another configured artifact in the same
+  Package, signing dependencies are acyclic, and the signed output is a distinct
+  artifact identity. Every artifact exclusion references an existing Release
+  Unit and Package and cannot equal a managed artifact identity. An optional
+  workspace-wide artifact namespace prefix is a stable ID. Credential secret
+  prefix defaults to `INTENTIONAL_`; an override uses uppercase letters, digits,
+  and underscores and ends with one underscore. Generation rejects any derived
+  artifact or secret name collision after canonical escaping. Primary and
+  workspace tag templates never use a `v` version prefix. A Release Unit
+  projection tag may use one only when its native ecosystem contract requires
+  that platform syntax.

@@ -1,0 +1,12 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  { realizes: [arch, ecosystem-recipes, recipe-catalog], models: intentional }
+description: Defines promotion of a sealed PKGBUILD and SRCINFO bundle to the Arch User Repository.
+format: json-schema
+validation-criteria: >-
+  Distributor alone receives the SSH key. The deterministic Git commit object and
+  descriptor bytes form immutable state; the package branch is a mutable alias.
+  Distribution consumes the sealed descriptor bundle and source archives from
+  an immutable Release Record. Public Git readback, SRCINFO parsing, source
+  URLs, and checksums agree with those exact inputs before the Distribution job
+  succeeds.

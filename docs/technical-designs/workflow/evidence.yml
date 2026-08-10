@@ -1,0 +1,100 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Produce, transport, validate, assemble, and preserve immutable claims that
+  prove one Release Unit's source identity, released content, provenance, and
+  immutable GitHub Release Record.
+proposed-design:
+  evidence-model: >-
+    A Release Artifact record identifies released content. A Tag Record
+    identifies authoritative source and version state. An Evidence Contribution
+    carries repository-owned values from a Custom Release Unit Record Gate.
+    Release Evidence deterministically assembles
+    the records required to close one Release Unit. File formats serialize these
+    values; file identity is transport rather than domain identity.
+
+  identity-envelope: >-
+    Every durable value carries its schema contract, producing operation, global
+    Release identity, global tag and tag object, target commit, complete Release
+    Plan digest, interpretation contract, Intentional generator identity,
+    security posture identifier, and posture profile version. Release Unit, tag,
+    Package, Release Artifact, recipe, and contribution identities extend that
+    envelope where applicable. Canonical identity fields let assembly reject
+    records from another global Release, Release Unit, or security posture before
+    interpreting their claims.
+
+  release-artifact-record: >-
+    A Release Artifact record identifies immutable released content by Package,
+    Release Unit, version, variant, file or logical content identity, content
+    digests, provenance, attached supply-chain components, and producing recipe.
+    It inventories exact transported bytes or a deterministic transport form for
+    a logical content graph. Upload and Distribution jobs validate this record
+    and its content before receiving authority.
+
+  tag-records: >-
+    Tag Records bind global and Release Unit tag objects to the complete Release
+    Plan, target source, version, prerequisites, and configured role. Release Unit
+    projection tags provide ecosystem-required source identity without creating
+    Package-level tag identity.
+
+  evidence-contributions: >-
+    A Custom Release Unit Record Gate can contribute namespaced structured values and
+    attachments for one Release Unit. A contribution manifest inventories its
+    namespace, schema-backed value, attachment names, sizes, and digests. Release
+    Evidence preserves the accepted value without assigning Intentional semantics
+    and places attachments into that Release Unit's flat GitHub Release asset
+    namespace after collision validation.
+
+  temporary-transport: >-
+    Producers write records and associated files to isolated runner paths. Each
+    cross-job bundle has the typed manifest defined by
+    `docs/specifications/transport-manifest.yml` and a fixed artifact name derived
+    from protocol identity. Consumers reject missing, duplicate, unexpected,
+    nested, foreign, or digest-mismatched files after download. GitHub Actions
+    artifact retention supports transport only; successful Release Record closure
+    depends on the immutable GitHub Release rather than temporary artifacts.
+
+  assembly: >-
+    One assembly operation per affected Release Unit derives its expected
+    inventory from the complete sealed Release Plan and selected recipes. It
+    requires exactly one valid record for each unit-owned Release Artifact and
+    tag plus each present Evidence Contribution. It rejects a record whose
+    global Release, Release Unit, posture identifier, or profile version differs
+    from the plan. It derives both identities from tagged source and plan rather
+    than majority agreement among fragments. Canonical output orders Packages,
+    artifacts, tags, and contribution namespaces by stable identity.
+
+  release-evidence: >-
+    Each Release Evidence statement embeds the complete global Release Plan and
+    identifies exactly one Release Unit. It contains that unit's source and tag
+    identity, Release Artifact records, Evidence Contributions, attachment inventory,
+    producing workflow identity, security posture identity, profile version,
+    required GitHub settings, removed controls, guarantee inventory, closure
+    asset inventory, and expected attestation subjects. A Release Unit with no
+    file-backed artifact still records its source tags and release notes. The
+    statement is a closure manifest for its unit rather than a claim that its own
+    upload, attestation, or immutable transition has occurred.
+
+  durable-storage: >-
+    Closure attaches Release Evidence and accepted attachments to the Release
+    Unit's tagged GitHub Release, reads exact bytes back, and creates required
+    attestations before immutable publication. Annotated tags carry compact plan
+    and Release Unit references. Immutable GitHub Release state and discoverable
+    attestations prove the transition that the pre-closure statement declares.
+    These records support verification after workflow artifacts expire.
+
+  distribution-status: >-
+    Distribution workflows verify consumer-visible destination state as an
+    operational success condition. Release-note badges obtain current state
+    through maintained consumer lookups. Neither workflow status nor badge state
+    changes Release Evidence. A later lookup can report absence or conflict while
+    the immutable Release Record continues to prove what Intentional released.
+
+  verification: >-
+    `intentional verify <release-unit-tag> --managed` checks immutable GitHub
+    Release state, asset set, attestations, Release Evidence schemas, tag objects,
+    plan digest, Release Unit identity, and materialized source without
+    destination credentials. Live verification executes maintained Distribution
+    lookups and reports current state independently from the durable record.

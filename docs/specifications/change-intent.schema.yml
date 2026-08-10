@@ -1,0 +1,13 @@
+# ---
+# relationships:
+#   realizes: change-intent
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/change-intent.yml
+title: Intentional Change Intent frontmatter
+type: object
+minProperties: 1
+propertyNames:
+  $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+additionalProperties:
+  enum: [major, minor, patch]

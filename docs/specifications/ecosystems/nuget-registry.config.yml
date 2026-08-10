@@ -1,0 +1,16 @@
+# ---
+# relationships:
+#   realizes: nuget-registry
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/ecosystems/nuget-registry.config.yml
+title: NuGet Registry recipe configuration catalog
+$defs:
+  version-1: { type: object, additionalProperties: false }
+  destination-version-1:
+    type: object
+    additionalProperties: false
+    required: [registry, service-index]
+    properties:
+      registry: { const: nuget-org }
+      service-index: { const: https://api.nuget.org/v3/index.json }

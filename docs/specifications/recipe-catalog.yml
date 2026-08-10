@@ -1,0 +1,38 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: ecosystem-recipes
+  models:
+    - intentional
+description: >-
+  Defines the normative machine-readable contract for Intentional-maintained
+  recipe catalogs. A catalog has one recipe role and immutable positive-integer
+  versions. Every version binds exact configuration-schema fragments, versioned
+  primitives, tools, requirements, guarantees, conformance cases, and the
+  lifecycle operations owned by its role. Package catalogs define discovery,
+  planning, build, collection, artifact validation, and any accepted prerequisite
+  artifact kinds used for derivation. They can also select one declared primitive
+  as their native tag contract. Signing catalogs define
+  input validation, transformation, and output validation. Distribution catalogs
+  define preflight, submission, observation, and verification. Signing and
+  Distribution versions declare their exact GitHub token permission additions and
+  logical credentials independently.
+  `docs/specifications/recipe-catalog.schema.yml` is the machine-readable
+  definition.
+format: json-schema
+validation-criteria: >-
+  A conforming catalog validates against
+  `docs/specifications/recipe-catalog.schema.yml` as YAML interpreted by JSON
+  Schema Draft 2020-12. Its filename stem supplies recipe identity. Version keys
+  are positive integers and sort numerically. Operation IDs, tool IDs,
+  requirement IDs, guarantee IDs, artifact-kind IDs, credential IDs, matrix IDs,
+  and conformance IDs are unique within their owning collections. Every artifact
+  kind declares native or Intentional asset-name authority. Primitive and
+  runner references resolve to compiled maintained entries with the exact named
+  version. Configuration references resolve to fragments in the same recipe
+  family's config asset and use the same recipe-version key. Every operation
+  binds declared inputs and outputs through its primitive's typed contract.
+  Semantic validation rejects missing references, reference cycles, duplicate
+  producers, role-incompatible primitives, undeclared authority, incoherent
+  security-control subtraction, and conformance cases that name absent behavior.
+  Catalog compilation expands every version canonically and compares retained
+  versions with their committed compatibility snapshots.

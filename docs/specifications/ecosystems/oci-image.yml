@@ -1,0 +1,9 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  { realizes: [oci, ecosystem-recipes, recipe-catalog], models: intentional }
+description: Defines credential-free multi-platform Open Container Initiative image production.
+format: json-schema
+validation-criteria: >-
+  The sealed layout contains exactly the planned platforms and immutable labels.
+  Every external base image is digest-pinned. Every descriptor and content
+  digest resolves inside the layout and provenance binds the source commit.

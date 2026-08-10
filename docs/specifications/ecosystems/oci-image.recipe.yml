@@ -1,0 +1,107 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: oci-image, part-of: oci }
+role: package
+versions:
+  1:
+    package-configuration: ./oci-image.config.yml#/$defs/version-1
+    artifact-configuration: ./oci-image.config.yml#/$defs/artifact-version-1
+    primitives:
+      [
+        { id: oci-discover, version: 1 },
+        { id: buildx-build-layout, version: 1 },
+        { id: oci-validate-layout, version: 1 },
+        { id: write-release-artifact, version: 1 },
+      ]
+    tools:
+      - {
+          id: buildx,
+          resolution: { default: 0.17.0 },
+          install: { id: install-buildx, version: 1 },
+        }
+    matrix: []
+    artifact-kinds:
+      [
+        {
+          id: oci-image-layout,
+          content: file,
+          asset-name-source: intentional,
+          native-kinds: [image-index],
+        },
+      ]
+    discovery:
+      [
+        {
+          id: discover-oci-image,
+          uses: { id: oci-discover, version: 1 },
+          with: { network: denied },
+        },
+      ]
+    planning:
+      [
+        {
+          id: plan-oci-image,
+          uses: { id: oci-discover, version: 1 },
+          with: { platforms: configured, aliases: release-plan },
+        },
+      ]
+    build:
+      [
+        {
+          id: build-oci-layout,
+          uses: { id: buildx-build-layout, version: 1 },
+          with: { network: dependency-only, registry-output: denied },
+        },
+      ]
+    collection:
+      [
+        {
+          id: collect-oci-layout,
+          uses: { id: oci-validate-layout, version: 1 },
+          with: { content-addressed: true },
+        },
+      ]
+    validation:
+      - {
+          id: validate-oci-layout,
+          uses: { id: oci-validate-layout, version: 1 },
+          with: { compare: [platforms, labels, descriptors, sbom, provenance] },
+        }
+      - {
+          id: record-oci-artifact,
+          uses: { id: write-release-artifact, version: 1 },
+          with:
+            { schema: https://intentional.foo/schemas/release-artifact.yml },
+        }
+    requirements:
+      [
+        { id: exact-platform-index, class: operational },
+        { id: credential-free-build, class: authority },
+        { id: digest-pinned-base-images, class: operational },
+      ]
+    control-subtractions: []
+    guarantees:
+      - {
+          id: sealed-oci-subject,
+          statement: Registry publication receives one verified content-addressed image layout.,
+        }
+      - {
+          id: source-bound-image,
+          statement: Image labels and provenance bind the release source and version.,
+        }
+    conformance:
+      cases:
+        - {
+            id: image-index,
+            fixture: fixtures/oci/index,
+            asserts: [amd64, arm64, exact-descriptors],
+          }
+        - {
+            id: provenance,
+            fixture: fixtures/oci/provenance,
+            asserts: [source-labels, sbom, source-commit],
+          }
+        - {
+            id: base-images,
+            fixture: fixtures/oci/base-images,
+            asserts: [digest-pinned, tag-only-rejected],
+          }

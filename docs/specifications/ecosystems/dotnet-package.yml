@@ -1,0 +1,9 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [dotnet, ecosystem-recipes, recipe-catalog]
+  models: intentional
+description: Defines maintained .NET discovery, restore, pack, validation, and artifact recording.
+format: json-schema
+validation-criteria: >-
+  Resolved MSBuild package identity and version equal the plan. Locked restore is
+  current. Exact nupkg and selected snupkg outputs pass native package validation.

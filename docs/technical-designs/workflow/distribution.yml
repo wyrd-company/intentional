@@ -1,0 +1,80 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Give every configured Distribution Target an independent workflow that
+  delivers content from an immutable Release Unit record and reports current
+  consumer-visible availability.
+proposed-design:
+  trigger-and-identity: >-
+    Generation creates
+    `.github/workflows/intentional-distribute-<distribution-path-token>.yml` for
+    each configured Distribution Target. The path token is the canonical
+    filesystem projection of the target's qualified
+    `distribution/<release-unit-id>/<package-id>/<target-id>` identity. Every
+    target workflow responds to
+    `release: published`. Its first read-only job resolves the Release Unit tag,
+    target commit, embedded Release Evidence, complete global Release Plan,
+    Release Unit identity, asset inventory, provenance, attestations, and exact
+    target definition. A workflow exits without authority when the published
+    Release Unit does not contain its target. It fails before a credential-bearing
+    job when the GitHub Release is mutable or any identity, digest, posture,
+    recipe, target, or generated-workflow value differs from the sealed plan.
+
+  released-content: >-
+    Every Distribution Target selects its input from the immutable Release
+    Record. File destinations consume exact attached bytes. Graph destinations
+    reconstruct and verify the sealed logical content graph from its attached
+    transport form. Source-reference destinations consume the protected Release
+    Unit primary or projection tag and target tree named by Release Evidence. Temporary
+    build outputs and draft GitHub Release assets are not Distribution inputs.
+
+  target-independence: >-
+    A target workflow has no caller, aggregate completion state, or dependency on
+    another workflow result. For every prerequisite Distribution named by the
+    global Release Plan, it uses the maintained consumer client to verify that
+    exact prerequisite state before submission. Existing consumer-visible state
+    satisfies the precondition regardless of which workflow or operator produced
+    it.
+
+  distributor-job: >-
+    The distributor job runs in its fixed protected environment with only the
+    destination credential names and GitHub permissions declared by its recipe.
+    It verifies the immutable Release Record and selected released content before
+    accessing credentials. The recipe probes immutable destination identity,
+    accepts an exact existing version, rejects conflicting content, or submits
+    the released content. Mutable aliases update only after immutable version
+    identity agrees.
+
+  consumer-observation: >-
+    A maintained recipe fixes its consumer client, destination lookup,
+    observation deadline, immutable identity comparison, alias checks, and
+    retrieval mode. Public or narrowly authorized reads poll until the exact
+    released version agrees or the deadline expires. Agreement completes the
+    Distribution job successfully. Absence, conflict, timeout, or an
+    unverifiable response fails it. The workflow run records the operational
+    result, and current state is derived again whenever a consumer requests it.
+
+  live-status-badges: >-
+    Release notes contain one stable badge image URL for every expected
+    Distribution Target. The badge service performs a current consumer-path
+    lookup and returns red until the exact version is visible and green while it
+    remains visible. Badge state is advisory, can lag through image caching, and
+    does not alter Release Evidence or immutable GitHub Release state. The badge
+    links to the destination version or a detailed live-status response.
+
+  delivery-actions: >-
+    A maintained recipe can execute an Intentional-owned delivery Action or one
+    explicitly configured repository-owned pinned delivery Action at its fixed
+    submission point. The Action receives only the selected released content,
+    closed non-secret target inputs, and that target's declared credential.
+    Intentional retains preflight and consumer observation.
+
+  independence-and-recovery: >-
+    Each Distribution is idempotent and shares no destination credential with
+    another target. Failure leaves the immutable Release Record and unrelated
+    target workflows untouched. A rerun probes current destination state,
+    accepts exact existing content, and executes only missing transitions whose
+    prerequisites currently agree. Workflow artifacts, observations, and run
+    identifiers never determine semantic Release progress.

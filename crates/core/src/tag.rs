@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: tag-record
 // ---
 
 //! Annotated release records and baseline establishment.
@@ -16,6 +16,9 @@ use semver::Version;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+/// Published JSON Schema identity for Intentional Tag Records.
+pub const TAG_RECORD_SCHEMA: &str = "https://intentional.foo/schemas/tag-record.yml";
 
 /// One annotated Git tag to create.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1261,6 +1264,25 @@ fn channel_iteration(version: &Version, channel: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_tag_record_schema_carries_identity_and_prerequisite_contracts() {
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/tag-record.schema.yml"
+        ))
+        .expect("Tag Record schema parses");
+        assert_eq!(schema["$id"].as_str(), Some(TAG_RECORD_SCHEMA));
+        let required = schema["required"]
+            .as_sequence()
+            .expect("required Tag Record fields");
+        for field in ["target", "tag-role", "prerequisites"] {
+            assert!(required.iter().any(|value| value.as_str() == Some(field)));
+        }
+        assert_eq!(
+            schema["properties"]["tag-id"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/config.yml#/$defs/tag-id")
+        );
+    }
 
     #[test]
     fn reads_leading_release_section() {

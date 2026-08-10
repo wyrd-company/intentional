@@ -1,0 +1,29 @@
+# ---
+# relationships: { realizes: npm-executable-package }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/destinations/npm-executable-package.config.yml
+title: npm Executable Package recipe configuration catalog
+$defs:
+  npm-package-name:
+    type: string
+    pattern: "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+  command-name:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [package-name, command-name]
+    properties:
+      package-name: { $ref: "#/$defs/npm-package-name" }
+      command-name: { $ref: "#/$defs/command-name" }
+      description: { type: string, minLength: 1 }
+      license: { type: string, minLength: 1 }
+      readme:
+        $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+      license-file:
+        $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+  artifact-version-1:
+    type: object
+    additionalProperties: false

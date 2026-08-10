@@ -1,0 +1,62 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - release-planning-and-records
+    - evidence
+    - distribution
+    - ecosystem-recipes
+  models:
+    - intentional
+description: >-
+  Defines one immutable Release Artifact record produced by a managed build,
+  derivation, or signing job.
+  The record binds publishable file bytes or an immutable image reference to the
+  established Release, Package, version, expected artifact identity, variant,
+  producing recipe, build provenance, content digests, and attached supply-chain
+  components. The record and its inventoried files travel together as one typed
+  temporary workflow bundle; image content remains at its immutable reference.
+  One Release Artifact can supply several Distribution Targets that name its
+  artifact ID in the sealed Release Plan.
+  `docs/specifications/release-artifact.schema.yml` is the machine-readable
+  definition.
+format: json-schema
+validation-criteria: >-
+  A conforming record validates against
+  `docs/specifications/release-artifact.schema.yml` as canonical JSON interpreted
+  by JSON Schema Draft 2020-12. Its `digest` is the lowercase SHA-256 digest of the
+  complete canonical object with only `digest` omitted. Object keys sort
+  lexically. Contents and attached components sort by ID; component content IDs
+  sort lexically. Canonical record fields use kebab-case. The
+  Release envelope names the canonical global workspace tag, rendered tag name,
+  exact annotated-tag object, complete core identity-tag object set, target
+  commit, sealed Release Plan digest, interpretation contract, plan generator,
+  and selected security posture. The
+  Package identity and artifact `id`, `kind`, `identity`, and optional `variant`
+  exactly equal one artifact expectation in that plan. The producing operation
+  names the generated build or signing job. Provenance names its generated
+  GitHub Actions workflow and job, resolved Package or Signing recipe, and
+  complete recipe parameters used to produce the content. A signing operation
+  also names the unsigned input artifact ID and canonical Release Artifact
+  record digest. A derived build embeds the qualified Package ID, artifact ID,
+  and canonical record digest for every prerequisite named by its plan
+  expectation. Provenance source is the authoritative target commit and
+  its tree; that tree must be the materialized result sealed by the Release Plan.
+  Each file entry records its exact bundle-relative path, byte size, and digests.
+  Each image entry records an immutable content reference and digests. Every
+  content entry includes a lowercase SHA-256 digest;
+  recipe contracts define any additional digest names and values. Values in a
+  named digest map omit the algorithm prefix; standalone digest fields retain
+  the `sha256:` prefix. Attached components use recipe-defined identities and
+  reference existing content IDs.
+  Semantic validation requires unique content and component IDs, exact agreement
+  with the selected recipe's artifact and component shapes, absence of undeclared
+  bundle files, agreement between the producing operation and generated build or
+  signing job, agreement between a signing operation and the sealed plan's
+  signing dependency, validation of the referenced unsigned Release Artifact,
+  exact agreement between derived inputs and the sealed artifact prerequisite set,
+  agreement between recorded file size and digest and the transported
+  bytes, resolution of image references to the recorded digest, and agreement
+  between provenance source and authoritative Release identity. A consumer
+  validates the record and all content before accessing upload or Distribution
+  credentials. An exact existing record and content set satisfies production; a
+  mismatch in identity, provenance, inventory, size, or digest is a conflict.

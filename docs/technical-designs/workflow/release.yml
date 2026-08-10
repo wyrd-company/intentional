@@ -1,0 +1,92 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Turn an explicitly requested release into a verified source commit, annotated
+  release tags, and one draft GitHub Release per affected Release Unit without
+  exposing repository authority to unverified inputs.
+proposed-design:
+  trigger: >-
+    `.github/workflows/intentional-release.yml` uses manual dispatch. Typed inputs
+    select the optional release channel defined by the command-line
+    specification. The workflow checks out the requested default branch state
+    with complete history and tags, without persisting checkout credentials.
+    Concurrency serializes release authority for the repository.
+
+  prepare-job: >-
+    A read-only preparation job installs the pinned Intentional binary, validates
+    Release Workspace conformance, computes a digest-bound candidate Release
+    Plan, and materializes the expected release tree in an isolated workspace.
+    It records source commit, tree, plan bytes and digest, operations, expected
+    tags, Packages, Distribution Targets, and workflow identity in the
+    schema-backed bundle defined by
+    `docs/specifications/release-candidate-bundle.yml`. The job inventories that
+    bundle with the shared transport manifest, uploads it as a temporary GitHub
+    Actions artifact, and has no environment or repository-write credential.
+
+  custom-candidate-release-gate: >-
+    When
+    `.github/workflows/intentional-custom-candidate-release-gate.yml` exists, a
+    generated call job invokes it with the explicit source and candidate plan
+    identity. The Custom Candidate Release Gate runs with read-only repository
+    permissions and no secrets supplied by Intentional. Success passes the
+    transition. Failure or cancellation blocks the authority job.
+
+  authority-job: >-
+    The authority job uses the protected release environment. It checks out the
+    accepted source without persisted credentials, downloads the candidate,
+    reinstalls the pinned Intentional binary, and reproduces the candidate's
+    source, plan, operation set, and materialized tree. Only after those checks
+    pass does it mint the short-lived repository credential required for commit,
+    tag, and draft GitHub Release operations. Publishing the verified release commit
+    and annotated identity tags establishes the Release, seals the candidate
+    plan as durable Release state, and consumes its Change Intents when the
+    Release is channel-less.
+
+  release-commit: >-
+    The authority job creates the deterministic release commit from the verified
+    materialized tree using the protocol's fixed authoring contract. It publishes
+    that commit to the configured default branch through the release GitHub App
+    authority. Immediately before the update it verifies the remote branch still
+    names the accepted source commit. Ruleset bypass belongs to the App and is
+    reported as required operator state.
+
+  release-tags: >-
+    The job creates the annotated core identity tags in prerequisite order. Each
+    tag operation revalidates target commit, version, interpretation contract,
+    plan digest, and prerequisite records. The global workspace tag identifies
+    the established Release as the managed Release Record handoff and uses plain
+    semantic-version text. Tags are published through the short-lived repository
+    credential after the release commit is observable.
+
+  draft-release: >-
+    The authority job creates or verifies one draft GitHub Release for every
+    affected Release Unit. Each draft uses that unit's consumer-facing tag and
+    version and binds its title, notes, source identity, global Release Plan
+    digest, and expected unit-specific asset namespace. A channel Release sets
+    the GitHub Release prerelease flag. A channel-less Release clears it. An exact
+    existing draft is reusable during retry only when this flag and every other
+    bound value agree. A GitHub Release at the same Release Unit tag with
+    incompatible identity or published state is a conflict at this transition.
+
+  credential-lifetime: >-
+    The workflow token remains read-only. The authority job mints a short-lived
+    GitHub App token only after candidate and Custom Candidate Release Gate
+    verification, uses it for
+    the bounded commit, tag, and draft-Release operations, and discards it before
+    exporting outputs. Preparation and Custom Candidate Release Gate jobs cannot
+    receive it.
+
+  handoff: >-
+    Release Record assembly starts from the global tag event rather than a direct
+    workflow call or mutable run output. The global tag and Release Unit drafts
+    contain enough identity to reconstruct the accepted source, sealed plan, and
+    expected record inventory. Temporary release-workflow artifacts improve
+    same-run transport but carry no durable authority.
+
+  retries: >-
+    A retry recomputes the same candidate Release from accepted source. An exact
+    release commit, tag set, and complete draft Release Unit set satisfy their operations. A remote
+    branch advance before authority publication requires a new manual release
+    request. Partial exact tag publication resumes in prerequisite order.

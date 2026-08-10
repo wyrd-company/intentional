@@ -94,21 +94,21 @@ pub enum TagRole {
     Projection,
 }
 
-/// Executor-declared phase required to create a configured tag.
+/// Distribution phase required to create a configured tag.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TagPhase {
-    /// The executor declares that publication has not begun.
-    BeforePublication,
-    /// The executor declares that publication has completed.
-    AfterPublication,
+    /// Distribution has not begun.
+    BeforeDistribution,
+    /// Distribution has completed.
+    AfterDistribution,
 }
 
 impl fmt::Display for TagPhase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::BeforePublication => "before-publication",
-            Self::AfterPublication => "after-publication",
+            Self::BeforeDistribution => "before-distribution",
+            Self::AfterDistribution => "after-distribution",
         })
     }
 }

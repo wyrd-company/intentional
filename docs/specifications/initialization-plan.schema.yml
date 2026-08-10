@@ -1,6 +1,6 @@
 # ---
 # relationships:
-#   implements: intent-driven-polyglot-release
+#   realizes: initialization-plan
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
 $id: https://intentional.foo/schemas/init-plan.yml
@@ -12,6 +12,7 @@ required:
   - state
   - source-kind
   - source-fingerprint
+  - workflow-adoption
   - inferred-config
   - discovery-candidates
   - diagnostics
@@ -23,12 +24,14 @@ properties:
   $schema:
     const: https://intentional.foo/schemas/init-plan.yml
   state:
-    enum: [ needs-input, ready ]
+    enum: [needs-input, ready]
   source-kind:
-    enum: [ workspace, intentional, changesets ]
+    enum: [workspace, intentional, changesets]
   source-fingerprint:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
+  workflow-adoption:
+    $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/workflow-adoption"
   inferred-config:
     oneOf:
       - $ref: config.yml
@@ -46,29 +49,30 @@ properties:
     items:
       type: object
       additionalProperties: false
-      required: [ id, release-units, message, source, target ]
+      required: [id, release-units, message, source, target]
       properties:
-        id: { type: string }
+        id:
+          $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
         release-units:
           type: object
           additionalProperties:
-            enum: [ major, minor, patch ]
+            enum: [major, minor, patch]
         message: { type: string }
         source: { type: string }
         target: { type: string }
   parity:
     type: object
     additionalProperties: false
-    required: [ status, release-units ]
+    required: [status, release-units]
     properties:
       status:
-        enum: [ equivalent, blocked ]
+        enum: [equivalent, blocked]
       release-units:
         type: array
         items:
           type: object
           additionalProperties: false
-          required: [ release-unit, current-version ]
+          required: [release-unit, current-version]
           properties:
             release-unit: { type: string }
             current-version: { type: string }
@@ -80,45 +84,82 @@ properties:
     type: array
     items: { type: string }
   post-commit-action:
-    enum: [ "", intentional tag --baseline ]
+    enum: ["", intentional tag --baseline]
 $defs:
   empty-inferred-config:
     type: object
     additionalProperties: false
-    required: [ contract, release-units ]
+    required: [contract, workflow, release-units]
     properties:
       $schema:
         const: https://intentional.foo/schemas/config.yml
       contract:
         const: contract-1
+      workflow:
+        $ref: config.yml#/$defs/workflow
       settings:
         type: object
         additionalProperties: false
         properties:
           internal-dependency-bump:
-            enum: [ major, minor, patch ]
+            enum: [major, minor, patch]
             default: patch
           pre-1-0-bump-mapping:
-            enum: [ component, compatibility ]
+            enum: [component, compatibility]
             default: compatibility
       release-units:
         type: object
         maxProperties: 0
   detector-id:
-    type: string
-    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+  stable-id:
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+  profile-ref:
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/profile-ref"
+  workspace-tag-id:
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/workspace-tag-id"
+  workflow-adoption:
+    type: object
+    additionalProperties: false
+    required:
+      - origin
+      - recommended-adoption
+      - recommended-posture
+      - recommended-global-tag
+      - supported-postures
+    properties:
+      origin:
+        type: object
+        additionalProperties: false
+        required: [kind]
+        properties:
+          kind:
+            enum: [github, other, missing]
+          url:
+            type: string
+            minLength: 1
+      recommended-adoption:
+        enum: [adopted, declined]
+      recommended-posture:
+        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/profile-ref"
+      recommended-global-tag:
+        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/workspace-tag-id"
+      supported-postures:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/profile-ref"
+      resolution:
+        $ref: "https://intentional.foo/schemas/config.yml#/$defs/workflow"
   release-unit-id:
-    type: string
-    pattern: "^[A-Za-z0-9@/_.-]+$"
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
   exact-path:
-    type: string
-    minLength: 1
-    not: { const: "." }
-    pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*[*?\[\]{}])[^/]+(?:/[^/]+)*$'
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
   discovery-candidate:
     type: object
     additionalProperties: false
-    required: [ id, detector, path, evidence ]
+    required: [id, detector, path, evidence]
     properties:
       id:
         type: string
@@ -138,7 +179,7 @@ $defs:
       raw-version:
         type: object
         additionalProperties: false
-        required: [ value, evidence ]
+        required: [value, evidence]
         properties:
           value:
             type: string
@@ -148,17 +189,28 @@ $defs:
             minItems: 1
             items:
               $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+      package:
+        type: object
+        additionalProperties: false
+        required: [path, recipe]
+        properties:
+          path:
+            oneOf:
+              - const: "."
+              - $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+          recipe:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
       projection:
         type: object
         additionalProperties: false
-        required: [ adapter, path, mode ]
+        required: [adapter, path, mode]
         properties:
           adapter:
-            enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
+            enum: [npm, cargo, pub, python, msbuild, go, json, toml, yaml]
           path:
             $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
           mode:
-            enum: [ committed, injected, none ]
+            enum: [committed, injected, none]
           pointer:
             type: string
             minLength: 1
@@ -166,22 +218,29 @@ $defs:
           - if:
               properties:
                 adapter:
-                  enum: [ json, toml, yaml ]
+                  enum: [json, toml, yaml]
             then:
-              required: [ pointer ]
+              required: [pointer]
       tag:
         type: object
         additionalProperties: false
-        required: [ id, role, template ]
+        required: [id, role, template]
         properties:
           id:
-            type: string
-            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
           role:
-            enum: [ primary, projection ]
+            enum: [primary, projection]
           template:
-            type: string
-            pattern: '^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
+            $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-template"
+        allOf:
+          - if:
+              properties:
+                role: { const: primary }
+              required: [role]
+            then:
+              properties:
+                template:
+                  $ref: "https://intentional.foo/schemas/config.yml#/$defs/primary-tag-template"
       diagnostics:
         type: array
         items:
@@ -192,30 +251,34 @@ $defs:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit ]
+        required: [kind, release-unit, package]
         properties:
           kind: { const: independent }
           release-unit:
             $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+          package:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit ]
+        required: [kind, release-unit, package]
         properties:
           kind: { const: projection }
           release-unit:
             $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+          package:
+            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
           target-candidate:
             type: string
             pattern: "^candidate:[0-9a-f]{64}$"
       - type: object
         additionalProperties: false
-        required: [ kind ]
+        required: [kind]
         properties:
           kind: { const: excluded }
   extraction-diagnostic:
     type: object
     additionalProperties: false
-    required: [ id, code, message, evidence ]
+    required: [id, code, message, evidence]
     properties:
       id: { type: string, minLength: 1 }
       code: { type: string, minLength: 1 }
@@ -228,14 +291,14 @@ $defs:
   parity-release:
     type: object
     additionalProperties: false
-    required: [ requested-bump, next-version ]
+    required: [requested-bump, next-version]
     properties:
-      requested-bump: { enum: [ major, minor, patch ] }
+      requested-bump: { enum: [major, minor, patch] }
       next-version: { type: string }
   evidence:
     type: object
     additionalProperties: false
-    required: [ path, digest ]
+    required: [path, digest]
     properties:
       path:
         $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
@@ -251,7 +314,7 @@ $defs:
   diagnostic:
     type: object
     additionalProperties: false
-    required: [ id, code, message, evidence, verified ]
+    required: [id, code, message, evidence, verified]
     properties:
       id: { type: string }
       code: { type: string }
@@ -265,7 +328,7 @@ $defs:
         items: { type: string }
       recommended: { type: string }
       resolution:
-        type: [ string, "null" ]
+        type: [string, "null"]
       verified: { type: boolean }
       invalidated-resolution: { type: boolean }
       supporting-evidence:

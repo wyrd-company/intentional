@@ -1,0 +1,89 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: debian-repository, part-of: debian }
+role: distribution
+versions:
+  1:
+    configuration: ./debian-repository.config.yml#/$defs/version-1
+    destination: ./debian-repository.config.yml#/$defs/destination-version-1
+    primitives:
+      [
+        { id: debian-preflight, version: 1 },
+        { id: invoke-delivery-action, version: 1 },
+        { id: debian-observe, version: 1 },
+        { id: debian-verify, version: 1 },
+      ]
+    tools: []
+    accepted-artifact-kinds: [debian-package]
+    credentials:
+      [
+        {
+          id: delivery-token,
+          process-variable: INTENTIONAL_DEBIAN_DELIVERY_TOKEN,
+        },
+      ]
+    github-permissions:
+      { distribute: { contents: read }, observe: { contents: read } }
+    preflight:
+      [
+        {
+          id: probe-debian-index,
+          uses: { id: debian-preflight, version: 1 },
+          with: { agreement: [package, version, architecture, sha256] },
+        },
+      ]
+    distribute:
+      [
+        {
+          id: deliver-debian-package,
+          uses: { id: invoke-delivery-action, version: 1 },
+          with:
+            {
+              action: configured-pinned-action,
+              artifact: exact-sealed-package,
+            },
+        },
+      ]
+    observe:
+      - {
+          id: observe-debian-index,
+          uses: { id: debian-observe, version: 1 },
+          with: { retrieval: public-client, deadline-seconds: 600 },
+        }
+    verify:
+      - {
+          id: verify-debian-package,
+          uses: { id: debian-verify, version: 1 },
+          with: { compare: [index, sha256, downloaded-bytes] },
+        }
+    requirements:
+      [
+        { id: pinned-delivery-action, class: authority },
+        { id: public-apt-readback, class: security-control },
+      ]
+    control-subtractions: []
+    guarantees:
+      - {
+          id: exact-debian-package,
+          statement: Public repository bytes agree with the sealed Debian package.,
+        }
+      - {
+          id: repository-owned-delivery,
+          statement: Destination-specific delivery behavior remains in the pinned repository Action.,
+        }
+    conformance:
+      cases:
+        - {
+            id: debian-delivery,
+            fixture: fixtures/debian/delivery,
+            asserts: [pinned-action, exact-package, public-index],
+          }
+        - {
+            id: debian-conflict,
+            fixture: fixtures/debian/conflict,
+            asserts: [conflict-rejection, no-overwrite],
+          }
+      live:
+        {
+          operation: debian-live-conformance,
+          proves: [pinned-action, public-readback, idempotent-retry],
+        }

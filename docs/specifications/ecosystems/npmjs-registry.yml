@@ -1,0 +1,21 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [node, ecosystem-recipes, recipe-catalog]
+  models: [intentional]
+description: >-
+  Defines npmjs distribution for sealed `npm-package-tarball` artifacts. Version 1
+  uses npm trusted publishing through GitHub OpenID Connect for an existing
+  package and a conditional owner-provided bootstrap token for first distribution.
+  It verifies immutable package integrity and configured dist-tags through a
+  clean public npm client. Config and recipe assets share the `npmjs-registry`
+  stem.
+format: json-schema
+validation-criteria: >-
+  Destination is npmjs with explicit public or restricted access. Package name,
+  version, tarball SHA-512 integrity, and access agree with the sealed plan and
+  native publish policy. Existing version identity is accepted only when
+  `dist.integrity` and downloaded tarball bytes agree. Absence requires a
+  bootstrap token only when trusted publishing cannot yet exist. Steady-state
+  distribution uses `id-token: write`, publishes the exact tarball with scripts
+  disabled and provenance enabled, then verifies public-client readback and each
+  planned dist-tag. Conflicts never overwrite immutable versions.

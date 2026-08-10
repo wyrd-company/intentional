@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: release-plan
 // ---
 
 //! Deterministic release planning, changelog rendering, and digest sealing.
@@ -328,6 +328,50 @@ pub(crate) fn lower_hex(bytes: &[u8]) -> String {
             output
         },
     )
+}
+
+#[cfg(test)]
+mod schema_tests {
+    #[test]
+    fn published_release_plan_schema_carries_shared_and_managed_contracts() {
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/release-plan.schema.yml"
+        ))
+        .expect("release-plan schema parses");
+        let required = schema["required"]
+            .as_sequence()
+            .expect("required release-plan fields");
+        for field in [
+            "$schema",
+            "source",
+            "workflow",
+            "packages",
+            "custom-release-gates",
+        ] {
+            assert!(required.iter().any(|value| value.as_str() == Some(field)));
+        }
+        assert!(required
+            .iter()
+            .any(|value| value.as_str() == Some("release-units")));
+        assert!(schema["properties"].get("release_units").is_none());
+        assert_eq!(
+            schema["$defs"]["release-unit"]["properties"]["id"]["$ref"].as_str(),
+            Some("#/$defs/stable-id")
+        );
+        assert_eq!(
+            schema["$defs"]["package"]["properties"]["recipe"]["$ref"].as_str(),
+            Some("#/$defs/resolved-recipe")
+        );
+        let workflow_variants = schema["$defs"]["workflow"]["oneOf"]
+            .as_sequence()
+            .expect("workflow adoption variants");
+        assert_eq!(workflow_variants.len(), 2);
+        assert!(workflow_variants[1]["required"]
+            .as_sequence()
+            .expect("adopted workflow fields")
+            .iter()
+            .any(|value| value.as_str() == Some("security-posture")));
+    }
 }
 
 /// Serialize a value as compact JSON with recursively sorted object keys.

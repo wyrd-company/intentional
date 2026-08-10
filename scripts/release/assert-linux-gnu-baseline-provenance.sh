@@ -9,7 +9,6 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 baseline_env="$root/scripts/release/linux-gnu-baseline.env"
-technical_design="$root/docs/technical-designs/intent-driven-polyglot-release.yml"
 decision_record="$root/docs/decisions/build-linux-gnu-release-on-pinned-cross-baseline.yml"
 install_doc="$root/docs/install.md"
 
@@ -40,7 +39,7 @@ for variable in "${required_env_vars[@]}"; do
   fi
 done
 
-for file in "$technical_design" "$decision_record" "$install_doc"; do
+for file in "$decision_record" "$install_doc"; do
   if ! grep -Fq "$CROSS_SOURCE_COMMIT" "$file"; then
     echo "$file must record cross source commit $CROSS_SOURCE_COMMIT." >&2
     exit 1
@@ -64,8 +63,8 @@ for file in "$technical_design" "$decision_record" "$install_doc"; do
 done
 
 for dockerfile in "$X86_64_GNU_DOCKERFILE" "$AARCH64_GNU_DOCKERFILE"; do
-  if ! grep -Fq "$dockerfile" "$technical_design"; then
-    echo "technical design must reference Dockerfile $dockerfile." >&2
+  if ! grep -Fq "$dockerfile" "$decision_record"; then
+    echo "baseline decision must reference Dockerfile $dockerfile." >&2
     exit 1
   fi
 done

@@ -1,510 +1,97 @@
 $schema: https://refinery.systems/ontology/technical-design
 relationships:
-  contextualized-by:
-    - build-linux-gnu-release-on-pinned-cross-baseline
+  realizes: intentional
 objective: >-
-  Provide a single, fast, dependency-free CLI that manages change intents,
-  version computation, manifest projection, changelogs, tags, and a verifiable
-  release plan across polyglot repositories — node, Rust, Dart, .NET, Python,
-  and Go — replacing per-ecosystem versioning tools and bespoke CD glue.
-background:
-  current-design: >-
-    Changesets-style workflows are ecosystem-bound. Changesets itself is
-    npm-only: packages in other ecosystems must be listed in its ignore
-    configuration and handled by hand-written CD jobs (for example, cutting a
-    Dart git tag after an npm publish). Repositories that need release rigor
-    beyond changesets build bespoke release-contract scripts that implement
-    deterministic planning and coordinate ecosystem-specific delivery per
-    repository. Tag-driven calculators (MinVer, tagver) compute versions from
-    git tags but cannot know whether pending work is breaking, so they guess
-    the next version.
-  problems:
-    - No existing tool covers node, Rust, Dart, .NET, Python, and Go manifests
-      as a single static binary; knope is closest but does not cover csproj or
-      pubspec, covector is JavaScript, changie does not bump manifests,
-      release-plz is Rust-only.
-    - Ecosystem-name package identity forces polyglot packages out of the
-      versioning workflow entirely (ignore lists plus CD duct tape).
-    - Tag-driven and manifest-driven versioning models conflict when aimed at
-      the same repository, and each has a known weakness the other repairs.
-    - Release planning and tag verification logic gets rebuilt per repository
-      as untested CI scripts.
-design-challenges:
-  version-source-of-truth: >-
-    Manifest-driven ecosystems (npm, cargo, pub, msbuild, python) and
-    tag-driven ecosystems (Go modules) appear to demand opposing models. The
-    real invariant is narrower: every registry except Go's requires the
-    version to be materialized in the artifact at publish time — none require
-    it to be stored in git. The design must reconcile both without forking the
-    mental model per repository.
-  cross-ecosystem-identity: >-
-    One release unit may ship to multiple ecosystems at one version (an npm
-    and a pub build of the same runtime). Ecosystem package names cannot serve
-    as identity without recreating the ignore-list problem.
-  choreography-diversity: >-
-    Release choreography varies legitimately per repository: local
-    commit-and-push, bot-authored version PRs, and deterministic
-    source-to-release commit pipelines. The tool must compose with all of them
-    without owning any of them.
-  format-preserving-writes: >-
-    Projecting versions into manifests must not destroy comments or formatting
-    in YAML, TOML, or JSON files that humans also edit.
-  bump-evidence: >-
-    Declared bump levels are claims. Public API surface diffs can ground those
-    claims, but API scanning is ecosystem-specific and must not expand the
-    tool into a polyglot static-analysis project.
-  adoption-authority: >-
-    A repository adopting Intentional may already contain pending release
-    intent, versioning configuration, and executable integrations owned by
-    another tool. Discovery must preserve that authority until the imported
-    contract is complete, unambiguous, and equivalent.
-  incomplete-discovery: >-
-    Manifest discovery can prove package identity and version projections but
-    cannot infer repository-specific choices such as ignored-package
-    disposition, tag roles, or the meaning of bespoke release automation.
-    Initialization needs a durable, editable handoff that records evidence and
-    requests only the decisions discovery cannot prove.
-  takeover-continuity: >-
-    Intentional writes working-tree state but does not create commits. The
-    authority handoff and the baseline tags therefore occur on opposite sides
-    of an externally created commit without relying on retained terminal
-    output or a permanent migration-state file.
+  Define Intentional as one coherent release protocol that turns change intent
+  into authoritative versions and, when managed workflow is adopted, preserves
+  one immutable GitHub Release record per affected Release Unit before
+  distributing its released content through maintained ecosystem integrations.
 proposed-design:
-  high-level-overview: >-
-    Intents answer what the next version should be; tags answer what was
-    released; manifests are projections, never sources. Accumulated intent
-    files determine the next bump per release unit. The tool always tags on
-    release; tags are the canonical release record in every mode. Manifests
-    receive the version by per-projection policy — committed, injected at
-    build time, or none (Go's degenerate case). Between releases the two
-    models compose: the next version from intents plus tag height from tagver
-    yields deterministic ephemeral build versions with no stored state. The
-    tool's boundary is git state plus a canonical, digest-bound release plan
-    that CD executes; it never speaks a registry protocol, and it never
-    commits, pushes, or opens pull requests.
-  core-model: >-
-    A workspace declares an inventory of release units under `release-units` in
-    .intentional/config.yml. Each release unit has a path, one or more projections,
-    named tags, and optional explicit depends-on edges. Exactly one release-unit tag
-    is primary and supplies current-version authority; any projection tags
-    record that same logical release in additional tag namespaces. Named
-    workspace tags represent repository-level release records and CD triggers
-    without becoming release-unit version authority. Tag templates never add a v
-    prefix. The next version is the primary tag version plus the accumulated
-    intent bump interpreted by the workspace contract. No version field exists
-    in config, so hand-edited manifest versions are observable drift rather
-    than competing authority. Monorepo support includes per-release-unit intents,
-    internal-dependency bumping with generated changelog entries, fixed and
-    linked release groups, and changed/unchanged partitioning. During init
-    reconciliation, current non-development npm manifest dependencies are
-    authoritative for edges between release units with npm projections. Edges
-    to release units without npm projections remain authored configuration
-    because npm manifests cannot represent those cross-ecosystem or non-native
-    ordering relationships.
-  intent-files: >-
-    Intents live in .intentional/intents/ as markdown files with a YAML
-    frontmatter block mapping release unit ids to bump levels; the markdown
-    body is the changelog prose. Filenames are generated memorable slugs so
-    parallel branches do not conflict. Intents reference logical ids, never
-    ecosystem names. A release unit with npm and pub projections is one
-    release unit with one version — cross-ecosystem linked versioning falls out of
-    identity rather than being a feature.
-  projections-and-adapters: >-
-    Ecosystem adapters (npm, cargo, pub, msbuild, python, go) know where the
-    version lives in their manifest and how to rewrite internal dependency
-    ranges. Format adapters (json, yaml, toml) take a file path and pointer and
-    cover arbitrary version-bearing files (for example a devcontainer feature
-    manifest). All writers are format-preserving (toml_edit-class libraries).
-    Ecosystem adapters are thin specializations of format adapters. The go
-    adapter is tag-only, except that a major bump rewrites the module path
-    suffix. Projection modes are committed (the version bump lands in a
-    commit), injected (stamp materializes a build-time version), and none.
-  version-computation: >-
-    Ephemeral build versions compose statelessly: next version from intents,
-    prerelease identifier, height from tagver — for example 1.3.0-alpha.5.
-    Channel releases (beta and similar) are opt-in per invocation via
-    --channel on plan, apply, and tag; the iteration number derives from
-    existing tags (max existing channel tag for that version, plus one). No
-    stored pre-mode state exists. Channel releases do not consume intents;
-    intents survive until the final channel-less release, so every channel
-    release recomputes from the full intent set. The workspace config selects
-    pre-1-0-bump-mapping. Component mapping applies major, minor, and patch to
-    the corresponding SemVer component. Compatibility mapping treats bump
-    names as compatibility significance: major advances 0.x.y to 0.(x+1).0,
-    while minor and patch advance to 0.x.(y+1). New workspaces use
-    compatibility mapping; Changesets adoption recommends component mapping.
-  release-groups: >-
-    Fixed and linked groups contain release unit ids. When any managed
-    member of a fixed group receives a direct or dependency-derived bump, all
-    managed members release. The group takes the highest current member
-    version, selects the highest requested bump, applies the configured
-    pre-1.0 mapping once, and assigns the result to every member. A suspended
-    member blocks a fixed-group release because the shared release cannot be
-    completed. In a linked group, only members with direct or
-    dependency-derived bumps release. Every releasing member uses the highest
-    current version across the full group and the highest requested bump among
-    the releasing members; unaffected members retain their versions. A
-    suspended linked member blocks only when it would release. Excluded
-    release units cannot appear in either group, and a release unit belongs to at most
-    one release group. Dependency propagation raises a dependent to at least
-    the configured internal-dependency bump only when the dependent and its
-    dependency share an ecosystem adapter, because propagation releases the
-    dependent manifest whose internal dependency range the release rewrites.
-    Generic format adapters carry no dependency ranges. An edge without a
-    shared ecosystem adapter orders releases and carries no bump; release
-    groups couple versions across ecosystems. Dependency propagation and group
-    constraints are evaluated to a fixed point before the release plan is
-    sealed.
-  tag-contract: >-
-    Every tag is an annotated release record carrying the interpretation
-    contract, generator name and version, and release-plan digest. Newly created
-    annotated tags also carry a deterministic tagger identity of
-    Intentional <intentional@wyrd.company> and the target commit's committer
-    timestamp including its timezone offset. The tagger is derived only from the
-    release target commit and stable Intentional identity; it does not use
-    ambient Git configuration, wall-clock time, randomness, host timezone, or
-    network state. Previously published tagger-less Intentional records remain
-    valid release authority and are not rewritten. A logical release unit has
-    exactly one primary tag and any number of projection tags. All tags for one
-    logical release target the same commit and agree on release-unit version,
-    contract, and plan digest. A projection tag can trigger external automation
-    but does not become lesser evidence or an alternate version source. Named
-    workspace tags carry the same record for a workspace release and can use a
-    plain {version} template. Each workspace tag has its own version stream: its
-    latest matching tag supplies the current version and the highest bump among
-    participating release units supplies its next bump. A workspace tag without
-    an existing stream requires an explicit baseline version. A tag can declare
-    require-phase as before-publication or after-publication; creating it
-    requires an equal --phase value. The phase is an executor declaration bound
-    to the plan. Publication state and registry evidence belong to the external
-    release executor.
-  tag-ordering: >-
-    Tags express observable prerequisites with tag-after. Before creating a
-    tag, Intentional resolves every prerequisite tag expected by the plan and
-    verifies its target commit, expected version, interpretation contract, and
-    plan digest. Missing or conflicting prerequisites block that tag. The
-    release plan contains tag order only; external CD determines how tag
-    creation relates to publication and other side effects.
-  initialization-discovery: >-
-    Init recursively discovers every supported manifest admitted by repository
-    Git ignore rules and hard exclusions. Package-manager workspace membership
-    is evidence for inference, recommendations, dependency analysis, and parity;
-    it is never an inclusion boundary. Directory basenames are evidence only and
-    never release-unit ids. Discovery records every manifest and workspace file
-    used as evidence, recognizes existing
-    Intentional or Changesets authority, and locates executable Changesets
-    references in workflows, package scripts, dependency declarations,
-    lockfiles, release scripts, and tests. Every detector returns the same
-    artifact-neutral candidate contract: stable detector/path identity,
-    evidence digests, optional native identity and raw version evidence,
-    conditional projection and tag suggestions, and narrow extraction
-    diagnostics. Detector evidence does not infer publication.
-    Walking hard-excludes version-control metadata, Intentional state, and
-    ecosystem cache directories. Broad names such as build, dist, bin, and
-    vendor have no built-in meaning and are controlled only by repository ignore
-    rules.
-  initialization-plan: |-
-    Init writes canonical config only when the complete configuration is
-    proven. Otherwise it writes one transient `.intentional/init-plan.yml`.
-    The plan is deterministic and schema-backed. It contains the discovered
-    source kind, source fingerprint, inferred configuration, diagnostics,
-    evidence locations and digests, planned operations, parity result, finite
-    resolution choices, recommendations, and editable resolution fields. Its
-    computed state is `needs-input` or `ready`; editing the state cannot bypass
-    validation. Stable diagnostic codes identify conditions, while diagnostic
-    ids combine the code with the affected release unit, tag, or repository
-    location so agents can reconcile reruns.
+  architecture: >-
+    Intentional consists of a native command-line interface, deterministic
+    release-domain mechanisms, optional generated GitHub Actions workflows,
+    maintained ecosystem recipes, and typed repository extension points. The
+    command-line interface provides the portable protocol. Managed workflow
+    coordinates GitHub authority, per-Release Unit records, destination
+    credentials, Distribution, and verification around the same release rules.
 
-    Discovery collects detector/path-identified candidates losslessly before it
-    materializes provisional release-unit configuration. Duplicate
-    manifest-native identities at different paths remain separate candidates
-    and cannot fail before explicit resolution. Discovery candidates resolve as
-    independent, projection, or excluded.
-    Independent and projection choices name the final release-unit id. A
-    projection either targets an existing configured release unit or follows a
-    candidate in the same plan to an independent creator. Validation rejects
-    duplicate creators, absent targets, release-unit disagreement, and
-    projection cycles before configuration is written. Candidate resolution
-    fields use the schema's canonical kebab-case spelling, including
-    `release-unit` and `target-candidate`.
+  core-protocol: >-
+    Intentional's core protocol requires Git and no hosting platform. It owns
+    Release Workspace initialization, Change Intents, status, semantic-version
+    computation, Release Plans, materialization, changelogs, and annotated tag
+    records. The surrounding harness creates the materialized commit.
+    `intentional tag --plan` verifies that commit and creates the authoritative
+    tags that establish the Release. This tag-backed Release is complete without
+    generated workflow, managed Release Record, or external Distribution.
 
-    New and configured repositories use the same candidate workflow. Managed
-    receipts resolve their detector/path identity; excluded receipts resolve it
-    only while the exact evidence digest still agrees. A scan with no new or
-    changed candidates and no transient plan performs no mutation. When current
-    evidence makes every candidate resolved, reconciliation removes any obsolete
-    transient plan. A complete set of new resolutions is validated and
-    materialized together, after which the transient plan is removed.
+  domain-state: >-
+    Release Workspace, Change Intent, Release, and Distribution are the domain
+    aggregates. Release Workspace owns configuration. Change Intent owns pending
+    release input. Release owns established source identity, its sealed global
+    plan, and the managed Release Records created for affected Release Units.
+    Distribution owns one released artifact or logical content graph's delivery
+    and current consumer-path verification at one destination.
 
-    YAML choices are compact scalar values with one inline comment explaining
-    each value, followed by recommended and resolution fields. Dry-run emits
-    the same plan without writing it. Human-readable and
-    structured JSON output expose the same state, diagnostics, evidence,
-    choices, and next actions. Success, needs-input, and failure are distinct
-    process outcomes. On rerun, init recomputes the source fingerprint,
-    preserves a resolution only while its evidence remains valid, and reports
-    invalidated resolutions with their changed evidence.
-  release-tool-proxy-recommendations: >-
-    Changesets adoption can expose an npm manifest mapped onto a genuine non-npm
-    artifact as a retain-or-remove integration choice. The best-effort
-    assessment uses only manifest structure, package-manager and dependency
-    graphs, exact identifiers as graph keys or source-tool references, explicit
-    candidate-resolution edges, and repository use. Descriptions, comments,
-    prose, semantic keyword matching, private status, minimal shape, path
-    proximity, and matching versions do not independently support a removal.
-    Each assessment exposes supporting evidence, contradictory evidence, and an
-    uncertainty statement. Weak or conflicting evidence carries no removal
-    recommendation. The explicit resolution is authoritative. A remove
-    resolution advances only when no non-Changesets repository references
-    remain, and takeover repeats that verification immediately before deleting
-    the manifest.
-  changesets-adoption: >-
-    A .changeset/config.json source activates the Changesets importer. The
-    importer maps package identities, pending changes, fixed and linked groups,
-    internal-dependency bump policy, ignored packages, and private-package
-    version behavior into the initialization plan. Changesets bump names use
-    component pre-1.0 mapping. Each pending Changesets file becomes one
-    Intentional intent: its markdown body is preserved and its manifest-native
-    package names are mapped to release unit ids. The importer independently
-    computes the source Changesets release result and the proposed Intentional
-    release result, including dependency propagation and group constraints,
-    then records release-unit membership, requested bumps, and next-version parity.
-    Source dependency propagation preserves npm dependency kinds, npm and
-    workspace ranges, Changesets' out-of-range default, peer-major behavior,
-    and its supported experimental dependent-update switches.
-    Range-conditional peer updates are also surfaced as an explicit contract
-    choice because canonical Intentional `depends-on` edges are uniform; a
-    current release difference remains a parity blocker. Internal
-    devDependencies participate in the source computation without becoming
-    durable Intentional `depends-on` edges; that contract choice is explicit
-    and current divergence remains blocking. Explicit discovery-candidate
-    projection resolutions map manifest-native intent keys to the selected
-    release-unit identity before comparison and conversion. Unsupported
-    settings and repository-specific release metadata remain explicit
-    diagnostics with source evidence rather than inferred behavior.
-    A Changesets ignore entry cannot be remapped from its native package
-    identity onto a merged managed release unit because that would erase the
-    package boundary that defines source authority. The merged target remains
-    in the source and proposed inventories, and parity reports a blocker until
-    the ignore entry is removed or the candidate resolution is revised.
-  release-unit-disposition: >-
-    Managed release units belong to the inventory and participate in release
-    computation. Suspended release units remain configured and visible to status
-    and check, but any release that requires them is blocked. Excluded
-    discovery candidates do not enter the inventory. Every Changesets ignore
-    entry produces a suspended, excluded, or managed resolution; suspended is
-    recommended because it preserves the identity and blocks release until the
-    repository owner resolves its contract. Package privacy is separate from
-    release-unit disposition and does not imply exclusion or suspension.
-    Applied discovery choices leave generic detector/path receipts in config.
-    Managed receipts retain their release-unit relationship; excluded receipts
-    bind an exact path identity to its evidence digest, so changed evidence is
-    presented for resolution again. Receipt paths are literal and never globs.
-  repository-integration-resolutions: >-
-    Changesets references outside .changeset are repository integrations, not
-    state owned by Intentional. The initialization plan reports each reference
-    with its exact location and requires an explicit resolution describing the
-    repository edit. A resolution is accepted only when a rerun inspects the
-    referenced file and observes the declared outcome. An acknowledgement
-    without the corresponding file change does not advance the plan to ready.
-  takeover-transaction: >-
-    Ordinary init leaves a Changesets repository under Changesets authority,
-    including when the initialization plan is ready. Intentional init
-    --take-over is the sole authority handoff. It verifies the current source
-    fingerprint, every resolution, release-plan parity, and the complete
-    operation set immediately before mutation. A rollback-capable filesystem
-    transaction writes canonical Intentional config and converted intents,
-    removes recognized .changeset state and explicitly authorized release-tool
-    proxy manifests, and consumes the initialization plan as one all-or-nothing
-    operation. Transient staging and rollback data are
-    removed after success and are recoverable on the next init after an
-    interrupted process. Other verified repository integrations are edited by
-    the user or agent that owns the repository.
-  baseline-establishment: >-
-    Takeover output identifies intentional tag --baseline as the post-commit
-    continuation in human-readable and structured forms. Status and check
-    independently rediscover the missing-baseline condition and emit the same
-    stable diagnostic and command until the tags exist. Baseline creation runs
-    against the externally created takeover commit. It infers a logical
-    release-unit version only when every version-bearing projection agrees and
-    reports per-file evidence when they differ. A tag-only release unit requires an
-    explicit baseline version. Baseline tags use the configured primary,
-    projection, and workspace templates, are annotated with the contract and
-    plan digest, target the takeover commit, and do not require a phase. A
-    release unit or workspace tag whose current tag is already an Intentional
-    record is established and outside the baseline set, unless that record is
-    a baseline at the commit being tagged; a release unit added after others
-    have released therefore receives its baseline alone.
-  command-surface: >-
-    init requires a Git repository, discovers candidates, and produces or
-    reconciles the single initialization plan before writing complete
-    configuration. --take-over performs a validated authority handoff. add
-    authors an intent through repeatable
-    --release-unit selectors or an interactive prompt. status reports pending intents, computed next
-    versions, drift, suspended release blockers, and missing baselines. plan
-    emits the canonical release plan without mutation. apply writes projections
-    and changelogs and consumes intents in the working tree. stamp writes
-    computed versions into injected projections and touches nothing else. tag
-    creates configured release-unit and workspace tags, accepts --phase for tags
-    with a required phase, and accepts --baseline to establish initial release
-    authority. Tag is the only git-writing command. check is the CI gate for
-    config, schema, intent validity, tag-record consistency, baseline presence,
-    and plan determinism. Every writing verb supports --dry-run and reports the
-    exact operation set. Commit, push, and forge choreography belong to the
-    harness.
-  release-plan: >-
-    Plan emits canonical JSON listing release units, old and new versions,
-    contributing intent ids, primary, projection, and workspace tags, tag-after
-    prerequisites, required phase declarations, and rendered release notes per
-    release unit. The interpretation contract and generator record are part of the
-    canonical payload sealed by its digest. CD consumes the plan as release
-    input and owns all publication and forge operations. The plan's only
-    ordering edges are tag-after prerequisites.
-  changelog-model: >-
-    apply writes each affected release unit's CHANGELOG.md from the consumed intent
-    bodies; a multi-release-unit intent's body lands in each affected release unit's
-    changelog, and a multi-projection release unit has exactly one changelog.
-    Sections group by bump level (breaking, features, fixes); an optional kind
-    frontmatter field can refine grouping later without schema breakage.
-    Internal dependency bumps generate their own entries. Channel releases
-    write a section for the channel version; the final release replaces that
-    version's prerelease sections with the consolidated section. Output is
-    deterministic, lintable CommonMark. Enrichment (PR links, contributors)
-    would arrive as data passed into the tool, never fetched by it.
-  api-approval-gate: >-
-    Future scope, first increment after the core ships. The tool orchestrates
-    an approval-test loop over public API surfaces but never scans a language
-    itself: per-release-unit config names a command that emits a deterministic,
-    line-oriented surface (cargo public-api, api-extractor, PublicApiGenerator,
-    griffe, apidiff, dart_apitool). A golden surface file is checked into git;
-    api check regenerates, diffs, and on failure leaves the received file
-    behind; api approve blesses it. Classification floors: additions-only
-    implies at least minor, mutation or removal implies at least major, no
-    change implies patch; the mapping is version-aware pre-1.0. check fails
-    when a declared bump is below the floor; declaring above the floor is
-    always allowed because behavioral breaks are invisible to surfaces. The
-    gate is opt-in per release unit, and add can prefill the suggested bump from
-    the current diff.
+  release-authority: >-
+    Annotated Git tags are version authority. A computed Release Plan and its
+    materialized tree are candidates. Making the verified release commit and
+    annotated identity tags authoritative repository objects establishes the
+    Release and seals the plan as durable identity. A channel-less Release
+    consumes its Change Intents. The portable command-line protocol prepares and
+    verifies these objects for an operator or another automation system. Managed
+    GitHub workflow performs the same transition through repository-owner App
+    authority and continues into per-Release Unit records and Distribution.
+
   interpretation-contract: >-
-    Interpretation semantics — bump aggregation, the pre-1.0 mapping,
-    canonicalization rules, changelog grouping — are versioned as a contract,
-    distinct from file-shape schemas. Config declares `contract` (written by
-    init); the binary carries an interpreter per contract it supports, so any
-    tool version interpreting a contract-1 workspace applies contract-1
-    semantics regardless of the binary's age. The release plan embeds the
-    contract and a plan-generator record (tool name and version of the Intentional
-    binary that sealed the plan) inside the digested payload, making the plan
-    self-describing evidence of what was decided and under which rules. Tags are
-    annotated, carrying a small canonical message: contract, tag-generator tool
-    version, and plan digest — each tag is thereby a complete, self-describing
-    release record, which also gives releases with no registry publish
-    (pub-by-git-tag, Go) a real evidence record. The plan generator and tag
-    generator are distinct: a sealed plan records the tool version that computed
-    and digested it, while annotated tags record the tool version that created
-    the tag object. During self-hosted releases the plan may be sealed by the
-    immediately preceding published Intentional version while tagging runs with
-    the newly materialized release binary, provided the plan generator is
-    Intentional, parses as SemVer, is not newer than the tagging binary, and the
-    recovered plan bytes match when reconstructed with the recorded plan-generator
-    version. Intent files and changelogs stay unbranded; they are authoring
-    artifacts interpreted under the workspace contract. The configured
-    pre-1-0-bump-mapping is an input to that contract, so component and
-    compatibility workspaces remain deterministic under every supporting tool
-    version.
-  release-recovery-and-verification: >-
-    Because apply consumes intents before tag runs, tag re-derives the
-    release rather than trusting a materialized artifact. In CD, tag accepts
-    --plan with the digest-sealed plan the harness is executing. Locally, tag
-    locates the release commit — the most recent commit since the last
-    release tags that deletes files under .intentional/intents/ — reads the
-    deleted intents from that commit's parent, and recomputes bumps and
-    versions from first principles under the contract recorded in the
-    previous release's tag. In both paths the recomputed result must match
-    the materialized tree (projections and the leading changelog section,
-    which serves as witness, not source); on mismatch, tag refuses and
-    reports the divergence. The witnessed release set holds each release
-    unit whose leading changelog section is newer than its latest primary
-    tag, or equal to it while that tag already marks the commit being
-    tagged; a unit whose leading section equals a tag on an earlier commit
-    did not move and is outside the comparison, so a release may move any
-    subset of release units. When verifying a supplied sealed plan, tag
-    reconstructs the plan payload using the recorded plan-generator version
-    rather than the tagging binary version so self-hosted releases can apply
-    with an older published Intentional and tag with the materialized release
-    binary without weakening digest, contract, recovered-intent,
-    materialized-tree, target, version, existing-record, or MustNotExist
-    validation. Repository operators verify acceptance with
-    `task self-release:verify` (dry-run only) and create annotated tags only
-    through `task self-release:tag` with
-    `CREATE_ACK=create-annotated-tag`, which invokes the materialized workspace
-    binary without `--dry-run`; routine CI never runs the create path. For the
-    selected phase, an exact existing annotated
-    record satisfies the operation, missing records are created in
-    prerequisite-safe order, and any target, version, interpretation-contract,
-    plan-digest, baseline, or prerequisite mismatch fails closed. Fully
-    completed and partially completed tag operations are therefore idempotent.
-    Channel releases need no recovery, since channel applies retain intents.
-  release-asset-identity: >-
-    A published native archive is authoritative only as an asset of an
-    immutable GitHub Release for its exact plain-SemVer tag. The immutable
-    release binds the tag and complete asset set against modification or
-    deletion and carries GitHub's cryptographically signed release attestation.
-    The attestation exposes a stable SHA-256 identity for every platform
-    archive and can verify downloaded bytes independently on a fresh runner.
-    `SHA256SUMS` provides portable checksum verification inside the same
-    immutable release; it is evidence, not a separately mutable authority.
-    Release automation accepts a publication only when GitHub reports the
-    release as published, final, and immutable, its signed attestation
-    verifies, every expected asset matches the locally built bytes, and every
-    downloaded asset verifies against the release attestation.
-  crate-layout-and-distribution: >-
-    A Cargo workspace mirroring tagver: intentional-core (model, adapters,
-    planning; no CLI dependencies) and intentional-cli (thin clap binary).
-    Config and intent-frontmatter schemas publish under
-    https://intentional.foo/schemas/. The
-    tagver library crate supplies tag discovery and height math, gitoxide
-    transitively. The CLI embeds its canonical agent workflow skill and prints
-    the complete installable document through the skill command. Distribution
-    includes the intentional-core and intentional-cli crates on crates.io,
-    native archives and portable checksums on immutable, attested GitHub
-    Releases, the
-    @wyrd-company/intentional npm launcher, the wyrd-company/tools Homebrew tap,
-    and a plumbing GitHub Action that runs the binary. The npm launcher selects
-    only release-matrix platforms and installs the matching archive after
-    checksum verification. A higher-level orchestration action (version-PR
-    choreography) is future scope. MSRV and CI conventions follow tagver.
-  linux-gnu-compatibility-baseline: >-
-    Linux x86_64 and ARM64 release archives are dynamically linked GNU
-    position-independent executables built through cross-rs 0.2.5 with
-    digest-pinned ghcr.io/cross-rs target images. The cross v0.2.5 annotated
-    tag object f8151ae777290430cf2108efacf3976d9528500b points to source commit
-    88f49ff79e777bef6d3564531636ee4d3cc2f8d2; both pinned image configs carry
-    org.opencontainers.image.revision=88f49ff79e777bef6d3564531636ee4d3cc2f8d2,
-    version v0.2.5, and the cross repository source. The images are built from
-    docker/Dockerfile.x86_64-unknown-linux-gnu and
-    docker/Dockerfile.aarch64-unknown-linux-gnu at that commit. Both build
-    containers use Ubuntu 16.04, which is end-of-life; both registry images are
-    amd64-hosted cross-compilation containers (the aarch64 image produces ARM64
-    targets, it is not a native ARM64 build container). Their GNU sysroots ship
-    glibc 2.23; release automation measures the linked artifact and enforces a
-    maximum required GLIBC symbol version of GLIBC_2.18, which is the binary
-    ceiling rather than the sysroot version. Supported GNU/Linux runtime
-    environments must provide glibc at least at that measured ceiling; the
-    linux-gnu smoke workflow exercises Ubuntu 22.04 LTS and Ubuntu 24.04 LTS on
-    pinned images. Baseline inputs live in Cross.toml and
-    scripts/release/linux-gnu-baseline.env; Linux GNU Cargo caches key those
-    files without restore-key fallbacks so sysroot or image changes cannot
-    restore incompatible target output. Refreshing the baseline is deliberate
-    and triggered by a Rust or compiler bump, image deletion or registry
-    unavailability, measured GLIBC symbol-ceiling drift, or security or
-    toolchain concerns. A replacement image must retain the same-or-older
-    compatibility sysroot and pass the full linux-gnu evidence matrix; advancing
-    to the next cross tag alone is insufficient without that proof. The frozen
-    end-of-life build base carries toolchain-provenance and no-rebuild risk that
-    the refresh policy must address explicitly. Alpine and musl-only environments
-    are outside this GNU contract.
-  out-of-scope: >-
-    Registry protocols (npm, crates.io, pub.dev, NuGet, PyPI) permanently;
-    committing, pushing, or opening pull requests permanently; language
-    parsing and API surface scanning permanently (delegated to per-release-unit
-    commands); forge API calls for changelog enrichment.
+    A versioned interpretation contract defines bump aggregation, dependency
+    propagation, release-group behavior, pre-1.0 semantic-version mapping,
+    changelog construction, canonical serialization, tag records, and recovery.
+    Release Workspace configuration names the contract. Release Plans and tags
+    carry it. A supporting Intentional binary applies the named semantics rather
+    than substituting behavior from its own release version.
+
+  initialization: >-
+    `intentional init` always configures the core protocol. The same
+    Initialization Plan separately resolves managed GitHub workflow adoption.
+    GitHub origin detection supplies a recommendation. `--workflow` opts in and
+    `--no-workflow` opts out. Declining workflow generation preserves every core
+    release capability.
+
+  change-intent-and-planning: >-
+    Change Intents, semantic-version computation, dependencies, release groups,
+    projections, changelogs, channels, and status form one portable versioning
+    design. Release Plans and tag records bind those calculations to authority.
+
+  managed-workflow: >-
+    Managed GitHub workflow is an optional layer projected from Release Workspace
+    state into two protocol entrypoints, independently triggered Distribution
+    Target workflows, and owned support files. Release workflow
+    automates the core establishment protocol through remote repository authority.
+    Release Record workflow builds and signs Release Artifacts and closes each
+    affected Release Unit's immutable GitHub Release record independently.
+    Each Distribution Target workflow consumes the applicable immutable record
+    independently. Managed workflow does not redefine
+    version computation, Release Plans, materialization, or tag identity.
+    Protected managed tag namespaces are the trust root for tag-triggered
+    workflow execution.
+
+  security-posture: >-
+    Managed workflow supports explicit named security postures derived by
+    subtracting controls from its canonical robust posture.
+
+  ecosystem-integrations: >-
+    Per-ecosystem designs specialize the shared protocol with complete discovery,
+    projection, build, packaging, Distribution, retrieval, verification, and
+    credential recipes.
+
+  implementation-topology: >-
+    A Rust core library implements the domain model, deterministic computation,
+    adapters, canonical records, and validation. A thin Rust command-line binary
+    exposes those operations and embeds its agent-facing usage skill. Published
+    schemas define configuration, plans, records, evidence, and extension
+    contracts. Generated repository scripts call the binary and project the
+    required GitHub step outputs. The setup Action installs an exact released
+    binary; the contribution Action carries typed Evidence Contributions;
+    Intentional-owned delivery Actions and repository-owned pinned delivery
+    Actions admitted by a maintained recipe implement bounded destination steps
+    inside generated jobs.

@@ -1,0 +1,65 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: rpm-package, part-of: rpm }
+role: package
+versions:
+  1:
+    package-configuration: ./rpm-package.config.yml#/$defs/version-1
+    artifact-configuration: ./rpm-package.config.yml#/$defs/artifact-version-1
+    primitives:
+      - { id: verify-input-artifacts, version: 1 }
+      - { id: build-rpm-package, version: 1 }
+      - { id: validate-rpm-package, version: 1 }
+      - { id: write-release-artifact, version: 1 }
+    tools:
+      - id: nfpm
+        resolution: { default: 2.47.0 }
+        install: { id: install-nfpm, version: 1 }
+    matrix: []
+    accepted-input-artifact-kinds: [executable-archive]
+    artifact-kinds:
+      - id: rpm-package
+        content: file
+        asset-name-source: native
+        native-kinds: [rpm]
+    discovery:
+      - id: discover-rpm-package
+        uses: { id: verify-input-artifacts, version: 1 }
+        with: { inputs: configured, kind: executable-archive }
+    planning:
+      - id: plan-rpm-package
+        uses: { id: verify-input-artifacts, version: 1 }
+        with: { identity: release-plan, architecture: from-input }
+    build:
+      - id: build-rpm-package
+        uses: { id: build-rpm-package, version: 1 }
+        with: { payload: sealed-prerequisite-artifact }
+    collection:
+      - id: collect-rpm-package
+        uses: { id: validate-rpm-package, version: 1 }
+        with: { cardinality: one }
+    validation:
+      - id: validate-rpm-package
+        uses: { id: validate-rpm-package, version: 1 }
+        with: { compare: [identity, version, architecture, inventory, payload] }
+      - id: record-rpm-package
+        uses: { id: write-release-artifact, version: 1 }
+        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
+    requirements:
+      - { id: verified-sealed-input, class: operational }
+      - { id: stable-release-version, class: operational }
+      - { id: credential-free-derivation, class: authority }
+    control-subtractions: []
+    guarantees:
+      - id: input-bound-rpm-package
+        statement: RPM payload bytes bind the consumed executable archive.
+      - id: rpm-reader-validation
+        statement: The sealed output passes the maintained RPM package reader.
+    conformance:
+      cases:
+        - id: package
+          fixture: fixtures/rpm-package/package
+          asserts:
+            [identity, architecture, inventory, exact-payload, provenance]
+        - id: input-conflict
+          fixture: fixtures/rpm-package/input-conflict
+          asserts: [digest-conflict, no-output]

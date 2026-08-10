@@ -1,0 +1,44 @@
+# ---
+# relationships:
+#   realizes: cargo-registry
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/ecosystems/cargo-registry.config.yml
+title: Cargo Registry recipe configuration catalog
+$defs:
+  stable-id:
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+  absolute-uri:
+    type: string
+    format: uri
+    pattern: "^[A-Za-z][A-Za-z0-9+.-]*://\\S+$"
+  cargo-download-url:
+    type: string
+    minLength: 1
+    pattern: "^[A-Za-z][A-Za-z0-9+.-]*://\\S+$"
+  version-1:
+    type: object
+    additionalProperties: false
+  destination-version-1:
+    oneOf:
+      - type: object
+        additionalProperties: false
+        required: [registry]
+        properties:
+          registry:
+            const: crates-io
+      - type: object
+        additionalProperties: false
+        required: [registry, index-url, api-url, download-url]
+        properties:
+          registry:
+            allOf:
+              - $ref: "#/$defs/stable-id"
+              - not:
+                  const: crates-io
+          index-url:
+            $ref: "#/$defs/absolute-uri"
+          api-url:
+            $ref: "#/$defs/absolute-uri"
+          download-url:
+            $ref: "#/$defs/cargo-download-url"

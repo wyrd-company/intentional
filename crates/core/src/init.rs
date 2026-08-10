@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: initialization-plan
 // ---
 
 //! Workspace-aware initialization and explicit Changesets takeover.
@@ -291,6 +291,7 @@ impl DiscoveryCandidate {
                 &format!("discovery candidate {} tag", self.id),
                 &tag.template,
                 true,
+                tag.role == TagRole::Projection,
             )?;
         }
         let mut diagnostic_ids = BTreeSet::new();
@@ -676,7 +677,7 @@ fn validate_empty_inferred_config(config: &Config) -> Result<()> {
         || !config.discovery.excluded_paths.is_empty()
     {
         return Err(Error::Validation(
-            "empty inferred config may only contain schema, contract, settings, and release-units"
+            "empty inferred config may only contain schema, contract, workflow, settings, and release-units"
                 .to_owned(),
         ));
     }
@@ -4298,7 +4299,7 @@ fn annotate_choice_lines(yaml: &str) -> String {
         ),
         (
             "external",
-            "publication sequencing remains with the external executor",
+            "Distribution sequencing remains with the external workflow or harness",
         ),
         ("intentional", "Intentional's contract owns this behavior"),
     ]);
@@ -4377,7 +4378,7 @@ mod tests {
 
     fn candidate_plan(candidates: Vec<DiscoveryCandidate>) -> InitPlan {
         let config = Config::from_yaml(
-            "contract: contract-1\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "contract: contract-1\nworkflow: { adoption: declined }\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         )
         .expect("candidate test config");
         InitPlan {
@@ -4528,6 +4529,7 @@ mod tests {
         .expect("write second duplicate");
         let mut config = Config::from_yaml(
             r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   sample-base:
     path: base
@@ -4720,6 +4722,7 @@ release-units:
     fn changesets_projection_rejects_an_unrelated_existing_owner() {
         let config = Config::from_yaml(
             r#"contract: contract-1
+workflow: { adoption: declined }
 release-units:
   alpha:
     path: examples
@@ -4799,7 +4802,7 @@ release-units:
             .validate()
             .expect_err("discovery is forbidden on an empty inferred config")
             .to_string()
-            .contains("may only contain schema, contract, settings, and release-units"));
+            .contains("may only contain schema, contract, workflow, settings, and release-units"));
 
         plan.inferred_config.discovery.excluded_paths.clear();
         plan.inferred_config.schema = Some("https://example.invalid/config.yml".to_owned());
@@ -4821,13 +4824,22 @@ release-units:
                 .to_string()
                 .contains("tag template"));
         }
+
+        let mut go_projection = candidate("examples/go.mod", None);
+        let tag = go_projection.tag.as_mut().expect("tag suggestion");
+        tag.role = TagRole::Projection;
+        tag.template = "v{version}".to_owned();
+        candidate_plan(vec![go_projection])
+            .validate()
+            .expect("ecosystem-required projection prefix accepted");
     }
 
     #[test]
     fn published_init_schema_carries_candidate_resolution_variants() {
-        let schema: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../../schemas/init-plan.yml"))
-                .expect("initialization-plan schema parses");
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/initialization-plan.schema.yml"
+        ))
+        .expect("initialization-plan schema parses");
         assert!(schema["required"]
             .as_sequence()
             .expect("required plan fields")
@@ -4851,11 +4863,21 @@ release-units:
         );
         assert_eq!(
             schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
-                ["pattern"]
+                ["$ref"]
                 .as_str(),
-            Some(
-                r"^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$"
-            )
+            Some("https://intentional.foo/schemas/config.yml#/$defs/tag-template")
+        );
+        assert_eq!(
+            schema["$defs"]["release-unit-id"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/config.yml#/$defs/stable-id")
+        );
+        assert_eq!(
+            schema["$defs"]["workflow-adoption"]["properties"]["resolution"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/config.yml#/$defs/workflow")
+        );
+        assert_eq!(
+            schema["properties"]["converted-intents"]["items"]["properties"]["id"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/config.yml#/$defs/stable-id")
         );
     }
 

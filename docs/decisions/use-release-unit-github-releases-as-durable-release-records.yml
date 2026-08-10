@@ -1,0 +1,101 @@
+$schema: https://refinery.systems/ontology/decision-record
+name: Use Release Unit GitHub Releases as durable Release records
+
+relationships:
+  contextualizes:
+    - intent-driven-polyglot-release
+    - release-planning-and-records
+    - managed-workflow
+    - release
+    - release-record
+    - distribution
+    - evidence
+
+description: >-
+  Managed releases need a durable record that serves both as an artifact vault
+  and as a consumer-facing release page. One global Release Plan can change
+  several Release Units whose versions differ. External distribution systems
+  expose released content through mutable and independently operated consumer
+  paths. A package version can appear after review or propagation, and it can
+  later be hidden, unlisted, yanked, or removed. The durable Release record must
+  bind source, version, artifacts, provenance, and attestations without making
+  continued destination availability part of the Release claim.
+
+considered-options:
+  1: >-
+    Use one global GitHub Release and publish it only after every configured
+    destination accepts and exposes its expected content. Preserve each
+    destination observation as Publication Evidence inside the global Release
+    Evidence statement. This gives one closure point, but makes a durable Release
+    depend on ephemeral external availability, couples independent Release Units,
+    and places artifacts whose versions differ from the global tag under one
+    consumer-facing version page.
+  2: >-
+    Use one global immutable GitHub Release before external distribution begins.
+    Attach every affected Release Unit's artifacts and preserve the complete
+    Release Plan in that record. This separates durable integrity from mutable
+    destination state, but the Release page and asset URLs still use a global
+    version that can differ from the versions carried by their Packages. One
+    Release Unit also cannot complete its record independently from another.
+  3: >-
+    Use one immutable GitHub Release for every Package. Each page and asset vault
+    then carries the Package's exact identity and version. This gives precise
+    artifact identity, but duplicates release records for Packages that share one
+    versioning boundary, fragments Release Unit notes and subscriptions, and
+    turns derived packaging forms into separate consumer releases.
+  4: >-
+    Use one immutable GitHub Release for every affected Release Unit. Bind it to
+    the Release Unit's consumer-facing tag and version. Embed the complete global
+    Release Plan while including only that Release Unit's tags, artifacts,
+    provenance, attestations, and closure manifest. Publish external
+    Distributions only after this record is immutable. Represent current
+    consumer-path availability with live advisory badges rather than durable
+    Distribution Evidence.
+
+decision-outcome:
+  chosen-option: 4
+  justification: >-
+    Release Unit is Intentional's versioning and consumer-release boundary. Its
+    tag, GitHub Release page, release notes, artifacts, and version therefore
+    describe the same identity. The complete global Release Plan preserves the
+    coordination and digest relationship among independently closing Release
+    Units. Unit-specific evidence keeps one Release Unit from waiting for or
+    inheriting the failure of another. Publishing the immutable record before
+    external Distribution gives every distributor one sealed source of artifacts
+    and provenance. The durable Release claim is that a consumer can validate
+    downloaded content against what Intentional released. Live destination
+    badges report whether that content is currently available without turning a
+    transient observation into permanent Release state.
+
+expected-outcomes:
+  positive:
+    - >-
+      Every GitHub Release tag, page, note set, asset name, and Package version
+      agrees with one Release Unit's consumer-facing identity.
+    - >-
+      Each affected Release Unit can become immutable and begin Distribution
+      without waiting for unrelated Release Units or destination systems.
+    - >-
+      External distributors consume content from an immutable artifact and
+      attestation boundary rather than from temporary workflow transport or a
+      draft Release.
+    - >-
+      Distribution failure, propagation delay, unlisting, or removal changes
+      live status without invalidating or rewriting the durable Release record.
+    - >-
+      Consumers can verify a specific downloaded version against the Release
+      Unit record even when the download came through another distribution
+      system.
+  negative:
+    - >-
+      One global Release Plan can produce several GitHub Release pages and repeat
+      shared plan context in each Release Evidence statement.
+    - >-
+      Repositories and subscribers receive one GitHub Release event for each
+      affected Release Unit rather than one event for the global operation.
+    - >-
+      Workflow generation, recovery, and conformance must track independent
+      Release Unit drafts, immutable transitions, and Distribution triggers.
+    - >-
+      Live badges depend on destination lookups and image-cache refresh behavior,
+      so their displayed state is advisory and can lag current destination state.

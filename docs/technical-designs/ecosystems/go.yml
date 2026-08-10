@@ -1,0 +1,27 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships: { part-of: ecosystem-recipes, realizes: intentional }
+objective: >-
+  Specialize Intentional's recipe protocol for Go modules and executable archives.
+proposed-design:
+  native-authority: >-
+    A tracked go.mod is a Package candidate. Module path, Go version, workspace
+    membership, command packages, build constraints, and go.sum remain native authority.
+  build: >-
+    Go 1.26.5 downloads modules in a credential-free dependency step, verifies
+    go.sum, then builds the plan-selected command and platform matrix with
+    network disabled. The recipe emits the shared executable-archive artifact
+    kind as deterministic tar.gz or ZIP files.
+  module-release: >-
+    Go module distribution is established by a protected projection tag paired
+    with the Release Unit's primary tag at the same commit and plan digest. The
+    primary tag remains Intentional's plain, namespaced Release Unit identity.
+    The maintained Go projection renders `v{version}` for a root module and
+    `<module-subdirectory>/v{version}` for a nested module, including Go's major
+    module-path rules. The tag prefix excludes the `/vN` major suffix even when
+    the module is stored in a matching major-version directory. This
+    platform-required projection is Go source identity rather than a
+    Distribution Target.
+  conformance: >-
+    Fixtures cover modules, workspaces, nested modules, commands, replace
+    directives, lock failures, platform archives, version injection, and dirty builds.
+  specification-topology: go-package uses colocated prose, config, and recipe assets.

@@ -1,0 +1,37 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - evidence
+    - extensions
+    - release-record
+  models:
+    - intentional
+description: >-
+  Defines one namespaced evidence contribution emitted by the repository-owned
+  Custom Release Unit Record Gate through Intentional's contribution Action. The
+  manifest binds a schema-backed structured value and explicitly named attachment
+  files to the established Release, affected Release Unit, and producing gate
+  operation. Intentional validates transport, namespace, schema, file inventory,
+  sizes, and digests without assigning domain meaning to the contributed value.
+  `docs/specifications/evidence-contribution.schema.yml` is the machine-readable
+  definition.
+format: json-schema
+validation-criteria: >-
+  A conforming manifest validates against
+  `docs/specifications/evidence-contribution.schema.yml` as canonical JSON
+  interpreted by JSON Schema Draft 2020-12. Its `digest` is the lowercase SHA-256
+  digest of the complete canonical object with only `digest` omitted. Object keys
+  sort lexically and attachments sort by name. Canonical record fields use
+  kebab-case. The Release envelope equals the gate input and carries the
+  complete core identity-tag set and selected security posture. The Release Unit
+  identity equals the gate input and one Release Record expectation in the
+  plan. The namespace is
+  repository-owned, stable, non-reserved, and unique among contributions to that
+  Release Unit. `value-schema` identifies the schema against which `value` validates.
+  Attachment names are flat, explicitly listed, and unique across every protocol
+  asset and contribution. Each attachment's size and lowercase SHA-256 digest
+  agree with the transported bytes; named digest-map values omit their algorithm
+  prefix. The temporary bundle contains exactly the manifest and listed files.
+  Assembly revalidates the manifest, value, and attachments, rejects namespace or
+  asset collisions, and preserves the accepted value and bytes without changing
+  their meaning.

@@ -120,7 +120,7 @@ fn yaml_unit(id: &str, path: &str, file: &str, pointer: &str, depends_on: &str) 
 
 fn config(units: &[String]) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n{}",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nworkflow:\n  adoption: declined\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n{}",
         units.concat()
     )
 }

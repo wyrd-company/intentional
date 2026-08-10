@@ -1,0 +1,88 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships:
+  realizes: nuget-registry
+  part-of: dotnet
+role: distribution
+versions:
+  1:
+    configuration: ./nuget-registry.config.yml#/$defs/version-1
+    destination: ./nuget-registry.config.yml#/$defs/destination-version-1
+    primitives:
+      - { id: nuget-preflight, version: 1 }
+      - { id: nuget-trusted-login, version: 1 }
+      - { id: nuget-push, version: 1 }
+      - { id: nuget-observe, version: 1 }
+      - { id: nuget-verify, version: 1 }
+    tools:
+      - {
+          id: dotnet,
+          resolution: { default: 10.0.110 },
+          install: { id: install-dotnet, version: 1 },
+        }
+    accepted-artifact-kinds: [nuget-package, nuget-symbol-package]
+    credentials: []
+    github-permissions:
+      distribute: { contents: read, id-token: write }
+      observe: { contents: read }
+    preflight:
+      - {
+          id: probe-nuget-version,
+          uses: { id: nuget-preflight, version: 1 },
+          with: { agreement: [package-set, downloaded-bytes] },
+        }
+    distribute:
+      - id: obtain-nuget-temporary-key
+        uses: { id: nuget-trusted-login, version: 1 }
+        with: { identity: github-oidc, lifetime: destination-bounded }
+      - {
+          id: push-nuget-set,
+          uses: { id: nuget-push, version: 1 },
+          with:
+            {
+              artifacts: exact-sealed-set,
+              authentication: trusted-publishing,
+              skip-duplicate: false,
+            },
+        }
+    observe:
+      - {
+          id: observe-nuget-version,
+          uses: { id: nuget-observe, version: 1 },
+          with: { retrieval: public-client, deadline-seconds: 600 },
+        }
+    verify:
+      - {
+          id: verify-nuget-version,
+          uses: { id: nuget-verify, version: 1 },
+          with: { compare: [id, version, package-set, downloaded-bytes] },
+        }
+    requirements:
+      - { id: nuget-trusted-publisher, class: authority }
+      - { id: public-package-readback, class: security-control }
+    control-subtractions: []
+    guarantees:
+      - {
+          id: exact-nuget-distribution,
+          statement: Consumer-visible NuGet bytes agree with the sealed package set.,
+        }
+      - {
+          id: short-lived-nuget-authority,
+          statement: nuget.org exchanges repository-bound OpenID Connect identity for a one-use temporary key.,
+        }
+    conformance:
+      cases:
+        - {
+            id: absent-version,
+            fixture: fixtures/nuget/absent,
+            asserts: [exact-push, oidc-only],
+          }
+        - {
+            id: conflict,
+            fixture: fixtures/nuget/conflict,
+            asserts: [conflict-rejection, no-overwrite],
+          }
+      live:
+        {
+          operation: nuget-live-conformance,
+          proves: [trusted-publishing, public-readback, idempotent-retry],
+        }

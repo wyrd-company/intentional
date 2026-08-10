@@ -23,7 +23,8 @@ pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
     Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection,
-    ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
+    ReleaseUnitConfig, Settings, TagConfig, VersionedRef, WorkflowConfig, WorkflowProvider,
+    WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
 pub use init::{

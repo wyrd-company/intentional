@@ -1,0 +1,40 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: ecosystem-recipes
+  realizes: intentional
+objective: >-
+  Derive Arch package descriptors from sealed executable archives and publish
+  them to the Arch User Repository.
+proposed-design:
+  artifact: >-
+    The arch-package Package recipe emits one sealed PKGBUILD and SRCINFO bundle.
+    Its immutable source URLs and checksums identify every sealed executable
+    archive named by its prerequisite artifact records.
+  distribution-prerequisite: >-
+    Distribution begins from an immutable Release Record containing the sealed
+    descriptor bundle and every source archive it names.
+  authority: >-
+    The distributor alone receives the configured Arch User Repository SSH key. It
+    receives no release App token, signing credential, or other destination
+    credential.
+  promotion: >-
+    Preflight reads the package repository. Absence permits creation, exact
+    PKGBUILD and SRCINFO agreement satisfies retry, and differing descriptors are
+    conflict. Promotion writes the sealed bundle through one deterministic Git
+    commit and never force-updates conflicting history.
+  observation: >-
+    An independent public Git read verifies the commit object, descriptor bytes,
+    parsed identity and version, source URLs, and checksums. The deterministic
+    commit and descriptor bytes are immutable state; the package branch head is
+    a mutable alias.
+  operational-result: >-
+    Public descriptor and source agreement makes the Distribution job succeed
+    and its live status green. Failure leaves the immutable Release Record
+    unchanged.
+  conformance: >-
+    Fixtures cover exact descriptor derivation, absent and agreeing repositories,
+    conflict rejection, deterministic commits, public readback, and idempotent retry.
+  specification-topology: >-
+    arch-package defines credential-free derivation and arch-user-repository
+    defines credential-isolated distribution. Each uses colocated prose, config,
+    and recipe assets.

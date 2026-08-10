@@ -1,0 +1,11 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  {
+    realizes: [devcontainers, ecosystem-recipes, recipe-catalog],
+    models: intentional,
+  }
+description: Defines Dev Container Feature and Template discovery, packaging, and validation.
+format: json-schema
+validation-criteria: >-
+  Native identity and version equal the plan. Each selected collection produces
+  one complete Open Container Initiative layout with exact metadata and safe contents.

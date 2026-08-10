@@ -1,0 +1,474 @@
+# ---
+# relationships:
+#   realizes: recipe-catalog
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/recipe-catalog.yml
+title: Intentional Recipe Catalog
+type: object
+additionalProperties: false
+required: [$schema, relationships, role, versions]
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/recipe-catalog.yml
+  relationships:
+    $ref: "#/$defs/relationships"
+  role:
+    enum: [package, signing, distribution]
+  versions:
+    type: object
+    minProperties: 1
+    propertyNames:
+      pattern: "^[1-9][0-9]*$"
+allOf:
+  - if:
+      properties:
+        role:
+          const: package
+      required: [role]
+    then:
+      properties:
+        versions:
+          additionalProperties:
+            $ref: "#/$defs/package-version"
+  - if:
+      properties:
+        role:
+          const: signing
+      required: [role]
+    then:
+      properties:
+        versions:
+          additionalProperties:
+            $ref: "#/$defs/signing-version"
+  - if:
+      properties:
+        role:
+          const: distribution
+      required: [role]
+    then:
+      properties:
+        versions:
+          additionalProperties:
+            $ref: "#/$defs/distribution-version"
+$defs:
+  stable-id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+  relationships:
+    type: object
+    minProperties: 1
+    additionalProperties:
+      oneOf:
+        - $ref: "#/$defs/stable-id"
+        - type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: "#/$defs/stable-id"
+  versioned-ref:
+    type: object
+    additionalProperties: false
+    required: [id, version]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      version:
+        type: integer
+        minimum: 1
+  schema-ref:
+    type: string
+    pattern: '^\./[a-z0-9][a-z0-9.-]*\.config\.yml#/\$defs/[a-z0-9][a-z0-9-]*$'
+  primitive-ref:
+    $ref: "#/$defs/versioned-ref"
+  operation:
+    type: object
+    additionalProperties: false
+    required: [id, uses, with]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      uses:
+        $ref: "#/$defs/primitive-ref"
+      with:
+        type: object
+  operations:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/operation"
+  tool:
+    type: object
+    additionalProperties: false
+    required: [id, resolution]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      resolution:
+        type: object
+      install:
+        $ref: "#/$defs/primitive-ref"
+  tools:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/tool"
+  runner:
+    type: object
+    additionalProperties: false
+    required: [id, version]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      version:
+        type: integer
+        minimum: 1
+      configuration:
+        type: object
+  matrix-value:
+    type: object
+    additionalProperties: false
+    required: [id, runner]
+    properties:
+      id:
+        type: string
+        minLength: 1
+      runner:
+        $ref: "#/$defs/runner"
+      configuration:
+        type: object
+  matrix-dimension:
+    type: object
+    additionalProperties: false
+    required: [id, values]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      values:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/matrix-value"
+  requirement:
+    type: object
+    additionalProperties: false
+    required: [id, class]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      class:
+        enum: [operational, authority, security-control]
+      configuration:
+        type: object
+  requirements:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/requirement"
+  control-subtraction:
+    type: object
+    additionalProperties: false
+    required: [control-id, removes-guarantee-ids]
+    properties:
+      control-id:
+        $ref: "#/$defs/stable-id"
+      removes-guarantee-ids:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/stable-id"
+  control-subtractions:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/control-subtraction"
+  guarantee:
+    type: object
+    additionalProperties: false
+    required: [id, statement]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      statement:
+        type: string
+        minLength: 1
+  guarantees:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/guarantee"
+  conformance-case:
+    type: object
+    additionalProperties: false
+    required: [id, fixture, asserts]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      fixture:
+        type: string
+        minLength: 1
+      asserts:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/stable-id"
+  conformance:
+    type: object
+    additionalProperties: false
+    required: [cases]
+    properties:
+      cases:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/conformance-case"
+      live:
+        type: object
+  artifact-kind:
+    type: object
+    additionalProperties: false
+    required: [id, content, native-kinds, asset-name-source]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      content:
+        enum: [file, image]
+      native-kinds:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+      asset-name-source:
+        enum: [native, intentional]
+      configuration:
+        type: object
+  artifact-kinds:
+    type: array
+    minItems: 1
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/artifact-kind"
+  credential:
+    type: object
+    additionalProperties: false
+    required: [id, process-variable]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      process-variable:
+        type: string
+        pattern: "^[A-Z][A-Z0-9_]*$"
+      availability:
+        enum: [required, conditional]
+        default: required
+      condition:
+        type: string
+        minLength: 1
+    allOf:
+      - if:
+          properties:
+            availability: { const: conditional }
+          required: [availability]
+        then:
+          required: [condition]
+  credentials:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/credential"
+  github-permissions:
+    type: object
+    additionalProperties: false
+    properties:
+      sign: { $ref: "#/$defs/github-permission-set" }
+      distribute: { $ref: "#/$defs/github-permission-set" }
+      observe: { $ref: "#/$defs/github-permission-set" }
+  github-permission-set:
+    type: object
+    additionalProperties: false
+    properties:
+      actions: { enum: [read, write] }
+      attestations: { enum: [read, write] }
+      contents: { enum: [read, write] }
+      id-token: { const: write }
+      packages: { enum: [read, write] }
+  common-version:
+    type: object
+    properties:
+      primitives:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/primitive-ref"
+      tools:
+        $ref: "#/$defs/tools"
+      requirements:
+        $ref: "#/$defs/requirements"
+      control-subtractions:
+        $ref: "#/$defs/control-subtractions"
+      guarantees:
+        $ref: "#/$defs/guarantees"
+      conformance:
+        $ref: "#/$defs/conformance"
+  package-version:
+    allOf:
+      - $ref: "#/$defs/common-version"
+      - type: object
+        additionalProperties: false
+        required:
+          - package-configuration
+          - artifact-configuration
+          - primitives
+          - tools
+          - matrix
+          - artifact-kinds
+          - discovery
+          - planning
+          - build
+          - collection
+          - validation
+          - requirements
+          - control-subtractions
+          - guarantees
+          - conformance
+        properties:
+          package-configuration:
+            $ref: "#/$defs/schema-ref"
+          artifact-configuration:
+            $ref: "#/$defs/schema-ref"
+          primitives: true
+          tools: true
+          matrix:
+            type: array
+            uniqueItems: true
+            items:
+              $ref: "#/$defs/matrix-dimension"
+          artifact-kinds:
+            $ref: "#/$defs/artifact-kinds"
+          tag-contract:
+            $ref: "#/$defs/primitive-ref"
+          accepted-input-artifact-kinds:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items: { $ref: "#/$defs/stable-id" }
+          discovery:
+            $ref: "#/$defs/operations"
+          planning:
+            $ref: "#/$defs/operations"
+          build:
+            $ref: "#/$defs/operations"
+          collection:
+            $ref: "#/$defs/operations"
+          validation:
+            $ref: "#/$defs/operations"
+          requirements: true
+          control-subtractions: true
+          guarantees: true
+          conformance: true
+  signing-version:
+    allOf:
+      - $ref: "#/$defs/common-version"
+      - type: object
+        additionalProperties: false
+        required:
+          - configuration
+          - primitives
+          - tools
+          - accepted-artifact-kinds
+          - output-artifact-kind
+          - input-validation
+          - signing
+          - output-validation
+          - credentials
+          - requirements
+          - control-subtractions
+          - guarantees
+          - conformance
+        properties:
+          configuration:
+            $ref: "#/$defs/schema-ref"
+          primitives: true
+          tools: true
+          accepted-artifact-kinds:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "#/$defs/stable-id"
+          output-artifact-kind:
+            $ref: "#/$defs/stable-id"
+          input-validation:
+            $ref: "#/$defs/operations"
+          signing:
+            $ref: "#/$defs/operations"
+          output-validation:
+            $ref: "#/$defs/operations"
+          credentials:
+            $ref: "#/$defs/credentials"
+          github-permissions:
+            $ref: "#/$defs/github-permissions"
+          requirements: true
+          control-subtractions: true
+          guarantees: true
+          conformance: true
+  distribution-version:
+    allOf:
+      - $ref: "#/$defs/common-version"
+      - type: object
+        additionalProperties: false
+        required:
+          - configuration
+          - destination
+          - primitives
+          - tools
+          - accepted-artifact-kinds
+          - credentials
+          - preflight
+          - distribute
+          - observe
+          - verify
+          - requirements
+          - control-subtractions
+          - guarantees
+          - conformance
+        properties:
+          configuration:
+            $ref: "#/$defs/schema-ref"
+          destination:
+            $ref: "#/$defs/schema-ref"
+          destination-defaults:
+            type: object
+          primitives: true
+          tools: true
+          accepted-artifact-kinds:
+            type: array
+            minItems: 1
+            uniqueItems: true
+            items:
+              $ref: "#/$defs/stable-id"
+          credentials:
+            $ref: "#/$defs/credentials"
+          github-permissions:
+            $ref: "#/$defs/github-permissions"
+          preflight:
+            $ref: "#/$defs/operations"
+          distribute:
+            $ref: "#/$defs/operations"
+          observe:
+            $ref: "#/$defs/operations"
+          verify:
+            $ref: "#/$defs/operations"
+          requirements: true
+          control-subtractions: true
+          guarantees: true
+          conformance: true

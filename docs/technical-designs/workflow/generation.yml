@@ -1,0 +1,128 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Deterministically generate and reconcile the complete repository-resident
+  implementation of the managed release protocol from Release Workspace state.
+proposed-design:
+  inputs: >-
+    Generation loads canonical Release Workspace configuration, the selected
+    interpretation contract resolved through its maintained catalog, selected
+    security-posture identifier and profile version resolved through the
+    maintained posture catalog, the profile's removed controls and remaining guarantees, configured
+    Packages, managed artifacts, Signing selections, and Distribution Targets,
+    detected Custom Release Gate workflow files,
+    generator source identity, released Intentional binary identity and
+    checksums, maintained Action revisions, and the recipe catalog compiled into
+    that Intentional version. Repository file contents influence generation only
+    through typed detection contracts.
+
+  protocol-model: >-
+    The generator constructs a typed internal graph before rendering files. Nodes
+    represent job roles, scripts, setup, permissions, environments, credentials,
+    artifacts, Release Records, extensions, recipes, and operational status. Edges represent
+    authority prerequisites and data handoffs. Artifact prerequisite edges bind
+    derived Package builds to verified Release Artifacts. A Distribution
+    prerequisite binds one target's preflight to consumer-visible state at the
+    prerequisite destination without joining their workflow executions.
+    Generation constructs the robust graph, subtracts only the
+    controls and coupled nodes declared by the selected
+    profile, and replaces dependent verification requirements with the remaining
+    guarantee contract. Validation proves unique protocol identities, acyclic job
+    dependencies, artifact prerequisites, and Distribution prerequisites, one producer per handoff,
+    complete Release Unit record inventories, credential
+    access confined to its owning workflow, collision-free generated paths, job
+    identifiers, artifact names, environment names, and derived secret names,
+    unchanged core Release identity, and
+    coherent authority paths, triggers, Release Record requirements, and closure after
+    subtraction. Missing GitHub features and runtime failure cannot select
+    another posture.
+
+  selected-recipes: >-
+    Every configured Package, Signing selection, and Distribution Target resolves
+    to exactly one maintained recipe of the required role. Recipe selection
+    binds discovery evidence, build operations, signing transformations,
+    distributor, concrete destination, Release Artifact shapes and dependencies,
+    required tools, credentials, environment, attached components, Distribution
+    command, consumer retrieval, and live verification. An unresolved, ambiguous, or
+    role-incompatible selection fails before rendering.
+
+  output-set: >-
+    Generation produces the release and Release Record workflows, one
+    `.github/workflows/intentional-distribute-<distribution-path-token>.yml` for
+    every configured Distribution Target, protocol support scripts, ownership
+    manifest, and any reusable workflows required by the generated graph. A
+    Distribution ID is
+    `distribution/<release-unit-id>/<package-id>/<target-id>`. Its path token is
+    the canonical reversible, collision-free filesystem escaping of that
+    complete identity.
+    Reusable workflows occupy
+    `.github/workflows/intentional-internal-<stable-id>.yml`; GitHub requires
+    reusable workflow files directly inside `.github/workflows/`. Generation
+    emits only configured recipes. Stable protocol paths and identifiers derive from domain identities
+    through one canonical escaping and collision-validation rule. The same rule
+    validates physical secret names derived from configured prefix, target or
+    signing identity, and logical credential identity. Generated comments
+    identify ownership and source generator without becoming semantic markers.
+
+  workflow-rendering: >-
+    Rendering uses structured workflow values and a deterministic YAML emitter.
+    Key order, sequence order, scalar style, whitespace, and final newlines are
+    canonical. Expressions and shell fragments are typed values until final
+    serialization so quoting cannot change their GitHub meaning. Job ordering
+    follows stable role and domain identity after dependency validation.
+
+  script-rendering: >-
+    Generated scripts contain the complete command sequence for their role and
+    begin with artifact relationship metadata. Scripts use strict shell behavior,
+    explicit input parameters, fixed output paths, and GitHub output projection
+    owned by the script. Privileged commands verify every untrusted input before
+    reading a credential or minting a token. Recipe-specific script sections
+    come from the selected maintained recipe rather than repository-authored
+    text.
+
+  action-pinning: >-
+    The setup Action is pinned to the generator source commit and receives the
+    exact Intentional binary version and platform checksum. Other
+    Intentional-owned Actions are pinned to immutable revisions selected by the
+    recipe catalog. A repository-owned delivery Action admitted by a maintained
+    recipe comes from its closed configuration as an exact source, optional
+    subpath, and revision. Generation records every pin in the ownership manifest
+    so conformance can report the responsible generator and recipe when bytes
+    differ.
+
+  file-decomposition: >-
+    Responsibility boundaries determine file structure. The release and Release
+    Record entrypoints plus each configured Distribution Target workflow are the
+    event-triggered workflow files.
+    Generated reusable workflows can represent a distinct internal job family
+    when GitHub resource constraints or responsibility isolation require it;
+    they expose only `workflow_call` and remain owned members of the same output
+    set. Generated file length has no Intentional policy limit.
+
+  ownership-manifest: >-
+    `.intentional/workflows/ownership-manifest.json` records generator identity
+    and every other owned path with its content digest and role. Its fixed path is
+    implicit so the manifest does not contain a self-referential file digest; the
+    manifest carries its own canonical self-excluding record digest. Paths are
+    exact repository-relative strings inside reserved protocol namespaces.
+    Generation reads the prior manifest only to identify stale owned paths.
+    Current configuration and generator logic determine all new bytes.
+
+  reconciliation: >-
+    `intentional workflow generate` stages the entire desired output set,
+    validates it, and calculates creates, replacements, and stale removals. It
+    writes through a rollback-capable transaction and publishes the new ownership
+    manifest last. Dry-run reports the exact operation set. A path inside the
+    owned set whose current bytes differ is replaced. A stale path is removed
+    only when the prior manifest proves Intentional ownership.
+
+  conformance: >-
+    `intentional check` runs the same graph construction and rendering in memory.
+    It verifies every expected path and byte, every manifest digest, absence of
+    stale owned files, Custom Release Gate interface shape, recipe resolution, Action
+    pins, selected security posture, and GitHub settings derived from its
+    remaining job roles. Diagnostics distinguish configuration failure,
+    unsupported posture or recipe selection, extension-contract failure, missing
+    operator state, and generated-byte drift.

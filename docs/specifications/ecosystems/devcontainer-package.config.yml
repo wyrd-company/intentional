@@ -1,0 +1,22 @@
+# ---
+# relationships: { realizes: devcontainer-package }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/ecosystems/devcontainer-package.config.yml
+title: Dev Container Package recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    properties: { kind: { enum: [feature, template] } }
+  artifact-version-1:
+    type: object
+    additionalProperties: false
+    required: [collection]
+    properties:
+      {
+        collection:
+          {
+            $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path",
+          },
+      }

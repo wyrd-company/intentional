@@ -1,0 +1,105 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: devcontainer-package, part-of: devcontainers }
+role: package
+versions:
+  1:
+    package-configuration: ./devcontainer-package.config.yml#/$defs/version-1
+    artifact-configuration: ./devcontainer-package.config.yml#/$defs/artifact-version-1
+    primitives:
+      [
+        { id: devcontainer-discover, version: 1 },
+        { id: devcontainer-package, version: 1 },
+        { id: oci-validate-layout, version: 1 },
+        { id: write-release-artifact, version: 1 },
+      ]
+    tools:
+      - {
+          id: devcontainer,
+          resolution: { default: 0.88.0 },
+          install: { id: install-devcontainer-cli, version: 1 },
+        }
+    matrix: []
+    artifact-kinds:
+      - {
+          id: devcontainer-feature-layout,
+          content: file,
+          asset-name-source: intentional,
+          native-kinds: [feature],
+        }
+      - {
+          id: devcontainer-template-layout,
+          content: file,
+          asset-name-source: intentional,
+          native-kinds: [template],
+        }
+    discovery:
+      [
+        {
+          id: discover-devcontainers,
+          uses: { id: devcontainer-discover, version: 1 },
+          with: { tracked-only: true },
+        },
+      ]
+    planning:
+      [
+        {
+          id: plan-devcontainer-collections,
+          uses: { id: devcontainer-discover, version: 1 },
+          with: { aliases: [major, major-minor] },
+        },
+      ]
+    build:
+      [
+        {
+          id: package-devcontainer,
+          uses: { id: devcontainer-package, version: 1 },
+          with: { output: oci-layout, registry-push: denied },
+        },
+      ]
+    collection:
+      [
+        {
+          id: collect-devcontainer-layout,
+          uses: { id: oci-validate-layout, version: 1 },
+          with: { cardinality: selected-collections },
+        },
+      ]
+    validation:
+      - {
+          id: validate-devcontainer-layout,
+          uses: { id: oci-validate-layout, version: 1 },
+          with: { compare: [identity, version, metadata, contents] },
+        }
+      - {
+          id: record-devcontainer-artifact,
+          uses: { id: write-release-artifact, version: 1 },
+          with:
+            { schema: https://intentional.foo/schemas/release-artifact.yml },
+        }
+    requirements:
+      [
+        { id: exact-devcontainer-cli, class: operational },
+        { id: credential-free-package, class: authority },
+      ]
+    control-subtractions: []
+    guarantees:
+      - {
+          id: native-devcontainer-authority,
+          statement: Native Feature and Template metadata remain authoritative.,
+        }
+      - {
+          id: exact-devcontainer-layout,
+          statement: Distribution receives the exact validated native package layout.,
+        }
+    conformance:
+      cases:
+        - {
+            id: feature-collection,
+            fixture: fixtures/devcontainers/features,
+            asserts: [options, dependencies, install-contents],
+          }
+        - {
+            id: template-collection,
+            fixture: fixtures/devcontainers/templates,
+            asserts: [metadata, contents, aliases],
+          }

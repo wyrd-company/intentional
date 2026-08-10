@@ -1,0 +1,16 @@
+# ---
+# relationships:
+#   realizes: dart-package
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/ecosystems/dart-package.config.yml
+title: Dart Package recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    properties:
+      dart-version: { type: string, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+  artifact-version-1:
+    type: object
+    additionalProperties: false

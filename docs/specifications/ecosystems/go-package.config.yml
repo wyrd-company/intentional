@@ -1,0 +1,34 @@
+# ---
+# relationships: { realizes: go-package }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/ecosystems/go-package.config.yml
+title: Go Package recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    properties:
+      go-version: { type: string, pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      commands:
+        type: array
+        uniqueItems: true
+        items: { type: string, pattern: "^\\./[^*?\\[\\]{}]+$" }
+      targets:
+        type: array
+        uniqueItems: true
+        items:
+          {
+            enum:
+              [
+                linux-amd64,
+                linux-arm64,
+                darwin-amd64,
+                darwin-arm64,
+                windows-amd64,
+              ],
+          }
+  artifact-version-1:
+    type: object
+    additionalProperties: false
+    properties: { archive-format: { enum: [tar-gz, zip] } }

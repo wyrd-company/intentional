@@ -130,7 +130,7 @@ release commit; a channel release is recovered from its retained intents.
 If a tag requires an executor phase, declare it explicitly:
 
 ```bash
-intentional tag --plan release-plan.json --phase before-publication
+intentional tag --plan release-plan.json --phase before-distribution
 ```
 
 The phase declaration does not assert or verify publication. External
@@ -147,6 +147,15 @@ workspace binary (`task self-release:verify`) and create annotated tags only
 through the guarded operator path (`CREATE_ACK=create-annotated-tag task
 self-release:tag`). Do not use an older installed Intentional for tag creation
 after apply.
+
+## Verify a release
+
+`verify` reconstructs one established Release from its exact annotated tag. Core
+verification uses Git history and needs no hosting-platform credentials:
+
+```bash
+intentional verify sample-library@1.2.3
+```
 
 ## Stamp build versions
 

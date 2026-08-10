@@ -1,0 +1,245 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: ecosystem-recipes
+  realizes: intentional
+objective: >-
+  Specialize Intentional's maintained recipe protocol for Cargo workspaces,
+  Rust packages, distributable Rust artifacts, and Cargo-compatible registries.
+proposed-design:
+  high-level-overview: >-
+    The Rust integration treats each Cargo package as one Intentional Package.
+    Cargo manifests, workspace metadata, lock state, toolchain declarations,
+    configuration files, and compiler output supply native facts. Release
+    Workspace configuration selects stable artifact identities, target variants,
+    custom build entrypoints, Signing recipes, and Distribution Targets. The Rust
+    Package recipe resolves those inputs into exact Cargo operations and final
+    Release Artifacts. The Cargo registry Distribution recipe uploads sealed crate
+    archives and verifies their consumer-visible registry state.
+
+  cargo-workspace-boundary: >-
+    Every manifest containing `[package]` is a Package candidate. A virtual
+    workspace manifest supplies membership and shared configuration without
+    becoming a Package. Workspace membership does not determine Release Unit
+    membership. Packages that inherit the same `[workspace.package].version`
+    belong to one Release Unit because one native version source has one release
+    owner. Packages with independent version fields can belong to independent or
+    shared Release Units according to Release Workspace policy.
+
+  discovery: >-
+    Rust discovery starts from tracked `Cargo.toml` files and resolves Cargo
+    workspace membership, default members, package manifests, package identity,
+    version ownership, targets, crate types, features, dependency declarations,
+    publish restrictions, profiles, workspace inheritance, Cargo configuration,
+    lockfile location, and Rust toolchain declarations. A recipe-approved Cargo
+    metadata operation runs under the resolved toolchain with dependency loading
+    disabled and network access unavailable. Initialization emits one Package
+    suggestion per Cargo package plus artifact and projection suggestions backed
+    by exact manifest evidence.
+
+  package-identity: >-
+    Intentional Package identity is stable workspace policy. Cargo package name
+    remains native identity and is sealed into crate and registry expectations.
+    Initialization proposes a stable Package identifier from the Cargo name and
+    requires an explicit resolution when normalization collides or the configured
+    Package already names another native package. A Cargo package rename changes
+    native publication identity and therefore requires owner reconciliation even
+    when Intentional Package identity remains stable.
+
+  version-projections: >-
+    A package with an explicit `package.version` uses that exact manifest field as
+    its committed Cargo projection. A package with `version.workspace = true`
+    uses the owning workspace manifest's `workspace.package.version` projection.
+    Materialization updates each version source once. Cargo dependency updates
+    preserve path, registry, feature, optionality, default-feature, package-alias,
+    and comparison syntax while changing only the applicable version requirement
+    in package or workspace dependency tables. Cargo target-version projections
+    and Intentional dependency propagation remain separate concerns.
+
+  artifact-candidates: >-
+    Rust discovery proposes a crate archive when Cargo metadata permits registry
+    publication, one executable artifact for each binary target, and one native
+    library artifact for each `cdylib` or `staticlib` target. Cargo library,
+    `rlib`, procedural-macro, example, test, benchmark, and build-script outputs
+    remain build inputs. A custom entrypoint can declare an exact additional
+    output contract. Managed artifacts appear under their Package; qualified
+    exclusions retain discovered artifacts that the Release Workspace does not
+    release.
+
+  artifact-identity: >-
+    Initialization derives an artifact identifier from Cargo target identity and
+    artifact kind. The identifier remains stable Intentional identity. A native
+    selector is stored only when the stable identifier differs from the Cargo
+    target name or Cargo metadata cannot select the target unambiguously. The
+    Release Plan seals Cargo package identity, Cargo target identity, artifact
+    kind, target triple, profile, configured feature override, archive format,
+    output names, and attached-component expectations for every artifact.
+
+  native-configuration: >-
+    Cargo manifests and `.cargo/config.toml` remain authoritative for package
+    metadata, target definitions, default features, registry declarations,
+    profiles, build scripts, linker configuration, target configuration, and
+    include or exclude rules. The Rust recipe applies Cargo's native defaults.
+    Recipe configuration records only release choices or explicit overrides,
+    including selected target triples, named Cargo profile, non-default feature
+    arguments, custom Task entrypoint, output contract, and packaging choice.
+    Planning binds the tracked native files it reads and records normalized
+    overrides rather than copying native configuration into Release Workspace
+    state.
+
+  toolchain-resolution: >-
+    An exact version in `rust-toolchain.toml` or `rust-toolchain` selects the Rust
+    toolchain. Mutable channel names and `package.rust-version` constrain the
+    recipe version's exact maintained default. The resolved compiler version must
+    satisfy every Package minimum and channel constraint in its build unit.
+    Explicit recipe configuration resolves a conflict. The plan records the exact
+    toolchain, installed profile, required components, and target standard
+    libraries. Local execution verifies those tools. Managed disposable runners
+    install them through the maintained Rust toolchain primitive.
+
+  lockfile-contract: >-
+    Every managed Rust artifact uses one tracked, current Cargo lockfile resolved
+    from its workspace. Planning validates that the lockfile agrees with the
+    selected manifests and records its source digest. Metadata, build, package,
+    and verification operations use Cargo's locked mode. Recipe execution never
+    rewrites dependency resolution. A Cargo package archive retains the exact
+    lockfile Cargo places inside the archive.
+
+  build-units: >-
+    A Rust build unit contains one Package, resolved toolchain, target triple,
+    Cargo profile, configured feature override, custom-entrypoint selection, and
+    compatible artifact set. Artifacts sharing those values use one Cargo
+    invocation. Target triples and other matrix dimensions are explicit Release
+    Workspace choices from the finite set supported by the selected recipe
+    version. That recipe version maps each target triple to an exact runner
+    operating system and image plus its native or cross-compilation tools. The
+    generator instantiates the mapping and does not infer runner choice from the
+    target name or repository configuration. The Release Plan records each exact
+    matrix cell before build.
+
+  cargo-entrypoint: >-
+    The canonical entrypoint invokes Cargo for the selected package and targets
+    under the resolved toolchain, locked dependency state, profile, target
+    triple, and configured feature arguments. Cargo emits structured compiler
+    messages. Intentional selects declared compiler-artifact messages by Cargo
+    package and target identity and obtains executable and native-library paths
+    from those messages rather than predicting Cargo's output layout. An absent,
+    duplicate, or undeclared final output fails collection.
+
+  custom-entrypoint: >-
+    A Rust Package can select a named Task target as its custom entrypoint. Task
+    is the maintained Rust recipe's custom invocation contract; repositories
+    using another build runner expose their release build through a Task target.
+    This gives Intentional one cross-platform typed entrypoint with fixed argument,
+    working-directory, environment, and exit semantics. The task receives the
+    shared recipe handoff and invokes the repository's normal Rust build system.
+    Each configured artifact declares its exact workspace-relative output paths
+    when Cargo metadata cannot report them. The same output validation and
+    collection contract applies to canonical and custom entrypoints.
+
+  crate-packaging: >-
+    The crate-archive artifact invokes Cargo package for one exact Package in
+    locked mode with Cargo's verification enabled. Cargo determines the source
+    inventory from native include and exclude rules, normalizes the published
+    manifest, includes the lockfile, and writes version-control metadata.
+    Intentional verifies package name and version, clean authoritative source
+    identity, normalized manifest, embedded lockfile, file inventory, and archive
+    digest before sealing the `.crate` file as a Release Artifact.
+
+  binary-and-library-packaging: >-
+    Executable, `cdylib`, and `staticlib` outputs build through their normal Cargo
+    target directory. Intentional validates the Cargo-reported file, copies or
+    hard-links it into isolated staging, and applies the artifact contract's
+    canonical file name and permissions. The maintained recipe constructs a ZIP
+    archive for Windows targets and a compressed tar archive for other supported
+    targets. Each archive has one directory-prefixed payload rooted at its
+    canonical artifact name. Artifact names use
+    `settings.artifact-namespace-prefix` when present and otherwise the
+    maintained Rust default.
+
+  source-and-build-scripts: >-
+    Planning reads manifests and approved Cargo metadata without executing build
+    scripts or procedural macros. Build is the first point at which Cargo can
+    execute package code. Build jobs receive the sealed source tree, resolved
+    non-secret parameters, and dependency access required by Cargo. They receive
+    no registry, signing, repository-write, or destination Distribution authority.
+    Release Artifact provenance records the exact Cargo command parameters,
+    toolchain, target, profile, source commit and tree, recipe version, and build
+    job identity.
+
+  local-build: >-
+    `intentional build --local` resolves the Rust recipe against the current work
+    tree and uses the same Cargo invocation, toolchain policy, artifact
+    collection, and archive construction as a sealed build. A clean work tree can
+    therefore rehearse the managed result. A dirty work tree continues with the
+    shared development warning and state record. `intentional build --plan`
+    verifies established Release identity and authoritative source before
+    emitting Rust Release Artifact records.
+
+  cargo-registry-targets: >-
+    Cargo manifest `package.publish` and Cargo registry configuration define
+    native publication capability and allowed registries. Distribution Target
+    selection remains explicit Release Workspace policy. An omitted publish
+    field permits Cargo's default registry without selecting it. `publish =
+    false` rejects a Cargo registry target. A publish list restricts selectable
+    targets to the named registries. Planning resolves each selected registry to
+    one explicit index and download identity and seals Cargo package name and
+    version as immutable destination identity.
+
+  registry-distribution: >-
+    The Cargo registry Distribution recipe consumes the verified `.crate` Release
+    Artifact produced before registry credentials become available. Its
+    maintained client uses the Cargo registry publish protocol to upload those
+    exact archive bytes and metadata to the sealed registry identity. The
+    distributor receives only that registry's logical credential mapping and
+    cannot rebuild or repackage the crate. A preflight lookup accepts an existing
+    package version only when its registry checksum and downloaded bytes agree
+    with the sealed artifact; another object at that identity is a conflict.
+
+  workspace-distribution-order: >-
+    Planning derives registry Distribution prerequisites from Cargo package and
+    workspace dependency declarations after version materialization. A Package
+    waits for verified consumer-visible Distribution of every newly released
+    registry dependency required by its packaged manifest. Independent packages
+    can publish concurrently. Dependency cycles that require mutually absent
+    registry versions fail planning and require a repository packaging change.
+
+  registry-observation: >-
+    Consumer verification reads the configured registry index entry for exact
+    package name and version, compares its checksum with the sealed crate, and
+    downloads the crate through the registry's normal consumer path. It verifies
+    downloaded bytes, normalized package identity, version, and embedded
+    lockfile. Observation polling uses the recipe version's fixed deadline and
+    reports absence, agreement, or conflict as the current operational result.
+    Cargo registry Distribution defines no mutable alias operation.
+
+  signing-composition: >-
+    Rust artifacts use the shared Signing recipe boundary. A configured signed
+    artifact names an unsigned crate, executable archive, or native-library
+    archive and one compatible Signing recipe. The Rust Package recipe completes
+    and seals the unsigned artifact first. Signing and Distribution jobs preserve
+    the shared credential and provenance isolation rules.
+
+  release-record-assets: >-
+    Release Record assembly attaches executable, native-library, and crate
+    archives assigned to the affected Release Unit. It verifies each attachment's
+    name, size, digest, and authenticated readback before immutable closure.
+
+  conformance: >-
+    Rust recipe fixtures cover virtual and package-root workspaces, explicit and
+    inherited versions, renamed dependencies, workspace dependencies, publish
+    restrictions, explicit and implicit targets, binary and library crate types,
+    toolchain constraints, lockfile failures, native and custom entrypoints,
+    Cargo message parsing, crate contents, platform archives, and multi-package
+    registry order. Live registry conformance publishes a legitimate test package
+    version to a qualifying Cargo-compatible registry, waits for index and
+    download visibility, verifies exact bytes and checksum, and proves idempotent
+    retry through the shared conformance contract.
+
+  specification-topology: >-
+    `docs/specifications/ecosystems/rust-package.yml` specifies the Rust Package
+    recipe family. `rust-package.config.yml` contains its versioned configuration
+    schema catalog, and `rust-package.recipe.yml` contains its versioned recipe
+    catalog. Cargo registry Distribution uses a separate three-file Distribution
+    recipe family in the same ecosystem directory. Those specifications own
+    exact fields, commands, supported toolchains and target triples, archive
+    layouts, Cargo protocol inputs, observation deadlines, and fixture cases.

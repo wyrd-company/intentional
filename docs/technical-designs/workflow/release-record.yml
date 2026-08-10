@@ -1,0 +1,93 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Build and preserve every affected Release Unit's exact deliverables and
+  evidence as an independently immutable GitHub Release Record.
+proposed-design:
+  trigger-and-identity: >-
+    `.github/workflows/intentional-release-record.yml` responds only to the
+    protected global release tag. The first read-only job resolves the annotated
+    global tag, target release commit, sealed global Release Plan, interpretation
+    contract, security posture, affected Release Units, and complete draft
+    GitHub Release set. It reconstructs the plan and materialized tree from the
+    tagged source. Processing stops before a credential-bearing job when any
+    identity, configuration, recipe, Custom Release Gate, or generated-workflow value
+    differs from the sealed plan.
+
+  release-unit-graph: >-
+    The generated graph partitions expected Release Artifacts, tags,
+    attachments, Evidence Contributions, and closure work by Release Unit.
+    Shared source preparation can serve several units without joining their
+    closure state. A Release Unit waits only for its own expected inputs and any
+    explicit artifact prerequisites. Closing one unit does not wait for another
+    unit's build, Custom Release Unit Record Gate, upload, or closure.
+
+  build-jobs: >-
+    Build jobs run without protected environments, repository-write authority,
+    or destination credentials. They install the pinned Intentional binary and
+    recipe tools, check out the tagged source with complete history, apply
+    configured injected projections, and execute maintained Package recipes.
+    Each job inventories its exact output, calculates content digests, records
+    build provenance and attached components, and writes a Release Artifact
+    record. Bytes and records travel together in typed temporary workflow
+    artifacts.
+
+  signing-jobs: >-
+    Each Signing job downloads and verifies one unsigned Release Artifact and
+    record before entering its fixed protected environment. It receives only the
+    signing credential declared by the sealed Signing recipe, performs the typed
+    transformation, verifies the output, and emits a distinct Release Artifact
+    whose provenance binds the unsigned artifact identity and record digest. It
+    has no repository or destination authority.
+
+  derived-package-jobs: >-
+    A derived Package build starts after every prerequisite Release Artifact is
+    verified. It receives only those sealed inputs, records their artifact-record
+    references in provenance, and emits its own verified Release Artifact.
+
+  release-asset-upload: >-
+    Each Release Unit has one protected upload job for its complete final asset
+    set. The job verifies every Release Artifact and expected asset name before
+    minting a short-lived GitHub App token. It uploads exact bytes to that unit's
+    draft GitHub Release and reads back each asset's name, size, and digest. It
+    cannot publish the Release or access a destination credential. Logical
+    content graphs such as Open Container Initiative layouts are attached in
+    their deterministic transport form and retain their logical identity in the
+    Release Artifact record.
+
+  custom-release-unit-record-gate: >-
+    The optional Custom Release Unit Record Gate runs after the standard build,
+    signing, and upload-readback graph for one Release Unit and before its
+    evidence assembly. It receives explicit global Release,
+    Release Unit, and Release Artifact identities, read-only repository
+    authority, and no Intentional-provided secrets. Completion success gates
+    that unit's closure. Typed contribution output supplies namespaced values and
+    attachments for that unit's Release Evidence.
+
+  evidence-assembly: >-
+    One read-only assembly job per Release Unit downloads exactly that unit's
+    expected Release Artifact records, tag records, and Evidence Contribution
+    bundles. It independently reconstructs global Release and Release Unit
+    identity from the tagged checkout and validates every fragment against the
+    sealed plan and selected maintained recipe. It writes Release Evidence that
+    embeds the complete global Release Plan and contains only that unit's record
+    inputs, closure manifest, and attachment inventory.
+
+  closure-job: >-
+    One protected closure job per Release Unit downloads assembled output,
+    reconstructs both identities, and verifies the draft's complete asset set.
+    It mints a short-lived GitHub App token, uploads Release Evidence and accepted
+    attachments, reads every asset back, creates required attestations, verifies
+    expected attestation subjects, and changes that unit's draft GitHub Release
+    to published immutable state while preserving its prerelease flag. Closure
+    is that Release Record's final write and occurs exactly once for an agreeing
+    unit-specific evidence set.
+
+  concurrency-and-recovery: >-
+    Concurrency serializes work for one Release Unit record while allowing other
+    affected units to progress independently. A published immutable GitHub
+    Release with matching Release Evidence satisfies a rerun. A draft resumes
+    from durable tags, exact draft assets, and validated temporary inputs. A
+    failed unit remains resumable without changing any closed unit.

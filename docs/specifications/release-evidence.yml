@@ -1,0 +1,58 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - evidence
+    - release-record
+    - release-planning-and-records
+  models:
+    - intentional
+description: >-
+  Defines the deterministic Release Evidence statement assembled for one
+  affected Release Unit before its closure job receives authority. It embeds the
+  complete sealed global Release Plan and contains that unit's Release identity,
+  Release Artifact records, Release Unit Tag Records, Evidence Contributions,
+  attachment inventory, producing workflow identity, selected security posture,
+  guarantee inventory, and exact closure asset and attestation-subject manifest.
+  Immutable GitHub Release state and discoverable attestations prove the later
+  closure transition. `docs/specifications/release-evidence.schema.yml` is the
+  machine-readable definition.
+format: json-schema
+validation-criteria: >-
+  A conforming statement validates against
+  `docs/specifications/release-evidence.schema.yml` as canonical JSON interpreted
+  by JSON Schema Draft 2020-12. Its `digest` is the lowercase SHA-256 digest of
+  the complete canonical object with only `digest` omitted. Object keys sort
+  lexically. Release Artifacts sort by Package and artifact ID; tag records by
+  Tag Record tag ID; contributions by namespace; attachments and release assets
+  by name; attestation subjects by name. Canonical record fields use kebab-case.
+  Assembly derives global Release identity, Release Unit identity, and posture
+  independently from tagged source and sealed plan. The nested plan is its exact
+  canonical record. The Release envelope, workflow generator, required GitHub
+  settings, removed controls, and guarantees equal that plan. Release Unit ID,
+  version, tag identity, rendered tag name, and annotated tag object equal one
+  Release Record expectation in the plan. Every included Package and Release
+  Artifact belongs to that Release Unit. Every expected unit-owned artifact has
+  exactly one valid Release Artifact record. Every configured Release Unit tag
+  has one exact annotated Tag Record and object. Unexpected, duplicate, missing,
+  foreign-plan, foreign-unit,
+  mismatched-posture, stale-recipe, or internally disagreeing records are
+  rejected. Each accepted Evidence Contribution remains its complete canonical
+  manifest, including Release envelope, namespace, value schema, structured
+  value, and attachment inventory. Attachment names are flat and collision-free;
+  their bytes agree with recorded sizes and digests. The closure manifest's
+  Release tag equals the unit identity and names every existing draft GitHub
+  Release asset other than the Release Evidence file itself, with role, source,
+  size, and content digests. Its attestation subjects equal the asset set required
+  by the posture and selected recipes. The Release Evidence file's own
+  attestation is identified after upload by the digest of its complete bytes, so
+  the statement contains no self-referential digest. Closure revalidates the
+  statement, uploads it and accepted attachments, reads all assets back, creates
+  and verifies required attestations, and requests immutable publication with
+  the recorded prerelease flag. The statement declares that required transition;
+  it does not claim that the transition has occurred. Under `contract-1`,
+  `immutable: true` and required final-evidence attestation are the robust
+  posture's closure values. A posture that subtracts either control uses an
+  interpretation contract whose Release Evidence schema represents that
+  subtraction explicitly. Release asset sources use
+  `artifact/<package>/<artifact>`, `contribution/<namespace>`, or a reserved
+  `protocol/<identity>` value so assembly can resolve every asset to its input.

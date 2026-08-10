@@ -1,0 +1,163 @@
+$schema: https://refinery.systems/ontology/domain-model
+relationships:
+  models: intentional
+description: >-
+  Intentional models a release workspace that turns pending change intent into
+  one authoritative tag-backed Release. Managed GitHub workflow adds one
+  immutable Release Record for every affected Release Unit, then delivers
+  released content through independently governed Distributions. Distribution
+  availability is observed operational state rather than part of the durable
+  Release claim. Git repositories, generated workflows, workflow runs, and
+  serialized record files are infrastructure or projections rather than domain
+  aggregates.
+aggregates:
+  - name: Release Workspace
+    description: >-
+      The consistency boundary for release configuration. It owns release
+      units, their packages, managed artifacts, Signing selections, version
+      projections, dependency and release groups, tag streams, Distribution
+      targets and prerequisites, exclusions, namespace settings, discovery receipts, and the
+      durable choice to adopt or decline managed workflow generation. An adopted
+      managed workflow also names one supported security posture and profile
+      version. A Release Unit is an entity that owns one version and changelog. A
+      Package is an entity owned by a Release Unit. A Distribution Target is a
+      value in Package configuration. Its qualified identity is
+      `distribution/<release-unit-id>/<package-id>/<target-id>`. Generated
+      workflow files are projections of this state.
+    commands:
+      - name: Reconcile Release Workspace
+        description: >-
+          Apply one reviewed Initialization Plan to initialize or converge the
+          complete workspace configuration without reversing explicit adoption,
+          exclusion, or ownership decisions.
+    events:
+      - name: Release Workspace Initialized
+        description: A release workspace and its initial configuration were established.
+      - name: Release Unit Registered
+        description: A discovered or declared release unit entered workspace ownership.
+      - name: Release Unit Reconfigured
+        description: >-
+          A release unit's projections, dependencies, groups, tags, or packages
+          changed through reconciliation.
+      - name: Release Unit Removed
+        description: A release unit left workspace ownership through reconciliation.
+      - name: Discovery Candidate Excluded
+        description: >-
+          A discovered candidate was explicitly declined against its observed
+          evidence.
+      - name: Package Configured
+        description: A package and its maintained ecosystem integration were accepted.
+      - name: Package Removed
+        description: A package left its owning release unit through reconciliation.
+      - name: Distribution Target Configured
+        description: A package gained a concrete destination and maintained recipe.
+      - name: Distribution Target Removed
+        description: A configured package destination was removed.
+      - name: Managed Workflow Adopted
+        description: The workspace chose Intentional's generated managed protocol.
+      - name: Managed Security Posture Selected
+        description: The workspace selected the named and versioned managed security contract.
+      - name: Managed Workflow Declined
+        description: The workspace explicitly chose not to generate a managed workflow.
+      - name: Release Workspace Reconciled
+        description: >-
+          Every accepted Initialization Plan resolution was applied and the
+          resulting workspace satisfies its configuration invariants.
+
+  - name: Change Intent
+    description: >-
+      One independently identified statement of user-visible change and the
+      semantic version effect claimed for one or more Release Units. Pending
+      intent may change until an authoritative Release consumes it. Consumed
+      intent is immutable.
+    commands:
+      - name: Record Change Intent
+        description: Record a new pending change and its release-unit bump claims.
+      - name: Revise Change Intent
+        description: Correct the claims or changelog text of pending intent.
+      - name: Withdraw Change Intent
+        description: Remove pending intent before any Release consumes it.
+      - name: Consume Change Intent
+        description: Bind pending intent to the Release established from a plan that includes it.
+    events:
+      - name: Change Intent Recorded
+        description: A valid change statement became pending release input.
+      - name: Change Intent Revised
+        description: A pending change statement or its bump claims changed.
+      - name: Change Intent Withdrawn
+        description: A pending change statement was removed from future planning.
+      - name: Change Intent Consumed
+        description: An established Release accepted the intent as immutable release input.
+
+  - name: Release
+    description: >-
+      One durable authoritative transition from a source state to a released
+      version. It comes into existence when the verified release commit and
+      annotated identity tags exist as authoritative repository objects. It owns
+      its sealed global Release Plan and source identity. Managed workflow adds
+      one Release Record entity for every affected Release Unit. Each Release
+      Record owns that unit's tag, version, immutable Release Artifacts, Release
+      Evidence, attestations, and GitHub Release state. A Release Artifact is a
+      content-digest-identified value. Plan computation and materialization are
+      candidate operations and do not create a Release.
+    commands:
+      - name: Establish Release
+        description: >-
+          Create or publish the verified release commit and annotated identity
+          tags as repository authority, seal the plan as durable Release
+          identity, and consume its contributing Change Intents when the Release
+          is channel-less.
+      - name: Seal Release Artifact
+        description: >-
+          Accept one immutable publishable output whose identity and content
+          digest conform to the sealed plan.
+      - name: Close Release Unit Record
+        description: >-
+          Validate one affected Release Unit's exact artifact, evidence,
+          attachment, and attestation inventory and publish its GitHub Release as
+          an immutable Release Record.
+    events:
+      - name: Release Established
+        description: >-
+          The authoritative source commit and annotated identity tags became
+          observable and bound the sealed plan as durable Release state. A
+          channel-less Release also consumed its Change Intents.
+      - name: Release Artifact Sealed
+        description: An immutable publishable output was bound to the Release by digest.
+      - name: Release Unit Record Closed
+        description: >-
+          One affected Release Unit's complete durable record became immutable
+          and eligible for Distribution.
+
+  - name: Distribution
+    description: >-
+      One immutable Release Record's artifact, logical content graph, or protected
+      source tag delivered to one Distribution Target. It protects destination
+      identity, authority, idempotency, and consumer observation. Distribution
+      prerequisites order starts without sharing authority or coupling retries
+      to other destinations. Current destination availability does not change the
+      Release Record.
+    commands:
+      - name: Start Distribution
+        description: >-
+          Bind one expected Distribution Target to the exact immutable Release
+          Record and content it must receive after every prerequisite
+          Distribution has verified consumer-visible state.
+      - name: Distribute Released Content
+        description: >-
+          Submit the released content to the destination or accept an
+          already-present version only when its immutable identity matches.
+      - name: Observe Distribution
+        description: >-
+          Evaluate current destination state through the maintained consumer
+          recipe and report whether the exact released version is visible.
+    events:
+      - name: Distribution Started
+        description: A Release Record and target were bound as one retryable Distribution.
+      - name: Destination Accepted Released Content
+        description: >-
+          The destination accepted or already held the exact released content.
+      - name: Distribution Observed
+        description: >-
+          A maintained consumer path reported the current state of the exact
+          released version.

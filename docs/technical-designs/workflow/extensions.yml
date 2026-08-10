@@ -1,0 +1,101 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: managed-workflow
+  realizes: intentional
+objective: >-
+  Admit repository-specific Custom Release Gates and typed destination delivery
+  behavior through bounded interfaces while preserving Intentional's ownership
+  of protocol structure, Release Record authority, and Distribution isolation.
+proposed-design:
+  extension-model: >-
+    Intentional exposes fixed extension roles whose invocation point, inputs,
+    permissions, completion semantics, and Evidence Contribution are part of the
+    protocol. Release Workspace configuration selects maintained destination
+    integrations. Presence at reserved paths selects Custom Release Gates.
+    Generated workflow structure remains derived entirely from those typed facts.
+
+  custom-candidate-release-gate: >-
+    `.github/workflows/intentional-custom-candidate-release-gate.yml` is an
+    optional repository-owned reusable workflow. It declares `workflow_call`
+    with the exact scalar candidate-plan identity inputs defined by its
+    specification. Intentional calls it after independently preparing the
+    candidate Release and before a job receives repository-write authority.
+    Successful completion passes the transition. Failure or cancellation blocks
+    it. `docs/specifications/custom-release-gates.yml` owns the exact extracted
+    `workflow_call` contract.
+
+  custom-release-unit-record-gate: >-
+    `.github/workflows/intentional-custom-release-unit-record-gate.yml` is an
+    optional repository-owned reusable workflow. It receives sealed Release
+    identity and one Release Unit's inventory of verified Release Artifacts after
+    upload readback. Its exact inputs are the `release-unit-record` gate in the
+    Custom Release Gates specification. It completes before that unit's evidence
+    assembly and closure. Successful completion passes the transition. Failure
+    or cancellation blocks it. Its jobs can call the contribution Action to emit
+    Evidence Contributions under repository-owned namespaces.
+
+  custom-release-gate-authority: >-
+    Custom Release Gate call jobs grant read-only repository permissions and pass
+    no secrets from Intentional. Gates can use authority they independently
+    declare and govern inside their reusable workflow, while their protocol
+    result remains pass or block plus any permitted Evidence Contributions. They
+    cannot receive the release GitHub App token, destination credentials, or the
+    generated Release Record closure role.
+
+  contribution-action: >-
+    The Intentional contribution Action validates a namespace and structured
+    value, inventories explicitly named attachment paths, rejects reserved names
+    and collisions, calculates sizes and digests, and uploads one typed temporary
+    Evidence Contribution bundle. Release Unit assembly validates the bundle
+    again and preserves its value under the namespace. The Action does not
+    interpret repository-specific fields.
+
+  maintained-delivery-actions: >-
+    A destination recipe can use an Intentional-owned composite Action as its
+    typed delivery component. The Action receives sealed Release Artifact paths
+    and explicit destination configuration, executes as a step inside the
+    generated distributor job, and emits a typed native response. Job-level
+    environment, permissions, credentials, and consumer verification remain
+    owned by generated orchestration.
+
+  repository-delivery-actions: >-
+    A maintained destination recipe can explicitly admit one repository-owned
+    delivery Action through a closed versioned configuration field. The value
+    names an exact `owner/repository[/path]@commit` reference. Generation records
+    its source, optional subpath, forty-character commit revision, and recipe
+    responsibility in the ownership manifest. The Action executes only at the
+    recipe's fixed submission point inside one isolated distributor job. It
+    receives the target's verified immutable Release Record content, closed non-secret
+    destination inputs, and only the logical credentials declared by that target
+    recipe. It receives no release App token, another target's credential,
+    observation role or Release Record authority. Intentional performs preflight
+    and consumer verification after the Action returns.
+    Selecting this recipe contract means the repository owner trusts that pinned
+    Action with the named target credential; the trust does not cross a
+    Distribution boundary.
+
+  contract-validation: >-
+    Initialization and `intentional check` parse each present Custom Release Gate workflow
+    and validate trigger shape, required and optional inputs, types, outputs,
+    permissions expressible at the call boundary, and reserved identifiers.
+    Workflow generation binds exact interface versions. Delivery recipe selection
+    validates every configured field, Action source, optional Action subpath,
+    immutable revision, credential name, attached component, and target against
+    the maintained contract before producing jobs.
+
+  namespace-and-collisions: >-
+    Extension paths, call-job identifiers, input names, output names, contribution
+    namespaces, attachment names, and destination selectors use fixed protocol
+    rules. Custom Release Gate internals remain repository-owned behind the
+    reusable workflow boundary. Contribution namespaces prevent those internals
+    from colliding with Intentional evidence or another contributor.
+
+  protocol-ownership: >-
+    Extensions answer bounded protocol questions: whether a Custom Release Gate
+    passes a transition, what Evidence Contributions it emits,
+    and how a maintained destination performs one typed delivery step through an
+    Intentional-owned or explicitly configured repository-owned pinned Action.
+    Intentional retains trigger selection, job graph, authority order, protected
+    environments, credential routing, Distribution identity, consumer
+    observation, and Release Record closure. New extension capability enters
+    through a new typed role or recipe contract.

@@ -1,0 +1,13 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  { realizes: [debian, ecosystem-recipes, recipe-catalog], models: intentional }
+description: >-
+  Defines credential-free derivation of Debian packages from sealed executable
+  archives.
+format: json-schema
+validation-criteria: >-
+  Each output names one executable-archive prerequisite explicitly. Its stable
+  version, package identity, Debian architecture, dependencies, installed paths,
+  scripts, and payload bytes agree with the Release Plan and consumed Release
+  Artifact record. The package passes the maintained Debian reader. Provenance
+  references the consumed artifact record.

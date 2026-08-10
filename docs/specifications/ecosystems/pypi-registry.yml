@@ -1,0 +1,19 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [python, ecosystem-recipes, recipe-catalog]
+  models: [intentional]
+description: >-
+  Defines the maintained PyPI Distribution recipe. Version 1 publishes a sealed
+  wheel and source-distribution set through repository-bound OpenID Connect,
+  and verifies every immutable file through PyPI metadata and public download.
+  Config and recipe assets share the
+  `pypi-registry` stem.
+format: json-schema
+validation-criteria: >-
+  Destination is PyPI. The artifact set contains unique Python distribution
+  filenames for one normalized project and version. Distributor receives
+  `id-token: write`, no named secret, and submits exact sealed files through the
+  maintained PyPI delivery Action. Existing version state agrees only when its
+  complete filename set and every SHA-256 digest and downloaded byte sequence
+  agree. Public observation polls for at most 600 seconds at 10-second intervals
+  and must agree before the Distribution job succeeds.

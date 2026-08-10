@@ -344,9 +344,9 @@ fn status(root: &std::path::Path) -> Result<()> {
 
 fn parse_phase(value: &str) -> Result<TagPhase> {
     match value {
-        "before-publication" => Ok(TagPhase::BeforePublication),
-        "after-publication" => Ok(TagPhase::AfterPublication),
-        _ => bail!("phase must be before-publication or after-publication; got {value}"),
+        "before-distribution" => Ok(TagPhase::BeforeDistribution),
+        "after-distribution" => Ok(TagPhase::AfterDistribution),
+        _ => bail!("phase must be before-distribution or after-distribution; got {value}"),
     }
 }
 

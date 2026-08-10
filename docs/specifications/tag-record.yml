@@ -1,0 +1,44 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - release-planning-and-records
+    - evidence
+  models:
+    - intentional
+description: >-
+  Defines the canonical protocol record carried by every annotated Git tag that
+  Intentional creates. The Git tag object and its message together bind one
+  configured tag identity and semantic version to a target commit, interpretation
+  contract, generator, plan or baseline digest, and verified
+  prerequisite tag objects.
+  `docs/specifications/tag-record.schema.yml` is the machine-readable definition
+  of the message fields.
+format: json-schema
+validation-criteria: >-
+  A conforming tag is an annotated Git tag whose message begins with
+  `intentional release record`, followed by one blank line and newline-delimited
+  `key: value` protocol fields. Scalar fields occur once in schema order. Each
+  `prerequisite: <tag-id> <tag-object>` entry follows in lexical `tag-id` order.
+  Parsing projects those repeated entries into the `prerequisites` array validated by
+  `docs/specifications/tag-record.schema.yml`. Canonical field names use
+  kebab-case. `generator` is the line-encoded form of the Release Plan generator:
+  the literal tool name `intentional`, one space, and the same semantic version.
+  The message target must equal the annotated tag object's target commit. The
+  fixed tagger name and email are `Intentional` and
+  `intentional@wyrd.company`; tagger time and offset equal the target commit's
+  committer time and offset. A release record's `plan-digest` equals its sealed
+  Release Plan digest. A baseline record's `plan-digest` is computed from the
+  object defined by `#/$defs/baseline-digest-payload` in the Tag Record schema.
+  Its exact fields are `contract`, the bare `generator` semantic version,
+  `versions`, and `baseline: true`. `versions` maps each Release Unit ID and
+  canonical workspace tag ID in the complete baseline set to its semantic
+  version. The payload uses the Release Plan canonical JSON rules: object keys
+  sort lexically at every depth, serialization is compact UTF-8 JSON, and the
+  digest is lowercase SHA-256 prefixed with `sha256:`. Workspace tag IDs require
+  `tag-role: workspace`. Release Unit tag IDs require `tag-role: primary` or
+  `projection`. Semantic validation resolves every
+  prerequisite record and verifies its tag ID, annotated-tag object ID, target,
+  version, interpretation contract, and plan digest against the
+  sealed plan. The interpretation contract identifier resolves through the
+  maintained interpretation catalog. Exact existing objects satisfy creation; any disagreement is a
+  conflict.

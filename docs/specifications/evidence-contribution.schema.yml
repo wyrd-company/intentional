@@ -1,0 +1,63 @@
+# ---
+# relationships:
+#   realizes: evidence-contribution
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/evidence-contribution.yml
+title: Intentional Evidence Contribution
+type: object
+additionalProperties: false
+required:
+  - $schema
+  - digest
+  - operation
+  - release
+  - release-unit
+  - namespace
+  - value-schema
+  - value
+  - attachments
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/evidence-contribution.yml
+  digest:
+    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+  operation:
+    $ref: "https://intentional.foo/schemas/evidence-contribution.yml#/$defs/operation"
+  release:
+    $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/release-identity"
+  release-unit:
+    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-unit-identity"
+  namespace:
+    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+  value-schema:
+    type: string
+    format: uri
+  value: {}
+  attachments:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "https://intentional.foo/schemas/evidence-contribution.yml#/$defs/attachment"
+$defs:
+  operation:
+    type: object
+    additionalProperties: false
+    required: [role, id]
+    properties:
+      role:
+        const: custom-release-unit-record-gate
+      id:
+        $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+  attachment:
+    type: object
+    additionalProperties: false
+    required: [name, size, digests]
+    properties:
+      name:
+        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/asset-name"
+      size:
+        type: integer
+        minimum: 0
+      digests:
+        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/content-digests"

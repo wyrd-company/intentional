@@ -1,0 +1,23 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships: { part-of: ecosystem-recipes, realizes: intentional }
+objective: Specialize Intentional for Open Container Initiative image builds and registries.
+proposed-design:
+  native-authority: >-
+    A configured Dockerfile or Task target defines build behavior. The Release
+    Plan fixes context, Dockerfile, platforms, build arguments, labels, subject
+    repository, immutable version tag, selected monotonic aliases, and every
+    external base image by digest. Planning rejects a tag-only external base so
+    the dependency-only build resolves the same inputs in every environment.
+  build: >-
+    Buildx builds the complete platform index without registry credentials,
+    stores and transports it as a file-backed Open Container Initiative layout, and seals descriptor,
+    manifest, configuration, layer, Software Bill of Materials, and provenance digests.
+  distribution: >-
+    Registry recipes push the exact sealed layout, apply aliases only after
+    immutable digest agreement, and verify through an independent consumer pull.
+    GitHub Container Registry and Docker Hub are separate authority recipes.
+  conformance: >-
+    Fixtures cover platform indexes, labels, deterministic metadata, digest
+    conflicts, private-first GitHub packages, aliases, attestations, and retry.
+  specification-topology: >-
+    oci-image, github-container-registry, and docker-hub-registry use colocated assets.

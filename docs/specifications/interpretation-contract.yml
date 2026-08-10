@@ -1,0 +1,35 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - intent-and-versioning
+    - release-planning-and-records
+  models:
+    - intentional
+description: >-
+  Defines the versioned interpretation contracts that give Release Workspace
+  configuration, Change Intents, Release Plans, materialization, tag records,
+  and recovery one stable meaning. A contract selects exact semantic primitives
+  for bump aggregation, pre-1.0 mapping, release groups, dependency propagation,
+  channels, changelogs, canonical serialization, digest calculation, tag
+  construction, intent consumption, and retry. `interpretation-contract.catalog.yml`
+  is the maintained catalog and `interpretation-contract.schema.yml` is its
+  machine-readable definition.
+format: json-schema
+validation-criteria: >-
+  The maintained catalog validates against
+  `docs/specifications/interpretation-contract.schema.yml` as YAML interpreted
+  by JSON Schema Draft 2020-12. Contract identifiers are `contract-<positive
+  integer>`. Every semantic slot references one maintained primitive and
+  positive integer version. References resolve without cycles or missing slots.
+  A contract identifier has one immutable expanded meaning within every
+  Intentional version that supports it.
+
+  `contract-1` orders bumps as patch, minor, major; applies the configured
+  component or compatibility pre-1.0 mapping; computes dependency and release
+  groups to a fixed point; preserves native dependency syntax while changing
+  only applicable version requirements; keeps channel releases from consuming
+  Change Intents; emits final changelogs from contributing intents and dependency
+  entries; serializes canonical JSON with lexically sorted keys and no
+  insignificant whitespace; calculates SHA-256 self-excluding record digests;
+  creates deterministic annotated tag records; and treats an exact existing
+  operation as success while rejecting conflicting durable state.

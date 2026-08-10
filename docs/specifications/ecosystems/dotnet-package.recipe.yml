@@ -1,0 +1,112 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships:
+  realizes: dotnet-package
+  part-of: dotnet
+role: package
+versions:
+  1:
+    package-configuration: ./dotnet-package.config.yml#/$defs/version-1
+    artifact-configuration: ./dotnet-package.config.yml#/$defs/artifact-version-1
+    primitives:
+      - { id: msbuild-discover, version: 1 }
+      - { id: dotnet-locked-restore, version: 1 }
+      - { id: dotnet-pack, version: 1 }
+      - { id: nuget-validate, version: 1 }
+      - { id: write-release-artifact, version: 1 }
+    tools:
+      - {
+          id: dotnet,
+          resolution: { project-pins: [global.json], default: 10.0.110 },
+          install: { id: install-dotnet, version: 1 },
+        }
+      - {
+          id: nuget,
+          resolution: { default: 7.0.3 },
+          install: { id: install-nuget, version: 1 },
+        }
+    matrix: []
+    artifact-kinds:
+      - {
+          id: nuget-package,
+          content: file,
+          asset-name-source: native,
+          native-kinds: [nupkg],
+        }
+      - {
+          id: nuget-symbol-package,
+          content: file,
+          asset-name-source: native,
+          native-kinds: [snupkg],
+        }
+    discovery:
+      - {
+          id: discover-dotnet-project,
+          uses: { id: msbuild-discover, version: 1 },
+          with: { build: false, network: denied },
+        }
+    planning:
+      - {
+          id: plan-dotnet-build,
+          uses: { id: msbuild-discover, version: 1 },
+          with:
+            {
+              build: false,
+              network: denied,
+              validate: [lockfile-current, package-identity, outputs],
+            },
+        }
+    build:
+      - {
+          id: restore-dotnet-lock,
+          uses: { id: dotnet-locked-restore, version: 1 },
+          with: { locked-mode: true },
+        }
+      - {
+          id: pack-dotnet-project,
+          uses: { id: dotnet-pack, version: 1 },
+          with: { no-restore: true, output: isolated-staging },
+        }
+    collection:
+      - {
+          id: collect-nuget-packages,
+          uses: { id: nuget-validate, version: 1 },
+          with: { unexpected-outputs: reject },
+        }
+    validation:
+      - {
+          id: validate-nuget-packages,
+          uses: { id: nuget-validate, version: 1 },
+          with: { compare: [id, version, frameworks, dependencies, inventory] },
+        }
+      - {
+          id: record-nuget-artifacts,
+          uses: { id: write-release-artifact, version: 1 },
+          with:
+            { schema: https://intentional.foo/schemas/release-artifact.yml },
+        }
+    requirements:
+      - { id: exact-dotnet-sdk, class: operational }
+      - { id: locked-restore, class: operational }
+      - { id: credential-free-build, class: authority }
+    control-subtractions: []
+    guarantees:
+      - {
+          id: evaluated-msbuild-authority,
+          statement: Package behavior comes from MSBuild evaluation under the resolved SDK.,
+        }
+      - {
+          id: exact-nuget-files,
+          statement: Every sealed NuGet file passes native package validation.,
+        }
+    conformance:
+      cases:
+        - {
+            id: msbuild-evaluation,
+            fixture: fixtures/dotnet/evaluation,
+            asserts: [multi-targeting, central-packages, exact-version],
+          }
+        - {
+            id: locked-pack,
+            fixture: fixtures/dotnet/pack,
+            asserts: [network-free-planning, locked-restore, nupkg, snupkg],
+          }

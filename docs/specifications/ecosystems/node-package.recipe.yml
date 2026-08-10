@@ -1,0 +1,126 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships:
+  realizes: node-package
+  part-of: node
+role: package
+versions:
+  1:
+    package-configuration: ./node-package.config.yml#/$defs/version-1
+    artifact-configuration: ./node-package.config.yml#/$defs/artifact-version-1
+    primitives:
+      - { id: node-discover, version: 1 }
+      - { id: node-plan-build, version: 1 }
+      - { id: node-install-locked, version: 1 }
+      - { id: node-run-script, version: 1 }
+      - { id: task-run, version: 1 }
+      - { id: npm-pack, version: 1 }
+      - { id: npm-validate-pack, version: 1 }
+      - { id: write-release-artifact, version: 1 }
+    tools:
+      - id: node
+        resolution:
+          project-pins: [package.json#engines.node, .node-version, .nvmrc]
+          default: 24.18.0
+        install: { id: install-node, version: 1 }
+      - id: npm
+        resolution:
+          project-pins: [package.json#packageManager]
+          default: 11.16.0
+        install: { id: install-node-package-manager, version: 1 }
+      - id: task
+        resolution:
+          required-for: task-entrypoint
+          default: 3.52.0
+        install: { id: install-task, version: 1 }
+    matrix: []
+    artifact-kinds:
+      - id: npm-package-tarball
+        content: file
+        asset-name-source: native
+        native-kinds: [npm-package]
+        configuration:
+          extension: .tgz
+          target-independent: true
+    discovery:
+      - id: discover-node-workspace
+        uses: { id: node-discover, version: 1 }
+        with:
+          manifests: tracked
+          lifecycle-scripts: denied
+          network: denied
+    planning:
+      - id: resolve-node-build
+        uses: { id: node-plan-build, version: 1 }
+        with:
+          package-manager: exact
+          lockfile: required-when-dependencies-exist
+          artifact: npm-package-tarball
+    build:
+      - id: install-locked-dependencies
+        uses: { id: node-install-locked, version: 1 }
+        with:
+          mode: immutable
+      - id: run-configured-build
+        uses: { id: node-run-script, version: 1 }
+        with:
+          script: configured-or-none
+      - id: run-task-entrypoint
+        uses: { id: task-run, version: 1 }
+        with:
+          interface: intentional-node-build-1
+      - id: pack-node-package
+        uses: { id: npm-pack, version: 1 }
+        with:
+          report: json
+          destination: isolated-staging
+    collection:
+      - id: collect-npm-tarball
+        uses: { id: npm-validate-pack, version: 1 }
+        with:
+          cardinality: exactly-one
+          inventory: npm-json-report
+    validation:
+      - id: validate-npm-tarball
+        uses: { id: npm-validate-pack, version: 1 }
+        with:
+          compare: [name, version, inventory, modes, size, sha512-integrity]
+      - id: record-node-artifact
+        uses: { id: write-release-artifact, version: 1 }
+        with:
+          schema: https://intentional.foo/schemas/release-artifact.yml
+    requirements:
+      - { id: exact-node-toolchain, class: operational }
+      - { id: agreeing-lock-state, class: operational }
+      - { id: credential-free-build, class: authority }
+    control-subtractions: []
+    guarantees:
+      - id: native-node-authority
+        statement: Node manifests, workspace declarations, and lockfiles remain authoritative for package behavior.
+      - id: exact-npm-tarball
+        statement: The Release Artifact is the exact tarball described by npm's pack report.
+      - id: lifecycle-authority-isolation
+        statement: Package lifecycle code executes before any publication credential is available.
+    conformance:
+      cases:
+        - id: workspace-discovery
+          fixture: fixtures/node/workspaces
+          asserts:
+            [
+              npm-workspaces,
+              pnpm-workspaces,
+              yarn-workspaces,
+              scoped-identities,
+            ]
+        - id: locked-install
+          fixture: fixtures/node/locked-install
+          asserts: [exact-package-manager, immutable-lockfile, no-lock-rewrite]
+        - id: package-inventory
+          fixture: fixtures/node/package-inventory
+          asserts:
+            [files-field, bundled-dependencies, bin-modes, exports-metadata]
+        - id: lifecycle-isolation
+          fixture: fixtures/node/lifecycle
+          asserts: [build-role-only, no-publisher-lifecycle]
+        - id: task-entrypoint
+          fixture: fixtures/node/task-entrypoint
+          asserts: [fixed-task-interface, exact-output-path]

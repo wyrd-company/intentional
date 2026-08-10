@@ -1,0 +1,83 @@
+$schema: https://intentional.foo/schemas/recipe-catalog.yml
+relationships: { realizes: homebrew-tap, part-of: homebrew }
+role: distribution
+versions:
+  1:
+    configuration: ./homebrew-tap.config.yml#/$defs/version-1
+    destination: ./homebrew-tap.config.yml#/$defs/destination-version-1
+    primitives:
+      [
+        { id: git-file-preflight, version: 1 },
+        { id: github-app-promote-file, version: 1 },
+        { id: git-public-observe, version: 1 },
+        { id: homebrew-verify-formula, version: 1 },
+      ]
+    tools: []
+    accepted-artifact-kinds: [homebrew-formula]
+    credentials: []
+    github-permissions:
+      { distribute: { contents: read }, observe: { contents: read } }
+    preflight:
+      [
+        {
+          id: probe-tap-formula,
+          uses: { id: git-file-preflight, version: 1 },
+          with: { agreement: [path, bytes] },
+        },
+      ]
+    distribute:
+      [
+        {
+          id: promote-tap-formula,
+          uses: { id: github-app-promote-file, version: 1 },
+          with: { authority: short-lived-app-token, commit: deterministic },
+        },
+      ]
+    observe:
+      - {
+          id: observe-tap,
+          uses: { id: git-public-observe, version: 1 },
+          with: { retrieval: public-client, deadline-seconds: 300 },
+        }
+    verify:
+      - {
+          id: verify-tap-formula,
+          uses: { id: homebrew-verify-formula, version: 1 },
+          with:
+            {
+              compare:
+                [commit-object, formula-bytes, urls, checksums, branch-head],
+            },
+        }
+    requirements:
+      [
+        { id: app-tap-authority, class: authority },
+        { id: public-tap-readback, class: security-control },
+      ]
+    control-subtractions: []
+    guarantees:
+      - {
+          id: exact-homebrew-formula,
+          statement: Public tap bytes agree with the sealed formula.,
+        }
+      - {
+          id: short-lived-tap-authority,
+          statement: Promotion uses repository-scoped short-lived App authority.,
+        }
+    conformance:
+      cases:
+        - {
+            id: tap-promotion,
+            fixture: fixtures/homebrew/promotion,
+            asserts: [exact-formula, deterministic-commit, public-readback],
+          }
+        - {
+            id: tap-conflict,
+            fixture: fixtures/homebrew/conflict,
+            asserts: [conflict-rejection, no-overwrite],
+          }
+      live:
+        {
+          operation: homebrew-live-conformance,
+          proves: [app-authority, public-readback, idempotent-retry],
+        }

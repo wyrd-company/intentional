@@ -1,0 +1,15 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  {
+    realizes: [homebrew, ecosystem-recipes, recipe-catalog],
+    models: intentional,
+  }
+description: Defines promotion of sealed Homebrew formulae to a configured tap repository.
+format: json-schema
+validation-criteria: >-
+  The distributor promotes the exact formula through short-lived App authority.
+  The deterministic Git commit object and formula bytes form immutable state;
+  the tap branch is a mutable alias. Public checkout and formula metadata agree
+  with the sealed artifact. Distribution consumes the formula and every source
+  archive from an immutable Release Record. Consumer readback must agree before
+  the Distribution job succeeds.

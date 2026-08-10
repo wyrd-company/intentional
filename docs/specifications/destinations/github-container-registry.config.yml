@@ -1,0 +1,14 @@
+# ---
+# relationships: { realizes: github-container-registry }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/destinations/github-container-registry.config.yml
+title: GitHub Container Registry recipe configuration catalog
+$defs:
+  version-1: { type: object, additionalProperties: false }
+  destination-version-1:
+    type: object
+    additionalProperties: false
+    required: [repository]
+    properties:
+      { repository: { type: string, pattern: "^[a-z0-9][a-z0-9._/-]*$" } }
