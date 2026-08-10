@@ -21,7 +21,8 @@ proposed-design:
   protocol-model: >-
     The generator constructs a typed internal graph before rendering files. Nodes
     represent job roles, scripts, setup, permissions, environments, credentials,
-    artifacts, Release Records, extensions, recipes, and operational status. Edges represent
+    artifacts, Release Records, extensions, recipes, callback entrypoints, and
+    operational status. Edges represent
     authority prerequisites and data handoffs. Artifact prerequisite edges bind
     derived Package builds to verified Release Artifacts. A Distribution
     prerequisite binds one target's preflight to consumer-visible state at the
@@ -51,7 +52,9 @@ proposed-design:
   output-set: >-
     Generation produces the release and Release Record workflows, one
     `.github/workflows/intentional-distribute-<distribution-path-token>.yml` for
-    every configured Distribution Target, protocol support scripts, ownership
+    every configured Distribution Target, one
+    `.github/workflows/intentional-validate-<callback-path-token>.yml` for every
+    distinct recipe-required callback contract, protocol support scripts, ownership
     manifest, and any reusable workflows required by the generated graph. A
     Distribution ID is
     `distribution/<release-unit-id>/<package-id>/<target-id>`. Its path token is
@@ -60,9 +63,10 @@ proposed-design:
     Reusable workflows occupy
     `.github/workflows/intentional-internal-<stable-id>.yml`; GitHub requires
     reusable workflow files directly inside `.github/workflows/`. Generation
-    emits only configured recipes. Stable protocol paths and identifiers derive from domain identities
-    through one canonical escaping and collision-validation rule. The same rule
-    validates physical secret names derived from configured prefix, target or
+    emits only configured recipes. Stable protocol paths and identifiers derive
+    from domain identities through one canonical escaping and
+    collision-validation rule. The same rule validates physical secret names
+    derived from configured prefix, target or
     signing identity, and logical credential identity. Generated comments
     identify ownership and source generator without becoming semantic markers.
 
@@ -94,8 +98,10 @@ proposed-design:
 
   file-decomposition: >-
     Responsibility boundaries determine file structure. The release and Release
-    Record entrypoints plus each configured Distribution Target workflow are the
-    event-triggered workflow files.
+    Record entrypoints plus each configured Distribution Target submission
+    workflow are event-triggered workflow files. A review-gated recipe adds one
+    callback validation entrypoint per distinct callback contract. Each callback
+    run infers exactly one configured target and produces no aggregate state.
     Generated reusable workflows can represent a distinct internal job family
     when GitHub resource constraints or responsibility isolation require it;
     they expose only `workflow_call` and remain owned members of the same output

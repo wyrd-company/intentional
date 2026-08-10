@@ -31,7 +31,9 @@ proposed-design:
     `.github/workflows/intentional-release-record.yml`,
     one
     `.github/workflows/intentional-distribute-<distribution-path-token>.yml` for
-    every configured Distribution Target, generated reusable workflows
+    every configured Distribution Target, any recipe-required
+    `.github/workflows/intentional-validate-<callback-path-token>.yml`,
+    generated reusable workflows
     named `.github/workflows/intentional-internal-<stable-id>.yml`, and
     `.intentional/workflows/`. The support directory contains generated scripts
     and an ownership manifest. These files are committed for review and runner
@@ -47,7 +49,9 @@ proposed-design:
     immutable GitHub Release published event. It exits without authority when
     the released unit does not contain its target. First execution and recovery
     derive from the same immutable Release Record; a target can also be retried
-    without coordinating another target.
+    without coordinating another target. A review-gated recipe can add a
+    repository_dispatch validation entrypoint whose untrusted callback is
+    verified and resolved to exactly one target before consumer observation.
 
   job-roles: >-
     Each job has one authority role: read and prepare, call the Custom Candidate
@@ -76,9 +80,11 @@ proposed-design:
     Records and probe current destination state.
 
   destination-isolation: >-
-    Each configured Distribution Target owns one generated event-triggered
-    workflow. Its permissions, protected environment, credentials, scripts,
-    retries, observation, and live status establish the trust boundary. Target
+    Each configured Distribution Target owns one generated submission workflow.
+    Recipe-required callback workflows route a validated event to exactly one
+    target's credential-free observation and verification jobs. Permissions,
+    protected environments, credentials, scripts, retries, observation, and live
+    status remain inside one target trust boundary. Target
     workflows do not propagate results to one another. File length does not
     define a protocol boundary.
 

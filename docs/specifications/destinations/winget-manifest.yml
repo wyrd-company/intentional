@@ -1,0 +1,18 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [ winget, ecosystem-recipes, recipe-catalog ]
+  models: intentional
+description: >-
+  Defines credential-free derivation of a sealed WinGet manifest archive from
+  final Inno Setup installer artifacts and repository-owned YAML templates.
+format: json-schema
+validation-criteria: >-
+  Configuration names the exact tracked version, installer, default-locale, and
+  optional locale template files. The recipe parses YAML and changes only
+  PackageVersion, InstallerUrl, InstallerSha256, and Architecture values derived
+  from the Release Plan and consumed inno-installer records. It emits one
+  deterministic ZIP whose entries use exact winget-pkgs repository-relative
+  paths and whose inventory records every path and digest. Maintained WinGet
+  validation accepts the extracted manifest set. Provenance references every
+  installer artifact. The ZIP and each installer it names are attached unchanged
+  to the immutable Release Unit record.

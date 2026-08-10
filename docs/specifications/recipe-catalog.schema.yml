@@ -300,6 +300,24 @@ $defs:
       contents: { enum: [read, write] }
       id-token: { const: write }
       packages: { enum: [read, write] }
+  callback-contract:
+    type: object
+    additionalProperties: false
+    required: [event, schema-version, payload-properties, validation]
+    properties:
+      event:
+        $ref: "#/$defs/stable-id"
+      schema-version:
+        type: integer
+        minimum: 1
+      payload-properties:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/stable-id"
+      validation:
+        $ref: "#/$defs/operations"
   common-version:
     type: object
     properties:
@@ -460,6 +478,8 @@ $defs:
             $ref: "#/$defs/credentials"
           github-permissions:
             $ref: "#/$defs/github-permissions"
+          callback:
+            $ref: "#/$defs/callback-contract"
           preflight:
             $ref: "#/$defs/operations"
           distribute:

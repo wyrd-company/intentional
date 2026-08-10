@@ -33,19 +33,21 @@ validation-criteria: >-
   revision, optional repository-relative subpath, and generator or recipe
   responsibility. An omitted subpath means repository root. The file inventory
   contains the release and Release Record entrypoints, one independently
-  event-triggered workflow per configured Distribution Target, and every
+  event-triggered submission workflow per configured Distribution Target, one
+  validation workflow per distinct recipe-required callback contract, and every
   generated reusable workflow, support script, and metadata file. A Distribution
-  workflow path uses the canonical reversible, collision-free path token derived
-  from the complete
-  `distribution/<release-unit-id>/<package-id>/<target-id>` identity.
+  submission workflow path uses the canonical reversible, collision-free path
+  token derived from the complete
+  `distribution/<release-unit-id>/<package-id>/<target-id>` identity. A callback
+  validation path uses the same escaping for its recipe-fixed callback event.
   Each path
   occurs once, lies in a
   reserved protocol namespace, and records its role, exact-byte digest,
   responsibility, and referenced Action IDs. Every referenced Action ID exists in
   the pin inventory. Each Action source is an `owner/repository` identity. A
   repository-owned delivery Action is recorded under its admitting recipe's
-  responsibility. Owned paths are exact paths without glob syntax. The manifest does not list its own
-  fixed path; its top-level digest protects its canonical bytes without a
+  responsibility. Owned paths are exact paths without glob syntax. The manifest
+  does not list its own fixed path; its top-level digest protects its canonical bytes without a
   self-reference. Generation stages and validates the complete desired set,
   writes all other files, and publishes this manifest last. Reconciliation
   replaces any expected path whose bytes disagree, removes a stale path only when

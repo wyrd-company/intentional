@@ -1,0 +1,21 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [ inno-setup, ecosystem-recipes, recipe-catalog ]
+  models: intentional
+description: >-
+  Defines credential-free Inno Setup planning, sealed compiler-input creation,
+  and unsigned installer compilation from executable-archive prerequisites.
+format: json-schema
+validation-criteria: >-
+  Configuration names one exact tracked Inno Setup script, a closed set of
+  non-secret defines, and an exact supported architecture set. Planning seals
+  the script, recursively resolved tracked includes, executable-archive inputs,
+  recipe-owned `INTENTIONAL_` release defines, compiler version, and output
+  identity. Configured defines cannot enter that reserved namespace. Without a Signing
+  selection, the recipe emits one validated inno-installer executable. With an
+  Inno Authenticode Signing selection, it emits one deterministic
+  inno-installer-input ZIP containing the complete final-compile input and no
+  credential. The intermediate ZIP is not attached to the Release Record.
+  The final installer Release Artifact records its architecture set, installed
+  executable inventory, uninstaller identity, compiler identity, input digests,
+  and signing state.

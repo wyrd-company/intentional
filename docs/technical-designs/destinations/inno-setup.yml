@@ -1,0 +1,60 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: ecosystem-recipes
+  realizes: intentional
+objective: >-
+  Produce a deterministic Windows installer from sealed executable archives and
+  a repository-owned Inno Setup script, with optional Authenticode signing that
+  covers both setup and uninstaller executables.
+proposed-design:
+  repository-contract: >-
+    The repository owns one tracked Inno Setup script and any tracked files it
+    includes. Release Workspace configuration selects the script, supported
+    architectures, exact executable-archive prerequisites, and closed non-secret
+    compiler defines. Intentional does not generate or reinterpret installer
+    behavior expressed by the script.
+  planning: >-
+    Planning resolves the pinned Inno Setup compiler, expands tracked includes,
+    verifies every configured executable archive and architecture, and seals the
+    digest and repository-relative path of every compiler input. The Release Plan
+    records the exact script, input inventory, defines, compiler version, expected
+    installer identity, and whether Authenticode signing is selected.
+  unsigned-path: >-
+    When signing is not selected, a credential-free Windows Package job expands
+    the sealed executable archives, invokes the pinned compiler with deterministic
+    settings, validates the setup and generated uninstaller, and emits the final
+    inno-installer Release Artifact.
+  signed-path: >-
+    When signing is selected, the credential-free Package job emits one
+    deterministic inno-installer-input archive containing the complete script
+    tree, exact executable payloads and assets, and release defines. An isolated
+    Signing job verifies that archive and performs the final Inno Setup compile
+    with its configured Authenticode SignTool. Inno signs the setup executable
+    and generated uninstaller during compilation. The Signing job verifies both
+    signatures and emits a distinct inno-installer Release Artifact whose
+    provenance names the sealed input artifact.
+  determinism: >-
+    The maintained recipe pins Inno Setup and every helper tool, disables
+    timestamp-dependent compiler output, and uses canonical input paths and
+    ordering. Timestamped Authenticode signatures are allowed only when the
+    selected Signing recipe declares that field and verification binds signed
+    content, signer identity, and timestamp policy.
+  artifact-contract: >-
+    An inno-installer artifact is one Windows setup executable for the exact
+    architecture set named by its Release Artifact record. Its inventory records
+    the setup digest, installed executable identities, generated uninstaller
+    identity, compiler version, script and input digests, and signing state. One
+    installer can cover one or several supported architectures.
+  release-record: >-
+    The final inno-installer executable is attached to the immutable Release Unit
+    record. The inno-installer-input archive is an intermediate workflow artifact
+    and is not a Release Record asset.
+  conformance: >-
+    Fixtures cover one- and multi-architecture installers, tracked includes,
+    exact prerequisite expansion, deterministic unsigned compilation, sealed
+    signed-input construction, setup and uninstaller signature verification,
+    missing or extra output rejection, and input-digest drift.
+  specification-topology: >-
+    inno-setup-installer defines credential-free planning and packaging.
+    inno-setup-authenticode defines signing-integrated final compilation. Each
+    family uses colocated prose, config, and recipe assets.

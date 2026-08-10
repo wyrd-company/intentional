@@ -13,8 +13,11 @@ proposed-design:
     each configured Distribution Target. The path token is the canonical
     filesystem projection of the target's qualified
     `distribution/<release-unit-id>/<package-id>/<target-id>` identity. Every
-    target workflow responds to
-    `release: published`. Its first read-only job resolves the Release Unit tag,
+    target submission workflow responds to `release: published`. A maintained
+    review-gated recipe can also require one generated validation workflow per
+    distinct callback contract. It responds to a recipe-fixed
+    `repository_dispatch` event after external review.
+    The first read-only job resolves the Release Unit tag,
     target commit, embedded Release Evidence, complete global Release Plan,
     Release Unit identity, asset inventory, provenance, attestations, and exact
     target definition. A workflow exits without authority when the published
@@ -45,16 +48,31 @@ proposed-design:
     accessing credentials. The recipe probes immutable destination identity,
     accepts an exact existing version, rejects conflicting content, or submits
     the released content. Mutable aliases update only after immutable version
-    identity agrees.
+    identity agrees. A review-gated destination can complete this workflow with
+    a submitted operational outcome. Submission success does not claim
+    consumer-visible availability.
 
   consumer-observation: >-
     A maintained recipe fixes its consumer client, destination lookup,
     observation deadline, immutable identity comparison, alias checks, and
     retrieval mode. Public or narrowly authorized reads poll until the exact
     released version agrees or the deadline expires. Agreement completes the
-    Distribution job successfully. Absence, conflict, timeout, or an
+    Distribution workflow, or its separate validation workflow for a
+    review-gated destination, successfully. Absence, conflict, timeout, or an
     unverifiable response fails it. The workflow run records the operational
     result, and current state is derived again whenever a consumer requests it.
+
+  external-review-callback: >-
+    A review-gated recipe defines a minimal repository_dispatch event as an
+    untrusted wake-up. The generated validation workflow derives exactly one
+    target identity from the external review object and immutable Release Record,
+    then validates
+    merged source, and exact released bytes before observation. The user owns all
+    that target's merged source and exact released bytes before observation.
+    A callback unrelated to any configured target exits without a target result;
+    ambiguous or conflicting identity fails. The user owns all monitoring and
+    event delivery outside the source repository. Intentional
+    generates no monitor or sender and records no waiting-for-review state.
 
   live-status-badges: >-
     Release notes contain one stable badge image URL for every expected

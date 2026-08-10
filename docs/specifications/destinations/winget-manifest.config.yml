@@ -1,0 +1,36 @@
+# ---
+# relationships: { realizes: winget-manifest }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/destinations/winget-manifest.config.yml
+title: WinGet manifest recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [ version-template, installer-template, default-locale-template ]
+    properties:
+      version-template:
+        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        description: Tracked version-manifest YAML file.
+      installer-template:
+        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        description: Tracked installer-manifest YAML file.
+      default-locale-template:
+        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        description: Tracked default-locale-manifest YAML file.
+      locale-templates:
+        type: array
+        description: Additional tracked locale-manifest YAML files.
+        uniqueItems: true
+        items:
+          $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+  artifact-version-1:
+    type: object
+    additionalProperties: false
+    required: [ package-identifier ]
+    properties:
+      package-identifier:
+        type: string
+        description: Consumer-visible WinGet PackageIdentifier.
+        pattern: "^[A-Za-z0-9][A-Za-z0-9.-]*\\.[A-Za-z0-9][A-Za-z0-9.-]*$"

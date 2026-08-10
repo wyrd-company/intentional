@@ -223,8 +223,11 @@ proposed-design:
     target pairing. Distributor execution supplies the sealed destination
     explicitly, disables native distribution lifecycle hooks, verifies immutable
     Release Record inputs, and submits that content through the maintained
-    operation. Consumer observation determines job success and supplies live
-    badge status.
+    operation. Consumer observation determines completed Distribution validation
+    and supplies live badge status. A review-gated recipe can end its initial
+    credential-bearing workflow at submitted and define a separate untrusted
+    callback contract that must be validated before credential-free consumer
+    observation.
 
   credential-routing: >-
     Distribution recipes name logical credentials without naming repository

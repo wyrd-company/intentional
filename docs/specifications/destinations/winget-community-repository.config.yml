@@ -1,0 +1,39 @@
+# ---
+# relationships: { realizes: winget-community-repository }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/destinations/winget-community-repository.config.yml
+title: WinGet community repository recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [ github-app-id, contributor ]
+    properties:
+      github-app-id:
+        type: integer
+        minimum: 1
+        description: Non-secret App identifier used to mint the fork installation token.
+      contributor:
+        type: object
+        description: Git author and committer identity covered by the Microsoft CLA.
+        additionalProperties: false
+        required: [ name, email ]
+        properties:
+          name: { type: string, minLength: 1 }
+          email: { type: string, format: email }
+  destination-version-1:
+    type: object
+    additionalProperties: false
+    required: [ fork-repository ]
+    properties:
+      fork-repository:
+        type: string
+        description: Same-owner organization fork of microsoft/winget-pkgs.
+        pattern: "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+      observation-deadline-seconds:
+        type: integer
+        description: Maximum catalog visibility polling period after validated merge.
+        minimum: 60
+        maximum: 86400
+        default: 3600

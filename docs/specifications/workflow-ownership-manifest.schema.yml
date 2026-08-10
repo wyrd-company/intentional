@@ -147,6 +147,14 @@ $defs:
               const: distribution-target-workflow
       - if:
           properties:
+            path:
+              pattern: '^\.github/workflows/intentional-validate-[a-z0-9][a-z0-9._-]*\.yml$'
+        then:
+          properties:
+            role:
+              const: distribution-validation-workflow
+      - if:
+          properties:
             role:
               const: release-workflow
         then:
@@ -171,6 +179,14 @@ $defs:
               pattern: '^\.github/workflows/intentional-distribute-[a-z0-9][a-z0-9._-]*\.yml$'
       - if:
           properties:
+            role:
+              const: distribution-validation-workflow
+        then:
+          properties:
+            path:
+              pattern: '^\.github/workflows/intentional-validate-[a-z0-9][a-z0-9._-]*\.yml$'
+      - if:
+          properties:
             path:
               pattern: '^\.github/workflows/intentional-internal-[a-z0-9][a-z0-9._-]*\.yml$'
         then:
@@ -193,6 +209,7 @@ $defs:
           - release-workflow
           - release-record-workflow
           - distribution-target-workflow
+          - distribution-validation-workflow
           - reusable-workflow
           - support-script
           - metadata
@@ -228,6 +245,8 @@ $defs:
       - const: .github/workflows/intentional-release-record.yml
       - type: string
         pattern: '^\.github/workflows/intentional-distribute-[a-z0-9][a-z0-9._-]*\.yml$'
+      - type: string
+        pattern: '^\.github/workflows/intentional-validate-[a-z0-9][a-z0-9._-]*\.yml$'
       - type: string
         pattern: '^\.github/workflows/intentional-internal-[a-z0-9][a-z0-9._-]*\.yml$'
       - type: string

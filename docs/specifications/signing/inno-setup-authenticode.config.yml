@@ -1,0 +1,20 @@
+# ---
+# relationships: { realizes: inno-setup-authenticode }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/signing/inno-setup-authenticode.config.yml
+title: Inno Setup Authenticode recipe configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [ certificate-thumbprint ]
+    properties:
+      certificate-thumbprint:
+        type: string
+        description: Expected SHA-1 certificate thumbprint after ephemeral import.
+        pattern: "^[0-9A-F]{40}$"
+      timestamp-url:
+        type: string
+        format: uri
+        description: Optional RFC 3161 timestamp service for Authenticode signatures.

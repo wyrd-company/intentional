@@ -86,8 +86,10 @@ proposed-design:
     These records support verification after workflow artifacts expire.
 
   distribution-status: >-
-    Distribution workflows verify consumer-visible destination state as an
-    operational success condition. Release-note badges obtain current state
+    Distribution validation workflows verify consumer-visible destination state
+    as an operational success condition. A review-gated submission workflow can
+    stop successfully at submitted without making an availability claim.
+    Release-note badges obtain current state
     through maintained consumer lookups. Neither workflow status nor badge state
     changes Release Evidence. A later lookup can report absence or conflict while
     the immutable Release Record continues to prove what Intentional released.

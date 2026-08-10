@@ -1,0 +1,28 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [ winget, ecosystem-recipes, recipe-catalog ]
+  models: intentional
+description: >-
+  Defines organization-fork submission of sealed WinGet manifests and validated
+  consumer observation after an untrusted merge callback.
+format: json-schema
+validation-criteria: >-
+  The destination is an organization-owned GitHub fork of
+  microsoft/winget-pkgs under the same owner as the source repository. A GitHub
+  App ID and contributor name and email are non-secret configuration. The App
+  private key is the only logical credential. The App installation on the fork
+  has Contents read and write and Pull requests read and write. Submission mints
+  a short-lived token scoped to that fork, bases the deterministic branch on
+  upstream master, writes the exact sealed archive, commits with the configured
+  contributor as author and committer, pushes the branch, and opens an upstream
+  pull request with maintainer modification disabled. Exact existing state is an
+  idempotent success and conflict is rejected. Submission ends with outcome
+  submitted and makes no availability claim. The generated callback workflow
+  accepts only the intentional-winget-manifest-merged repository_dispatch event
+  with schema-version 1 and pull-request-number. It treats the payload as an
+  untrusted wake-up and independently validates merged upstream state, fork and
+  branch identity, exact manifest bytes, immutable Release Record, Release Unit,
+  package, version, and inferred target. Linux observation polls catalog
+  visibility. Windows verification performs exact non-interactive WinGet
+  downloads for every architecture and compares SHA-256 values. Intentional does
+  not generate or document the external monitor or callback sender.
