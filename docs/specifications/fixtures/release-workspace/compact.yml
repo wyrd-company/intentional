@@ -35,8 +35,6 @@ release-units:
               archive-format: zip
               targets: [ x86-64-windows ]
           windows:
-            prerequisite-artifacts:
-              - application/command/windows-unsigned
             signing:
               input-artifact: windows-unsigned
               uses: windows-pe-azure-artifact-signing
