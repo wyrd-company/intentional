@@ -11,9 +11,12 @@ validation-criteria: >-
   non-secret defines, and an exact supported architecture set. Planning seals
   the script, recursively resolved tracked includes, executable-archive inputs,
   recipe-owned `INTENTIONAL_` release defines, compiler version, and output
-  identity. Configured defines cannot enter that reserved namespace. Without a Signing
-  selection, the recipe emits one validated inno-installer executable. With an
-  Inno Authenticode Signing selection, it emits one deterministic
+  identity. The installed application payload is exactly one portable executable
+  from each architecture-specific archive plus tracked installer-only resources;
+  it is not an arbitrary application output tree. Configured defines cannot
+  enter the reserved namespace. Without a Signing selection, the recipe emits
+  one validated inno-installer executable. With an Inno Azure Artifact Signing
+  selection, it emits one deterministic
   inno-installer-input ZIP containing the complete final-compile input and no
   credential. The intermediate ZIP is not attached to the Release Record.
   The final installer Release Artifact records its architecture set, installed

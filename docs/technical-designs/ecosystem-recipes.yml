@@ -85,11 +85,19 @@ proposed-design:
     Release Workspace schema owns Release Unit, Package, artifact, Distribution
     Target, recipe-reference, projection, and exclusion envelopes. A recipe
     config asset owns only recipe-specific configuration and recipe-specific
-    artifact configuration. A user-authored Distribution Target uses
-    `<recipe-id>@<version>` and one flat `with` mapping. Catalog compilation
-    requires its configuration and destination fragments to have disjoint
-    top-level property names; Intentional validates the combined closed mapping
-    and normalizes each value into its owning fragment. Intentional reads other
+    artifact configuration. A user-authored Signing selection or Distribution
+    Target uses `<recipe-id>@<version>` and one flat `with` mapping. A Signing
+    mapping validates against the authorable projection of its one closed
+    configuration fragment. The catalog identifies any read-only configuration
+    properties injected from workspace settings. Intentional rejects authored
+    values for those properties, injects them from the named setting, then
+    validates the complete resolved configuration. Catalog
+    compilation requires a Distribution recipe's configuration and destination
+    fragments to have disjoint top-level property names; Intentional validates
+    their combined closed mapping and normalizes each value into its owning
+    fragment. A Signing recipe can also receive a workspace-owned identity value
+    and a recipe-fixed organization variable contract during resolution.
+    Intentional reads other
     producing recipe identifiers and versions, then validates their
     `configuration` values against the corresponding version fragments. Every
     fragment is closed to unknown fields. Omitted
@@ -201,7 +209,8 @@ proposed-design:
     tree; a dirty tree produces an explicit warning and records dirty and
     untracked state in its development result. Only a build against authoritative
     sealed source can produce a Release Artifact record accepted into Release
-    Evidence.
+    Evidence. Local builds produce and verify unsigned precursors for planned
+    signing transformations and report signing as deferred.
 
   tool-resolution: >-
     A Package recipe resolves an exact toolchain from a supported project-native
@@ -221,6 +230,10 @@ proposed-design:
     artifact selected by the sealed plan and their destination authority.
     Destination-native signatures and platform attestations remain destination
     or Release Record attestations rather than Signing recipe output.
+    `intentional sign --plan <path> --artifact <qualified-id>` executes exactly
+    one planned Signing transformation through the public recipe-generic
+    interface used by generated workflows. It requires the authority declared by
+    the resolved recipe and never falls back to unsigned output.
 
   distribution-boundary: >-
     A Distribution recipe declares accepted released-content contracts, concrete
@@ -237,7 +250,7 @@ proposed-design:
     callback contract that must be validated before credential-free consumer
     observation.
 
-  credential-routing: >-
+  authority-routing: >-
     Distribution recipes name logical credentials without naming repository
     secrets. Managed generation derives each GitHub secret name from
     `settings.credential-secret-prefix`, Distribution Target identifier, and
@@ -247,8 +260,11 @@ proposed-design:
     named by the recipe. Generation applies its canonical escaping and collision
     check to every derived physical secret name and rejects distinct logical
     identities that produce the same name. Each credential is available only to
-    the Distribution Target role that declares it. Signing authority follows the
-    same logical-to-physical mapping within its separate role.
+    the Distribution Target role that declares it. A Signing recipe can instead
+    declare fixed `INTENTIONAL_` organization variables and GitHub OpenID Connect
+    permission. Generation exposes only those variables to its protected Signing
+    job and records their logical contract without sealing current operator
+    values.
 
   security-postures: >-
     Each recipe classifies operational requirements, authority requirements, and

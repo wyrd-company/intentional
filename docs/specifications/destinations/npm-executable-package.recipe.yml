@@ -41,6 +41,7 @@ versions:
           identity: node-platform-and-architecture
           urls: github-release-assets
           cardinality: unique-and-complete
+          windows-signing: azure-public-trust-under-robust
     build:
       - id: render-npm-executable-wrapper
         uses: { id: render-npm-executable-package, version: 1 }
@@ -82,6 +83,7 @@ versions:
       - { id: complete-node-platform-map, class: operational }
       - { id: stable-release-version, class: operational }
       - { id: credential-free-derivation, class: authority }
+      - { id: signed-windows-executables-under-robust, class: security-control }
     control-subtractions: []
     guarantees:
       - id: exact-executable-archive-binding

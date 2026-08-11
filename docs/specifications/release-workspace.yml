@@ -23,6 +23,10 @@ description: >-
   through `uses` and places recipe-specific and destination-specific values in
   one `with` mapping. Initialization recommends and writes that selection after
   user acceptance; users do not author recipe definitions.
+  A Signing selection uses the same compact selector and optional `with` mapping
+  beside its input artifact identity. Workspace settings record the durable
+  Azure Artifact Signing Public Trust subscriber identity expected from every
+  released Windows Portable Executable under the robust managed posture.
   Interpretation-contract references resolve through the maintained
   interpretation catalog; managed security-posture references resolve through
   the maintained posture catalog.
@@ -48,7 +52,11 @@ validation-criteria: >-
   mapping, and normalizes it into separate resolved recipe configuration and
   destination values for the Release Plan. Recipe-specific Package, artifact,
   and Signing configuration is validated by the maintained producing recipe
-  selected by its stable identifier and version.
+  selected by its stable identifier and version. A Signing `uses` selector
+  resolves one maintained Signing recipe. Azure recipe resolution injects the
+  workspace subscriber identity into resolved configuration and preserves the
+  recipe-fixed organization-variable contract. Robust managed validation rejects
+  any Windows executable artifact without a planned Signing transformation.
   Every configured native selector resolves exactly one artifact candidate under
   that producing recipe. A derived artifact names a non-empty unique set of
   Release Unit-qualified Package and artifact identities whose kinds its

@@ -22,8 +22,9 @@ proposed-design:
     The immutable Release Unit record attaches the exact inno-installer
     executable or executables and the winget-manifest-archive ZIP. Release
     Artifact inventories bind every manifest path and digest, installer URL and
-    digest, package identifier, version, and architecture. WinGet Distribution
-    consumes those released files without rebuilding or rewriting them.
+    digest, package identifier, version, architecture, and verified Azure
+    Artifact Signing Public Trust identity. WinGet Distribution consumes those
+    released files without rebuilding or rewriting them.
   repository-contract: >-
     Distribution targets `microsoft/winget-pkgs` through a configured
     organization-owned fork of that repository. The source repository and fork

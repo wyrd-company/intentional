@@ -39,7 +39,13 @@ versions:
       - id: plan-inno-installer
         uses: { id: verify-input-artifacts, version: 1 }
         with:
-          { inputs: configured, kind: executable-archive, architectures: exact }
+          {
+            inputs: configured,
+            kind: executable-archive,
+            architectures: exact,
+            payload: one-portable-executable,
+            signing: posture-required,
+          }
       - id: seal-inno-inputs
         uses: { id: resolve-inno-inputs, version: 1 }
         with: { digests: complete, defines: closed, compiler: exact }
@@ -67,13 +73,14 @@ versions:
     requirements:
       - { id: tracked-inno-script, class: operational }
       - { id: verified-executable-archives, class: operational }
+      - { id: signed-windows-executables-under-robust, class: security-control }
       - { id: credential-free-input-bundle, class: authority }
     control-subtractions: []
     guarantees:
       - id: input-bound-inno-output
         statement: Installer output binds the complete sealed compiler input.
       - id: no-package-signing-authority
-        statement: Package execution never receives Authenticode authority.
+        statement: Package execution never receives signing authority.
     conformance:
       cases:
         - id: unsigned-installer

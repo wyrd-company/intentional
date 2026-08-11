@@ -31,6 +31,8 @@ properties:
         type: string
         pattern: "^[A-Z][A-Z0-9_]*_$"
         default: INTENTIONAL_
+      azure-artifact-signing-subscriber-identity:
+        $ref: "#/$defs/azure-artifact-signing-subscriber-identity"
   fixed:
     $ref: "#/$defs/groups"
   linked:
@@ -81,6 +83,12 @@ $defs:
     type: string
     description: Maintained recipe identity and positive integer version.
     pattern: "^[a-z0-9][a-z0-9._-]*@[1-9][0-9]*$"
+  azure-artifact-signing-subscriber-identity:
+    type: string
+    description: >-
+      Durable Azure Artifact Signing Public Trust subscriber identity Extended
+      Key Usage value.
+    pattern: '^1[.]3[.]6[.]1[.]4[.]1[.]311[.]97[.](?!(?:1[.]3[.]1|1[.]4[.]1)(?:[.]|$))[0-9]+(?:[.][0-9]+){3,}$'
   profile-ref:
     $ref: "#/$defs/versioned-ref"
     unevaluatedProperties: false
@@ -266,12 +274,15 @@ $defs:
   signing:
     type: object
     additionalProperties: false
-    required: [input-artifact-id, recipe]
+    required: [ input-artifact-id, uses ]
     properties:
       input-artifact-id:
         $ref: "#/$defs/stable-id"
-      recipe:
-        $ref: "#/$defs/recipe-ref"
+      uses:
+        $ref: "#/$defs/recipe-selector"
+      with:
+        type: object
+        description: Flat values owned by the selected Signing recipe fragment.
   artifact-reference:
     type: object
     additionalProperties: false

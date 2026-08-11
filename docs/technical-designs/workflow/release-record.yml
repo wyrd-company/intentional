@@ -37,10 +37,12 @@ proposed-design:
   signing-jobs: >-
     Each Signing job downloads and verifies one unsigned Release Artifact and
     record before entering its fixed protected environment. It receives only the
-    signing credential declared by the sealed Signing recipe, performs the typed
-    transformation, verifies the output, and emits a distinct Release Artifact
-    whose provenance binds the unsigned artifact identity and record digest. It
-    has no repository or destination authority.
+    credential or OpenID Connect authority declared by the sealed Signing recipe,
+    performs the typed transformation, verifies the output, and emits a distinct
+    Release Artifact whose provenance binds the unsigned artifact identity and
+    record digest. Recipe-fixed organization variables supply non-secret authority
+    routing without becoming sealed values. It has no repository or destination
+    authority.
 
   derived-package-jobs: >-
     A derived Package build starts after every prerequisite Release Artifact is

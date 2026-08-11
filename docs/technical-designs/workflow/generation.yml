@@ -43,12 +43,16 @@ proposed-design:
   selected-recipes: >-
     Every configured Package, Signing selection, and Distribution Target resolves
     to exactly one maintained recipe of the required role. Recipe selection
-    parses each authored Distribution Target `uses` selector, validates its flat
-    `with` mapping against the selected catalog version's disjoint configuration
-    and destination fragments, and carries the normalized split into the Release
-    Plan. It binds discovery evidence, build operations, signing transformations,
+    parses each authored Signing or Distribution `uses` selector. It validates a
+    Signing `with` mapping against its authorable configuration projection,
+    injects catalog-declared workspace settings, and validates the complete
+    closed configuration. It validates a Distribution mapping against its
+    disjoint configuration and destination fragments, then carries the normalized
+    result into the Release Plan. It
+    binds discovery evidence, build operations, signing transformations,
     distributor, concrete destination, Release Artifact shapes and dependencies,
-    required tools, credentials, environment, attached components, Distribution
+    required tools, credentials, fixed organization variables, environment,
+    attached components, Distribution
     command, consumer retrieval, and live verification. An unresolved, ambiguous, or
     role-incompatible selection fails before rendering.
 

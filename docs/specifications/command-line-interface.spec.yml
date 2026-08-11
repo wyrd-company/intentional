@@ -285,6 +285,63 @@ commands:
       - >-
         Builds write to their normal project output locations. Intentional
         validates and collects exact declared outputs into isolated staging.
+  - name: sign
+    summary: Execute one Signing transformation sealed by a Release Plan.
+    mode: non-interactive
+    options:
+      - name: plan
+        flags:
+          - --plan
+        kind: option
+        description: Release Plan that seals the Signing recipe and input artifact.
+        required: true
+        repeatable: false
+        value:
+          type: file
+          arity:
+            min: 1
+            max: 1
+      - name: artifact
+        flags:
+          - --artifact
+        kind: option
+        description: >-
+          Qualified `<release-unit>/<package>/<artifact>` identity of the planned
+          signed output.
+        required: true
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+    output:
+      modes:
+        - name: signed-artifact
+          description: >-
+            Prints the canonical signed bundle and Release Artifact record
+            locations.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: Planned Signing transformation and output validation completed.
+        - code: 1
+          meaning: >-
+            Plan, identity, input artifact, recipe, authority, signing,
+            timestamp, or output validation failed.
+    examples:
+      - intentional sign --plan release-plan.json --artifact sample/app/windows-x64
+    notes:
+      - Relative plan paths resolve from --directory.
+      - >-
+        The command resolves exactly one Signing expectation, verifies its
+        unsigned artifact bundle and record, and receives only authority declared
+        by that recipe.
+      - >-
+        Generated managed workflows and user-managed workflows invoke the same
+        public command. Azure recipes require their protected GitHub environment,
+        fixed organization variables, and OpenID Connect permission.
+      - Signing failure never returns or promotes the unsigned input as output.
   - name: apply
     summary: Materialize a candidate Release tree.
     mode: non-interactive

@@ -13,7 +13,9 @@ validation-criteria: >-
   Node platform and architecture pair maps to exactly one executable-archive
   prerequisite. Generated release-asset URLs, archive names, executable names,
   archive layouts, and SHA-256 digests agree with the consumed Release Artifact
-  records. The npm tarball contains only the generated manifest, maintained
+  records. Under the robust posture, every Windows mapping consumes the final
+  Azure Artifact Signing executable archive and rejects its unsigned precursor.
+  The npm tarball contains only the generated manifest, maintained
   installer, maintained launcher, declared documentation, and license files.
   npm's pack report agrees with the exact tarball inventory, modes, size, name,
   version, and integrity. Provenance references every consumed artifact record.

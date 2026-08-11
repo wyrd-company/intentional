@@ -61,7 +61,8 @@ proposed-design:
     observe one destination. Dependencies
     order jobs so untrusted or
     invalid inputs are rejected before a job receives credentials. A Signing job
-    receives only its sealed unsigned artifact and signing authority. A
+    receives only its sealed unsigned artifact, declared non-secret variables,
+    and signing authority. A
     Distribution workflow receives only its own protected environment and
     credential contract.
     A derived build receives only the verified Release Artifacts named by its

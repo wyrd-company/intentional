@@ -21,7 +21,8 @@ validation-criteria: >-
   accepts only the intentional-winget-manifest-merged repository_dispatch event
   with schema-version 1 and pull-request-number. It treats the payload as an
   untrusted wake-up and independently validates merged upstream state, fork and
-  branch identity, exact manifest bytes, immutable Release Record, Release Unit,
+  branch identity, exact manifest bytes, immutable Release Record, verified
+  Azure Artifact Signing Public Trust installer identity, Release Unit,
   package, version, and inferred target. Linux observation polls catalog
   visibility. Windows verification performs exact non-interactive WinGet
   downloads for every architecture and compares SHA-256 values. Intentional does

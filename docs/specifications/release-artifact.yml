@@ -37,7 +37,15 @@ validation-criteria: >-
   GitHub Actions workflow and job, resolved Package or Signing recipe, and
   complete recipe parameters used to produce the content. A signing operation
   also names the unsigned input artifact ID and canonical Release Artifact
-  record digest. A derived build embeds the qualified Package ID, artifact ID,
+  record digest. Azure Artifact Signing operations record one signature
+  observation for every signed executable. Each observation carries target,
+  provider, Public Trust model, resolved endpoint, account and profile,
+  Release-derived correlation ID, durable subscriber identity, observed
+  publisher subject, rotating leaf certificate identity and validity, SHA-256
+  signature algorithm, and RFC 3161 timestamp. The durable subscriber identity,
+  rather than leaf thumbprint or
+  subject, agrees with the sealed recipe configuration. A derived build embeds
+  the qualified Package ID, artifact ID,
   and canonical record digest for every prerequisite named by its plan
   expectation. Provenance source is the authoritative target commit and
   its tree; that tree must be the materialized result sealed by the Release Plan.

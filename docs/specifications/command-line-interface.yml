@@ -11,7 +11,7 @@ relationships:
 description: >-
   Defines Intentional's supported command-line interface for Release Workspace
   reconciliation, Change Intent authoring, status, Release planning, recipe
-  builds and materialization, injected projection stamping, annotated tag authority,
+  builds, signing, and materialization, injected projection stamping, annotated tag authority,
   Release verification, conformance, managed workflow generation, and embedded
   agent guidance.
   Managed workflow adoption is resolved through initialization rather than a
@@ -39,7 +39,11 @@ validation-criteria: >-
   Release authority.
   `build` requires exactly one sealed-plan or local-development mode. Plan mode
   emits Release Artifact evidence only from authoritative sealed source; local
-  mode computes current candidate expectations and emits development results.
+  mode computes current candidate expectations, emits development results, and
+  reports planned Signing transformations as deferred. `sign` requires a sealed
+  plan and one qualified artifact identity. It executes the resolved Signing
+  recipe through its declared protected authority and emits a signed Release
+  Artifact record whose provenance binds the unsigned input.
   `workflow generate` requires adopted
   managed workflow configuration and reconciles the complete output set through
   its valid ownership manifest. `check` applies core conformance everywhere and

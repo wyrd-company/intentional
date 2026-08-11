@@ -2,23 +2,26 @@ $schema: https://refinery.systems/ontology/technical-design
 relationships:
   part-of: ecosystem-recipes
   realizes: intentional
+  uses: azure-artifact-signing
 objective: >-
   Produce a deterministic Windows installer from sealed executable archives and
-  a repository-owned Inno Setup script, with optional Authenticode signing that
-  covers both setup and uninstaller executables.
+  a repository-owned Inno Setup script, with Azure Artifact Signing Public Trust
+  signatures on setup and uninstaller executables under the robust posture.
 proposed-design:
   repository-contract: >-
     The repository owns one tracked Inno Setup script and any tracked files it
     includes. Release Workspace configuration selects the script, supported
     architectures, exact executable-archive prerequisites, and closed non-secret
-    compiler defines. Intentional does not generate or reinterpret installer
-    behavior expressed by the script.
+    compiler defines. Each architecture contributes exactly one signed portable
+    executable; tracked includes supply installer-only resources rather than an
+    application output tree. Intentional does not generate or reinterpret
+    installer behavior expressed by the script.
   planning: >-
     Planning resolves the pinned Inno Setup compiler, expands tracked includes,
     verifies every configured executable archive and architecture, and seals the
     digest and repository-relative path of every compiler input. The Release Plan
     records the exact script, input inventory, defines, compiler version, expected
-    installer identity, and whether Authenticode signing is selected.
+    installer identity, and the planned Signing transformation.
   unsigned-path: >-
     When signing is not selected, a credential-free Windows Package job expands
     the sealed executable archives, invokes the pinned compiler with deterministic
@@ -29,16 +32,17 @@ proposed-design:
     deterministic inno-installer-input archive containing the complete script
     tree, exact executable payloads and assets, and release defines. An isolated
     Signing job verifies that archive and performs the final Inno Setup compile
-    with its configured Authenticode SignTool. Inno signs the setup executable
-    and generated uninstaller during compilation. The Signing job verifies both
-    signatures and emits a distinct inno-installer Release Artifact whose
-    provenance names the sealed input artifact.
+    with the pinned Azure Artifact Signing SignTool integration. Inno signs the
+    setup executable and generated uninstaller during compilation. The Signing
+    job verifies their Public Trust chain, durable subscriber identity, and
+    required timestamps, then emits a distinct inno-installer Release Artifact
+    whose provenance names the sealed input artifact.
   determinism: >-
-    The maintained recipe pins Inno Setup and every helper tool, disables
-    timestamp-dependent compiler output, and uses canonical input paths and
-    ordering. Timestamped Authenticode signatures are allowed only when the
-    selected Signing recipe declares that field and verification binds signed
-    content, signer identity, and timestamp policy.
+    The maintained recipe pins Inno Setup and every helper tool and uses canonical
+    input paths and ordering. Unsigned compiler-input construction is
+    deterministic. Signed output includes the required Microsoft RFC 3161
+    timestamp and records the resulting bytes, durable subscriber identity, and
+    timestamp observation rather than promising repeatable signature bytes.
   artifact-contract: >-
     An inno-installer artifact is one Windows setup executable for the exact
     architecture set named by its Release Artifact record. Its inventory records
@@ -59,5 +63,6 @@ proposed-design:
     missing or extra output rejection, and input-digest drift.
   specification-topology: >-
     inno-setup-installer defines credential-free planning and packaging.
-    inno-setup-authenticode defines signing-integrated final compilation. Each
-    family uses colocated prose, config, and recipe assets.
+    inno-setup-azure-artifact-signing defines Public Trust signing-integrated
+    final compilation. Each family uses colocated prose, config, and recipe
+    assets.

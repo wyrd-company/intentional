@@ -18,7 +18,9 @@ description: >-
   validated event continues into its nested observation and verification
   operations. Signing and
   Distribution versions declare their exact GitHub token permission additions and
-  logical credentials independently.
+  logical credentials independently. Signing versions also declare every
+  recipe-fixed GitHub variable used for non-secret authority routing and every
+  resolved configuration property injected from workspace settings.
   `docs/specifications/recipe-catalog.schema.yml` is the machine-readable
   definition.
 format: json-schema
@@ -40,6 +42,9 @@ validation-criteria: >-
   producers, role-incompatible primitives, undeclared authority, incoherent
   security-control subtraction, direct Distribution versions without top-level
   observation and verification, review-gated versions with operations outside
-  their callback, and conformance cases that name absent behavior.
+  their callback, Signing variables outside the Intentional namespace, duplicate
+  logical or physical variable identities, authored values for injected Signing
+  properties, missing injection sources, and conformance cases that name absent
+  behavior.
   Catalog compilation expands every version canonically and compares retained
   versions with their committed compatibility snapshots.

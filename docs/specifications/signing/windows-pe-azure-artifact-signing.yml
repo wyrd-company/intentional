@@ -1,0 +1,21 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes: [ azure-artifact-signing, ecosystem-recipes, recipe-catalog ]
+  models: intentional
+description: >-
+  Defines Azure Artifact Signing of the one Windows Portable Executable file in
+  a sealed executable archive.
+format: json-schema
+validation-criteria: >-
+  The Signing job validates one unsigned Windows executable-archive Release
+  Artifact, including its exact one-file payload, platform, canonical layout,
+  executable identity, and record digest. It authenticates through GitHub OpenID
+  Connect, signs the extracted Portable Executable digest with the configured
+  Azure Artifact Signing Public Trust profile, requires the maintained Microsoft
+  RFC 3161 timestamp, and reconstructs the archive with the same canonical path
+  and permissions. It verifies the Public Trust chain, Authenticode code-signing
+  usage, Artifact Signing marker, expected durable subscriber identity, file
+  signature, trusted timestamp, and certificate validity at that timestamp. The
+  signed executable archive is a distinct Release Artifact whose provenance
+  references the unsigned input record and records the complete signature
+  observation. No other archive entry changes.

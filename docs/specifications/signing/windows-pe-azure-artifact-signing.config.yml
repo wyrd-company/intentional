@@ -1,0 +1,18 @@
+# ---
+# relationships: { realizes: windows-pe-azure-artifact-signing }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/signing/windows-pe-azure-artifact-signing.config.yml
+title: Windows PE Azure Artifact Signing configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [ expected-subscriber-identity ]
+    properties:
+      expected-subscriber-identity:
+        $ref: https://intentional.foo/schemas/config.yml#/$defs/azure-artifact-signing-subscriber-identity
+        readOnly: true
+        description: >-
+          Durable Public Trust subscriber identity injected from workspace
+          settings during recipe resolution.

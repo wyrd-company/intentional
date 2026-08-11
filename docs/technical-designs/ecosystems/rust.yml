@@ -217,7 +217,9 @@ proposed-design:
     artifact names an unsigned crate, executable archive, or native-library
     archive and one compatible Signing recipe. The Rust Package recipe completes
     and seals the unsigned artifact first. Signing and Distribution jobs preserve
-    the shared credential and provenance isolation rules.
+    the shared credential and provenance isolation rules. Under the robust
+    posture, every Windows executable archive resolves the shared Azure Artifact
+    Signing recipe and downstream packages consume only its signed output.
 
   release-record-assets: >-
     Release Record assembly attaches executable, native-library, and crate

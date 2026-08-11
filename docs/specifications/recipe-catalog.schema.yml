@@ -284,6 +284,35 @@ $defs:
     uniqueItems: true
     items:
       $ref: "#/$defs/credential"
+  variable:
+    type: object
+    additionalProperties: false
+    required: [ id, github-variable ]
+    properties:
+      id:
+        $ref: "#/$defs/stable-id"
+      github-variable:
+        type: string
+        pattern: "^INTENTIONAL_[A-Z][A-Z0-9_]*$"
+  variables:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/variable"
+  configuration-injection:
+    type: object
+    additionalProperties: false
+    required: [ property, workspace-setting ]
+    properties:
+      property:
+        $ref: "#/$defs/stable-id"
+      workspace-setting:
+        $ref: "#/$defs/stable-id"
+  configuration-injections:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/configuration-injection"
   github-permissions:
     type: object
     additionalProperties: false
@@ -413,6 +442,8 @@ $defs:
           - signing
           - output-validation
           - credentials
+          - variables
+          - configuration-injections
           - requirements
           - control-subtractions
           - guarantees
@@ -438,6 +469,10 @@ $defs:
             $ref: "#/$defs/operations"
           credentials:
             $ref: "#/$defs/credentials"
+          variables:
+            $ref: "#/$defs/variables"
+          configuration-injections:
+            $ref: "#/$defs/configuration-injections"
           github-permissions:
             $ref: "#/$defs/github-permissions"
           requirements: true

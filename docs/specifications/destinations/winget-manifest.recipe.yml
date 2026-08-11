@@ -30,7 +30,12 @@ versions:
       - id: plan-winget-manifests
         uses: { id: verify-input-artifacts, version: 1 }
         with:
-          { kind: inno-installer, identities: exact, architectures: complete }
+          {
+            kind: inno-installer,
+            identities: exact,
+            architectures: complete,
+            signing: azure-public-trust,
+          }
     build:
       - id: render-winget-manifests
         uses: { id: render-structured-yaml, version: 1 }
@@ -53,6 +58,7 @@ versions:
         with: { schema: https://intentional.foo/schemas/release-artifact.yml }
     requirements:
       - { id: final-inno-installers, class: operational }
+      - { id: public-trust-signed-installers, class: security-control }
       - { id: tracked-winget-templates, class: operational }
       - { id: credential-free-manifest-rendering, class: authority }
     control-subtractions: []

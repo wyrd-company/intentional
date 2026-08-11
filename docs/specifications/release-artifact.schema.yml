@@ -175,6 +175,98 @@ $defs:
         minItems: 1
         uniqueItems: true
         items: { $ref: "#/$defs/input-artifact-reference" }
+      signatures:
+        type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/signature-observation"
+    allOf:
+      - if:
+          required: [ input-artifact ]
+        then:
+          required: [ signatures ]
+      - if:
+          required: [ signatures ]
+        then:
+          required: [ input-artifact ]
+  signature-observation:
+    type: object
+    additionalProperties: false
+    required:
+      - target-id
+      - provider
+      - trust-model
+      - endpoint
+      - account
+      - profile
+      - correlation-id
+      - subscriber-identity
+      - publisher-subject
+      - certificate-thumbprint
+      - certificate-serial-number
+      - certificate-validity
+      - issuer
+      - signature-digest
+      - timestamp
+    properties:
+      target-id:
+        $ref: "#/$defs/stable-id"
+      provider:
+        const: azure-artifact-signing
+      trust-model:
+        const: public
+      endpoint:
+        type: string
+        format: uri
+      account:
+        type: string
+        minLength: 1
+      profile:
+        type: string
+        minLength: 1
+      correlation-id:
+        type: string
+        minLength: 1
+      subscriber-identity:
+        $ref: "https://intentional.foo/schemas/config.yml#/$defs/azure-artifact-signing-subscriber-identity"
+      publisher-subject:
+        type: string
+        minLength: 1
+      certificate-thumbprint:
+        $ref: "#/$defs/digest"
+      certificate-serial-number:
+        type: string
+        pattern: "^[0-9A-F]+$"
+      certificate-validity:
+        type: object
+        additionalProperties: false
+        required: [ not-before, not-after ]
+        properties:
+          not-before:
+            type: string
+            format: date-time
+          not-after:
+            type: string
+            format: date-time
+      issuer:
+        type: string
+        minLength: 1
+      signature-digest:
+        const: sha256
+      timestamp:
+        type: object
+        additionalProperties: false
+        required: [ at, authority, digest ]
+        properties:
+          at:
+            type: string
+            format: date-time
+          authority:
+            type: string
+            minLength: 1
+          digest:
+            const: sha256
   artifact-record-reference:
     type: object
     additionalProperties: false

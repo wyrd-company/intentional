@@ -1,0 +1,18 @@
+# ---
+# relationships: { realizes: inno-setup-azure-artifact-signing }
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/signing/inno-setup-azure-artifact-signing.config.yml
+title: Inno Setup Azure Artifact Signing configuration catalog
+$defs:
+  version-1:
+    type: object
+    additionalProperties: false
+    required: [ expected-subscriber-identity ]
+    properties:
+      expected-subscriber-identity:
+        $ref: https://intentional.foo/schemas/config.yml#/$defs/azure-artifact-signing-subscriber-identity
+        readOnly: true
+        description: >-
+          Durable Public Trust subscriber identity injected from workspace
+          settings during recipe resolution.

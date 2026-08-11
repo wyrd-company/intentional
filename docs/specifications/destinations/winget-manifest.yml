@@ -10,7 +10,9 @@ validation-criteria: >-
   Configuration names the exact tracked version, installer, default-locale, and
   optional locale template files. The recipe parses YAML and changes only
   PackageVersion, InstallerUrl, InstallerSha256, and Architecture values derived
-  from the Release Plan and consumed inno-installer records. Each installer
+  from the Release Plan and consumed inno-installer records. Every installer
+  record carries verified Azure Artifact Signing Public Trust setup and
+  uninstaller signatures for the workspace subscriber identity. Each installer
   artifact produces one installer node for every architecture in its record;
   nodes for one multi-architecture file repeat its URL and SHA-256 digest. It emits one
   deterministic ZIP whose entries use exact winget-pkgs repository-relative

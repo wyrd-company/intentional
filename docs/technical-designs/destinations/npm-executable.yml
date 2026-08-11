@@ -19,11 +19,14 @@ proposed-design:
     architecture pairs to sealed executable-archive variants. Derivation uses
     maintained templates and exact Release Plan values. It executes no project
     lifecycle code and receives no repository, registry, or release credential.
+    Every Windows mapping names the final Azure Artifact Signing output rather
+    than its unsigned precursor under the robust posture.
   consumer-installation: >-
     The package postinstall script selects the current platform mapping,
     downloads its archive over HTTPS with bounded redirects and timeout,
     verifies the sealed SHA-256 digest, rejects unsafe or unexpected archive
-    entries, and installs the exact executable with canonical permissions. The
+    entries, and installs the exact signed Windows executable or corresponding
+    non-Windows executable with canonical permissions. The
     command launcher forwards arguments, inherited standard streams, signals,
     and exit status to that installed executable. When lifecycle scripts are
     disabled or installation is incomplete, the launcher fails with an

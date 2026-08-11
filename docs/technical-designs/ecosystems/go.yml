@@ -11,6 +11,12 @@ proposed-design:
     go.sum, then builds the plan-selected command and platform matrix with
     network disabled. The recipe emits the shared executable-archive artifact
     kind as deterministic tar.gz or ZIP files.
+  signing-composition: >-
+    Go executable archives use the shared Signing recipe boundary. The Go
+    Package recipe completes and seals each unsigned archive first. Under the
+    robust posture, every Windows executable archive resolves the shared Azure
+    Artifact Signing recipe, and Release Record assets and downstream packages
+    consume only its signed output.
   module-release: >-
     Go module distribution is established by a protected projection tag paired
     with the Release Unit's primary tag at the same commit and plan digest. The

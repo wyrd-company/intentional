@@ -36,7 +36,11 @@ versions:
       - id: verify-winget-release-record
         uses: { id: verify-release-record, version: 1 }
         with:
-          { artifacts: [ winget-manifest-archive, inno-installer ], immutable: true }
+          {
+            artifacts: [ winget-manifest-archive, inno-installer ],
+            immutable: true,
+            installer-signing: azure-public-trust,
+          }
       - id: verify-organization-fork
         uses: { id: github-fork-preflight, version: 1 }
         with:
@@ -117,6 +121,7 @@ versions:
       - { id: configured-cla-contributor, class: operational }
       - { id: user-owned-merge-callback, class: operational }
       - { id: consumer-download-readback, class: security-control }
+      - { id: public-trust-signed-installer, class: security-control }
     control-subtractions: []
     guarantees:
       - id: exact-winget-submission
