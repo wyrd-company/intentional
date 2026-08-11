@@ -303,7 +303,8 @@ $defs:
   callback-contract:
     type: object
     additionalProperties: false
-    required: [event, schema-version, payload-properties, validation]
+    required:
+      [event, schema-version, payload-properties, validation, observe, verify]
     properties:
       event:
         $ref: "#/$defs/stable-id"
@@ -317,6 +318,10 @@ $defs:
         items:
           $ref: "#/$defs/stable-id"
       validation:
+        $ref: "#/$defs/operations"
+      observe:
+        $ref: "#/$defs/operations"
+      verify:
         $ref: "#/$defs/operations"
   common-version:
     type: object
@@ -453,8 +458,6 @@ $defs:
           - credentials
           - preflight
           - distribute
-          - observe
-          - verify
           - requirements
           - control-subtractions
           - guarantees
@@ -492,3 +495,12 @@ $defs:
           control-subtractions: true
           guarantees: true
           conformance: true
+        oneOf:
+          - required: [observe, verify]
+            not:
+              required: [callback]
+          - required: [callback]
+            not:
+              anyOf:
+                - required: [observe]
+                - required: [verify]

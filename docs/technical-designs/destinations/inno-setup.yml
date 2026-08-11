@@ -44,7 +44,10 @@ proposed-design:
     architecture set named by its Release Artifact record. Its inventory records
     the setup digest, installed executable identities, generated uninstaller
     identity, compiler version, script and input digests, and signing state. One
-    installer can cover one or several supported architectures.
+    installer can cover one or several supported architectures. A downstream
+    format that requires one architecture per entry expands that one artifact
+    identity into one entry per declared architecture without duplicating the
+    released file.
   release-record: >-
     The final inno-installer executable is attached to the immutable Release Unit
     record. The inno-installer-input archive is an intermediate workflow artifact

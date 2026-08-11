@@ -78,34 +78,34 @@ versions:
               compare:
                 [ upstream, merged, fork, branch, manifest-bytes, release-record ],
             }
-    observe:
-      - id: observe-winget-catalog
-        uses: { id: winget-catalog-observe, version: 1 }
-        with:
-          {
-            runner: linux,
-            identity: [ package, version, architectures ],
-            deadline: configured,
-          }
-    verify:
-      - id: verify-winget-downloads
-        uses: { id: winget-download-verify, version: 1 }
-        with:
-          {
-            runner: windows,
-            arguments:
-              [
-                --id,
-                exact-package,
-                --version,
-                exact-version,
-                --architecture,
-                each,
-                --exact,
-                --disable-interactivity,
-              ],
-            compare: sha256,
-          }
+      observe:
+        - id: observe-winget-catalog
+          uses: { id: winget-catalog-observe, version: 1 }
+          with:
+            {
+              runner: linux,
+              identity: [ package, version, architectures ],
+              deadline: configured,
+            }
+      verify:
+        - id: verify-winget-downloads
+          uses: { id: winget-download-verify, version: 1 }
+          with:
+            {
+              runner: windows,
+              arguments:
+                [
+                  --id,
+                  exact-package,
+                  --version,
+                  exact-version,
+                  --architecture,
+                  each,
+                  --exact,
+                  --disable-interactivity,
+                ],
+              compare: sha256,
+            }
     requirements:
       - id: organization-fork
         class: operational

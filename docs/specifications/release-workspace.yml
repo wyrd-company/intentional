@@ -19,6 +19,10 @@ description: >-
   Package and Distribution Target keys are local to their containing mappings.
   A Distribution Target has the qualified protocol identity
   `distribution/<release-unit-id>/<package-id>/<target-id>`.
+  Its authored form selects one maintained recipe as `<recipe-id>@<version>`
+  through `uses` and places recipe-specific and destination-specific values in
+  one `with` mapping. Initialization recommends and writes that selection after
+  user acceptance; users do not author recipe definitions.
   Interpretation-contract references resolve through the maintained
   interpretation catalog; managed security-posture references resolve through
   the maintained posture catalog.
@@ -38,9 +42,13 @@ validation-criteria: >-
   adopted, validation also proves that every Package retains at least one
   managed artifact and that removing `workspace/` from the qualified global tag
   yields a configured workspace-tag key whose template is exactly `{version}`.
-  Recipe-specific
-  configuration is validated by the
-  maintained producing recipe selected by its stable identifier and version.
+  A Distribution Target's `uses` selector resolves one maintained Distribution
+  recipe. The selected catalog version assigns each `with` property to its
+  disjoint configuration or destination schema, validates the combined closed
+  mapping, and normalizes it into separate resolved recipe configuration and
+  destination values for the Release Plan. Recipe-specific Package, artifact,
+  and Signing configuration is validated by the maintained producing recipe
+  selected by its stable identifier and version.
   Every configured native selector resolves exactly one artifact candidate under
   that producing recipe. A derived artifact names a non-empty unique set of
   Release Unit-qualified Package and artifact identities whose kinds its

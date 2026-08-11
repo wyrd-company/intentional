@@ -14,7 +14,10 @@ proposed-design:
     SHA-256 values derived from the Release Plan and final inno-installer
     artifacts. It validates the complete manifest set with maintained WinGet
     tooling and emits one deterministic ZIP using exact winget-pkgs repository
-    paths.
+    paths. Each released installer produces one manifest installer node per
+    architecture declared by its Release Artifact. Nodes expanded from one
+    multi-architecture installer repeat its exact Release Record URL and SHA-256
+    digest while naming distinct architectures.
   release-record: >-
     The immutable Release Unit record attaches the exact inno-installer
     executable or executables and the winget-manifest-archive ZIP. Release

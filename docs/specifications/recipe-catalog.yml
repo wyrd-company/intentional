@@ -12,8 +12,11 @@ description: >-
   planning, build, collection, artifact validation, and any accepted prerequisite
   artifact kinds used for derivation. They can also select one declared primitive
   as their native tag contract. Signing catalogs define
-  input validation, transformation, and output validation. Distribution catalogs
-  define preflight, submission, observation, and verification. Signing and
+  input validation, transformation, and output validation. Direct Distribution
+  catalogs define preflight, submission, observation, and verification. A
+  review-gated Distribution catalog instead defines a callback contract whose
+  validated event continues into its nested observation and verification
+  operations. Signing and
   Distribution versions declare their exact GitHub token permission additions and
   logical credentials independently.
   `docs/specifications/recipe-catalog.schema.yml` is the machine-readable
@@ -28,11 +31,15 @@ validation-criteria: >-
   and conformance IDs are unique within their owning collections. Every artifact
   kind declares native or Intentional asset-name authority. Primitive and
   runner references resolve to compiled maintained entries with the exact named
-  version. Configuration references resolve to fragments in the same recipe
-  family's config asset and use the same recipe-version key. Every operation
+  version. Configuration and destination references resolve to fragments in the
+  same recipe family's config asset, use the same recipe-version key, and have
+  disjoint top-level property names so Release Workspace `with` values normalize
+  without precedence rules. Every operation
   binds declared inputs and outputs through its primitive's typed contract.
   Semantic validation rejects missing references, reference cycles, duplicate
   producers, role-incompatible primitives, undeclared authority, incoherent
-  security-control subtraction, and conformance cases that name absent behavior.
+  security-control subtraction, direct Distribution versions without top-level
+  observation and verification, review-gated versions with operations outside
+  their callback, and conformance cases that name absent behavior.
   Catalog compilation expands every version canonically and compares retained
   versions with their committed compatibility snapshots.

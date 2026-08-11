@@ -38,6 +38,7 @@ versions:
           {
             fields: [ PackageVersion, InstallerUrl, InstallerSha256, Architecture ],
             source: sealed-release-record,
+            installer-node-mapping: one-per-declared-architecture,
           }
     collection:
       - id: collect-winget-archive
@@ -67,7 +68,13 @@ versions:
           asserts: [ structured-rendering, exact-paths, installer-digests ]
         - id: multi-architecture
           fixture: fixtures/winget/multi-architecture
-          asserts: [ complete-architectures, canonical-zip, exact-provenance ]
+          asserts:
+            [
+              complete-architectures,
+              repeated-url-and-digest,
+              canonical-zip,
+              exact-provenance,
+            ]
         - id: template-conflict
           fixture: fixtures/winget/template-conflict
           asserts: [ owned-field-conflict, no-output ]

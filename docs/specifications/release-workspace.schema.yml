@@ -77,6 +77,10 @@ $defs:
       version:
         type: integer
         minimum: 1
+  recipe-selector:
+    type: string
+    description: Maintained recipe identity and positive integer version.
+    pattern: "^[a-z0-9][a-z0-9._-]*@[1-9][0-9]*$"
   profile-ref:
     $ref: "#/$defs/versioned-ref"
     unevaluatedProperties: false
@@ -279,12 +283,15 @@ $defs:
   distribution-target:
     type: object
     additionalProperties: false
-    required: [recipe, destination]
+    required: [uses]
     properties:
-      recipe:
-        $ref: "#/$defs/recipe-ref"
-      destination:
+      uses:
+        $ref: "#/$defs/recipe-selector"
+      with:
         type: object
+        description: >-
+          Flat values owned by the selected recipe's configuration and
+          destination fragments.
   projection:
     type: object
     additionalProperties: false

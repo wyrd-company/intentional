@@ -72,8 +72,11 @@ proposed-design:
     Packages, dependencies, tag streams, and discovery receipts. Package
     discovery proves native packaging capability. Distribution Target selection
     remains explicit unless a maintained recipe defines one unambiguous
-    repository-local destination identity. Reconciliation validates the complete
-    resulting Release Workspace rather than applying candidates one at a time.
+    repository-local destination identity. Accepted selection writes the target's
+    stable instance key, compact `<recipe-id>@<version>` selector, and only the
+    combined `with` values that native evidence cannot supply at runtime.
+    Reconciliation validates the complete resulting Release Workspace rather than
+    applying candidates one at a time.
 
   workflow-adoption: >-
     Core Release Workspace initialization does not depend on workflow adoption.

@@ -13,9 +13,10 @@ proposed-design:
     Release Artifacts. A Signing recipe transforms one sealed artifact into a
     separately identified signed artifact. A Distribution recipe submits one
     compatible immutable Release Record content set to one Distribution Target and verifies the
-    consumer-visible result. Release Workspace configuration selects recipe
-    identities and versions; the Release Plan seals their resolved configuration
-    and release-specific outputs.
+    consumer-visible result. Release Workspace configuration records recipe
+    identities and versions; initialization normally recommends and writes those
+    selections after user acceptance. The Release Plan seals their resolved
+    configuration and release-specific outputs.
 
   recipe-roles: >-
     Every recipe declares exactly one role. A Package selects one Package recipe
@@ -74,17 +75,24 @@ proposed-design:
     Recipe assets share an identity and version envelope and use role-specific
     contracts. Package recipes define discovery, planning, build, collection,
     and artifact validation. Signing recipes define input validation, signing,
-    and signed-output validation. Distribution recipes define preflight,
-    submission, observation, and verification. The compiled model therefore
-    represents only operations valid for the selected recipe role.
+    and signed-output validation. Direct Distribution recipes define preflight,
+    submission, observation, and verification. Review-gated Distribution recipes
+    define preflight and submission followed by a callback containing validation,
+    observation, and verification. The compiled model therefore represents only
+    operations valid for the selected recipe role.
 
   configuration-boundary: >-
     Release Workspace schema owns Release Unit, Package, artifact, Distribution
     Target, recipe-reference, projection, and exclusion envelopes. A recipe
     config asset owns only recipe-specific configuration and recipe-specific
-    artifact configuration. Intentional reads each producing recipe identifier
-    and version, then validates its `configuration` values against the
-    corresponding version fragments. Every fragment is closed to unknown fields. Omitted
+    artifact configuration. A user-authored Distribution Target uses
+    `<recipe-id>@<version>` and one flat `with` mapping. Catalog compilation
+    requires its configuration and destination fragments to have disjoint
+    top-level property names; Intentional validates the combined closed mapping
+    and normalizes each value into its owning fragment. Intentional reads other
+    producing recipe identifiers and versions, then validates their
+    `configuration` values against the corresponding version fragments. Every
+    fragment is closed to unknown fields. Omitted
     configuration is accepted only when the selected fragment accepts an empty
     object; the Release Plan records the normalized resolved object.
     Package identifiers are local to their containing Release Unit. Canonical
