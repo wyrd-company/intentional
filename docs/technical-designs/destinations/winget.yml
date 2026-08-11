@@ -55,7 +55,7 @@ proposed-design:
   callback-contract: >-
     Generation creates one source-repository validation workflow for the
     `intentional-winget-manifest-merged` repository_dispatch event. Its client
-    payload contains only schema-version 1 and pull-request-number. The callback
+    payload contains only pull-request-number. The callback
     is an untrusted wake-up. Intentional supplies no monitor or sender; the user
     decides how the upstream repository is observed and how the event is sent.
   callback-validation: >-

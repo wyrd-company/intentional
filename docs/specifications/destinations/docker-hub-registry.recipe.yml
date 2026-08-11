@@ -1,86 +1,34 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: docker-hub-registry, part-of: oci }
 role: distribution
-versions:
-  1:
-    configuration: ./docker-hub-registry.config.yml#/$defs/version-1
-    destination: ./docker-hub-registry.config.yml#/$defs/destination-version-1
-    primitives:
-      [
-        { id: oci-registry-preflight, version: 1 },
-        { id: oci-push-layout, version: 1 },
-        { id: oci-pull-observe, version: 1 },
-        { id: oci-verify, version: 1 },
-      ]
-    tools: []
-    accepted-artifact-kinds:
-      [
-        oci-image-layout,
-        devcontainer-feature-layout,
-        devcontainer-template-layout,
-      ]
-    credentials:
-      - { id: username, process-variable: INTENTIONAL_DOCKERHUB_USERNAME }
-      - { id: token, process-variable: INTENTIONAL_DOCKERHUB_TOKEN }
-    github-permissions:
-      { distribute: { contents: read }, observe: { contents: read } }
-    preflight:
-      [
-        {
-          id: probe-dockerhub,
-          uses: { id: oci-registry-preflight, version: 1 },
-          with: { agreement: [descriptor-digest] },
-        },
-      ]
-    distribute:
-      [
-        {
-          id: push-dockerhub-layout,
-          uses: { id: oci-push-layout, version: 1 },
-          with: { immutable-first: true, aliases: after-agreement },
-        },
-      ]
-    observe:
-      - {
-          id: pull-dockerhub-subject,
-          uses: { id: oci-pull-observe, version: 1 },
-          with: { retrieval: public-client, deadline-seconds: 300 },
-        }
-    verify:
-      - {
-          id: verify-dockerhub-subject,
-          uses: { id: oci-verify, version: 1 },
-          with: { compare: [immutable-digest, aliases, platforms] },
-        }
-    requirements:
-      [
-        { id: dockerhub-token, class: authority },
-        { id: public-pull, class: security-control },
-      ]
-    control-subtractions: []
-    guarantees:
-      - {
-          id: exact-dockerhub-subject,
-          statement: Public descriptor digests agree with the sealed layout.,
-        }
-      - {
-          id: isolated-dockerhub-authority,
-          statement: Only the Docker Hub publisher receives its credentials.,
-        }
-    conformance:
-      cases:
-        - {
-            id: dockerhub-publish,
-            fixture: fixtures/dockerhub/publish,
-            asserts: [isolated-secret, immutable-first, aliases],
-          }
-        - {
-            id: dockerhub-conflict,
-            fixture: fixtures/dockerhub/conflict,
-            asserts: [digest-conflict, no-overwrite],
-          }
-      live:
-        {
-          operation: dockerhub-live-conformance,
-          proves: [isolated-secret, public-pull, idempotent-retry],
-        }
+configuration: ./docker-hub-registry.config.yml#/$defs/configuration
+destination: ./docker-hub-registry.config.yml#/$defs/destination
+primitives: [ oci-registry-preflight, oci-push-layout, oci-pull-observe, oci-verify ]
+tools: []
+accepted-artifact-kinds: [ oci-image-layout, devcontainer-feature-layout, devcontainer-template-layout ]
+credentials:
+  - { id: username, process-variable: INTENTIONAL_DOCKERHUB_USERNAME }
+  - { id: token, process-variable: INTENTIONAL_DOCKERHUB_TOKEN }
+github-permissions:
+  distribute:
+    contents: read
+  observe:
+    contents: read
+preflight: [ { id: probe-dockerhub, uses: oci-registry-preflight, with: { agreement: [ descriptor-digest ] } } ]
+distribute: [ { id: push-dockerhub-layout, uses: oci-push-layout, with: { immutable-first: true, aliases: after-agreement } } ]
+observe:
+  - { id: pull-dockerhub-subject, uses: oci-pull-observe, with: { retrieval: public-client, deadline-seconds: 300 } }
+verify:
+  - { id: verify-dockerhub-subject, uses: oci-verify, with: { compare: [ immutable-digest, aliases, platforms ] } }
+requirements: [ { id: dockerhub-token, class: authority }, { id: public-pull, class: security-control } ]
+control-subtractions: []
+guarantees:
+  - { id: exact-dockerhub-subject, statement: Public descriptor digests agree with the sealed layout. }
+  - { id: isolated-dockerhub-authority, statement: Only the Docker Hub publisher receives its credentials. }
+conformance:
+  cases:
+    - { id: dockerhub-publish, fixture: fixtures/dockerhub/publish, asserts: [ isolated-secret, immutable-first, aliases ] }
+    - { id: dockerhub-conflict, fixture: fixtures/dockerhub/conflict, asserts: [ digest-conflict, no-overwrite ] }
+  live:
+    operation: dockerhub-live-conformance
+    proves: [ isolated-secret, public-pull, idempotent-retry ]

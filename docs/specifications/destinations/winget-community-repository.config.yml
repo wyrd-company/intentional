@@ -2,10 +2,10 @@
 # relationships: { realizes: winget-community-repository }
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/destinations/winget-community-repository.config.yml
+$id: "https://intentional.foo/schemas/0.2/destinations/winget-community-repository/config"
 title: WinGet community repository recipe configuration catalog
 $defs:
-  version-1:
+  configuration:
     type: object
     additionalProperties: false
     required: [ github-app-id, contributor ]
@@ -22,7 +22,7 @@ $defs:
         properties:
           name: { type: string, minLength: 1 }
           email: { type: string, format: email }
-  destination-version-1:
+  destination:
     type: object
     additionalProperties: false
     required: [ fork-repository ]

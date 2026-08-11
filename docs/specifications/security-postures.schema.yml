@@ -3,16 +3,16 @@
 #   realizes: security-postures
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/security-postures.yml
+$id: https://intentional.foo/schemas/0.2/security-postures
 title: Intentional security posture catalog
 type: object
 additionalProperties: false
-required: [$schema, relationships, controls, guarantees, profiles]
+required: [ $schema, relationships, controls, guarantees, profiles ]
 properties:
   $schema:
-    const: https://intentional.foo/schemas/security-postures.yml
+    const: https://intentional.foo/schemas/0.2/security-postures
   relationships:
-    $ref: "https://intentional.foo/schemas/recipe-catalog.yml#/$defs/relationships"
+    $ref: "https://intentional.foo/schemas/0.2/recipe-catalog#/$defs/relationships"
   controls:
     type: array
     minItems: 1
@@ -24,26 +24,21 @@ properties:
     minItems: 1
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/recipe-catalog.yml#/$defs/guarantee"
+      $ref: "https://intentional.foo/schemas/0.2/recipe-catalog#/$defs/guarantee"
   profiles:
     type: object
     minProperties: 1
     propertyNames:
-      $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+      $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
     additionalProperties:
-      type: object
-      minProperties: 1
-      propertyNames:
-        pattern: "^[1-9][0-9]*$"
-      additionalProperties:
-        $ref: "#/$defs/profile"
+      $ref: "#/$defs/profile"
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   control:
     type: object
     additionalProperties: false
-    required: [id, statement, removes-guarantee-ids]
+    required: [ id, statement, removes-guarantee-ids ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
@@ -58,20 +53,20 @@ $defs:
   setting:
     type: object
     additionalProperties: false
-    required: [id, scope, configuration, verification]
+    required: [ id, scope, configuration, verification ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
       scope:
-        enum: [repository, environment, organization]
+        enum: [ repository, environment, organization ]
       configuration:
         type: object
       verification:
-        enum: [observable, presence-only, owner-attested]
+        enum: [ observable, presence-only, owner-attested ]
   profile:
     type: object
     additionalProperties: false
-    required: [removed-controls, guarantees, required-settings]
+    required: [ removed-controls, guarantees, required-settings ]
     properties:
       removed-controls:
         type: array

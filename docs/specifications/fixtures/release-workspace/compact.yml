@@ -1,0 +1,51 @@
+# ---
+# relationships:
+#   tests: release-workspace
+# ---
+$schema: https://intentional.foo/schemas/0.2/config
+workflow:
+  adoption: adopted
+  provider: github
+  global-tag: release
+  security-posture: robust
+settings:
+  artifact-namespace-prefix: sample
+workspace-tags:
+  release:
+    template: "{version}"
+exclusions:
+  artifacts:
+    - application/command/diagnostic
+release-units:
+  application:
+    path: .
+    packages:
+      command:
+        path: .
+        uses: rust-package
+        with:
+          toolchain: 1.85.0
+        artifacts:
+          linux:
+            with:
+              archive-format: tar-gz
+              targets: [ x86-64-linux ]
+          windows-unsigned:
+            with:
+              archive-format: zip
+              targets: [ x86-64-windows ]
+          windows:
+            prerequisite-artifacts:
+              - application/command/windows-unsigned
+            signing:
+              input-artifact: windows-unsigned
+              uses: windows-pe-azure-artifact-signing
+        distribution-targets:
+          registry:
+            uses: cargo-registry
+            with:
+              registry: sample
+    tags:
+      primary:
+        role: primary
+        template: "application/{version}"

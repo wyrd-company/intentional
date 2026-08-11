@@ -56,7 +56,7 @@ aggregates:
       - name: Managed Workflow Adopted
         description: The workspace chose Intentional's generated managed protocol.
       - name: Managed Security Posture Selected
-        description: The workspace selected the named and versioned managed security contract.
+        description: The workspace selected the named managed security posture.
       - name: Managed Workflow Declined
         description: The workspace explicitly chose not to generate a managed workflow.
       - name: Release Workspace Reconciled

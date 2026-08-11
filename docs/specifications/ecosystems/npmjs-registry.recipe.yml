@@ -1,97 +1,97 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships:
   realizes: npmjs-registry
   part-of: node
 role: distribution
-versions:
-  1:
-    configuration: ./npmjs-registry.config.yml#/$defs/version-1
-    destination: ./npmjs-registry.config.yml#/$defs/destination-version-1
-    primitives:
-      - { id: npm-registry-preflight, version: 1 }
-      - { id: npm-publish-tarball, version: 1 }
-      - { id: npm-observe-package, version: 1 }
-      - { id: npm-verify-package, version: 1 }
-    tools:
-      - id: node
-        resolution: { default: 24.18.0 }
-        install: { id: install-node, version: 1 }
-      - id: npm
-        resolution: { default: 11.16.0 }
-        install: { id: install-node-package-manager, version: 1 }
-    accepted-artifact-kinds: [npm-package-tarball]
-    credentials:
-      - id: bootstrap-token
-        process-variable: INTENTIONAL_NPM_BOOTSTRAP_TOKEN
-        availability: conditional
-        condition: package-identity-absent
-    github-permissions:
-      distribute: { contents: read, id-token: write }
-      observe: { contents: read }
-    preflight:
-      - id: probe-npmjs-version
-        uses: { id: npm-registry-preflight, version: 1 }
-        with:
-          registry: https://registry.npmjs.org
-          agreement: [dist-integrity, downloaded-byte-digest]
-          on-absence: distribute
-          on-agreement: accept
-          on-conflict: reject
-    distribute:
-      - id: publish-npmjs-tarball
-        uses: { id: npm-publish-tarball, version: 1 }
-        with:
-          artifact: exact-sealed-tarball
-          authentication: trusted-publishing-or-bootstrap
-          provenance: required
-          lifecycle-scripts: denied
-      - id: update-dist-tags
-        uses: { id: npm-publish-tarball, version: 1 }
-        with:
-          aliases: release-plan
-          after: immutable-version-agreement
-    observe:
-      - id: observe-npmjs-package
-        uses: { id: npm-observe-package, version: 1 }
-        with:
-          retrieval: public-client
-          deadline-seconds: 300
-          interval-seconds: 10
-    verify:
-      - id: verify-npmjs-package
-        uses: { id: npm-verify-package, version: 1 }
-        with:
-          compare: [name, version, dist-integrity, downloaded-bytes, dist-tags]
-    requirements:
-      - { id: npmjs-package-policy, class: operational }
-      - { id: npmjs-trusted-publisher, class: authority }
-      - { id: public-package-readback, class: security-control }
-    control-subtractions: []
-    guarantees:
-      - id: exact-npmjs-package
-        statement: npmjs immutable integrity and downloaded bytes agree with the sealed tarball.
-      - id: credential-free-steady-state
-        statement: Existing npmjs packages publish through repository-bound OpenID Connect without a standing token.
-      - id: consumer-visible-npm-package
-        statement: Evidence represents a clean public npm client and all planned dist-tags.
-    conformance:
-      cases:
-        - id: bootstrap-distribution
-          fixture: fixtures/npmjs/bootstrap
-          asserts: [conditional-token, exact-tarball, provenance]
-        - id: trusted-distribution
-          fixture: fixtures/npmjs/trusted
-          asserts: [oidc-only, exact-tarball, public-readback]
-        - id: agreeing-version
-          fixture: fixtures/npmjs/agreement
-          asserts: [idempotent-acceptance, no-republish]
-        - id: conflicting-version
-          fixture: fixtures/npmjs/conflict
-          asserts: [integrity-conflict, no-overwrite]
-        - id: dist-tags
-          fixture: fixtures/npmjs/dist-tags
-          asserts: [immutable-first, alias-agreement]
-      live:
-        operation: npmjs-live-conformance
-        proves:
-          [trusted-publishing, provenance, public-readback, idempotent-retry]
+configuration: ./npmjs-registry.config.yml#/$defs/configuration
+destination: ./npmjs-registry.config.yml#/$defs/destination
+primitives:
+  - npm-registry-preflight
+  - npm-publish-tarball
+  - npm-observe-package
+  - npm-verify-package
+tools:
+  - id: node
+    resolution: { default: 24.18.0 }
+    install: install-node
+  - id: npm
+    resolution: { default: 11.16.0 }
+    install: install-node-package-manager
+accepted-artifact-kinds: [ npm-package-tarball ]
+credentials:
+  - id: bootstrap-token
+    process-variable: INTENTIONAL_NPM_BOOTSTRAP_TOKEN
+    availability: conditional
+    condition: package-identity-absent
+github-permissions:
+  distribute:
+    contents: read
+    id-token: write
+  observe:
+    contents: read
+preflight:
+  - id: probe-npmjs-version
+    uses: npm-registry-preflight
+    with:
+      registry: https://registry.npmjs.org
+      agreement: [ dist-integrity, downloaded-byte-digest ]
+      on-absence: distribute
+      on-agreement: accept
+      on-conflict: reject
+distribute:
+  - id: publish-npmjs-tarball
+    uses: npm-publish-tarball
+    with:
+      artifact: exact-sealed-tarball
+      authentication: trusted-publishing-or-bootstrap
+      provenance: required
+      lifecycle-scripts: denied
+  - id: update-dist-tags
+    uses: npm-publish-tarball
+    with:
+      aliases: release-plan
+      after: immutable-version-agreement
+observe:
+  - id: observe-npmjs-package
+    uses: npm-observe-package
+    with:
+      retrieval: public-client
+      deadline-seconds: 300
+      interval-seconds: 10
+verify:
+  - id: verify-npmjs-package
+    uses: npm-verify-package
+    with:
+      compare: [ name, version, dist-integrity, downloaded-bytes, dist-tags ]
+requirements:
+  - { id: npmjs-package-policy, class: operational }
+  - { id: npmjs-trusted-publisher, class: authority }
+  - { id: public-package-readback, class: security-control }
+control-subtractions: []
+guarantees:
+  - id: exact-npmjs-package
+    statement: npmjs immutable integrity and downloaded bytes agree with the sealed tarball.
+  - id: credential-free-steady-state
+    statement: Existing npmjs packages publish through repository-bound OpenID Connect without a standing token.
+  - id: consumer-visible-npm-package
+    statement: Evidence represents a clean public npm client and all planned dist-tags.
+conformance:
+  cases:
+    - id: bootstrap-distribution
+      fixture: fixtures/npmjs/bootstrap
+      asserts: [ conditional-token, exact-tarball, provenance ]
+    - id: trusted-distribution
+      fixture: fixtures/npmjs/trusted
+      asserts: [ oidc-only, exact-tarball, public-readback ]
+    - id: agreeing-version
+      fixture: fixtures/npmjs/agreement
+      asserts: [ idempotent-acceptance, no-republish ]
+    - id: conflicting-version
+      fixture: fixtures/npmjs/conflict
+      asserts: [ integrity-conflict, no-overwrite ]
+    - id: dist-tags
+      fixture: fixtures/npmjs/dist-tags
+      asserts: [ immutable-first, alias-agreement ]
+  live:
+    operation: npmjs-live-conformance
+    proves: [ trusted-publishing, provenance, public-readback, idempotent-retry ]

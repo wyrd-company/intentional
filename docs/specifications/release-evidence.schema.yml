@@ -3,7 +3,7 @@
 #   realizes: release-evidence
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/release-evidence.yml
+$id: https://intentional.foo/schemas/0.2/release-evidence
 title: Intentional Release Evidence
 type: object
 additionalProperties: false
@@ -23,133 +23,133 @@ required:
   - closure-manifest
 properties:
   $schema:
-    const: https://intentional.foo/schemas/release-evidence.yml
+    const: https://intentional.foo/schemas/0.2/release-evidence
   digest:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/digest"
   operation:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/operation"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/operation"
   release:
-    $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/release-identity"
+    $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/release-identity"
   release-unit:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-unit-identity"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/release-unit-identity"
   plan:
-    $ref: "https://intentional.foo/schemas/release-plan.yml"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan"
   workflow:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/producing-workflow"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/producing-workflow"
   posture:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/posture"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/posture"
   release-artifacts:
     type: array
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/release-artifact.yml"
+      $ref: "https://intentional.foo/schemas/0.2/release-artifact"
   tag-records:
     type: array
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/tag-record"
+      $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/tag-record"
   evidence-contributions:
     type: array
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/evidence-contribution.yml"
+      $ref: "https://intentional.foo/schemas/0.2/evidence-contribution"
   attachments:
     type: array
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/attachment"
+      $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/attachment"
   closure-manifest:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/closure-manifest"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/closure-manifest"
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   operation:
     type: object
     additionalProperties: false
-    required: [role, id]
+    required: [ role, id ]
     properties:
       role:
         const: assemble
       id:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/stable-id"
   producing-workflow:
     type: object
     additionalProperties: false
-    required: [provider, path, job, revision]
+    required: [ provider, path, job, revision ]
     properties:
       provider:
         const: github-actions
       path:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/exact-path"
       job:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/stable-id"
       revision:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"
   posture:
     allOf:
-      - $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/workflow"
+      - $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/workflow"
       - properties:
           adoption:
             const: adopted
-        required: [adoption]
+        required: [ adoption ]
   release-unit-identity:
     type: object
     additionalProperties: false
-    required: [id, version, tag]
+    required: [ id, version, tag ]
     properties:
       id:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/stable-id"
       version:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/semver"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/semver"
       tag:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-tag-reference"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/release-tag-reference"
   release-tag-reference:
     type: object
     additionalProperties: false
-    required: [id, name, object]
+    required: [ id, name, object ]
     properties:
       id:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
       name:
         type: string
         minLength: 1
       object:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"
   tag-record:
     type: object
     additionalProperties: false
-    required: [name, tag-object, record]
+    required: [ name, tag-object, record ]
     properties:
       name:
         type: string
         minLength: 1
       tag-object:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"
       record:
         allOf:
-          - $ref: "https://intentional.foo/schemas/tag-record.yml"
+          - $ref: "https://intentional.foo/schemas/0.2/tag-record"
           - properties:
               baseline:
                 const: false
-            required: [baseline]
+            required: [ baseline ]
   attachment:
     type: object
     additionalProperties: false
-    required: [name, namespace, size, digests]
+    required: [ name, namespace, size, digests ]
     properties:
       name:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/asset-name"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/asset-name"
       namespace:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/stable-id"
       size:
         type: integer
         minimum: 0
       digests:
-        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/content-digests"
+        $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/content-digests"
   closure-manifest:
     type: object
     additionalProperties: false
@@ -165,7 +165,7 @@ $defs:
       provider:
         const: github
       release-tag:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-tag-reference"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/release-tag-reference"
       prerelease:
         type: boolean
       immutable:
@@ -174,16 +174,16 @@ $defs:
         type: array
         uniqueItems: true
         items:
-          $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-asset"
+          $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/release-asset"
       attestation-subjects:
         type: array
         uniqueItems: true
         items:
-          $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/attestation-subject"
+          $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/attestation-subject"
       final-evidence-attestation:
         type: object
         additionalProperties: false
-        required: [required, discovery]
+        required: [ required, discovery ]
         properties:
           required:
             const: true
@@ -192,30 +192,30 @@ $defs:
   release-asset:
     type: object
     additionalProperties: false
-    required: [name, role, size, digests, source]
+    required: [ name, role, size, digests, source ]
     properties:
       name:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/asset-name"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/asset-name"
       role:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/stable-id"
       size:
         type: integer
         minimum: 0
       digests:
-        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/content-digests"
+        $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/content-digests"
       source:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/asset-source"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/asset-source"
   attestation-subject:
     type: object
     additionalProperties: false
-    required: [name, digests]
+    required: [ name, digests ]
     properties:
       name:
-        $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/asset-name"
+        $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/asset-name"
       digests:
-        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/content-digests"
+        $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/content-digests"
   asset-name:
-    $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/asset-name"
+    $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/asset-name"
   asset-source:
     type: string
     oneOf:

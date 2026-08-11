@@ -24,8 +24,8 @@ validation-criteria: >-
   `workflow_call` interface into the normalized record defined by
   `docs/specifications/custom-release-gates.schema.yml`, and validates exact
   agreement. Custom Candidate Release Gate requires string inputs `plan-digest`,
-  `source-commit`, `source-tree`, `interpretation-contract`, and
-  `generator-version`. Custom Release Unit Record Gate requires string inputs
+  `source-commit`, `source-tree`, and `generator-version`. Custom Release Unit
+  Record Gate requires string inputs
   `plan-digest`, `global-tag`, `release-unit-id`, `release-unit-tag`,
   `target-commit`, and `artifact-record-digests-json`. Every input is required.
   Neither interface declares outputs or callable secrets. The generated caller

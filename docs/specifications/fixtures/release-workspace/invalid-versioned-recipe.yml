@@ -1,0 +1,18 @@
+# ---
+# relationships:
+#   tests: release-workspace
+# ---
+$schema: https://intentional.foo/schemas/0.2/config
+workflow:
+  adoption: declined
+release-units:
+  application:
+    path: .
+    packages:
+      command:
+        path: .
+        uses: rust-package@1
+    tags:
+      primary:
+        role: primary
+        template: "application/{version}"

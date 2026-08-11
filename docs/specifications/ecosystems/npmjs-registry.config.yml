@@ -3,19 +3,19 @@
 #   realizes: npmjs-registry
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/npmjs-registry.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/npmjs-registry/config"
 title: npmjs Registry recipe configuration catalog
 $defs:
-  version-1:
+  configuration:
     type: object
     additionalProperties: false
-  destination-version-1:
+  destination:
     type: object
     additionalProperties: false
-    required: [registry, access]
+    required: [ registry, access ]
     properties:
       registry: { const: npmjs }
-      access: { enum: [public, restricted] }
+      access: { enum: [ public, restricted ] }
       dist-tags:
         type: array
         uniqueItems: true

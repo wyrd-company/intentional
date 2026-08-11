@@ -1,65 +1,62 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: debian-package, part-of: debian }
 role: package
-versions:
-  1:
-    package-configuration: ./debian-package.config.yml#/$defs/version-1
-    artifact-configuration: ./debian-package.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: verify-input-artifacts, version: 1 }
-      - { id: build-debian-package, version: 1 }
-      - { id: validate-debian-package, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools:
-      - id: nfpm
-        resolution: { default: 2.47.0 }
-        install: { id: install-nfpm, version: 1 }
-    matrix: []
-    accepted-input-artifact-kinds: [executable-archive]
-    artifact-kinds:
-      - id: debian-package
-        content: file
-        asset-name-source: native
-        native-kinds: [deb]
-    discovery:
-      - id: discover-debian-package
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { inputs: configured, kind: executable-archive }
-    planning:
-      - id: plan-debian-package
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { identity: release-plan, architecture: from-input }
-    build:
-      - id: build-debian-package
-        uses: { id: build-debian-package, version: 1 }
-        with: { payload: sealed-prerequisite-artifact }
-    collection:
-      - id: collect-debian-package
-        uses: { id: validate-debian-package, version: 1 }
-        with: { cardinality: one }
-    validation:
-      - id: validate-debian-package
-        uses: { id: validate-debian-package, version: 1 }
-        with: { compare: [identity, version, architecture, inventory, payload] }
-      - id: record-debian-package
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: verified-sealed-input, class: operational }
-      - { id: stable-release-version, class: operational }
-      - { id: credential-free-derivation, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: input-bound-debian-package
-        statement: Debian payload bytes bind the consumed executable archive.
-      - id: debian-reader-validation
-        statement: The sealed output passes the maintained Debian package reader.
-    conformance:
-      cases:
-        - id: package
-          fixture: fixtures/debian-package/package
-          asserts:
-            [identity, architecture, inventory, exact-payload, provenance]
-        - id: input-conflict
-          fixture: fixtures/debian-package/input-conflict
-          asserts: [digest-conflict, no-output]
+package-configuration: ./debian-package.config.yml#/$defs/package
+artifact-configuration: ./debian-package.config.yml#/$defs/artifact
+primitives:
+  - verify-input-artifacts
+  - build-debian-package
+  - validate-debian-package
+  - write-release-artifact
+tools:
+  - id: nfpm
+    resolution: { default: 2.47.0 }
+    install: install-nfpm
+matrix: []
+accepted-input-artifact-kinds: [ executable-archive ]
+artifact-kinds:
+  - id: debian-package
+    content: file
+    asset-name-source: native
+    native-kinds: [ deb ]
+discovery:
+  - id: discover-debian-package
+    uses: verify-input-artifacts
+    with: { inputs: configured, kind: executable-archive }
+planning:
+  - id: plan-debian-package
+    uses: verify-input-artifacts
+    with: { identity: release-plan, architecture: from-input }
+build:
+  - id: build-debian-package
+    uses: build-debian-package
+    with: { payload: sealed-prerequisite-artifact }
+collection:
+  - id: collect-debian-package
+    uses: validate-debian-package
+    with: { cardinality: one }
+validation:
+  - id: validate-debian-package
+    uses: validate-debian-package
+    with: { compare: [ identity, version, architecture, inventory, payload ] }
+  - id: record-debian-package
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: verified-sealed-input, class: operational }
+  - { id: stable-release-version, class: operational }
+  - { id: credential-free-derivation, class: authority }
+control-subtractions: []
+guarantees:
+  - id: input-bound-debian-package
+    statement: Debian payload bytes bind the consumed executable archive.
+  - id: debian-reader-validation
+    statement: The sealed output passes the maintained Debian package reader.
+conformance:
+  cases:
+    - id: package
+      fixture: fixtures/debian-package/package
+      asserts: [ identity, architecture, inventory, exact-payload, provenance ]
+    - id: input-conflict
+      fixture: fixtures/debian-package/input-conflict
+      asserts: [ digest-conflict, no-output ]

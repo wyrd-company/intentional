@@ -3,7 +3,7 @@
 #   realizes: initialization-plan
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/init-plan.yml
+$id: https://intentional.foo/schemas/0.2/init-plan
 title: Intentional initialization plan
 type: object
 additionalProperties: false
@@ -22,102 +22,100 @@ required:
   - post-commit-action
 properties:
   $schema:
-    const: https://intentional.foo/schemas/init-plan.yml
+    const: https://intentional.foo/schemas/0.2/init-plan
   state:
-    enum: [needs-input, ready]
+    enum: [ needs-input, ready ]
   source-kind:
-    enum: [workspace, intentional, changesets]
+    enum: [ workspace, intentional, changesets ]
   source-fingerprint:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
   workflow-adoption:
-    $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/workflow-adoption"
+    $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/workflow-adoption"
   inferred-config:
     oneOf:
-      - $ref: config.yml
-      - $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/empty-inferred-config"
+      - $ref: https://intentional.foo/schemas/0.2/config
+      - $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/empty-inferred-config"
   discovery-candidates:
     type: array
     items:
-      $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/discovery-candidate"
+      $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/discovery-candidate"
   diagnostics:
     type: array
     items:
-      $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/diagnostic"
+      $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/diagnostic"
   converted-intents:
     type: array
     items:
       type: object
       additionalProperties: false
-      required: [id, release-units, message, source, target]
+      required: [ id, release-units, message, source, target ]
       properties:
         id:
-          $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+          $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
         release-units:
           type: object
           additionalProperties:
-            enum: [major, minor, patch]
+            enum: [ major, minor, patch ]
         message: { type: string }
         source: { type: string }
         target: { type: string }
   parity:
     type: object
     additionalProperties: false
-    required: [status, release-units]
+    required: [ status, release-units ]
     properties:
       status:
-        enum: [equivalent, blocked]
+        enum: [ equivalent, blocked ]
       release-units:
         type: array
         items:
           type: object
           additionalProperties: false
-          required: [release-unit, current-version]
+          required: [ release-unit, current-version ]
           properties:
             release-unit: { type: string }
             current-version: { type: string }
             source:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/parity-release"
             proposed:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/parity-release"
   planned-operations:
     type: array
     items: { type: string }
   post-commit-action:
-    enum: ["", intentional tag --baseline]
+    enum: [ "", intentional tag --baseline ]
 $defs:
   empty-inferred-config:
     type: object
     additionalProperties: false
-    required: [contract, workflow, release-units]
+    required: [ $schema, workflow, release-units ]
     properties:
       $schema:
-        const: https://intentional.foo/schemas/config.yml
-      contract:
-        const: contract-1
+        const: https://intentional.foo/schemas/0.2/config
       workflow:
-        $ref: config.yml#/$defs/workflow
+        $ref: https://intentional.foo/schemas/0.2/config#/$defs/workflow
       settings:
         type: object
         additionalProperties: false
         properties:
           internal-dependency-bump:
-            enum: [major, minor, patch]
+            enum: [ major, minor, patch ]
             default: patch
           pre-1-0-bump-mapping:
-            enum: [component, compatibility]
+            enum: [ component, compatibility ]
             default: compatibility
       release-units:
         type: object
         maxProperties: 0
   detector-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
-  profile-ref:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/profile-ref"
-  workspace-tag-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/workspace-tag-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
+  security-posture:
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
+  workspace-tag-reference:
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   workflow-adoption:
     type: object
     additionalProperties: false
@@ -131,55 +129,55 @@ $defs:
       origin:
         type: object
         additionalProperties: false
-        required: [kind]
+        required: [ kind ]
         properties:
           kind:
-            enum: [github, other, missing]
+            enum: [ github, other, missing ]
           url:
             type: string
             minLength: 1
       recommended-adoption:
-        enum: [adopted, declined]
+        enum: [ adopted, declined ]
       recommended-posture:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/profile-ref"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/security-posture"
       recommended-global-tag:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/workspace-tag-id"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/workspace-tag-reference"
       supported-postures:
         type: array
         minItems: 1
         uniqueItems: true
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/profile-ref"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/security-posture"
       resolution:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/workflow"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workflow"
   release-unit-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   discovery-candidate:
     type: object
     additionalProperties: false
-    required: [id, detector, path, evidence]
+    required: [ id, detector, path, evidence ]
     properties:
       id:
         type: string
         pattern: "^candidate:[0-9a-f]{64}$"
       detector:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/detector-id"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/detector-id"
       path:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
       evidence:
         type: array
         minItems: 1
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       native-identity:
         type: string
         minLength: 1
       raw-version:
         type: object
         additionalProperties: false
-        required: [value, evidence]
+        required: [ value, evidence ]
         properties:
           value:
             type: string
@@ -188,29 +186,29 @@ $defs:
             type: array
             minItems: 1
             items:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       package:
         type: object
         additionalProperties: false
-        required: [path, recipe]
+        required: [ path, recipe ]
         properties:
           path:
             oneOf:
               - const: "."
-              - $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+              - $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
           recipe:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
       projection:
         type: object
         additionalProperties: false
-        required: [adapter, path, mode]
+        required: [ adapter, path, mode ]
         properties:
           adapter:
-            enum: [npm, cargo, pub, python, msbuild, go, json, toml, yaml]
+            enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
           path:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
           mode:
-            enum: [committed, injected, none]
+            enum: [ committed, injected, none ]
           pointer:
             type: string
             minLength: 1
@@ -218,67 +216,67 @@ $defs:
           - if:
               properties:
                 adapter:
-                  enum: [json, toml, yaml]
+                  enum: [ json, toml, yaml ]
             then:
-              required: [pointer]
+              required: [ pointer ]
       tag:
         type: object
         additionalProperties: false
-        required: [id, role, template]
+        required: [ id, role, template ]
         properties:
           id:
-            $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
           role:
-            enum: [primary, projection]
+            enum: [ primary, projection ]
           template:
-            $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-template"
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-template"
         allOf:
           - if:
               properties:
                 role: { const: primary }
-              required: [role]
+              required: [ role ]
             then:
               properties:
                 template:
-                  $ref: "https://intentional.foo/schemas/config.yml#/$defs/primary-tag-template"
+                  $ref: "https://intentional.foo/schemas/0.2/config#/$defs/primary-tag-template"
       diagnostics:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/extraction-diagnostic"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/extraction-diagnostic"
       resolution:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/candidate-resolution"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/candidate-resolution"
   candidate-resolution:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [kind, release-unit, package]
+        required: [ kind, release-unit, package ]
         properties:
           kind: { const: independent }
           release-unit:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
           package:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
       - type: object
         additionalProperties: false
-        required: [kind, release-unit, package]
+        required: [ kind, release-unit, package ]
         properties:
           kind: { const: projection }
           release-unit:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
           package:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/stable-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
           target-candidate:
             type: string
             pattern: "^candidate:[0-9a-f]{64}$"
       - type: object
         additionalProperties: false
-        required: [kind]
+        required: [ kind ]
         properties:
           kind: { const: excluded }
   extraction-diagnostic:
     type: object
     additionalProperties: false
-    required: [id, code, message, evidence]
+    required: [ id, code, message, evidence ]
     properties:
       id: { type: string, minLength: 1 }
       code: { type: string, minLength: 1 }
@@ -287,21 +285,21 @@ $defs:
         type: array
         minItems: 1
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
   parity-release:
     type: object
     additionalProperties: false
-    required: [requested-bump, next-version]
+    required: [ requested-bump, next-version ]
     properties:
-      requested-bump: { enum: [major, minor, patch] }
+      requested-bump: { enum: [ major, minor, patch ] }
       next-version: { type: string }
   evidence:
     type: object
     additionalProperties: false
-    required: [path, digest]
+    required: [ path, digest ]
     properties:
       path:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
       digest:
         type: string
         pattern: "^sha256:[0-9a-f]{64}$"
@@ -314,7 +312,7 @@ $defs:
   diagnostic:
     type: object
     additionalProperties: false
-    required: [id, code, message, evidence, verified]
+    required: [ id, code, message, evidence, verified ]
     properties:
       id: { type: string }
       code: { type: string }
@@ -322,23 +320,23 @@ $defs:
       evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       choices:
         type: array
         items: { type: string }
       recommended: { type: string }
       resolution:
-        type: [string, "null"]
+        type: [ string, "null" ]
       verified: { type: boolean }
       invalidated-resolution: { type: boolean }
       supporting-evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       contradictory-evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       uncertainty:
         type: string
         minLength: 1

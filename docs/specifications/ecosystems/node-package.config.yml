@@ -3,15 +3,15 @@
 #   realizes: node-package
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/node-package.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/node-package/config"
 title: Node Package recipe configuration catalog
 $defs:
   package-manager:
-    enum: [npm, pnpm, yarn]
+    enum: [ npm, pnpm, yarn ]
   task-target:
     type: string
     pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
-  version-1:
+  package:
     type: object
     additionalProperties: false
     properties:
@@ -20,16 +20,16 @@ $defs:
         type: string
         pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
       pack-directory:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/relative-root-path"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/relative-root-path"
       entrypoint:
         type: object
         additionalProperties: false
-        required: [task]
+        required: [ task ]
         properties:
           task: { $ref: "#/$defs/task-target" }
-  artifact-version-1:
+  artifact:
     type: object
     additionalProperties: false
     properties:
       output-path:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"

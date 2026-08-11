@@ -33,14 +33,13 @@ proposed-design:
     Computation loads the latest valid primary tag for every configured Release Unit,
     aggregates direct intent claims by maximum significance, propagates required
     internal dependency bumps, and evaluates release-group constraints to a fixed
-    point. The configured interpretation contract resolves through
-    `docs/specifications/interpretation-contract.yml` and maps the effective bump onto
-    the current semantic version. A Release Unit with no effective bump remains
+    point. The producing Intentional version maps the effective bump onto the
+    current semantic version. A Release Unit with no effective bump remains
     unchanged unless a fixed-group invariant requires its release.
 
   pre-one-versioning: >-
-    Release Workspace configuration selects the pre-1.0 mapping interpreted by
-    its contract. Component mapping applies major, minor, and patch to their
+    Release Workspace configuration selects the pre-1.0 mapping. Component
+    mapping applies major, minor, and patch to their
     corresponding semantic-version components. Compatibility mapping treats the
     names as compatibility significance: major advances `0.x.y` to `0.(x+1).0`,
     while minor and patch advance to `0.x.(y+1)`. Versions at or above `1.0.0`
@@ -102,7 +101,7 @@ proposed-design:
 
   tag-streams: >-
     Primary, projection, and workspace tags for one Release target the same
-    commit and carry agreeing interpretation contract, Release Plan digest, and
+    commit and carry agreeing Intentional generator, Release Plan digest, and
     version evidence. A workspace stream computes its next version from its own
     latest tag and the highest effective bump among participating Release Units.
     A new tag stream requires explicit baseline evidence. Tag prerequisite edges
@@ -117,8 +116,8 @@ proposed-design:
     computation.
 
   determinism: >-
-    Computation depends only on Release Workspace configuration, supported
-    interpretation contract, pending Change Intents, repository tree, and
+    Computation depends only on Release Workspace configuration, the producing
+    Intentional version, pending Change Intents, repository tree, and
     reachable annotated tags. Canonical ordering uses stable Release Unit,
     intent, tag, and path identities. Wall-clock time, network state, ambient Git
     identity, and filesystem enumeration order do not affect the result.

@@ -73,7 +73,7 @@ proposed-design:
     discovery proves native packaging capability. Distribution Target selection
     remains explicit unless a maintained recipe defines one unambiguous
     repository-local destination identity. Accepted selection writes the target's
-    stable instance key, compact `<recipe-id>@<version>` selector, and only the
+    stable instance key, compact recipe identifier, and only the
     combined `with` values that native evidence cannot supply at runtime.
     Reconciliation validates the complete resulting Release Workspace rather than
     applying candidates one at a time.
@@ -87,7 +87,7 @@ proposed-design:
     outranks later origin detection. Adoption includes detected Custom Release Gate
     extension files and every configured Package and Distribution Target in the
     same Initialization Plan. The plan resolves one supported security-posture
-    identifier and profile version; the robust posture is recommended rather than
+    identifier; the robust posture is recommended rather than
     inferred from observed settings. Adoption also requires one workspace tag
     stream with template `{version}` designated as the global release stream and
     resolves any missing baseline for that stream. Decline generates no managed workflow and removes

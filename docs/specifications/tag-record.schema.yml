@@ -3,14 +3,13 @@
 #   realizes: tag-record
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/tag-record.yml
+$id: https://intentional.foo/schemas/0.2/tag-record
 title: Intentional Tag Record
 description: >-
   The protocol fields encoded in an Intentional annotated Git tag message.
 type: object
 additionalProperties: false
 required:
-  - contract
   - generator
   - plan-digest
   - tag-id
@@ -20,21 +19,19 @@ required:
   - baseline
   - prerequisites
 properties:
-  contract:
-    const: contract-1
   generator:
     type: string
     pattern: '^intentional (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*))*))?(?:\+(?:[\dA-Za-z-]+(?:\.[\dA-Za-z-]+)*))?$'
   plan-digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   tag-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
   tag-role:
-    enum: [primary, projection, workspace]
+    enum: [ primary, projection, workspace ]
   version:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/semver"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/semver"
   target:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"
   baseline:
     type: boolean
   prerequisites:
@@ -47,7 +44,7 @@ allOf:
       properties:
         tag-id:
           pattern: "^workspace/"
-      required: [tag-id]
+      required: [ tag-id ]
     then:
       properties:
         tag-role:
@@ -55,34 +52,32 @@ allOf:
     else:
       properties:
         tag-role:
-          enum: [primary, projection]
+          enum: [ primary, projection ]
 $defs:
   baseline-digest-payload:
     type: object
     additionalProperties: false
-    required: [contract, generator, versions, baseline]
+    required: [ generator, versions, baseline ]
     properties:
-      contract:
-        const: contract-1
       generator:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/semver"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/semver"
       versions:
         type: object
         minProperties: 1
         propertyNames:
           oneOf:
-            - $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
-            - $ref: "https://intentional.foo/schemas/config.yml#/$defs/workspace-tag-id"
+            - $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
+            - $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workspace-tag-id"
         additionalProperties:
-          $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/semver"
+          $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/semver"
       baseline:
         const: true
   prerequisite:
     type: object
     additionalProperties: false
-    required: [tag-id, tag-object]
+    required: [ tag-id, tag-object ]
     properties:
       tag-id:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
       tag-object:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"

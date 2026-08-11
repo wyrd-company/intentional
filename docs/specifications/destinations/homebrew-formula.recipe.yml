@@ -1,61 +1,59 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: homebrew-formula, part-of: homebrew }
 role: package
-versions:
-  1:
-    package-configuration: ./homebrew-formula.config.yml#/$defs/version-1
-    artifact-configuration: ./homebrew-formula.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: verify-input-artifacts, version: 1 }
-      - { id: render-homebrew-formula, version: 1 }
-      - { id: validate-homebrew-formula, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools: []
-    matrix: []
-    accepted-input-artifact-kinds: [executable-archive]
-    artifact-kinds:
-      - id: homebrew-formula
-        content: file
-        asset-name-source: native
-        native-kinds: [ruby-formula]
-    discovery:
-      - id: discover-homebrew-formula
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { inputs: configured, kind: executable-archive }
-    planning:
-      - id: plan-homebrew-formula
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { identity: release-plan, platforms: complete }
-    build:
-      - id: render-homebrew-formula
-        uses: { id: render-homebrew-formula, version: 1 }
-        with: { sources: sealed-prerequisite-artifacts }
-    collection:
-      - id: collect-homebrew-formula
-        uses: { id: validate-homebrew-formula, version: 1 }
-        with: { cardinality: one }
-    validation:
-      - id: validate-homebrew-formula
-        uses: { id: validate-homebrew-formula, version: 1 }
-        with: { compare: [identity, version, sources, checksums, install-path] }
-      - id: record-homebrew-formula
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: verified-sealed-inputs, class: operational }
-      - { id: stable-release-version, class: operational }
-      - { id: credential-free-derivation, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: input-bound-homebrew-formula
-        statement: Formula sources and checksums bind every consumed executable archive.
-      - id: homebrew-reader-validation
-        statement: The sealed output passes the maintained Homebrew formula reader.
-    conformance:
-      cases:
-        - id: formula
-          fixture: fixtures/homebrew-formula/formula
-          asserts: [immutable-urls, checksums, formula-syntax, exact-provenance]
-        - id: input-conflict
-          fixture: fixtures/homebrew-formula/input-conflict
-          asserts: [digest-conflict, no-output]
+package-configuration: ./homebrew-formula.config.yml#/$defs/package
+artifact-configuration: ./homebrew-formula.config.yml#/$defs/artifact
+primitives:
+  - verify-input-artifacts
+  - render-homebrew-formula
+  - validate-homebrew-formula
+  - write-release-artifact
+tools: []
+matrix: []
+accepted-input-artifact-kinds: [ executable-archive ]
+artifact-kinds:
+  - id: homebrew-formula
+    content: file
+    asset-name-source: native
+    native-kinds: [ ruby-formula ]
+discovery:
+  - id: discover-homebrew-formula
+    uses: verify-input-artifacts
+    with: { inputs: configured, kind: executable-archive }
+planning:
+  - id: plan-homebrew-formula
+    uses: verify-input-artifacts
+    with: { identity: release-plan, platforms: complete }
+build:
+  - id: render-homebrew-formula
+    uses: render-homebrew-formula
+    with: { sources: sealed-prerequisite-artifacts }
+collection:
+  - id: collect-homebrew-formula
+    uses: validate-homebrew-formula
+    with: { cardinality: one }
+validation:
+  - id: validate-homebrew-formula
+    uses: validate-homebrew-formula
+    with: { compare: [ identity, version, sources, checksums, install-path ] }
+  - id: record-homebrew-formula
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: verified-sealed-inputs, class: operational }
+  - { id: stable-release-version, class: operational }
+  - { id: credential-free-derivation, class: authority }
+control-subtractions: []
+guarantees:
+  - id: input-bound-homebrew-formula
+    statement: Formula sources and checksums bind every consumed executable archive.
+  - id: homebrew-reader-validation
+    statement: The sealed output passes the maintained Homebrew formula reader.
+conformance:
+  cases:
+    - id: formula
+      fixture: fixtures/homebrew-formula/formula
+      asserts: [ immutable-urls, checksums, formula-syntax, exact-provenance ]
+    - id: input-conflict
+      fixture: fixtures/homebrew-formula/input-conflict
+      asserts: [ digest-conflict, no-output ]

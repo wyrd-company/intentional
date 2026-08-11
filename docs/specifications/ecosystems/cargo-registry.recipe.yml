@@ -1,147 +1,133 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships:
   realizes: cargo-registry
   part-of: rust
 role: distribution
-versions:
-  1:
-    configuration: ./cargo-registry.config.yml#/$defs/version-1
-    destination: ./cargo-registry.config.yml#/$defs/destination-version-1
-    destination-defaults:
-      crates-io:
-        index-url: sparse+https://index.crates.io/
-        api-url: https://crates.io
-        download-url: https://static.crates.io/crates
-    primitives:
-      - id: cargo-registry-preflight
-        version: 1
-      - id: cargo-registry-submit
-        version: 1
-      - id: cargo-registry-observe
-        version: 1
-      - id: cargo-registry-verify
-        version: 1
-    tools:
-      - id: cargo-registry-protocol-client
-        resolution:
-          bundled-with: intentional
-    accepted-artifact-kinds:
-      - crate-archive
-    credentials:
-      - id: token
-        process-variable: INTENTIONAL_CARGO_REGISTRY_TOKEN
-    preflight:
-      - id: probe-package-version
-        uses:
-          id: cargo-registry-preflight
-          version: 1
-        with:
-          identity:
-            - registry
-            - package-name
-            - version
-          agreement:
-            - registry-checksum
-            - downloaded-byte-digest
-          on-absence: submit
-          on-agreement: accept
-          on-conflict: reject
-    distribute:
-      - id: submit-crate
-        uses:
-          id: cargo-registry-submit
-          version: 1
-        with:
-          protocol: cargo-registry-publish
-          artifact: exact-sealed-crate
-          lifecycle-hooks: denied
-          credential: token
-    observe:
-      - id: poll-consumer-visible-package
-        uses:
-          id: cargo-registry-observe
-          version: 1
-        with:
-          deadline-seconds: 600
-          interval-seconds: 10
-          retrieval: public-client-or-authenticated-normal
-          index-entry: exact-package-version
-          download: normal-consumer-path
-          aliases: []
-    verify:
-      - id: verify-registry-state
-        uses:
-          id: cargo-registry-verify
-          version: 1
-        with:
-          compare:
-            - package-name
-            - version
-            - registry-checksum
-            - downloaded-byte-digest
-            - crate-metadata
-            - embedded-lockfile
-    requirements:
-      - id: sealed-crate-artifact
-        class: operational
-      - id: explicit-registry-identity
-        class: operational
-      - id: verified-distribution-prerequisites
-        class: operational
-      - id: registry-publish-token
-        class: authority
-      - id: consumer-visible-readback
-        class: security-control
-    control-subtractions: []
-    guarantees:
-      - id: exact-crate-distribution
-        statement: Distribution submits the exact validated crate bytes named by the sealed Release Plan.
-      - id: immutable-identity-agreement
-        statement: Existing registry state is accepted only when checksum and downloaded bytes agree with the sealed crate.
-      - id: destination-authority-isolation
-        statement: The distributor receives only the selected registry target's token credential.
-      - id: consumer-visible-verification
-        statement: Distribution succeeds only after the registry index and normal package download path agree.
-      - id: ordered-dependent-distribution
-        statement: A package distributor independently verifies every planned registry dependency through its consumer path before submission.
-    conformance:
-      cases:
-        - id: absent-package-version
-          fixture: fixtures/cargo-registry/absent
-          asserts:
-            - submission-permitted
-            - exact-crate-request
-        - id: agreeing-package-version
-          fixture: fixtures/cargo-registry/agreement
-          asserts:
-            - idempotent-acceptance
-            - no-resubmission
-        - id: conflicting-package-version
-          fixture: fixtures/cargo-registry/conflict
-          asserts:
-            - conflict-rejection
-            - no-resubmission
-        - id: delayed-consumer-visibility
-          fixture: fixtures/cargo-registry/delayed-visibility
-          asserts:
-            - bounded-polling
-            - exact-index-checksum
-            - exact-downloaded-bytes
-        - id: ordered-package-distribution
-          fixture: fixtures/cargo-registry/ordered-packages
-          asserts:
-            - prerequisite-consumer-agreement
-            - dependent-preflight
-        - id: authenticated-consumer-path
-          fixture: fixtures/cargo-registry/authenticated-consumer
-          asserts:
-            - distributor-bounded-observation
-            - no-credential-export
-      live:
-        operation: cargo-registry-live-conformance
-        proves:
-          - credential-routing
-          - exact-submission
-          - eventual-consistency-polling
-          - consumer-download-agreement
-          - idempotent-retry
+configuration: ./cargo-registry.config.yml#/$defs/configuration
+destination: ./cargo-registry.config.yml#/$defs/destination
+destination-defaults:
+  crates-io:
+    index-url: sparse+https://index.crates.io/
+    api-url: https://crates.io
+    download-url: https://static.crates.io/crates
+primitives:
+  - cargo-registry-preflight
+  - cargo-registry-submit
+  - cargo-registry-observe
+  - cargo-registry-verify
+tools:
+  - id: cargo-registry-protocol-client
+    resolution:
+      bundled-with: intentional
+accepted-artifact-kinds:
+  - crate-archive
+credentials:
+  - id: token
+    process-variable: INTENTIONAL_CARGO_REGISTRY_TOKEN
+preflight:
+  - id: probe-package-version
+    uses: cargo-registry-preflight
+    with:
+      identity:
+        - registry
+        - package-name
+        - version
+      agreement:
+        - registry-checksum
+        - downloaded-byte-digest
+      on-absence: submit
+      on-agreement: accept
+      on-conflict: reject
+distribute:
+  - id: submit-crate
+    uses: cargo-registry-submit
+    with:
+      protocol: cargo-registry-publish
+      artifact: exact-sealed-crate
+      lifecycle-hooks: denied
+      credential: token
+observe:
+  - id: poll-consumer-visible-package
+    uses: cargo-registry-observe
+    with:
+      deadline-seconds: 600
+      interval-seconds: 10
+      retrieval: public-client-or-authenticated-normal
+      index-entry: exact-package-version
+      download: normal-consumer-path
+      aliases: []
+verify:
+  - id: verify-registry-state
+    uses: cargo-registry-verify
+    with:
+      compare:
+        - package-name
+        - version
+        - registry-checksum
+        - downloaded-byte-digest
+        - crate-metadata
+        - embedded-lockfile
+requirements:
+  - id: sealed-crate-artifact
+    class: operational
+  - id: explicit-registry-identity
+    class: operational
+  - id: verified-distribution-prerequisites
+    class: operational
+  - id: registry-publish-token
+    class: authority
+  - id: consumer-visible-readback
+    class: security-control
+control-subtractions: []
+guarantees:
+  - id: exact-crate-distribution
+    statement: Distribution submits the exact validated crate bytes named by the sealed Release Plan.
+  - id: immutable-identity-agreement
+    statement: Existing registry state is accepted only when checksum and downloaded bytes agree with the sealed crate.
+  - id: destination-authority-isolation
+    statement: The distributor receives only the selected registry target's token credential.
+  - id: consumer-visible-verification
+    statement: Distribution succeeds only after the registry index and normal package download path agree.
+  - id: ordered-dependent-distribution
+    statement: A package distributor independently verifies every planned registry dependency through its consumer path before submission.
+conformance:
+  cases:
+    - id: absent-package-version
+      fixture: fixtures/cargo-registry/absent
+      asserts:
+        - submission-permitted
+        - exact-crate-request
+    - id: agreeing-package-version
+      fixture: fixtures/cargo-registry/agreement
+      asserts:
+        - idempotent-acceptance
+        - no-resubmission
+    - id: conflicting-package-version
+      fixture: fixtures/cargo-registry/conflict
+      asserts:
+        - conflict-rejection
+        - no-resubmission
+    - id: delayed-consumer-visibility
+      fixture: fixtures/cargo-registry/delayed-visibility
+      asserts:
+        - bounded-polling
+        - exact-index-checksum
+        - exact-downloaded-bytes
+    - id: ordered-package-distribution
+      fixture: fixtures/cargo-registry/ordered-packages
+      asserts:
+        - prerequisite-consumer-agreement
+        - dependent-preflight
+    - id: authenticated-consumer-path
+      fixture: fixtures/cargo-registry/authenticated-consumer
+      asserts:
+        - distributor-bounded-observation
+        - no-credential-export
+  live:
+    operation: cargo-registry-live-conformance
+    proves:
+      - credential-routing
+      - exact-submission
+      - eventual-consistency-polling
+      - consumer-download-agreement
+      - idempotent-retry

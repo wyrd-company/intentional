@@ -4865,19 +4865,19 @@ release-units:
             schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
                 ["$ref"]
                 .as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/tag-template")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-template")
         );
         assert_eq!(
             schema["$defs"]["release-unit-id"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/stable-id")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
         );
         assert_eq!(
             schema["$defs"]["workflow-adoption"]["properties"]["resolution"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/workflow")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/workflow")
         );
         assert_eq!(
             schema["properties"]["converted-intents"]["items"]["properties"]["id"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/stable-id")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
         );
     }
 

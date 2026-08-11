@@ -1,155 +1,98 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: winget-community-repository, part-of: winget }
 role: distribution
-versions:
-  1:
-    configuration: ./winget-community-repository.config.yml#/$defs/version-1
-    destination: ./winget-community-repository.config.yml#/$defs/destination-version-1
-    destination-defaults:
-      { upstream-repository: microsoft/winget-pkgs, upstream-branch: master }
-    primitives:
-      - { id: verify-release-record, version: 1 }
-      - { id: github-fork-preflight, version: 1 }
-      - { id: mint-github-app-token, version: 1 }
-      - { id: submit-github-fork-pull-request, version: 1 }
-      - { id: validate-github-merged-pull-request, version: 1 }
-      - { id: winget-catalog-observe, version: 1 }
-      - { id: winget-download-verify, version: 1 }
-    tools:
-      - id: git
-        resolution: { runner: pinned }
-        install: { id: select-runner-tool, version: 1 }
-      - id: github-api-client
-        resolution: { exact: 2022-11-28 }
-        install: { id: select-github-api, version: 1 }
-      - id: winget
-        resolution: { runner: pinned }
-        install: { id: select-runner-tool, version: 1 }
-    accepted-artifact-kinds: [ winget-manifest-archive, inno-installer ]
-    credentials:
-      - id: github-app-private-key
-        process-variable: INTENTIONAL_WINGET_GITHUB_APP_PRIVATE_KEY
-    github-permissions:
-      distribute: { contents: read }
-      observe: { contents: read }
-    preflight:
-      - id: verify-winget-release-record
-        uses: { id: verify-release-record, version: 1 }
-        with:
-          {
-            artifacts: [ winget-manifest-archive, inno-installer ],
-            immutable: true,
-            installer-signing: azure-public-trust,
-          }
-      - id: verify-organization-fork
-        uses: { id: github-fork-preflight, version: 1 }
-        with:
-          {
-            parent: microsoft/winget-pkgs,
-            owner: source-repository-owner,
-            branch: "{source-repo}/{release-unit}/{version}/{package}",
-          }
-    distribute:
-      - id: mint-fork-token
-        uses: { id: mint-github-app-token, version: 1 }
-        with:
-          {
-            repository: configured-fork,
-            permissions: [ contents-write, pull-requests-write ],
-          }
-      - id: submit-winget-pull-request
-        uses: { id: submit-github-fork-pull-request, version: 1 }
-        with:
-          {
-            base: microsoft/winget-pkgs:master,
-            head: deterministic-fork-branch,
-            bytes: sealed-manifest-archive,
-            author: configured-contributor,
-            committer: configured-contributor,
-            maintainer-can-modify: false,
-            success: submitted,
-          }
-    callback:
-      event: intentional-winget-manifest-merged
-      schema-version: 1
-      payload-properties: [ pull-request-number ]
-      validation:
-        - id: validate-winget-merge
-          uses: { id: validate-github-merged-pull-request, version: 1 }
-          with:
-            {
-              payload: untrusted-wake-up,
-              compare:
-                [ upstream, merged, fork, branch, manifest-bytes, release-record ],
-            }
-      observe:
-        - id: observe-winget-catalog
-          uses: { id: winget-catalog-observe, version: 1 }
-          with:
-            {
-              runner: linux,
-              identity: [ package, version, architectures ],
-              deadline: configured,
-            }
-      verify:
-        - id: verify-winget-downloads
-          uses: { id: winget-download-verify, version: 1 }
-          with:
-            {
-              runner: windows,
-              arguments:
-                [
-                  --id,
-                  exact-package,
-                  --version,
-                  exact-version,
-                  --architecture,
-                  each,
-                  --exact,
-                  --disable-interactivity,
-                ],
-              compare: sha256,
-            }
-    requirements:
-      - id: organization-fork
-        class: operational
-        configuration: { parent: microsoft/winget-pkgs, owner: source-owner }
-      - id: fork-app-authority
-        class: authority
-        configuration:
-          { permissions: [ contents-read-write, pull-requests-read-write ] }
-      - { id: configured-cla-contributor, class: operational }
-      - { id: user-owned-merge-callback, class: operational }
-      - { id: consumer-download-readback, class: security-control }
-      - { id: public-trust-signed-installer, class: security-control }
-    control-subtractions: []
-    guarantees:
-      - id: exact-winget-submission
-        statement: The upstream pull request contains the exact released manifest archive bytes.
-      - id: contributor-attributed-commit
-        statement: >-
-          Author and committer identity equal the configured Contributor License
-          Agreement identity.
-      - id: verified-winget-download
-        statement: Consumer downloads for every architecture agree with released installer digests.
-    conformance:
-      cases:
-        - id: submission
-          fixture: fixtures/winget/submission
-          asserts: [ fork-validation, exact-branch, exact-manifests, contributor-identity ]
-        - id: callback-rejection
-          fixture: fixtures/winget/callback-rejection
-          asserts: [ untrusted-payload, merged-state-validation, no-observation ]
-        - id: consumer-verification
-          fixture: fixtures/winget/consumer-verification
-          asserts: [ catalog-visibility, exact-download, sha256-agreement ]
-      live:
-        operation: winget-submission-test-conformance
-        proves:
-          [
-            app-token-push,
-            cross-fork-pull-request,
-            contributor-attribution,
-            cla-status,
-            idempotent-retry,
-          ]
+configuration: ./winget-community-repository.config.yml#/$defs/configuration
+destination: ./winget-community-repository.config.yml#/$defs/destination
+destination-defaults:
+  upstream-repository: microsoft/winget-pkgs
+  upstream-branch: master
+primitives:
+  - verify-release-record
+  - github-fork-preflight
+  - mint-github-app-token
+  - submit-github-fork-pull-request
+  - validate-github-merged-pull-request
+  - winget-catalog-observe
+  - winget-download-verify
+tools:
+  - id: git
+    resolution: { runner: pinned }
+    install: select-runner-tool
+  - id: github-api-client
+    resolution: { exact: 2022-11-28 }
+    install: select-github-api
+  - id: winget
+    resolution: { runner: pinned }
+    install: select-runner-tool
+accepted-artifact-kinds: [ winget-manifest-archive, inno-installer ]
+credentials:
+  - id: github-app-private-key
+    process-variable: INTENTIONAL_WINGET_GITHUB_APP_PRIVATE_KEY
+github-permissions:
+  distribute:
+    contents: read
+  observe:
+    contents: read
+preflight:
+  - id: verify-winget-release-record
+    uses: verify-release-record
+    with: { artifacts: [ winget-manifest-archive, inno-installer ], immutable: true, installer-signing: azure-public-trust }
+  - id: verify-organization-fork
+    uses: github-fork-preflight
+    with: { parent: microsoft/winget-pkgs, owner: source-repository-owner, branch: "{source-repo}/{release-unit}/{version}/{package}" }
+distribute:
+  - id: mint-fork-token
+    uses: mint-github-app-token
+    with: { repository: configured-fork, permissions: [ contents-write, pull-requests-write ] }
+  - id: submit-winget-pull-request
+    uses: submit-github-fork-pull-request
+    with: { base: 'microsoft/winget-pkgs:master', head: deterministic-fork-branch, bytes: sealed-manifest-archive, author: configured-contributor, committer: configured-contributor, maintainer-can-modify: false, success: submitted }
+callback:
+  event: intentional-winget-manifest-merged
+  payload-properties: [ pull-request-number ]
+  validation:
+    - id: validate-winget-merge
+      uses: validate-github-merged-pull-request
+      with: { payload: untrusted-wake-up, compare: [ upstream, merged, fork, branch, manifest-bytes, release-record ] }
+  observe:
+    - id: observe-winget-catalog
+      uses: winget-catalog-observe
+      with: { runner: linux, identity: [ package, version, architectures ], deadline: configured }
+  verify:
+    - id: verify-winget-downloads
+      uses: winget-download-verify
+      with: { runner: windows, arguments: [ --id, exact-package, --version, exact-version, --architecture, each, --exact, --disable-interactivity ], compare: sha256 }
+requirements:
+  - id: organization-fork
+    class: operational
+    configuration: { parent: microsoft/winget-pkgs, owner: source-owner }
+  - id: fork-app-authority
+    class: authority
+    configuration: { permissions: [ contents-read-write, pull-requests-read-write ] }
+  - { id: configured-cla-contributor, class: operational }
+  - { id: user-owned-merge-callback, class: operational }
+  - { id: consumer-download-readback, class: security-control }
+  - { id: public-trust-signed-installer, class: security-control }
+control-subtractions: []
+guarantees:
+  - id: exact-winget-submission
+    statement: The upstream pull request contains the exact released manifest archive bytes.
+  - id: contributor-attributed-commit
+    statement: >-
+      Author and committer identity equal the configured Contributor License Agreement identity.
+  - id: verified-winget-download
+    statement: Consumer downloads for every architecture agree with released installer digests.
+conformance:
+  cases:
+    - id: submission
+      fixture: fixtures/winget/submission
+      asserts: [ fork-validation, exact-branch, exact-manifests, contributor-identity ]
+    - id: callback-rejection
+      fixture: fixtures/winget/callback-rejection
+      asserts: [ untrusted-payload, merged-state-validation, no-observation ]
+    - id: consumer-verification
+      fixture: fixtures/winget/consumer-verification
+      asserts: [ catalog-visibility, exact-download, sha256-agreement ]
+  live:
+    operation: winget-submission-test-conformance
+    proves: [ app-token-push, cross-fork-pull-request, contributor-attribution, cla-status, idempotent-retry ]

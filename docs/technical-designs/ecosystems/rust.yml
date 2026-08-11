@@ -89,7 +89,8 @@ proposed-design:
   toolchain-resolution: >-
     An exact version in `rust-toolchain.toml` or `rust-toolchain` selects the Rust
     toolchain. Mutable channel names and `package.rust-version` constrain the
-    recipe version's exact maintained default. The resolved compiler version must
+    exact compiler default maintained by the producing Intentional version. The
+    resolved compiler version must
     satisfy every Package minimum and channel constraint in its build unit.
     Explicit recipe configuration resolves a conflict. The plan records the exact
     toolchain, installed profile, required components, and target standard
@@ -109,8 +110,8 @@ proposed-design:
     Cargo profile, configured feature override, custom-entrypoint selection, and
     compatible artifact set. Artifacts sharing those values use one Cargo
     invocation. Target triples and other matrix dimensions are explicit Release
-    Workspace choices from the finite set supported by the selected recipe
-    version. That recipe version maps each target triple to an exact runner
+    Workspace choices from the finite set supported by the Rust recipe. That
+    recipe maps each target triple to an exact runner
     operating system and image plus its native or cross-compilation tools. The
     generator instantiates the mapping and does not infer runner choice from the
     target name or repository configuration. The Release Plan records each exact
@@ -163,7 +164,7 @@ proposed-design:
     non-secret parameters, and dependency access required by Cargo. They receive
     no registry, signing, repository-write, or destination Distribution authority.
     Release Artifact provenance records the exact Cargo command parameters,
-    toolchain, target, profile, source commit and tree, recipe version, and build
+    toolchain, target, profile, source commit and tree, recipe identity, and build
     job identity.
 
   local-build: >-
@@ -208,7 +209,7 @@ proposed-design:
     package name and version, compares its checksum with the sealed crate, and
     downloads the crate through the registry's normal consumer path. It verifies
     downloaded bytes, normalized package identity, version, and embedded
-    lockfile. Observation polling uses the recipe version's fixed deadline and
+    lockfile. Observation polling uses the Cargo registry recipe's fixed deadline and
     reports absence, agreement, or conflict as the current operational result.
     Cargo registry Distribution defines no mutable alias operation.
 
@@ -239,9 +240,9 @@ proposed-design:
 
   specification-topology: >-
     `docs/specifications/ecosystems/rust-package.yml` specifies the Rust Package
-    recipe family. `rust-package.config.yml` contains its versioned configuration
-    schema catalog, and `rust-package.recipe.yml` contains its versioned recipe
-    catalog. Cargo registry Distribution uses a separate three-file Distribution
+    recipe family. `rust-package.config.yml` contains its configuration schema,
+    and `rust-package.recipe.yml` contains its recipe catalog. Cargo registry
+    Distribution uses a separate three-file Distribution
     recipe family in the same ecosystem directory. Those specifications own
     exact fields, commands, supported toolchains and target triples, archive
     layouts, Cargo protocol inputs, observation deadlines, and fixture cases.

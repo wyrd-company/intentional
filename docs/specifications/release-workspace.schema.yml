@@ -3,16 +3,14 @@
 #   realizes: release-workspace
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/config.yml
+$id: https://intentional.foo/schemas/0.2/config
 title: Intentional workspace configuration
 type: object
 additionalProperties: false
-required: [contract, workflow, release-units]
+required: [ $schema, workflow, release-units ]
 properties:
   $schema:
-    const: https://intentional.foo/schemas/config.yml
-  contract:
-    const: contract-1
+    const: https://intentional.foo/schemas/0.2/config
   workflow:
     $ref: "#/$defs/workflow"
   settings:
@@ -23,7 +21,7 @@ properties:
         $ref: "#/$defs/bump"
         default: patch
       pre-1-0-bump-mapping:
-        enum: [component, compatibility]
+        enum: [ component, compatibility ]
         default: compatibility
       artifact-namespace-prefix:
         $ref: "#/$defs/stable-id"
@@ -59,7 +57,7 @@ $defs:
     type: string
     pattern: "^[a-z0-9][a-z0-9._-]*$"
   bump:
-    enum: [major, minor, patch]
+    enum: [ major, minor, patch ]
   groups:
     type: array
     items:
@@ -70,48 +68,34 @@ $defs:
         $ref: "#/$defs/stable-id"
   detector-id:
     $ref: "#/$defs/stable-id"
-  versioned-ref:
-    type: object
-    required: [id, version]
-    properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      version:
-        type: integer
-        minimum: 1
   recipe-selector:
-    type: string
-    description: Maintained recipe identity and positive integer version.
-    pattern: "^[a-z0-9][a-z0-9._-]*@[1-9][0-9]*$"
+    $ref: "#/$defs/stable-id"
   azure-artifact-signing-subscriber-identity:
     type: string
     description: >-
       Durable Azure Artifact Signing Public Trust subscriber identity Extended
       Key Usage value.
     pattern: '^1[.]3[.]6[.]1[.]4[.]1[.]311[.]97[.](?!(?:1[.]3[.]1|1[.]4[.]1)(?:[.]|$))[0-9]+(?:[.][0-9]+){3,}$'
-  profile-ref:
-    $ref: "#/$defs/versioned-ref"
-    unevaluatedProperties: false
   workflow:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [adoption]
+        required: [ adoption ]
         properties:
           adoption:
             const: declined
       - type: object
         additionalProperties: false
-        required: [adoption, provider, global-tag, security-posture]
+        required: [ adoption, provider, global-tag, security-posture ]
         properties:
           adoption:
             const: adopted
           provider:
             const: github
           global-tag:
-            $ref: "#/$defs/workspace-tag-id"
+            $ref: "#/$defs/stable-id"
           security-posture:
-            $ref: "#/$defs/profile-ref"
+            $ref: "#/$defs/stable-id"
   workspace-tag-id:
     type: string
     pattern: "^workspace/[a-z0-9][a-z0-9._-]*$"
@@ -142,7 +126,7 @@ $defs:
         items:
           type: object
           additionalProperties: false
-          required: [detector, path, release-unit, package]
+          required: [ detector, path, release-unit, package ]
           properties:
             detector:
               $ref: "#/$defs/detector-id"
@@ -158,7 +142,7 @@ $defs:
         items:
           type: object
           additionalProperties: false
-          required: [detector, path, evidence-digest]
+          required: [ detector, path, evidence-digest ]
           properties:
             detector:
               $ref: "#/$defs/detector-id"
@@ -175,28 +159,19 @@ $defs:
         type: array
         uniqueItems: true
         items:
-          $ref: "#/$defs/qualified-artifact"
+          $ref: "#/$defs/artifact-reference"
   qualified-artifact:
-    type: object
-    additionalProperties: false
-    required: [release-unit, package, id]
-    properties:
-      release-unit:
-        $ref: "#/$defs/stable-id"
-      package:
-        $ref: "#/$defs/stable-id"
-      id:
-        $ref: "#/$defs/stable-id"
+    $ref: "#/$defs/artifact-reference"
   release-unit:
     type: object
     additionalProperties: false
-    required: [path, tags]
+    required: [ path, tags ]
     properties:
       path:
         type: string
         minLength: 1
       disposition:
-        enum: [managed, suspended]
+        enum: [ managed, suspended ]
         default: managed
       projections:
         type: array
@@ -224,27 +199,22 @@ $defs:
     oneOf:
       - const: "."
       - $ref: "#/$defs/exact-path"
-  recipe-ref:
-    allOf:
-      - $ref: "#/$defs/versioned-ref"
-      - type: object
-        properties:
-          configuration:
-            type: object
-    unevaluatedProperties: false
   package:
     type: object
     additionalProperties: false
-    required: [path, recipe]
+    required: [ path, uses ]
     properties:
       path:
         $ref: "#/$defs/relative-root-path"
-      recipe:
-        $ref: "#/$defs/recipe-ref"
+      uses:
+        $ref: "#/$defs/recipe-selector"
+      with:
+        type: object
       artifacts:
-        type: array
-        uniqueItems: true
-        items:
+        type: object
+        propertyNames:
+          $ref: "#/$defs/stable-id"
+        additionalProperties:
           $ref: "#/$defs/artifact"
       distribution-targets:
         type: object
@@ -255,11 +225,8 @@ $defs:
   artifact:
     type: object
     additionalProperties: false
-    required: [id]
     properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      configuration:
+      with:
         type: object
       native-selector:
         type: string
@@ -274,9 +241,9 @@ $defs:
   signing:
     type: object
     additionalProperties: false
-    required: [ input-artifact-id, uses ]
+    required: [ input-artifact, uses ]
     properties:
-      input-artifact-id:
+      input-artifact:
         $ref: "#/$defs/stable-id"
       uses:
         $ref: "#/$defs/recipe-selector"
@@ -284,17 +251,13 @@ $defs:
         type: object
         description: Flat values owned by the selected Signing recipe fragment.
   artifact-reference:
-    type: object
-    additionalProperties: false
-    required: [release-unit-id, package-id, artifact-id]
-    properties:
-      release-unit-id: { $ref: "#/$defs/stable-id" }
-      package-id: { $ref: "#/$defs/stable-id" }
-      artifact-id: { $ref: "#/$defs/stable-id" }
+    type: string
+    description: Qualified Release Unit, Package, and artifact identity.
+    pattern: "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$"
   distribution-target:
     type: object
     additionalProperties: false
-    required: [uses]
+    required: [ uses ]
     properties:
       uses:
         $ref: "#/$defs/recipe-selector"
@@ -306,15 +269,15 @@ $defs:
   projection:
     type: object
     additionalProperties: false
-    required: [adapter, file, mode]
+    required: [ adapter, file, mode ]
     properties:
       adapter:
-        enum: [npm, cargo, pub, python, msbuild, go, json, toml, yaml]
+        enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
       file:
         type: string
         minLength: 1
       mode:
-        enum: [committed, injected, none]
+        enum: [ committed, injected, none ]
       pointer:
         type: string
         minLength: 1
@@ -322,16 +285,16 @@ $defs:
       - if:
           properties:
             adapter:
-              enum: [json, toml, yaml]
+              enum: [ json, toml, yaml ]
         then:
-          required: [pointer]
+          required: [ pointer ]
   release-unit-tag:
     type: object
     additionalProperties: false
-    required: [role, template]
+    required: [ role, template ]
     properties:
       role:
-        enum: [primary, projection]
+        enum: [ primary, projection ]
       template:
         $ref: "#/$defs/tag-template"
       tag-after:
@@ -343,7 +306,7 @@ $defs:
       - if:
           properties:
             role: { const: primary }
-          required: [role]
+          required: [ role ]
         then:
           properties:
             template:
@@ -351,7 +314,7 @@ $defs:
   workspace-tag:
     type: object
     additionalProperties: false
-    required: [template]
+    required: [ template ]
     properties:
       template:
         $ref: "#/$defs/workspace-tag-template"

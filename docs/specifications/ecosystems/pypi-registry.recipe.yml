@@ -1,80 +1,68 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships:
   realizes: pypi-registry
   part-of: python
 role: distribution
-versions:
-  1:
-    configuration: ./pypi-registry.config.yml#/$defs/version-1
-    destination: ./pypi-registry.config.yml#/$defs/destination-version-1
-    primitives:
-      - { id: pypi-preflight, version: 1 }
-      - { id: pypi-publish, version: 1 }
-      - { id: pypi-observe, version: 1 }
-      - { id: pypi-verify, version: 1 }
-    tools:
-      - id: pypi-publish-action
-        resolution: { maintained-action: pypa-gh-action-pypi-publish }
-    accepted-artifact-kinds: [python-wheel, python-sdist]
-    credentials: []
-    github-permissions:
-      distribute: { contents: read, id-token: write }
-      observe: { contents: read }
-    preflight:
-      - id: probe-pypi-version
-        uses: { id: pypi-preflight, version: 1 }
-        with: { agreement: [complete-filename-set, sha256, downloaded-bytes] }
-    distribute:
-      - id: publish-pypi-distributions
-        uses: { id: pypi-publish, version: 1 }
-        with:
-          { artifacts: exact-sealed-set, authentication: trusted-publishing }
-    observe:
-      - id: observe-pypi-version
-        uses: { id: pypi-observe, version: 1 }
-        with:
-          {
-            retrieval: public-client,
-            deadline-seconds: 600,
-            interval-seconds: 10,
-          }
-    verify:
-      - id: verify-pypi-version
-        uses: { id: pypi-verify, version: 1 }
-        with:
-          { compare: [project, version, filenames, sha256, downloaded-bytes] }
-    requirements:
-      - { id: pypi-project-policy, class: operational }
-      - { id: pypi-trusted-publisher, class: authority }
-      - { id: public-distribution-readback, class: security-control }
-    control-subtractions: []
-    guarantees:
-      - id: exact-pypi-distributions
-        statement: Every PyPI file and downloaded byte sequence agrees with the sealed distribution set.
-      - id: repository-bound-pypi-authority
-        statement: Distribution uses repository-bound OpenID Connect and no standing package token.
-      - id: complete-version-evidence
-        statement: Evidence covers the complete planned filename set for one project version.
-    conformance:
-      cases:
-        - id: absent-version
-          fixture: fixtures/pypi/absent
-          asserts: [trusted-distribution, exact-file-set]
-        - id: agreeing-version
-          fixture: fixtures/pypi/agreement
-          asserts: [idempotent-acceptance, no-republish]
-        - id: conflicting-version
-          fixture: fixtures/pypi/conflict
-          asserts: [filename-or-digest-conflict, no-overwrite]
-        - id: delayed-files
-          fixture: fixtures/pypi/delayed
-          asserts: [bounded-polling, complete-public-readback]
-      live:
-        operation: pypi-live-conformance
-        proves:
-          [
-            trusted-publishing,
-            exact-file-set,
-            public-readback,
-            idempotent-retry,
-          ]
+configuration: ./pypi-registry.config.yml#/$defs/configuration
+destination: ./pypi-registry.config.yml#/$defs/destination
+primitives:
+  - pypi-preflight
+  - pypi-publish
+  - pypi-observe
+  - pypi-verify
+tools:
+  - id: pypi-publish-action
+    resolution: { maintained-action: pypa-gh-action-pypi-publish }
+accepted-artifact-kinds: [ python-wheel, python-sdist ]
+credentials: []
+github-permissions:
+  distribute:
+    contents: read
+    id-token: write
+  observe:
+    contents: read
+preflight:
+  - id: probe-pypi-version
+    uses: pypi-preflight
+    with: { agreement: [ complete-filename-set, sha256, downloaded-bytes ] }
+distribute:
+  - id: publish-pypi-distributions
+    uses: pypi-publish
+    with: { artifacts: exact-sealed-set, authentication: trusted-publishing }
+observe:
+  - id: observe-pypi-version
+    uses: pypi-observe
+    with: { retrieval: public-client, deadline-seconds: 600, interval-seconds: 10 }
+verify:
+  - id: verify-pypi-version
+    uses: pypi-verify
+    with: { compare: [ project, version, filenames, sha256, downloaded-bytes ] }
+requirements:
+  - { id: pypi-project-policy, class: operational }
+  - { id: pypi-trusted-publisher, class: authority }
+  - { id: public-distribution-readback, class: security-control }
+control-subtractions: []
+guarantees:
+  - id: exact-pypi-distributions
+    statement: Every PyPI file and downloaded byte sequence agrees with the sealed distribution set.
+  - id: repository-bound-pypi-authority
+    statement: Distribution uses repository-bound OpenID Connect and no standing package token.
+  - id: complete-version-evidence
+    statement: Evidence covers the complete planned filename set for one project version.
+conformance:
+  cases:
+    - id: absent-version
+      fixture: fixtures/pypi/absent
+      asserts: [ trusted-distribution, exact-file-set ]
+    - id: agreeing-version
+      fixture: fixtures/pypi/agreement
+      asserts: [ idempotent-acceptance, no-republish ]
+    - id: conflicting-version
+      fixture: fixtures/pypi/conflict
+      asserts: [ filename-or-digest-conflict, no-overwrite ]
+    - id: delayed-files
+      fixture: fixtures/pypi/delayed
+      asserts: [ bounded-polling, complete-public-readback ]
+  live:
+    operation: pypi-live-conformance
+    proves: [ trusted-publishing, exact-file-set, public-readback, idempotent-retry ]

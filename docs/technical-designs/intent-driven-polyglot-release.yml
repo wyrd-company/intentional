@@ -42,13 +42,12 @@ proposed-design:
     GitHub workflow performs the same transition through repository-owner App
     authority and continues into per-Release Unit records and Distribution.
 
-  interpretation-contract: >-
-    A versioned interpretation contract defines bump aggregation, dependency
-    propagation, release-group behavior, pre-1.0 semantic-version mapping,
-    changelog construction, canonical serialization, tag records, and recovery.
-    Release Workspace configuration names the contract. Release Plans and tags
-    carry it. A supporting Intentional binary applies the named semantics rather
-    than substituting behavior from its own release version.
+  versioned-semantics: >-
+    Intentional's semantic version owns bump aggregation, dependency propagation,
+    release-group behavior, pre-1.0 semantic-version mapping, changelog
+    construction, canonical serialization, tag records, recipes, postures, and
+    recovery. Release Plans and tags carry the exact producing Intentional
+    version so the same semantics can be selected for execution and verification.
 
   initialization: >-
     `intentional init` always configures the core protocol. The same

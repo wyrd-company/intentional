@@ -1,104 +1,88 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships:
   realizes: python-package
   part-of: python
 role: package
-versions:
-  1:
-    package-configuration: ./python-package.config.yml#/$defs/version-1
-    artifact-configuration: ./python-package.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: python-discover, version: 1 }
-      - { id: python-plan-build, version: 1 }
-      - { id: uv-build, version: 1 }
-      - { id: task-run, version: 1 }
-      - { id: python-validate-distribution, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools:
-      - id: python
-        resolution:
-          project-pins:
-            [.python-version, pyproject.toml#project.requires-python]
-          default: 3.14.6
-        install: { id: install-python, version: 1 }
-      - id: uv
-        resolution: { default: 0.11.21 }
-        install: { id: install-uv, version: 1 }
-      - id: task
-        resolution: { required-for: task-entrypoint, default: 3.52.0 }
-        install: { id: install-task, version: 1 }
-    matrix: []
-    artifact-kinds:
-      - id: python-wheel
-        content: file
-        asset-name-source: native
-        native-kinds: [wheel]
-      - id: python-sdist
-        content: file
-        asset-name-source: native
-        native-kinds: [sdist]
-    discovery:
-      - id: discover-python-project
-        uses: { id: python-discover, version: 1 }
-        with:
-          { import-project-code: false, network: denied, tracked-only: true }
-    planning:
-      - id: resolve-python-distributions
-        uses: { id: python-plan-build, version: 1 }
-        with: { backend: native, lock: frozen, distributions: configured }
-    build:
-      - id: build-python-distributions
-        uses: { id: uv-build, version: 1 }
-        with: { frozen: true, output: isolated-staging }
-      - id: run-task-entrypoint
-        uses: { id: task-run, version: 1 }
-        with: { interface: intentional-python-build-1 }
-    collection:
-      - id: collect-python-distributions
-        uses: { id: python-validate-distribution, version: 1 }
-        with: { filenames: planned, unexpected-outputs: reject }
-    validation:
-      - id: validate-python-distributions
-        uses: { id: python-validate-distribution, version: 1 }
-        with:
-          {
-            compare:
-              [
-                name,
-                version,
-                metadata,
-                platform-tags,
-                inventory,
-                record-hashes,
-              ],
-          }
-      - id: record-python-artifacts
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: exact-python-toolchain, class: operational }
-      - { id: locked-build-requirements, class: operational }
-      - { id: credential-free-build, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: native-python-authority
-        statement: pyproject metadata and its selected backend remain authoritative for package behavior.
-      - id: exact-python-distributions
-        statement: Every wheel and source distribution is validated and sealed before publication authority exists.
-      - id: locked-python-build
-        statement: Build requirements resolve from the tracked frozen project lock.
-    conformance:
-      cases:
-        - id: project-discovery
-          fixture: fixtures/python/projects
-          asserts: [static-version, dynamic-version, workspace-membership]
-        - id: frozen-build
-          fixture: fixtures/python/frozen-build
-          asserts: [exact-python, exact-uv, backend-lock-agreement]
-        - id: distributions
-          fixture: fixtures/python/distributions
-          asserts:
-            [wheel-metadata, sdist-metadata, record-hashes, archive-safety]
-        - id: task-entrypoint
-          fixture: fixtures/python/task-entrypoint
-          asserts: [fixed-task-interface, exact-output-paths]
+package-configuration: ./python-package.config.yml#/$defs/package
+artifact-configuration: ./python-package.config.yml#/$defs/artifact
+primitives:
+  - python-discover
+  - python-plan-build
+  - uv-build
+  - task-run
+  - python-validate-distribution
+  - write-release-artifact
+tools:
+  - id: python
+    resolution:
+      project-pins: [ .python-version, pyproject.toml#project.requires-python ]
+      default: 3.14.6
+    install: install-python
+  - id: uv
+    resolution: { default: 0.11.21 }
+    install: install-uv
+  - id: task
+    resolution: { required-for: task-entrypoint, default: 3.52.0 }
+    install: install-task
+matrix: []
+artifact-kinds:
+  - id: python-wheel
+    content: file
+    asset-name-source: native
+    native-kinds: [ wheel ]
+  - id: python-sdist
+    content: file
+    asset-name-source: native
+    native-kinds: [ sdist ]
+discovery:
+  - id: discover-python-project
+    uses: python-discover
+    with: { import-project-code: false, network: denied, tracked-only: true }
+planning:
+  - id: resolve-python-distributions
+    uses: python-plan-build
+    with: { backend: native, lock: frozen, distributions: configured }
+build:
+  - id: build-python-distributions
+    uses: uv-build
+    with: { frozen: true, output: isolated-staging }
+  - id: run-task-entrypoint
+    uses: task-run
+    with: { interface: intentional-python-build-1 }
+collection:
+  - id: collect-python-distributions
+    uses: python-validate-distribution
+    with: { filenames: planned, unexpected-outputs: reject }
+validation:
+  - id: validate-python-distributions
+    uses: python-validate-distribution
+    with: { compare: [ name, version, metadata, platform-tags, inventory, record-hashes ] }
+  - id: record-python-artifacts
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: exact-python-toolchain, class: operational }
+  - { id: locked-build-requirements, class: operational }
+  - { id: credential-free-build, class: authority }
+control-subtractions: []
+guarantees:
+  - id: native-python-authority
+    statement: pyproject metadata and its selected backend remain authoritative for package behavior.
+  - id: exact-python-distributions
+    statement: Every wheel and source distribution is validated and sealed before publication authority exists.
+  - id: locked-python-build
+    statement: Build requirements resolve from the tracked frozen project lock.
+conformance:
+  cases:
+    - id: project-discovery
+      fixture: fixtures/python/projects
+      asserts: [ static-version, dynamic-version, workspace-membership ]
+    - id: frozen-build
+      fixture: fixtures/python/frozen-build
+      asserts: [ exact-python, exact-uv, backend-lock-agreement ]
+    - id: distributions
+      fixture: fixtures/python/distributions
+      asserts: [ wheel-metadata, sdist-metadata, record-hashes, archive-safety ]
+    - id: task-entrypoint
+      fixture: fixtures/python/task-entrypoint
+      asserts: [ fixed-task-interface, exact-output-paths ]

@@ -3,7 +3,7 @@
 #   realizes: release-candidate-bundle
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/release-candidate-bundle.yml
+$id: https://intentional.foo/schemas/0.2/release-candidate-bundle
 title: Intentional release candidate bundle
 type: object
 additionalProperties: false
@@ -18,13 +18,13 @@ required:
   - release-notes
 properties:
   $schema:
-    const: https://intentional.foo/schemas/release-candidate-bundle.yml
+    const: https://intentional.foo/schemas/0.2/release-candidate-bundle
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   source:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/source"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/source"
   plan:
-    $ref: "https://intentional.foo/schemas/release-plan.yml"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan"
   materialization:
     type: array
     uniqueItems: true
@@ -35,13 +35,13 @@ properties:
     minItems: 1
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+      $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
   tag-order:
     type: array
     minItems: 1
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+      $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
   release-notes:
     type: array
     minItems: 1
@@ -50,18 +50,18 @@ properties:
       $ref: "#/$defs/release-note"
 $defs:
   exact-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   operation:
     type: object
     additionalProperties: false
-    required: [kind, path, before-digest, after-digest]
+    required: [ kind, path, before-digest, after-digest ]
     properties:
       kind:
-        enum: [write, delete]
+        enum: [ write, delete ]
       path: { $ref: "#/$defs/exact-path" }
       before-digest:
         oneOf:
@@ -74,7 +74,7 @@ $defs:
   release-note:
     type: object
     additionalProperties: false
-    required: [release-unit, path, digest]
+    required: [ release-unit, path, digest ]
     properties:
       release-unit: { $ref: "#/$defs/stable-id" }
       path: { $ref: "#/$defs/exact-path" }

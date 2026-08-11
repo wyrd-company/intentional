@@ -1,61 +1,59 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: arch-package, part-of: arch }
 role: package
-versions:
-  1:
-    package-configuration: ./arch-package.config.yml#/$defs/version-1
-    artifact-configuration: ./arch-package.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: verify-input-artifacts, version: 1 }
-      - { id: render-arch-package, version: 1 }
-      - { id: validate-arch-package, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools: []
-    matrix: []
-    accepted-input-artifact-kinds: [executable-archive]
-    artifact-kinds:
-      - id: arch-package
-        content: file
-        asset-name-source: native
-        native-kinds: [pkgbuild-bundle]
-    discovery:
-      - id: discover-arch-package
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { inputs: configured, kind: executable-archive }
-    planning:
-      - id: plan-arch-package
-        uses: { id: verify-input-artifacts, version: 1 }
-        with: { identity: release-plan, platforms: configured }
-    build:
-      - id: render-arch-package
-        uses: { id: render-arch-package, version: 1 }
-        with: { sources: sealed-prerequisite-artifacts }
-    collection:
-      - id: collect-arch-package
-        uses: { id: validate-arch-package, version: 1 }
-        with: { cardinality: one }
-    validation:
-      - id: validate-arch-package
-        uses: { id: validate-arch-package, version: 1 }
-        with: { compare: [identity, version, architecture, sources, checksums] }
-      - id: record-arch-package
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: verified-sealed-inputs, class: operational }
-      - { id: stable-release-version, class: operational }
-      - { id: credential-free-derivation, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: input-bound-arch-package
-        statement: Arch sources and checksums bind every consumed executable archive.
-      - id: arch-reader-validation
-        statement: PKGBUILD and SRCINFO agree and pass maintained Arch readers.
-    conformance:
-      cases:
-        - id: descriptors
-          fixture: fixtures/arch-package/descriptors
-          asserts: [pkgbuild, srcinfo, checksums, exact-provenance]
-        - id: input-conflict
-          fixture: fixtures/arch-package/input-conflict
-          asserts: [digest-conflict, no-output]
+package-configuration: ./arch-package.config.yml#/$defs/package
+artifact-configuration: ./arch-package.config.yml#/$defs/artifact
+primitives:
+  - verify-input-artifacts
+  - render-arch-package
+  - validate-arch-package
+  - write-release-artifact
+tools: []
+matrix: []
+accepted-input-artifact-kinds: [ executable-archive ]
+artifact-kinds:
+  - id: arch-package
+    content: file
+    asset-name-source: native
+    native-kinds: [ pkgbuild-bundle ]
+discovery:
+  - id: discover-arch-package
+    uses: verify-input-artifacts
+    with: { inputs: configured, kind: executable-archive }
+planning:
+  - id: plan-arch-package
+    uses: verify-input-artifacts
+    with: { identity: release-plan, platforms: configured }
+build:
+  - id: render-arch-package
+    uses: render-arch-package
+    with: { sources: sealed-prerequisite-artifacts }
+collection:
+  - id: collect-arch-package
+    uses: validate-arch-package
+    with: { cardinality: one }
+validation:
+  - id: validate-arch-package
+    uses: validate-arch-package
+    with: { compare: [ identity, version, architecture, sources, checksums ] }
+  - id: record-arch-package
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: verified-sealed-inputs, class: operational }
+  - { id: stable-release-version, class: operational }
+  - { id: credential-free-derivation, class: authority }
+control-subtractions: []
+guarantees:
+  - id: input-bound-arch-package
+    statement: Arch sources and checksums bind every consumed executable archive.
+  - id: arch-reader-validation
+    statement: PKGBUILD and SRCINFO agree and pass maintained Arch readers.
+conformance:
+  cases:
+    - id: descriptors
+      fixture: fixtures/arch-package/descriptors
+      asserts: [ pkgbuild, srcinfo, checksums, exact-provenance ]
+    - id: input-conflict
+      fixture: fixtures/arch-package/input-conflict
+      asserts: [ digest-conflict, no-output ]

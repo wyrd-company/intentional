@@ -18,8 +18,8 @@ proposed-design:
   identity-envelope: >-
     Every durable value carries its schema contract, producing operation, global
     Release identity, global tag and tag object, target commit, complete Release
-    Plan digest, interpretation contract, Intentional generator identity,
-    security posture identifier, and posture profile version. Release Unit, tag,
+    Plan digest, Intentional generator identity, and security posture identifier.
+    Release Unit, tag,
     Package, Release Artifact, recipe, and contribution identities extend that
     envelope where applicable. Canonical identity fields let assembly reject
     records from another global Release, Release Unit, or security posture before
@@ -61,7 +61,7 @@ proposed-design:
     inventory from the complete sealed Release Plan and selected recipes. It
     requires exactly one valid record for each unit-owned Release Artifact and
     tag plus each present Evidence Contribution. It rejects a record whose
-    global Release, Release Unit, posture identifier, or profile version differs
+    global Release, Release Unit, or posture identifier differs
     from the plan. It derives both identities from tagged source and plan rather
     than majority agreement among fragments. Canonical output orders Packages,
     artifacts, tags, and contribution namespaces by stable identity.
@@ -70,7 +70,7 @@ proposed-design:
     Each Release Evidence statement embeds the complete global Release Plan and
     identifies exactly one Release Unit. It contains that unit's source and tag
     identity, Release Artifact records, Evidence Contributions, attachment inventory,
-    producing workflow identity, security posture identity, profile version,
+    producing workflow identity, security posture identity,
     required GitHub settings, removed controls, guarantee inventory, closure
     asset inventory, and expected attestation subjects. A Release Unit with no
     file-backed artifact still records its source tags and release notes. The

@@ -2,30 +2,30 @@
 # relationships: { realizes: winget-manifest }
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/destinations/winget-manifest.config.yml
+$id: "https://intentional.foo/schemas/0.2/destinations/winget-manifest/config"
 title: WinGet manifest recipe configuration catalog
 $defs:
-  version-1:
+  package:
     type: object
     additionalProperties: false
     required: [ version-template, installer-template, default-locale-template ]
     properties:
       version-template:
-        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        $ref: https://intentional.foo/schemas/0.2/config#/$defs/exact-path
         description: Tracked version-manifest YAML file.
       installer-template:
-        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        $ref: https://intentional.foo/schemas/0.2/config#/$defs/exact-path
         description: Tracked installer-manifest YAML file.
       default-locale-template:
-        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        $ref: https://intentional.foo/schemas/0.2/config#/$defs/exact-path
         description: Tracked default-locale-manifest YAML file.
       locale-templates:
         type: array
         description: Additional tracked locale-manifest YAML files.
         uniqueItems: true
         items:
-          $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
-  artifact-version-1:
+          $ref: https://intentional.foo/schemas/0.2/config#/$defs/exact-path
+  artifact:
     type: object
     additionalProperties: false
     required: [ package-identifier ]

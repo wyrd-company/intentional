@@ -3,10 +3,10 @@
 #   realizes: python-package
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/python-package.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/python-package/config"
 title: Python Package recipe configuration catalog
 $defs:
-  version-1:
+  package:
     type: object
     additionalProperties: false
     properties:
@@ -17,19 +17,19 @@ $defs:
         type: array
         minItems: 1
         uniqueItems: true
-        items: { enum: [wheel, sdist] }
+        items: { enum: [ wheel, sdist ] }
       entrypoint:
         type: object
         additionalProperties: false
-        required: [task]
+        required: [ task ]
         properties:
           task:
             type: string
             pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
-  artifact-version-1:
+  artifact:
     type: object
     additionalProperties: false
     properties:
-      kind: { enum: [wheel, sdist] }
+      kind: { enum: [ wheel, sdist ] }
       output-path:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"

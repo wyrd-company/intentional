@@ -7,19 +7,18 @@ relationships:
   models:
     - intentional
 description: >-
-  Defines the maintained Cargo Registry Distribution recipe family. Version 1
+  Defines the maintained Cargo Registry Distribution recipe family. It
   accepts a validated `crate-archive` Release Artifact, resolves one explicit
   Cargo-compatible registry, probes the immutable package-version identity,
   submits the exact sealed crate bytes through the Cargo registry publish
   protocol, and observes the registry index and normal download path. Cargo
   registry distribution has no mutable alias operation. `cargo-registry.config.yml`
-  defines versioned recipe and destination configuration fragments.
+  defines recipe and destination configuration fragments.
   `cargo-registry.recipe.yml` defines the declarative recipe catalog.
 format: json-schema
 validation-criteria: >-
-  A conforming Cargo Registry target names recipe `cargo-registry` and a version
-  present in `cargo-registry.recipe.yml`. Recipe `configuration` and target
-  `destination` validate against that version's fragments. Version 1 identifies
+  A conforming Cargo Registry target uses recipe `cargo-registry`. Its authored
+  `with` values validate against the recipe and destination fragments. The recipe identifies
   the default registry as `crates-io`; its recipe owns the canonical sparse
   index, publish API, and download URL. Another registry destination names its
   exact index URL, publish API URL, and Cargo download URL. The download URL is

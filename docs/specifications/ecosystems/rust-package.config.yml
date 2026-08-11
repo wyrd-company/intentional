@@ -3,7 +3,7 @@
 #   realizes: rust-package
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/rust-package.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/rust-package/config"
 title: Rust Package recipe configuration catalog
 $defs:
   rust-version:
@@ -19,13 +19,13 @@ $defs:
   task-target:
     type: string
     pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
-  target-triple-version-1:
+  target-triple:
     enum:
       - x86_64-unknown-linux-gnu
       - aarch64-unknown-linux-gnu
       - aarch64-apple-darwin
       - x86_64-pc-windows-msvc
-  version-1:
+  package:
     type: object
     additionalProperties: false
     properties:
@@ -34,11 +34,11 @@ $defs:
       entrypoint:
         type: object
         additionalProperties: false
-        required: [task]
+        required: [ task ]
         properties:
           task:
             $ref: "#/$defs/task-target"
-  artifact-version-1:
+  artifact:
     type: object
     additionalProperties: false
     properties:
@@ -47,7 +47,7 @@ $defs:
         minItems: 1
         uniqueItems: true
         items:
-          $ref: "#/$defs/target-triple-version-1"
+          $ref: "#/$defs/target-triple"
       profile:
         $ref: "#/$defs/cargo-profile"
       features:
@@ -59,10 +59,10 @@ $defs:
       no-default-features:
         type: boolean
       archive-format:
-        enum: [tar-gz, zip]
+        enum: [ tar-gz, zip ]
       output-paths:
         type: array
         minItems: 1
         uniqueItems: true
         items:
-          $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+          $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"

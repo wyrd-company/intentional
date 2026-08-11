@@ -3,16 +3,16 @@
 #   realizes: github-npm-registry
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/github-npm-registry.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/github-npm-registry/config"
 title: GitHub npm Registry recipe configuration catalog
 $defs:
-  version-1:
+  configuration:
     type: object
     additionalProperties: false
-  destination-version-1:
+  destination:
     type: object
     additionalProperties: false
-    required: [owner, repository]
+    required: [ owner, repository ]
     properties:
       owner:
         type: string

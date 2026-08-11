@@ -236,10 +236,13 @@ release-units:
             "../../../docs/specifications/change-intent.schema.yml"
         ))
         .expect("Change Intent schema parses");
-        assert_eq!(schema["$id"].as_str(), Some(CHANGE_INTENT_SCHEMA));
+        assert_eq!(
+            schema["$id"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/change-intent")
+        );
         assert_eq!(
             schema["propertyNames"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/stable-id")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
         );
         assert_eq!(schema["minProperties"].as_u64(), Some(1));
     }

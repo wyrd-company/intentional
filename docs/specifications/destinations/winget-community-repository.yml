@@ -19,7 +19,7 @@ validation-criteria: >-
   idempotent success and conflict is rejected. Submission ends with outcome
   submitted and makes no availability claim. The generated callback workflow
   accepts only the intentional-winget-manifest-merged repository_dispatch event
-  with schema-version 1 and pull-request-number. It treats the payload as an
+  with pull-request-number. It treats the payload as an
   untrusted wake-up and independently validates merged upstream state, fork and
   branch identity, exact manifest bytes, immutable Release Record, verified
   Azure Artifact Signing Public Trust installer identity, Release Unit,

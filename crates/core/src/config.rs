@@ -859,7 +859,7 @@ release-units:
         );
         assert_eq!(
             schema["properties"]["$schema"]["const"].as_str(),
-            Some(CONFIG_SCHEMA)
+            Some("https://intentional.foo/schemas/0.2/config")
         );
         assert_eq!(
             schema["properties"]["workspace-tags"]["propertyNames"]["$ref"].as_str(),

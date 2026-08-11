@@ -3,7 +3,7 @@ relationships:
   part-of: intent-driven-polyglot-release
   realizes: intentional
 objective: >-
-  Define maintained, versioned recipe contracts that translate native project
+  Define maintained recipe contracts that translate native project
   evidence and explicit Release Workspace choices into deterministic planning,
   build, signing, Distribution, observation, and verification operations.
 proposed-design:
@@ -14,9 +14,9 @@ proposed-design:
     separately identified signed artifact. A Distribution recipe submits one
     compatible immutable Release Record content set to one Distribution Target and verifies the
     consumer-visible result. Release Workspace configuration records recipe
-    identities and versions; initialization normally recommends and writes those
-    selections after user acceptance. The Release Plan seals their resolved
-    configuration and release-specific outputs.
+    identities; initialization normally recommends and writes those selections
+    after user acceptance. The Release Plan seals their resolved configuration,
+    release-specific outputs, and exact producing Intentional version.
 
   recipe-roles: >-
     Every recipe declares exactly one role. A Package selects one Package recipe
@@ -33,46 +33,44 @@ proposed-design:
   recipe-family-assets: >-
     Every recipe family consists of three specification artifacts with one
     stable stem. `<recipe>.yml` specifies the family in prose,
-    `<recipe>.config.yml` defines its closed versioned configuration schemas, and
-    `<recipe>.recipe.yml` defines its declarative versioned recipe catalog. The
-    prose specification covers the recipe family and identifies differences
-    among supported versions. The config and recipe assets use the same positive
-    integer version keys. Recipe version 1 therefore selects the version-1
-    configuration fragments. Shared definitions can be included through exact
-    local references without introducing another public version axis.
+    `<recipe>.config.yml` defines its closed role-named configuration schemas,
+    and `<recipe>.recipe.yml` defines its declarative recipe catalog. Package
+    configuration assets expose `package` and `artifact` fragments. Signing
+    assets expose `configuration`. Distribution assets expose `configuration`
+    and `destination`. Shared definitions can be included through exact local
+    references without introducing another public version axis.
 
   compiled-catalog: >-
     Recipe assets are Intentional-maintained source inputs. The build resolves
     their local references, validates every catalog entry, binds every named
     primitive, and compiles the closed catalog into the binary. Runtime recipe
-    resolution selects a compiled entry by stable recipe identifier, role, and
-    positive integer version. Repository configuration supplies values accepted
+    resolution selects a compiled entry by stable recipe identifier and role.
+    Repository configuration supplies values accepted
     by that entry rather than executable recipe definitions. The Release Plan
-    records the Intentional generator version and each selected recipe identifier
-    and version.
+    records the exact Intentional generator version and each selected recipe
+    identifier.
 
   recipe-compatibility: >-
-    A recipe identifier and version have one immutable meaning. An Intentional
-    major line retains every recipe version shipped within that line. Another
-    major line can omit an old recipe version while preserving its historical
-    meaning. A changed contract receives a new recipe version. Catalog tests
-    expand every retained version and compare its canonical contract and
-    behavioral fixtures with committed expectations, so a binary build fails
-    when an existing version changes or disappears from its supported major
-    line.
+    A recipe identifier has the meaning compiled into one exact Intentional
+    version. Recipe shape and behavior contribute directly to the Intentional
+    semantic version. A deprecated recipe can be removed under the backward
+    compatibility standard without providing a replacement. Historical Release
+    Plans execute through their exact producing Intentional binary. Catalog tests
+    expand every recipe and compare its canonical contract and behavioral
+    fixtures with committed expectations.
 
   primitive-model: >-
     Recipe catalogs compose maintained, typed primitives rather than shell text.
-    Each primitive has an internal stable identifier and positive integer
-    version. A recipe version pins every primitive version it uses. Changed
-    primitive behavior receives a new primitive version. Process primitives
+    Each primitive has an internal stable identifier whose behavior is owned by
+    the exact Intentional binary. Changed primitive behavior contributes to the
+    Intentional semantic version. Process primitives
     declare executable, argument vector, working directory, environment, input
     paths, output paths, timeout, and retry behavior as structured values. The
-    compiler rejects missing primitive versions, reference cycles, unbound
+    compiler rejects missing primitives, reference cycles, unbound
     values, undeclared inputs and outputs, and role-incompatible operations.
 
   role-contracts: >-
-    Recipe assets share an identity and version envelope and use role-specific
+    Recipe assets share an identity envelope and use role-specific
     contracts. Package recipes define discovery, planning, build, collection,
     and artifact validation. Signing recipes define input validation, signing,
     and signed-output validation. Direct Distribution recipes define preflight,
@@ -85,8 +83,8 @@ proposed-design:
     Release Workspace schema owns Release Unit, Package, artifact, Distribution
     Target, recipe-reference, projection, and exclusion envelopes. A recipe
     config asset owns only recipe-specific configuration and recipe-specific
-    artifact configuration. A user-authored Signing selection or Distribution
-    Target uses `<recipe-id>@<version>` and one flat `with` mapping. A Signing
+    artifact configuration. A user-authored Package, Signing selection, or
+    Distribution Target uses `uses: <recipe-id>` and one flat `with` mapping. A Signing
     mapping validates against the authorable projection of its one closed
     configuration fragment. The catalog identifies any read-only configuration
     properties injected from workspace settings. Intentional rejects authored
@@ -98,8 +96,8 @@ proposed-design:
     fragment. A Signing recipe can also receive a workspace-owned identity value
     and a recipe-fixed organization variable contract during resolution.
     Intentional reads other
-    producing recipe identifiers and versions, then validates their
-    `configuration` values against the corresponding version fragments. Every
+    producing recipe identifiers, then validates their `with` values against the
+    corresponding role-named fragments. Every
     fragment is closed to unknown fields. Omitted
     configuration is accepted only when the selected fragment accepts an empty
     object; the Release Plan records the normalized resolved object.
@@ -108,7 +106,7 @@ proposed-design:
     with Release Unit identity.
 
   native-tag-contracts: >-
-    A Package recipe can select one of its versioned native tag primitives when its
+    A Package recipe can select one of its native tag primitives when its
     ecosystem assigns consumer semantics to Git tags. Release Unit tag templates
     can use otherwise discouraged syntax only when that contract requires it.
     The managed global workspace tag retains Intentional's plain
@@ -214,7 +212,7 @@ proposed-design:
 
   tool-resolution: >-
     A Package recipe resolves an exact toolchain from a supported project-native
-    pin and otherwise from the recipe version's exact default. Local execution
+    pin and otherwise from the compiled recipe's exact default. Local execution
     verifies the resolved tools already available to the developer. Managed
     disposable runners install the exact resolved tools. Each artifact kind has
     a recipe-defined locked-input policy. Applicable builds require a valid
@@ -275,7 +273,7 @@ proposed-design:
     observation. Recipe behavior remains fixed for every accepted posture combination.
 
   conformance: >-
-    Each recipe version carries hermetic fixtures for discovery, planning,
+    Each recipe carries hermetic fixtures for discovery, planning,
     configuration validation, deterministic rendering, build and collection,
     signing where applicable, consumer observation parsing, and status evaluation.
     Distribution recipes also expose a live destination conformance operation that

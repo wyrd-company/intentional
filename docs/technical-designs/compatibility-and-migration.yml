@@ -1,0 +1,155 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  realizes: intentional
+  related-to: semantic-versioning
+objective: >-
+  Implement permanent durable-record verification and explicit workspace
+  migration without retaining every historical execution engine in the current
+  Intentional runtime.
+proposed-design:
+  high-level-overview: >-
+    Intentional separates historical representation from current execution.
+    Version-specific readers parse published workspace and record formats into
+    their exact historical models. Workspace migrations transform committed
+    mutable state into the current model through an explicit plan. Durable-record
+    verification retains historical semantics permanently. Current runtime
+    operations consume only the current normalized model, while historical plan
+    execution uses the exact producing Intentional binary.
+
+  compatibility-floor: >-
+    Compatibility registries begin with Intentional `0.2.0`. Earlier
+    configuration, generated state, binaries, and records are best-effort inputs
+    and do not enter permanent compatibility fixtures. Every published
+    compatibility line at or after that floor adds immutable parser, migration,
+    schema, and verification fixtures before release.
+
+  state-classes: >-
+    Committed mutable workspace state consists of Release Workspace
+    configuration, pending Change Intents, and workflow ownership manifests.
+    Sealed durable state consists of annotated tag records, sealed Release Plans,
+    Release Artifact records, Release Evidence, and other accepted evidence
+    records. Unsealed generated state consists of Initialization Plans, candidate
+    Release Plans, local build results, and conformance reports. Mutable state is
+    migrated, sealed state is historically verified, and unsealed generated
+    state is regenerated.
+
+  version-specific-models: >-
+    Each published compatibility line owns immutable data-transfer models for
+    its configuration, Change Intents, and ownership manifests. Each published
+    durable-record schema owns an immutable record model and historical
+    verifier. These models contain no current runtime behavior. Current domain
+    and execution code accepts only the current normalized model, so a field
+    added to current code cannot silently become required while parsing an older
+    representation.
+
+  compatibility-registry: >-
+    One compiled registry maps schema identity and record identity to the exact
+    parser, validator, migrator, and verifier that own that representation.
+    Configuration schema identity selects the workspace compatibility line and
+    therefore the applicable Change Intent format. Ownership manifests and
+    durable records carry their own schema or generator identity. Unknown
+    identities fail with a diagnostic that distinguishes unpublished,
+    unsupported pre-0.2.0, and malformed inputs.
+
+  migration-graph: >-
+    A typed migration edge converts one published workspace compatibility model
+    to the next. Intentional composes consecutive edges to reach the current
+    model. An edge preserves stable identities and authored values, creates
+    explicit operations for mechanical transformations, and creates decisions
+    or blockers for information that current configuration cannot infer. A
+    removed recipe or capability becomes an unresolved selection; migration does
+    not invent a replacement or discard it.
+
+  migration-plan: >-
+    Migration planning is read-only. Its structured result records source and
+    target compatibility lines, source file paths and digests, ordered file
+    operations, retained and removed fields, ownership transitions, required
+    user decisions, blockers, and resulting validation expectations. Human and
+    machine-readable projections represent the same plan. No normal command
+    interprets historical workspace state as current state without this
+    conversion boundary.
+
+  migration-application: >-
+    Migration application requires an explicit plan selection. It re-reads and
+    validates every source digest, resolves every required decision, computes
+    the complete output set before writing, and stops without mutation on drift
+    or conflict. It then applies the file set as one workspace operation. The
+    surrounding repository workflow owns review and commit; Intentional does not
+    silently migrate during status, planning, build, release, or verification.
+
+  ownership-reconciliation: >-
+    Every historical ownership-manifest reader reconstructs exact generated path,
+    role, and content-digest ownership. An owned file whose digest still matches
+    can be replaced or removed according to the current generated graph. An
+    owned file whose digest differs is a user-edit conflict and remains
+    unchanged. A path absent from the historical manifest is user-owned and
+    remains unchanged. Current Intentional retains recognition and migration of
+    historical manifests without retaining the workflow generator that produced
+    their contents.
+
+  historical-verification: >-
+    Historical verification parses an immutable record with its owning reader
+    and evaluates it under the producing Intentional contract. The result states
+    historical conformance without depending on current policy. A separate
+    current trust assessment evaluates algorithms, authorities, attestations,
+    platform state, and known security conditions under current knowledge. The
+    two results remain distinct so a trust downgrade does not rewrite what the
+    historical record proved when produced.
+
+  historical-execution: >-
+    A sealed Release Plan names its exact producing Intentional version. Current
+    Intentional verifies that plan but directs build, signing, distribution, or
+    other historical execution to that recorded binary. Released Intentional
+    binaries and integrity information remain immutable Release Record assets.
+    Retention does not claim that a future host can execute the binary or that
+    its external toolchains, dependencies, services, and network inputs remain
+    available.
+
+  reproducible-generated-state: >-
+    Unsealed generated state is bound to its exact producing Intentional version
+    and has no migration implementation. Loading it under another Intentional
+    version reports the producer and the command that regenerates a current
+    equivalent. Sealed Release Plans never take this path because their identity
+    and historical verifier are permanent durable state.
+
+  schema-and-binary-publication: >-
+    Release automation publishes each compatibility-line schema to its permanent
+    representation-neutral `intentional.foo` identifier and validates served JSON
+    against authoritative repository YAML. It also preserves every released
+    binary, source identity, digest, and attestation in an immutable Intentional
+    Release Record. Publication tests prove that existing schema identifiers and
+    binary assets remain retrievable before another compatibility line closes.
+
+  deprecation-and-removal: >-
+    A compatibility inventory names public commands, crate API, machine output,
+    action and workflow inputs, callback events, environment and credential
+    variables, maintained recipes, supported operating systems and architectures,
+    and installation channels. Removal requires a deprecation marker in a
+    compatible release of the preceding line and an incompatible Intentional
+    release. Deprecation records the affected identity and replacement when one
+    exists; recipes and platforms can be removed without a replacement. Release
+    ordering supplies notice, and no elapsed-time support window exists.
+
+  maintenance-lines: >-
+    The latest published compatibility line is the sole active maintenance
+    target. Fixes, security updates, support, and conformance changes apply there.
+    Historical parsers, migrators, verifiers, schemas, and binary assets remain
+    permanent compatibility infrastructure rather than maintained product
+    branches.
+
+  compatibility-fixtures: >-
+    Every published mutable format contributes valid, invalid, and migration
+    fixtures. Every published durable format contributes historical-conformance,
+    tamper, malformed-input, and current-trust fixtures. Ownership fixtures cover
+    unchanged owned, edited owned, removed owned, and user-owned paths. Release
+    gates run all historical fixtures against the current binary and compare
+    migration plans and historical results with committed canonical
+    expectations.
+
+  change-review: >-
+    A change identifies every affected semantic-version surface and compatibility
+    mandate in its Change Intent and review evidence. Review checks the requested
+    bump under the semantic-versioning design, then checks this compatibility
+    design independently. A major version correctly reports an incompatible
+    change but does not waive permanent verification, migration, schema, or
+    artifact-retention requirements.

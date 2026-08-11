@@ -275,7 +275,7 @@ commands:
     notes:
       - Relative plan paths resolve from --directory.
       - >-
-        Plan mode validates generator and recipe versions, resolved
+        Plan mode validates the exact Intentional generator, resolved recipe
         configuration, authoritative Release identity, and exact source before
         producing Release Artifact records.
       - >-

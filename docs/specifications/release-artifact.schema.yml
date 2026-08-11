@@ -3,7 +3,7 @@
 #   realizes: release-artifact
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/release-artifact.yml
+$id: https://intentional.foo/schemas/0.2/release-artifact
 title: Intentional Release Artifact
 type: object
 additionalProperties: false
@@ -19,9 +19,9 @@ required:
   - attached-components
 properties:
   $schema:
-    const: https://intentional.foo/schemas/release-artifact.yml
+    const: https://intentional.foo/schemas/0.2/release-artifact
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   operation:
     $ref: "#/$defs/operation"
   release:
@@ -29,7 +29,7 @@ properties:
   package:
     $ref: "#/$defs/package"
   artifact:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/artifact-expectation"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/artifact-expectation"
   provenance:
     $ref: "#/$defs/provenance"
   contents:
@@ -50,48 +50,48 @@ allOf:
           properties:
             role:
               const: sign
-          required: [role]
-      required: [operation]
+          required: [ role ]
+      required: [ operation ]
     then:
       properties:
         provenance:
-          required: [input-artifact]
+          required: [ input-artifact ]
     else:
       properties:
         provenance:
           not:
-            required: [input-artifact]
+            required: [ input-artifact ]
   - if:
       properties:
         artifact:
-          required: [prerequisite-artifacts]
-      required: [artifact]
+          required: [ prerequisite-artifacts ]
+      required: [ artifact ]
     then:
       properties:
         provenance:
-          required: [input-artifacts]
+          required: [ input-artifacts ]
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   asset-name:
     type: string
     minLength: 1
     pattern: "^[^/]+$"
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   git-object:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/git-object"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/git-object"
   semver:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/semver"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/semver"
   operation:
     type: object
     additionalProperties: false
-    required: [role, id]
+    required: [ role, id ]
     properties:
       role:
-        enum: [build, sign]
+        enum: [ build, sign ]
       id:
         $ref: "#/$defs/stable-id"
   release-identity:
@@ -102,7 +102,6 @@ $defs:
       - identity-tags
       - target-commit
       - plan-digest
-      - interpretation-contract
       - generator
       - security-posture
     properties:
@@ -118,19 +117,17 @@ $defs:
         $ref: "#/$defs/git-object"
       plan-digest:
         $ref: "#/$defs/digest"
-      interpretation-contract:
-        const: contract-1
       generator:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/generator"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/generator"
       security-posture:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/profile-ref"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   global-tag:
     type: object
     additionalProperties: false
-    required: [id, name, object]
+    required: [ id, name, object ]
     properties:
       id:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/workspace-tag-id"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workspace-tag-id"
       name:
         $ref: "#/$defs/semver"
       object:
@@ -138,16 +135,16 @@ $defs:
   tag-object-reference:
     type: object
     additionalProperties: false
-    required: [tag-id, tag-object]
+    required: [ tag-id, tag-object ]
     properties:
       tag-id:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
       tag-object:
         $ref: "#/$defs/git-object"
   package:
     type: object
     additionalProperties: false
-    required: [id, release-unit, version]
+    required: [ id, release-unit, version ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
@@ -158,14 +155,14 @@ $defs:
   provenance:
     type: object
     additionalProperties: false
-    required: [source, builder, recipe, parameters]
+    required: [ source, builder, recipe, parameters ]
     properties:
       source:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/source"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/source"
       builder:
         $ref: "#/$defs/builder"
       recipe:
-        $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/resolved-recipe"
+        $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/resolved-recipe"
       parameters:
         type: object
       input-artifact:
@@ -229,7 +226,7 @@ $defs:
         type: string
         minLength: 1
       subscriber-identity:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/azure-artifact-signing-subscriber-identity"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/azure-artifact-signing-subscriber-identity"
       publisher-subject:
         type: string
         minLength: 1
@@ -270,7 +267,7 @@ $defs:
   artifact-record-reference:
     type: object
     additionalProperties: false
-    required: [id, record-digest]
+    required: [ id, record-digest ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
@@ -279,7 +276,7 @@ $defs:
   input-artifact-reference:
     type: object
     additionalProperties: false
-    required: [release-unit-id, package-id, artifact-id, record-digest]
+    required: [ release-unit-id, package-id, artifact-id, record-digest ]
     properties:
       release-unit-id: { $ref: "#/$defs/stable-id" }
       package-id: { $ref: "#/$defs/stable-id" }
@@ -288,7 +285,7 @@ $defs:
   builder:
     type: object
     additionalProperties: false
-    required: [provider, workflow, job]
+    required: [ provider, workflow, job ]
     properties:
       provider:
         const: github-actions
@@ -299,12 +296,12 @@ $defs:
   content:
     type: object
     additionalProperties: false
-    required: [id, kind, digests]
+    required: [ id, kind, digests ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
       kind:
-        enum: [file, image]
+        enum: [ file, image ]
       path:
         $ref: "#/$defs/exact-path"
       size:
@@ -320,26 +317,26 @@ $defs:
           properties:
             kind:
               const: file
-          required: [kind]
+          required: [ kind ]
         then:
-          required: [path, size]
+          required: [ path, size ]
           not:
-            required: [reference]
+            required: [ reference ]
       - if:
           properties:
             kind:
               const: image
-          required: [kind]
+          required: [ kind ]
         then:
-          required: [reference]
+          required: [ reference ]
           not:
             anyOf:
-              - required: [path]
-              - required: [size]
+              - required: [ path ]
+              - required: [ size ]
   content-digests:
     type: object
     minProperties: 1
-    required: [sha256]
+    required: [ sha256 ]
     propertyNames:
       $ref: "#/$defs/stable-id"
     properties:
@@ -352,7 +349,7 @@ $defs:
   attached-component:
     type: object
     additionalProperties: false
-    required: [id, kind, identity, content-ids]
+    required: [ id, kind, identity, content-ids ]
     properties:
       id:
         $ref: "#/$defs/stable-id"

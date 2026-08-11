@@ -1,87 +1,34 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: github-container-registry, part-of: oci }
 role: distribution
-versions:
-  1:
-    configuration: ./github-container-registry.config.yml#/$defs/version-1
-    destination: ./github-container-registry.config.yml#/$defs/destination-version-1
-    primitives:
-      [
-        { id: oci-registry-preflight, version: 1 },
-        { id: oci-push-layout, version: 1 },
-        { id: oci-pull-observe, version: 1 },
-        { id: oci-verify, version: 1 },
-      ]
-    tools: []
-    accepted-artifact-kinds:
-      [
-        oci-image-layout,
-        devcontainer-feature-layout,
-        devcontainer-template-layout,
-      ]
-    credentials: []
-    github-permissions:
-      {
-        distribute: { contents: read, packages: write },
-        observe: { contents: read, packages: read },
-      }
-    preflight:
-      [
-        {
-          id: probe-ghcr,
-          uses: { id: oci-registry-preflight, version: 1 },
-          with: { agreement: [descriptor-digest] },
-        },
-      ]
-    distribute:
-      [
-        {
-          id: push-ghcr-layout,
-          uses: { id: oci-push-layout, version: 1 },
-          with: { immutable-first: true, aliases: after-agreement },
-        },
-      ]
-    observe:
-      - {
-          id: pull-ghcr-subject,
-          uses: { id: oci-pull-observe, version: 1 },
-          with: { retrieval: narrow-consumer, deadline-seconds: 300 },
-        }
-    verify:
-      - {
-          id: verify-ghcr-subject,
-          uses: { id: oci-verify, version: 1 },
-          with: { compare: [immutable-digest, aliases, platforms] },
-        }
-    requirements:
-      [
-        { id: github-packages-write, class: authority },
-        { id: consumer-pull, class: security-control },
-      ]
-    control-subtractions: []
-    guarantees:
-      - {
-          id: exact-ghcr-subject,
-          statement: Consumer-visible descriptors agree with the sealed layout.,
-        }
-      - {
-          id: job-token-authority,
-          statement: Distribution uses no named registry secret.,
-        }
-    conformance:
-      cases:
-        - {
-            id: ghcr-publish,
-            fixture: fixtures/ghcr/publish,
-            asserts: [packages-write, immutable-first, aliases],
-          }
-        - {
-            id: ghcr-conflict,
-            fixture: fixtures/ghcr/conflict,
-            asserts: [digest-conflict, no-overwrite],
-          }
-      live:
-        {
-          operation: ghcr-live-conformance,
-          proves: [job-token-routing, consumer-pull, idempotent-retry],
-        }
+configuration: ./github-container-registry.config.yml#/$defs/configuration
+destination: ./github-container-registry.config.yml#/$defs/destination
+primitives: [ oci-registry-preflight, oci-push-layout, oci-pull-observe, oci-verify ]
+tools: []
+accepted-artifact-kinds: [ oci-image-layout, devcontainer-feature-layout, devcontainer-template-layout ]
+credentials: []
+github-permissions:
+  distribute:
+    contents: read
+    packages: write
+  observe:
+    contents: read
+    packages: read
+preflight: [ { id: probe-ghcr, uses: oci-registry-preflight, with: { agreement: [ descriptor-digest ] } } ]
+distribute: [ { id: push-ghcr-layout, uses: oci-push-layout, with: { immutable-first: true, aliases: after-agreement } } ]
+observe:
+  - { id: pull-ghcr-subject, uses: oci-pull-observe, with: { retrieval: narrow-consumer, deadline-seconds: 300 } }
+verify:
+  - { id: verify-ghcr-subject, uses: oci-verify, with: { compare: [ immutable-digest, aliases, platforms ] } }
+requirements: [ { id: github-packages-write, class: authority }, { id: consumer-pull, class: security-control } ]
+control-subtractions: []
+guarantees:
+  - { id: exact-ghcr-subject, statement: Consumer-visible descriptors agree with the sealed layout. }
+  - { id: job-token-authority, statement: Distribution uses no named registry secret. }
+conformance:
+  cases:
+    - { id: ghcr-publish, fixture: fixtures/ghcr/publish, asserts: [ packages-write, immutable-first, aliases ] }
+    - { id: ghcr-conflict, fixture: fixtures/ghcr/conflict, asserts: [ digest-conflict, no-overwrite ] }
+  live:
+    operation: ghcr-live-conformance
+    proves: [ job-token-routing, consumer-pull, idempotent-retry ]

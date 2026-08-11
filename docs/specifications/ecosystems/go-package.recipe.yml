@@ -1,120 +1,37 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: go-package, part-of: go }
 role: package
-versions:
-  1:
-    package-configuration: ./go-package.config.yml#/$defs/version-1
-    artifact-configuration: ./go-package.config.yml#/$defs/artifact-version-1
-    primitives:
-      [
-        { id: go-discover, version: 1 },
-        { id: go-module-tag, version: 1 },
-        { id: go-download, version: 1 },
-        { id: go-build, version: 1 },
-        { id: archive-create, version: 1 },
-        { id: archive-validate, version: 1 },
-        { id: write-release-artifact, version: 1 },
-      ]
-    tools:
-      - {
-          id: go,
-          resolution: { project-pins: [go.mod, go.work], default: 1.26.5 },
-          install: { id: install-go, version: 1 },
-        }
-    matrix:
-      - id: target
-        values:
-          - { id: linux-amd64, runner: { id: ubuntu, version: 1 } }
-          - { id: linux-arm64, runner: { id: ubuntu, version: 1 } }
-          - { id: darwin-amd64, runner: { id: macos, version: 1 } }
-          - { id: darwin-arm64, runner: { id: macos, version: 1 } }
-          - { id: windows-amd64, runner: { id: windows, version: 1 } }
-    artifact-kinds:
-      [
-        {
-          id: executable-archive,
-          content: file,
-          asset-name-source: intentional,
-          native-kinds: [executable-archive],
-        },
-      ]
-    tag-contract: { id: go-module-tag, version: 1 }
-    discovery:
-      [
-        {
-          id: discover-go-module,
-          uses: { id: go-discover, version: 1 },
-          with: { network: denied },
-        },
-      ]
-    planning:
-      [
-        {
-          id: resolve-go-commands,
-          uses: { id: go-discover, version: 1 },
-          with: { selection: configured-or-single-command },
-        },
-      ]
-    build:
-      - {
-          id: download-go-modules,
-          uses: { id: go-download, version: 1 },
-          with: { verify-go-sum: true },
-        }
-      - {
-          id: build-go-command,
-          uses: { id: go-build, version: 1 },
-          with: { network: denied, trimpath: true },
-        }
-      - {
-          id: archive-go-command,
-          uses: { id: archive-create, version: 1 },
-          with: { timestamps: source-commit, root: planned-asset-stem },
-        }
-    collection:
-      [
-        {
-          id: collect-go-archive,
-          uses: { id: archive-validate, version: 1 },
-          with: { cardinality: matrix },
-        },
-      ]
-    validation:
-      - {
-          id: validate-go-archive,
-          uses: { id: archive-validate, version: 1 },
-          with: { compare: [target, executable, version, inventory, bytes] },
-        }
-      - {
-          id: record-go-artifact,
-          uses: { id: write-release-artifact, version: 1 },
-          with:
-            { schema: https://intentional.foo/schemas/release-artifact.yml },
-        }
-    requirements:
-      [
-        { id: verified-go-sum, class: operational },
-        { id: credential-free-build, class: authority },
-      ]
-    control-subtractions: []
-    guarantees:
-      - {
-          id: native-go-authority,
-          statement: Go module and workspace files remain authoritative.,
-        }
-      - {
-          id: exact-go-archives,
-          statement: Every platform archive is deterministic and version-verified.,
-        }
-    conformance:
-      cases:
-        - {
-            id: go-workspace,
-            fixture: fixtures/go/workspace,
-            asserts: [nested-modules, command-selection, replace-rules],
-          }
-        - {
-            id: go-matrix,
-            fixture: fixtures/go/matrix,
-            asserts: [all-targets, exact-archives, version-injection],
-          }
+package-configuration: ./go-package.config.yml#/$defs/package
+artifact-configuration: ./go-package.config.yml#/$defs/artifact
+primitives: [ go-discover, go-module-tag, go-download, go-build, archive-create, archive-validate, write-release-artifact ]
+tools:
+  - { id: go, resolution: { project-pins: [ go.mod, go.work ], default: 1.26.5 }, install: install-go }
+matrix:
+  - id: target
+    values:
+      - { id: linux-amd64, runner: ubuntu }
+      - { id: linux-arm64, runner: ubuntu }
+      - { id: darwin-amd64, runner: macos }
+      - { id: darwin-arm64, runner: macos }
+      - { id: windows-amd64, runner: windows }
+artifact-kinds: [ { id: executable-archive, content: file, asset-name-source: intentional, native-kinds: [ executable-archive ] } ]
+tag-contract: go-module-tag
+discovery: [ { id: discover-go-module, uses: go-discover, with: { network: denied } } ]
+planning: [ { id: resolve-go-commands, uses: go-discover, with: { selection: configured-or-single-command } } ]
+build:
+  - { id: download-go-modules, uses: go-download, with: { verify-go-sum: true } }
+  - { id: build-go-command, uses: go-build, with: { network: denied, trimpath: true } }
+  - { id: archive-go-command, uses: archive-create, with: { timestamps: source-commit, root: planned-asset-stem } }
+collection: [ { id: collect-go-archive, uses: archive-validate, with: { cardinality: matrix } } ]
+validation:
+  - { id: validate-go-archive, uses: archive-validate, with: { compare: [ target, executable, version, inventory, bytes ] } }
+  - { id: record-go-artifact, uses: write-release-artifact, with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' } }
+requirements: [ { id: verified-go-sum, class: operational }, { id: credential-free-build, class: authority } ]
+control-subtractions: []
+guarantees:
+  - { id: native-go-authority, statement: Go module and workspace files remain authoritative. }
+  - { id: exact-go-archives, statement: Every platform archive is deterministic and version-verified. }
+conformance:
+  cases:
+    - { id: go-workspace, fixture: fixtures/go/workspace, asserts: [ nested-modules, command-selection, replace-rules ] }
+    - { id: go-matrix, fixture: fixtures/go/matrix, asserts: [ all-targets, exact-archives, version-injection ] }

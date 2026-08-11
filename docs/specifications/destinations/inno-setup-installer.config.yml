@@ -2,16 +2,16 @@
 # relationships: { realizes: inno-setup-installer }
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/destinations/inno-setup-installer.config.yml
+$id: "https://intentional.foo/schemas/0.2/destinations/inno-setup-installer/config"
 title: Inno Setup installer recipe configuration catalog
 $defs:
-  version-1:
+  package:
     type: object
     additionalProperties: false
     required: [ script ]
     properties:
       script:
-        $ref: https://intentional.foo/schemas/config.yml#/$defs/exact-path
+        $ref: https://intentional.foo/schemas/0.2/config#/$defs/exact-path
         description: Tracked root .iss file whose include tree becomes compiler input.
       defines:
         type: object
@@ -20,7 +20,7 @@ $defs:
           pattern: "^(?![Ii][Nn][Tt][Ee][Nn][Tt][Ii][Oo][Nn][Aa][Ll]_)[A-Za-z][A-Za-z0-9_]*$"
         additionalProperties:
           type: string
-  artifact-version-1:
+  artifact:
     type: object
     additionalProperties: false
     required: [ architectures, output-name ]

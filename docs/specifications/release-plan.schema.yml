@@ -3,14 +3,13 @@
 #   realizes: release-plan
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/release-plan.yml
+$id: https://intentional.foo/schemas/0.2/release-plan
 title: Intentional Release Plan
 type: object
 additionalProperties: false
 required:
   - $schema
   - digest
-  - contract
   - generator
   - source
   - workflow
@@ -21,11 +20,9 @@ required:
   - tag-order
 properties:
   $schema:
-    const: https://intentional.foo/schemas/release-plan.yml
+    const: https://intentional.foo/schemas/0.2/release-plan
   digest:
     $ref: "#/$defs/digest"
-  contract:
-    const: contract-1
   generator:
     $ref: "#/$defs/generator"
   source:
@@ -69,19 +66,19 @@ allOf:
           properties:
             adoption:
               const: adopted
-          required: [adoption]
+          required: [ adoption ]
     then:
       properties:
         release-units:
           items:
             allOf:
               - $ref: "#/$defs/release-unit"
-              - required: [release-record]
+              - required: [ release-record ]
         packages:
           items:
             allOf:
               - $ref: "#/$defs/package"
-              - required: [artifact-expectations, distribution-targets]
+              - required: [ artifact-expectations, distribution-targets ]
     else:
       properties:
         release-units:
@@ -89,7 +86,7 @@ allOf:
             allOf:
               - $ref: "#/$defs/release-unit"
               - not:
-                  required: [release-record]
+                  required: [ release-record ]
         custom-release-gates:
           maxItems: 0
         packages:
@@ -98,23 +95,24 @@ allOf:
               - $ref: "#/$defs/package"
               - not:
                   anyOf:
-                    - required: [artifact-expectations]
-                    - required: [distribution-targets]
+                    - required: [ artifact-expectations ]
+                    - required: [ distribution-targets ]
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   relative-root-path:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/relative-root-path"
-  profile-ref:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/profile-ref"
-  versioned-ref:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/versioned-ref"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/relative-root-path"
   resolved-recipe:
-    allOf:
-      - $ref: "https://intentional.foo/schemas/config.yml#/$defs/recipe-ref"
-      - required: [configuration]
+    type: object
+    additionalProperties: false
+    required: [ id, configuration ]
+    properties:
+      id:
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/recipe-selector"
+      configuration:
+        type: object
   digest:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
@@ -130,7 +128,7 @@ $defs:
   generator:
     type: object
     additionalProperties: false
-    required: [tool, version]
+    required: [ tool, version ]
     properties:
       tool:
         const: intentional
@@ -139,7 +137,7 @@ $defs:
   source:
     type: object
     additionalProperties: false
-    required: [commit, tree]
+    required: [ commit, tree ]
     properties:
       commit:
         $ref: "#/$defs/git-object"
@@ -148,7 +146,7 @@ $defs:
   setting-requirement:
     type: object
     additionalProperties: false
-    required: [id, scope, configuration]
+    required: [ id, scope, configuration ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
@@ -160,7 +158,7 @@ $defs:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [adoption]
+        required: [ adoption ]
         properties:
           adoption:
             const: declined
@@ -180,9 +178,9 @@ $defs:
           provider:
             const: github
           global-tag:
-            $ref: "https://intentional.foo/schemas/config.yml#/$defs/workspace-tag-id"
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workspace-tag-id"
           security-posture:
-            $ref: "#/$defs/profile-ref"
+            $ref: "#/$defs/stable-id"
           required-settings:
             type: array
             uniqueItems: true
@@ -217,7 +215,7 @@ $defs:
       new-version:
         $ref: "#/$defs/semver"
       bump:
-        enum: [major, minor, patch]
+        enum: [ major, minor, patch ]
       contributing-intent-ids:
         type: array
         uniqueItems: true
@@ -237,7 +235,7 @@ $defs:
   release-record-expectation:
     type: object
     additionalProperties: false
-    required: [tag-id, tag-name, version, prerelease]
+    required: [ tag-id, tag-name, version, prerelease ]
     properties:
       tag-id:
         $ref: "#/$defs/tag-id"
@@ -251,7 +249,7 @@ $defs:
   artifact-expectation:
     type: object
     additionalProperties: false
-    required: [id, kind, identity]
+    required: [ id, kind, identity ]
     properties:
       id:
         $ref: "#/$defs/stable-id"
@@ -267,16 +265,16 @@ $defs:
         uniqueItems: true
         items:
           {
-            $ref: "https://intentional.foo/schemas/config.yml#/$defs/artifact-reference",
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/artifact-reference",
           }
       signing:
         $ref: "#/$defs/signing-resolution"
   signing-resolution:
     type: object
     additionalProperties: false
-    required: [input-artifact-id, recipe]
+    required: [ input-artifact, recipe ]
     properties:
-      input-artifact-id:
+      input-artifact:
         $ref: "#/$defs/stable-id"
       recipe:
         $ref: "#/$defs/resolved-recipe"
@@ -313,7 +311,7 @@ $defs:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [kind, artifact-ids]
+        required: [ kind, artifact-ids ]
         properties:
           kind:
             const: release-artifacts
@@ -325,7 +323,7 @@ $defs:
               $ref: "#/$defs/stable-id"
       - type: object
         additionalProperties: false
-        required: [kind, tag-id]
+        required: [ kind, tag-id ]
         properties:
           kind:
             const: source-tag
@@ -365,12 +363,12 @@ $defs:
   custom-release-gate:
     type: object
     additionalProperties: false
-    required: [id, gate, workflow, contract]
+    required: [ id, gate, workflow ]
     allOf:
       - if:
           properties:
             gate: { const: candidate-release }
-          required: [gate]
+          required: [ gate ]
         then:
           properties:
             workflow:
@@ -378,7 +376,7 @@ $defs:
       - if:
           properties:
             gate: { const: release-unit-record }
-          required: [gate]
+          required: [ gate ]
         then:
           properties:
             workflow:
@@ -387,22 +385,20 @@ $defs:
       id:
         $ref: "#/$defs/stable-id"
       gate:
-        enum: [candidate-release, release-unit-record]
+        enum: [ candidate-release, release-unit-record ]
       workflow:
         $ref: "#/$defs/exact-path"
-      contract:
-        $ref: "#/$defs/versioned-ref"
   tag-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/tag-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
   tag:
     type: object
     additionalProperties: false
-    required: [id, kind, name, version, tag-after]
+    required: [ id, kind, name, version, tag-after ]
     properties:
       id:
         $ref: "#/$defs/tag-id"
       kind:
-        enum: [release-unit, workspace]
+        enum: [ release-unit, workspace ]
       name:
         type: string
         minLength: 1
@@ -411,7 +407,7 @@ $defs:
       release-unit:
         $ref: "#/$defs/stable-id"
       role:
-        enum: [primary, projection]
+        enum: [ primary, projection ]
       tag-after:
         type: array
         uniqueItems: true
@@ -423,7 +419,7 @@ $defs:
             kind:
               const: release-unit
         then:
-          required: [release-unit, role]
+          required: [ release-unit, role ]
       - if:
           properties:
             kind:
@@ -431,5 +427,5 @@ $defs:
         then:
           not:
             anyOf:
-              - required: [release-unit]
-              - required: [role]
+              - required: [ release-unit ]
+              - required: [ role ]

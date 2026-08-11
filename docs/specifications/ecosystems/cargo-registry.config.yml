@@ -3,11 +3,11 @@
 #   realizes: cargo-registry
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/cargo-registry.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/cargo-registry/config"
 title: Cargo Registry recipe configuration catalog
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   absolute-uri:
     type: string
     format: uri
@@ -16,20 +16,20 @@ $defs:
     type: string
     minLength: 1
     pattern: "^[A-Za-z][A-Za-z0-9+.-]*://\\S+$"
-  version-1:
+  configuration:
     type: object
     additionalProperties: false
-  destination-version-1:
+  destination:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [registry]
+        required: [ registry ]
         properties:
           registry:
             const: crates-io
       - type: object
         additionalProperties: false
-        required: [registry, index-url, api-url, download-url]
+        required: [ registry, index-url, api-url, download-url ]
         properties:
           registry:
             allOf:

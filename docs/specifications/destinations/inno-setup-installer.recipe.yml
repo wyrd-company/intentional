@@ -1,94 +1,79 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: inno-setup-installer, part-of: inno-setup }
 role: package
-versions:
-  1:
-    package-configuration: ./inno-setup-installer.config.yml#/$defs/version-1
-    artifact-configuration: ./inno-setup-installer.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: verify-input-artifacts, version: 1 }
-      - { id: resolve-inno-inputs, version: 1 }
-      - { id: construct-canonical-zip, version: 1 }
-      - { id: compile-inno-installer, version: 1 }
-      - { id: validate-inno-installer, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools:
-      - id: inno-setup
-        resolution: { exact: 7.0.2 }
-        install: { id: install-inno-setup, version: 1 }
-    matrix:
-      - id: runner
-        values:
-          - id: windows
-            runner: { id: github-windows, version: 1 }
-    accepted-input-artifact-kinds: [ executable-archive ]
-    artifact-kinds:
-      - id: inno-installer-input
-        content: file
-        asset-name-source: intentional
-        native-kinds: [ canonical-zip ]
-      - id: inno-installer
-        content: file
-        asset-name-source: native
-        native-kinds: [ windows-setup-executable ]
-    discovery:
-      - id: discover-inno-script
-        uses: { id: resolve-inno-inputs, version: 1 }
-        with: { script: configured, includes: recursive-tracked }
-    planning:
-      - id: plan-inno-installer
-        uses: { id: verify-input-artifacts, version: 1 }
-        with:
-          {
-            inputs: configured,
-            kind: executable-archive,
-            architectures: exact,
-            payload: one-portable-executable,
-            signing: posture-required,
-          }
-      - id: seal-inno-inputs
-        uses: { id: resolve-inno-inputs, version: 1 }
-        with: { digests: complete, defines: closed, compiler: exact }
-    build:
-      - id: build-inno-output
-        uses: { id: compile-inno-installer, version: 1 }
-        with:
-          {
-            signing-selected: emit-input-archive,
-            signing-absent: compile-unsigned-installer,
-            timestamp-mode: disabled,
-          }
-    collection:
-      - id: collect-inno-output
-        uses: { id: construct-canonical-zip, version: 1 }
-        with: { when: signing-selected, content: complete-compiler-input }
-    validation:
-      - id: validate-inno-output
-        uses: { id: validate-inno-installer, version: 1 }
-        with:
-          { compare: [ identity, architectures, installed-files, uninstaller ] }
-      - id: record-inno-output
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: tracked-inno-script, class: operational }
-      - { id: verified-executable-archives, class: operational }
-      - { id: signed-windows-executables-under-robust, class: security-control }
-      - { id: credential-free-input-bundle, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: input-bound-inno-output
-        statement: Installer output binds the complete sealed compiler input.
-      - id: no-package-signing-authority
-        statement: Package execution never receives signing authority.
-    conformance:
-      cases:
-        - id: unsigned-installer
-          fixture: fixtures/inno-setup/unsigned
-          asserts: [ deterministic-output, exact-inventory, valid-uninstaller ]
-        - id: signing-input
-          fixture: fixtures/inno-setup/signing-input
-          asserts: [ canonical-zip, complete-inputs, no-credentials ]
-        - id: input-drift
-          fixture: fixtures/inno-setup/input-drift
-          asserts: [ digest-conflict, no-output ]
+package-configuration: ./inno-setup-installer.config.yml#/$defs/package
+artifact-configuration: ./inno-setup-installer.config.yml#/$defs/artifact
+primitives:
+  - verify-input-artifacts
+  - resolve-inno-inputs
+  - construct-canonical-zip
+  - compile-inno-installer
+  - validate-inno-installer
+  - write-release-artifact
+tools:
+  - id: inno-setup
+    resolution: { exact: 7.0.2 }
+    install: install-inno-setup
+matrix:
+  - id: runner
+    values:
+      - id: windows
+        runner: github-windows
+accepted-input-artifact-kinds: [ executable-archive ]
+artifact-kinds:
+  - id: inno-installer-input
+    content: file
+    asset-name-source: intentional
+    native-kinds: [ canonical-zip ]
+  - id: inno-installer
+    content: file
+    asset-name-source: native
+    native-kinds: [ windows-setup-executable ]
+discovery:
+  - id: discover-inno-script
+    uses: resolve-inno-inputs
+    with: { script: configured, includes: recursive-tracked }
+planning:
+  - id: plan-inno-installer
+    uses: verify-input-artifacts
+    with: { inputs: configured, kind: executable-archive, architectures: exact, payload: one-portable-executable, signing: posture-required }
+  - id: seal-inno-inputs
+    uses: resolve-inno-inputs
+    with: { digests: complete, defines: closed, compiler: exact }
+build:
+  - id: build-inno-output
+    uses: compile-inno-installer
+    with: { signing-selected: emit-input-archive, signing-absent: compile-unsigned-installer, timestamp-mode: disabled }
+collection:
+  - id: collect-inno-output
+    uses: construct-canonical-zip
+    with: { when: signing-selected, content: complete-compiler-input }
+validation:
+  - id: validate-inno-output
+    uses: validate-inno-installer
+    with: { compare: [ identity, architectures, installed-files, uninstaller ] }
+  - id: record-inno-output
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: tracked-inno-script, class: operational }
+  - { id: verified-executable-archives, class: operational }
+  - { id: signed-windows-executables-under-robust, class: security-control }
+  - { id: credential-free-input-bundle, class: authority }
+control-subtractions: []
+guarantees:
+  - id: input-bound-inno-output
+    statement: Installer output binds the complete sealed compiler input.
+  - id: no-package-signing-authority
+    statement: Package execution never receives signing authority.
+conformance:
+  cases:
+    - id: unsigned-installer
+      fixture: fixtures/inno-setup/unsigned
+      asserts: [ deterministic-output, exact-inventory, valid-uninstaller ]
+    - id: signing-input
+      fixture: fixtures/inno-setup/signing-input
+      asserts: [ canonical-zip, complete-inputs, no-credentials ]
+    - id: input-drift
+      fixture: fixtures/inno-setup/input-drift
+      asserts: [ digest-conflict, no-output ]

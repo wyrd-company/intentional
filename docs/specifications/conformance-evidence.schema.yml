@@ -3,7 +3,7 @@
 #   realizes: conformance-evidence
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/conformance-evidence.yml
+$id: https://intentional.foo/schemas/0.2/conformance-evidence
 title: Intentional recipe conformance evidence
 type: object
 additionalProperties: false
@@ -19,17 +19,17 @@ required:
   - outcome
 properties:
   $schema:
-    const: https://intentional.foo/schemas/conformance-evidence.yml
+    const: https://intentional.foo/schemas/0.2/conformance-evidence
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   generator:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/generator"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/generator"
   recipe:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/resolved-recipe"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/resolved-recipe"
   case:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   mode:
-    enum: [hermetic, live]
+    enum: [ hermetic, live ]
   fixture:
     $ref: "#/$defs/fixture"
   destination:
@@ -46,52 +46,52 @@ properties:
     items:
       $ref: "#/$defs/authority-check"
   outcome:
-    enum: [supported, unsupported, incomplete]
+    enum: [ supported, unsupported, incomplete ]
 allOf:
   - if:
       properties:
         mode: { const: hermetic }
-      required: [mode]
+      required: [ mode ]
     then:
-      required: [fixture]
-      not: { required: [destination] }
+      required: [ fixture ]
+      not: { required: [ destination ] }
   - if:
       properties:
         mode: { const: live }
-      required: [mode]
+      required: [ mode ]
     then:
-      required: [destination]
-      not: { required: [fixture] }
+      required: [ destination ]
+      not: { required: [ fixture ] }
 $defs:
   stable-id:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   fixture:
     type: object
     additionalProperties: false
-    required: [path, digest]
+    required: [ path, digest ]
     properties:
       path:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
       digest: { $ref: "#/$defs/digest" }
   assertion:
     type: object
     additionalProperties: false
-    required: [id, state, observations]
+    required: [ id, state, observations ]
     properties:
       id: { $ref: "#/$defs/stable-id" }
       state:
-        enum: [passed, failed, unobserved]
+        enum: [ passed, failed, unobserved ]
       observations:
         type: object
   authority-check:
     type: object
     additionalProperties: false
-    required: [id, kind, state]
+    required: [ id, kind, state ]
     properties:
       id: { $ref: "#/$defs/stable-id" }
       kind:
-        enum: [credential-presence, setting]
+        enum: [ credential-presence, setting ]
       state:
-        enum: [present, absent, unverifiable, agreeing, conflicting]
+        enum: [ present, absent, unverifiable, agreeing, conflicting ]

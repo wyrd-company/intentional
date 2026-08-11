@@ -10,14 +10,14 @@ description: >-
   Defines the canonical Release Plan emitted by `intentional plan` and consumed
   by materialization, portable release establishment, managed release workflow,
   Release Record assembly, Distribution, and verification. A Release Plan freezes the
-  accepted source, interpretation contract, generator, channel, Release Unit
+  accepted source, exact Intentional generator, channel, Release Unit
   versions, contributing Change Intents, release notes, Packages, Release
   Artifact expectations, qualified artifact derivation prerequisites, resolved
   Signing recipes and their input artifacts, Distribution Targets, per-unit
   Release Record expectations, Custom Release Gates,
-  workflow security posture, and complete tag graph. Interpretation contract and
-  security posture identities resolve through
-  their maintained catalogs. It is a digest-bound candidate until the
+  workflow security posture, and complete tag graph. Security posture identity
+  resolves through the maintained catalog compiled into the producing
+  Intentional version. It is a digest-bound candidate until the
   verified materialized commit and annotated identity tags establish the Release.
   `docs/specifications/release-plan.schema.yml` is the machine-readable
   definition.
@@ -39,12 +39,12 @@ validation-criteria: >-
   consumer-visible state that the dependent target verifies for itself; it does
   not name another workflow run. `tag-order` is the
   deterministic topological order of the complete tag graph with lexical tie
-  breaking. Semantic validation proves the source objects, generator and
-  interpretation contract, versions, intent membership, Package ownership,
+  breaking. Semantic validation proves the source objects, generator, versions,
+  intent membership, Package ownership,
   recipe-specific payloads, signing-input and target-to-artifact references,
   acyclic signing and artifact-derivation dependencies, qualified Distribution
   identity, Distribution prerequisite references and acyclicity, workflow
-  adoption, posture profile, Custom Release Gate contracts,
+  adoption, security posture, Custom Release Gate contracts,
   global-tag designation, tag
   prerequisites, and exact agreement with Release Workspace configuration. A
   declined plan contains no managed posture, Custom Release Gate, Release Artifact

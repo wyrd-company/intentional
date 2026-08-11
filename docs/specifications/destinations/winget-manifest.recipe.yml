@@ -1,86 +1,67 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: winget-manifest, part-of: winget }
 role: package
-versions:
-  1:
-    package-configuration: ./winget-manifest.config.yml#/$defs/version-1
-    artifact-configuration: ./winget-manifest.config.yml#/$defs/artifact-version-1
-    primitives:
-      - { id: verify-input-artifacts, version: 1 }
-      - { id: render-structured-yaml, version: 1 }
-      - { id: validate-winget-manifests, version: 1 }
-      - { id: construct-canonical-zip, version: 1 }
-      - { id: write-release-artifact, version: 1 }
-    tools:
-      - id: winget-manifest-validator
-        resolution: { source: winget-create, exact: 1.12.13.0 }
-        install: { id: install-winget-manifest-validator, version: 1 }
-    matrix: []
-    accepted-input-artifact-kinds: [ inno-installer ]
-    artifact-kinds:
-      - id: winget-manifest-archive
-        content: file
-        asset-name-source: intentional
-        native-kinds: [ canonical-zip, winget-manifest-set ]
-    discovery:
-      - id: discover-winget-templates
-        uses: { id: render-structured-yaml, version: 1 }
-        with: { mode: parse-only, paths: configured }
-    planning:
-      - id: plan-winget-manifests
-        uses: { id: verify-input-artifacts, version: 1 }
-        with:
-          {
-            kind: inno-installer,
-            identities: exact,
-            architectures: complete,
-            signing: azure-public-trust,
-          }
-    build:
-      - id: render-winget-manifests
-        uses: { id: render-structured-yaml, version: 1 }
-        with:
-          {
-            fields: [ PackageVersion, InstallerUrl, InstallerSha256, Architecture ],
-            source: sealed-release-record,
-            installer-node-mapping: one-per-declared-architecture,
-          }
-    collection:
-      - id: collect-winget-archive
-        uses: { id: construct-canonical-zip, version: 1 }
-        with: { paths: winget-repository-relative, inventory: complete }
-    validation:
-      - id: validate-winget-manifests
-        uses: { id: validate-winget-manifests, version: 1 }
-        with: { compare: [ package, version, urls, digests, architectures ] }
-      - id: record-winget-archive
-        uses: { id: write-release-artifact, version: 1 }
-        with: { schema: https://intentional.foo/schemas/release-artifact.yml }
-    requirements:
-      - { id: final-inno-installers, class: operational }
-      - { id: public-trust-signed-installers, class: security-control }
-      - { id: tracked-winget-templates, class: operational }
-      - { id: credential-free-manifest-rendering, class: authority }
-    control-subtractions: []
-    guarantees:
-      - id: released-installer-binding
-        statement: Every manifest URL and digest identifies an attached released installer.
-      - id: repository-ready-manifest-set
-        statement: The sealed archive contains the exact validated upstream paths and bytes.
-    conformance:
-      cases:
-        - id: manifest-set
-          fixture: fixtures/winget/manifest-set
-          asserts: [ structured-rendering, exact-paths, installer-digests ]
-        - id: multi-architecture
-          fixture: fixtures/winget/multi-architecture
-          asserts:
-            [
-              complete-architectures,
-              repeated-url-and-digest,
-              canonical-zip,
-              exact-provenance,
-            ]
-        - id: template-conflict
-          fixture: fixtures/winget/template-conflict
-          asserts: [ owned-field-conflict, no-output ]
+package-configuration: ./winget-manifest.config.yml#/$defs/package
+artifact-configuration: ./winget-manifest.config.yml#/$defs/artifact
+primitives:
+  - verify-input-artifacts
+  - render-structured-yaml
+  - validate-winget-manifests
+  - construct-canonical-zip
+  - write-release-artifact
+tools:
+  - id: winget-manifest-validator
+    resolution: { source: winget-create, exact: 1.12.13.0 }
+    install: install-winget-manifest-validator
+matrix: []
+accepted-input-artifact-kinds: [ inno-installer ]
+artifact-kinds:
+  - id: winget-manifest-archive
+    content: file
+    asset-name-source: intentional
+    native-kinds: [ canonical-zip, winget-manifest-set ]
+discovery:
+  - id: discover-winget-templates
+    uses: render-structured-yaml
+    with: { mode: parse-only, paths: configured }
+planning:
+  - id: plan-winget-manifests
+    uses: verify-input-artifacts
+    with: { kind: inno-installer, identities: exact, architectures: complete, signing: azure-public-trust }
+build:
+  - id: render-winget-manifests
+    uses: render-structured-yaml
+    with: { fields: [ PackageVersion, InstallerUrl, InstallerSha256, Architecture ], source: sealed-release-record, installer-node-mapping: one-per-declared-architecture }
+collection:
+  - id: collect-winget-archive
+    uses: construct-canonical-zip
+    with: { paths: winget-repository-relative, inventory: complete }
+validation:
+  - id: validate-winget-manifests
+    uses: validate-winget-manifests
+    with: { compare: [ package, version, urls, digests, architectures ] }
+  - id: record-winget-archive
+    uses: write-release-artifact
+    with: { schema: 'https://intentional.foo/schemas/0.2/release-artifact' }
+requirements:
+  - { id: final-inno-installers, class: operational }
+  - { id: public-trust-signed-installers, class: security-control }
+  - { id: tracked-winget-templates, class: operational }
+  - { id: credential-free-manifest-rendering, class: authority }
+control-subtractions: []
+guarantees:
+  - id: released-installer-binding
+    statement: Every manifest URL and digest identifies an attached released installer.
+  - id: repository-ready-manifest-set
+    statement: The sealed archive contains the exact validated upstream paths and bytes.
+conformance:
+  cases:
+    - id: manifest-set
+      fixture: fixtures/winget/manifest-set
+      asserts: [ structured-rendering, exact-paths, installer-digests ]
+    - id: multi-architecture
+      fixture: fixtures/winget/multi-architecture
+      asserts: [ complete-architectures, repeated-url-and-digest, canonical-zip, exact-provenance ]
+    - id: template-conflict
+      fixture: fixtures/winget/template-conflict
+      asserts: [ owned-field-conflict, no-output ]

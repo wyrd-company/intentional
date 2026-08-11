@@ -29,8 +29,8 @@ validation-criteria: >-
   sort lexically. Canonical record fields use kebab-case. The
   Release envelope names the canonical global workspace tag, rendered tag name,
   exact annotated-tag object, complete core identity-tag object set, target
-  commit, sealed Release Plan digest, interpretation contract, plan generator,
-  and selected security posture. The
+  commit, sealed Release Plan digest, plan generator, and selected security
+  posture. The
   Package identity and artifact `id`, `kind`, `identity`, and optional `variant`
   exactly equal one artifact expectation in that plan. The producing operation
   names the generated build or signing job. Provenance names its generated

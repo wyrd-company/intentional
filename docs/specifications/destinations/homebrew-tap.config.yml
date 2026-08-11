@@ -2,19 +2,12 @@
 # relationships: { realizes: homebrew-tap }
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/destinations/homebrew-tap.config.yml
+$id: "https://intentional.foo/schemas/0.2/destinations/homebrew-tap/config"
 title: Homebrew Tap recipe configuration catalog
 $defs:
-  version-1: { type: object, additionalProperties: false }
-  destination-version-1:
+  configuration: { type: object, additionalProperties: false }
+  destination:
     type: object
     additionalProperties: false
-    required: [repository]
-    properties:
-      {
-        repository:
-          {
-            type: string,
-            pattern: "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
-          },
-      }
+    required: [ repository ]
+    properties: { repository: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*$" } }

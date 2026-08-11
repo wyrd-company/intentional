@@ -6,7 +6,7 @@ relationships:
     - intentional
 description: >-
   Defines structured evidence emitted by recipe conformance operations. A record
-  binds one Intentional binary, compiled recipe and version, conformance case,
+  binds one Intentional binary and compiled recipe, conformance case,
   execution mode, exact fixture or live destination identity, asserted behavior,
   observed results, and support outcome. It records credential identifiers and
   setting checks without secret values. `conformance-evidence.schema.yml` is the
@@ -17,7 +17,7 @@ validation-criteria: >-
   `docs/specifications/conformance-evidence.schema.yml` as canonical JSON under
   JSON Schema Draft 2020-12. Its digest is the `sha256:` digest of canonical JSON
   with only `digest` omitted. Recipe identity resolves in the named Intentional
-  generator. Case identity and assertions exist in that recipe version. Hermetic
+  generator. Case identity and assertions exist in that compiled recipe. Hermetic
   mode names a committed fixture digest and records no destination. Live mode
   names a normalized destination and records credential-presence and setting
   checks without values. Outcome is `supported` only when every assertion

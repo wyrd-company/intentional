@@ -1,0 +1,166 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  realizes: intentional
+  related-to:
+    - ecosystem-recipes
+    - intent-and-versioning
+objective: >-
+  Define how changes to the Intentional crate API, configuration, maintained
+  recipes, commands, generated workflows, security postures, and durable records
+  contribute to one Intentional semantic version.
+proposed-design:
+  high-level-overview: >-
+    Intentional has one public version axis. The binary, published crate API,
+    configuration schemas, Change Intent format, maintained recipe catalog,
+    command behavior, generated workflow behavior, built-in security postures,
+    durable record formats, and record verifiers form one released product
+    contract. A release uses the highest semantic impact contributed by any
+    changed layer. Semantic versioning communicates that impact;
+    backward-compatibility policy separately determines which impacts the
+    project permits.
+
+  owned-version-surfaces: >-
+    The Intentional semantic version owns every behavior shipped in the binary.
+    Recipe identifiers, recipe configuration fragments, recipe primitives, and
+    built-in security posture identifiers do not carry independent versions.
+    External tools selected by a recipe retain exact tool versions because they
+    are build inputs rather than public Intentional contract versions. A sealed
+    Release Plan records the exact Intentional version, resolved recipe
+    identities and inputs, posture identity, tool versions, and release-specific
+    outputs needed to interpret the release.
+
+  compatibility-impact: >-
+    A major change requires an existing adopter, configuration, invocation,
+    workflow installation, or durable-record consumer to change. A minor change
+    adds an optional capability. Optional means that omission preserves existing
+    behavior and the adopter explicitly selects the capability. A capability
+    that activates for an existing selection is not optional. A patch corrects
+    implementation or validation within the existing contract. When one change
+    affects several layers, its Intentional bump is the greatest impact found in
+    any layer.
+
+  configuration-classification: >-
+    Configuration changes are major when they add a required field, remove or
+    rename an accepted field or value, reject an existing valid configuration,
+    require an existing configuration to change, or change the meaning or
+    default behavior of an existing configuration. Configuration changes are
+    minor when they add an optional field or value whose omission preserves
+    existing behavior, or make an existing requirement optional. Configuration
+    changes are patch when they correct validation, diagnostics, or loading
+    without changing the accepted configuration set or its meaning.
+
+  change-intent-format-classification: >-
+    Change Intent files are committed mutable workspace state and their format
+    is an Intentional contract surface. Format changes are major when they add a
+    required field, remove or rename an accepted field or value, reject an
+    existing valid intent, require an existing intent to change, or change the
+    meaning of existing intent content. Format changes are minor when they add
+    optional content whose omission preserves existing meaning or make an
+    existing requirement optional. Format changes are patch when they correct
+    parsing, validation, or diagnostics without changing the accepted intent set
+    or its meaning. The Release Workspace schema compatibility line identifies
+    the Change Intent format used by that workspace.
+
+  recipe-classification: >-
+    Recipe changes are major when they require new input or change an existing
+    selection's artifact identity, artifact naming, format, defaults, required
+    tools, authority, operation contract, or verification meaning. Recipe
+    changes are minor when they add an optional target, artifact kind,
+    destination, operation, or control that requires explicit selection and
+    leaves existing selections unchanged. Recipe changes are patch when they
+    correct behavior to satisfy the existing recipe contract. Exact artifact
+    bytes can change under a correction; artifact identity, format, provenance,
+    and verification meaning remain stable.
+
+  command-classification: >-
+    Command changes are major when they remove or rename a public command or
+    option, change accepted arguments incompatibly, change documented exit
+    behavior, or change documented machine-readable output incompatibly.
+    Command changes are minor when they add an optional command, option, or
+    machine-readable field that existing consumers can ignore. Command changes
+    are patch when they correct execution within the documented interface.
+    Human-readable wording is not a stable parsing interface.
+
+  published-crate-classification: >-
+    Every externally reachable public item, re-export, feature, type contract,
+    trait contract, and minimum supported Rust version of a published
+    Intentional library crate is part of the product contract. Crate API changes
+    are major when existing dependent source can no longer compile or must
+    change to preserve its behavior. This includes incompatible item removal or
+    renaming, signature and bound changes, exhaustive-enum changes, feature
+    removal, and a higher minimum supported Rust version. Crate API changes are
+    minor when they add an optional, source-compatible public capability. They
+    are patch when they correct implementation without changing the public type
+    and behavior contract. Automated Rust API comparison checks the prior
+    release, while review remains responsible for behavioral and ecosystem
+    compatibility that structural comparison cannot prove.
+
+  workflow-and-posture-classification: >-
+    Managed workflow changes are major when an existing adopter must change
+    repository configuration, workflow-owned inputs, credentials, or settings,
+    or when an existing security guarantee changes incompatibly. Weakening a
+    built-in posture is major. Workflow changes are minor when they add an
+    optional job, Distribution Target, callback, posture, or control that
+    requires explicit adoption. Workflow changes are patch when they correct the
+    generated graph or enforcement while preserving its authored inputs,
+    authority boundaries, and guarantees.
+
+  durable-record-classification: >-
+    Durable-record changes are major when an existing record can no longer be
+    parsed or verified, an existing field changes meaning, or an existing
+    verifier result changes incompatibly. Durable-record changes are minor when
+    they add optional record data while the new Intentional version continues to
+    parse and verify older records in the compatibility line. Durable-record
+    changes are patch when they correct validation or verification without
+    changing record shape or meaning. A major classification reports the impact;
+    it does not grant permission to abandon historical verification.
+
+  schema-identity: >-
+    Public schema identifiers name an Intentional compatibility line rather than
+    a source-file representation or exact binary release. Before `1.0.0`, the
+    line is `0.<minor>`, such as
+    `https://intentional.foo/schemas/0.2/config`. At and after `1.0.0`, the line
+    is the semantic-version major, such as
+    `https://intentional.foo/schemas/1/config`. Public identifiers have no YAML
+    or JSON suffix. Repository YAML is authoritative; schema publication serves
+    a semantically equivalent JSON representation. Minor and patch changes can
+    extend a compatibility-line schema only according to their classification.
+    A major change creates another compatibility-line path.
+
+  recipe-and-posture-selection: >-
+    Release Workspace configuration selects a maintained recipe with its stable
+    identity, such as `uses: rust-package`, and selects a built-in posture with
+    its stable identity, such as `security-posture: robust`. Recipe catalog and
+    configuration assets use role-named fragments instead of version-numbered
+    entries. The exact Intentional binary determines the meaning of each shipped
+    identity. Supporting an older configuration or record uses an
+    Intentional-version compatibility reader rather than parallel recipe or
+    posture version axes.
+
+  pre-one-release-mapping: >-
+    Intentional uses compatibility-significance mapping for its own releases
+    before `1.0.0`. A classified major change advances `0.x.y` to
+    `0.(x+1).0` and establishes another schema compatibility line. Classified
+    minor and patch changes advance `0.x.y` to `0.x.(y+1)` and preserve that
+    line. The Change Intent retains the underlying major, minor, or patch claim
+    even when minor and patch produce the same pre-1.0 numeric component. At and
+    after `1.0.0`, each classification advances its corresponding semantic
+    version component.
+
+  change-intents: >-
+    Every Intentional Change Intent states the highest semantic impact of its
+    change. Its author evaluates published crate API, configuration, Change
+    Intent format, recipes, commands, workflows, postures, durable records, and
+    verification behavior. An intent covering several changes or Release Units
+    records the highest resulting claim and describes adopter-visible behavior
+    in its changelog prose. Generated or derived files inherit the impact of
+    their authoritative source rather than adding another claim.
+
+  review-contract: >-
+    Code review independently checks the affected contract layers, whether each
+    added capability is genuinely optional, the claimed semantic impact, and
+    the resulting Change Intent. Review also checks backward-compatibility
+    policy as a separate gate. A correctly classified major change can still be
+    rejected when project compatibility guarantees forbid it. Contributor and
+    agent instructions point reviewers to this design and require correction of
+    an understated intent before acceptance.

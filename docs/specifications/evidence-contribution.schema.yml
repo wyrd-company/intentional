@@ -3,7 +3,7 @@
 #   realizes: evidence-contribution
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/evidence-contribution.yml
+$id: https://intentional.foo/schemas/0.2/evidence-contribution
 title: Intentional Evidence Contribution
 type: object
 additionalProperties: false
@@ -19,17 +19,17 @@ required:
   - attachments
 properties:
   $schema:
-    const: https://intentional.foo/schemas/evidence-contribution.yml
+    const: https://intentional.foo/schemas/0.2/evidence-contribution
   digest:
-    $ref: "https://intentional.foo/schemas/release-plan.yml#/$defs/digest"
+    $ref: "https://intentional.foo/schemas/0.2/release-plan#/$defs/digest"
   operation:
-    $ref: "https://intentional.foo/schemas/evidence-contribution.yml#/$defs/operation"
+    $ref: "https://intentional.foo/schemas/0.2/evidence-contribution#/$defs/operation"
   release:
-    $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/release-identity"
+    $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/release-identity"
   release-unit:
-    $ref: "https://intentional.foo/schemas/release-evidence.yml#/$defs/release-unit-identity"
+    $ref: "https://intentional.foo/schemas/0.2/release-evidence#/$defs/release-unit-identity"
   namespace:
-    $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   value-schema:
     type: string
     format: uri
@@ -38,26 +38,26 @@ properties:
     type: array
     uniqueItems: true
     items:
-      $ref: "https://intentional.foo/schemas/evidence-contribution.yml#/$defs/attachment"
+      $ref: "https://intentional.foo/schemas/0.2/evidence-contribution#/$defs/attachment"
 $defs:
   operation:
     type: object
     additionalProperties: false
-    required: [role, id]
+    required: [ role, id ]
     properties:
       role:
         const: custom-release-unit-record-gate
       id:
-        $ref: "https://intentional.foo/schemas/config.yml#/$defs/stable-id"
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   attachment:
     type: object
     additionalProperties: false
-    required: [name, size, digests]
+    required: [ name, size, digests ]
     properties:
       name:
-        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/asset-name"
+        $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/asset-name"
       size:
         type: integer
         minimum: 0
       digests:
-        $ref: "https://intentional.foo/schemas/release-artifact.yml#/$defs/content-digests"
+        $ref: "https://intentional.foo/schemas/0.2/release-artifact#/$defs/content-digests"

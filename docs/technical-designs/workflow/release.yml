@@ -54,7 +54,7 @@ proposed-design:
 
   release-tags: >-
     The job creates the annotated core identity tags in prerequisite order. Each
-    tag operation revalidates target commit, version, interpretation contract,
+    tag operation revalidates target commit, version, Intentional generator,
     plan digest, and prerequisite records. The global workspace tag identifies
     the established Release as the managed Release Record handoff and uses plain
     semantic-version text. Tags are published through the short-lived repository

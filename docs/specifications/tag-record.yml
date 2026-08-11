@@ -8,8 +8,8 @@ relationships:
 description: >-
   Defines the canonical protocol record carried by every annotated Git tag that
   Intentional creates. The Git tag object and its message together bind one
-  configured tag identity and semantic version to a target commit, interpretation
-  contract, generator, plan or baseline digest, and verified
+  configured tag identity and semantic version to a target commit, exact
+  Intentional generator, plan or baseline digest, and verified
   prerequisite tag objects.
   `docs/specifications/tag-record.schema.yml` is the machine-readable definition
   of the message fields.
@@ -29,8 +29,8 @@ validation-criteria: >-
   committer time and offset. A release record's `plan-digest` equals its sealed
   Release Plan digest. A baseline record's `plan-digest` is computed from the
   object defined by `#/$defs/baseline-digest-payload` in the Tag Record schema.
-  Its exact fields are `contract`, the bare `generator` semantic version,
-  `versions`, and `baseline: true`. `versions` maps each Release Unit ID and
+  Its exact fields are the bare `generator` semantic version, `versions`, and
+  `baseline: true`. `versions` maps each Release Unit ID and
   canonical workspace tag ID in the complete baseline set to its semantic
   version. The payload uses the Release Plan canonical JSON rules: object keys
   sort lexically at every depth, serialization is compact UTF-8 JSON, and the
@@ -38,7 +38,5 @@ validation-criteria: >-
   `tag-role: workspace`. Release Unit tag IDs require `tag-role: primary` or
   `projection`. Semantic validation resolves every
   prerequisite record and verifies its tag ID, annotated-tag object ID, target,
-  version, interpretation contract, and plan digest against the
-  sealed plan. The interpretation contract identifier resolves through the
-  maintained interpretation catalog. Exact existing objects satisfy creation; any disagreement is a
-  conflict.
+  version, generator, and plan digest against the sealed plan. Exact existing
+  objects satisfy creation; any disagreement is a conflict.

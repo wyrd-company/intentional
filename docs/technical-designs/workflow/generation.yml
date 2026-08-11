@@ -8,9 +8,8 @@ objective: >-
 proposed-design:
   inputs: >-
     Generation loads canonical Release Workspace configuration, the selected
-    interpretation contract resolved through its maintained catalog, selected
-    security-posture identifier and profile version resolved through the
-    maintained posture catalog, the profile's removed controls and remaining guarantees, configured
+    security-posture identifier resolved through the maintained posture catalog,
+    the posture's removed controls and remaining guarantees, configured
     Packages, managed artifacts, Signing selections, and Distribution Targets,
     detected Custom Release Gate workflow files,
     generator source identity, released Intentional binary identity and
@@ -29,7 +28,7 @@ proposed-design:
     prerequisite destination without joining their workflow executions.
     Generation constructs the robust graph, subtracts only the
     controls and coupled nodes declared by the selected
-    profile, and replaces dependent verification requirements with the remaining
+    posture, and replaces dependent verification requirements with the remaining
     guarantee contract. Validation proves unique protocol identities, acyclic job
     dependencies, artifact prerequisites, and Distribution prerequisites, one producer per handoff,
     complete Release Unit record inventories, credential

@@ -1271,7 +1271,10 @@ mod tests {
             "../../../docs/specifications/tag-record.schema.yml"
         ))
         .expect("Tag Record schema parses");
-        assert_eq!(schema["$id"].as_str(), Some(TAG_RECORD_SCHEMA));
+        assert_eq!(
+            schema["$id"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/tag-record")
+        );
         let required = schema["required"]
             .as_sequence()
             .expect("required Tag Record fields");
@@ -1280,7 +1283,7 @@ mod tests {
         }
         assert_eq!(
             schema["properties"]["tag-id"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/config.yml#/$defs/tag-id")
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-id")
         );
     }
 

@@ -7,7 +7,7 @@ relationships:
   models:
     - intentional
 description: >-
-  Defines the maintained Rust Package recipe family. Version 1 discovers Cargo
+  Defines the maintained Rust Package recipe family. It discovers Cargo
   packages and distributable targets, resolves exact Rust and Task tools, plans
   locked build units, executes canonical Cargo or named Task entrypoints,
   collects Cargo-reported outputs, constructs crate and platform archives, and
@@ -15,14 +15,13 @@ description: >-
   the shared executable-archive artifact kind, `cdylib` archives, and `staticlib`
   archives. Task is its only custom entrypoint contract; another repository
   build runner participates through a named Task target.
-  `rust-package.config.yml` defines versioned Package and artifact configuration
+  `rust-package.config.yml` defines Package and artifact configuration
   fragments. `rust-package.recipe.yml` defines the declarative recipe catalog.
 format: json-schema
 validation-criteria: >-
-  A conforming Rust Package selection names recipe `rust-package` and a version
-  present in `rust-package.recipe.yml`. Package `configuration` validates against
-  that version's Package fragment; each artifact `configuration` validates
-  against its artifact fragment. Version 1 accepts Rust 1.85.0 as its exact
+  A conforming Rust Package selection uses recipe `rust-package`. Package `with`
+  validates against its Package fragment; each artifact `with` validates against
+  its artifact fragment. The recipe accepts Rust 1.85.0 as its exact
   maintained default, Task 3.52.0 for custom entrypoints, and the target triples
   declared by its recipe matrix. It uses Cross 0.2.5 for
   `aarch64-unknown-linux-gnu`. An exact project toolchain pin replaces the Rust
@@ -38,7 +37,7 @@ validation-criteria: >-
   A target-independent crate expectation retains the configured artifact ID. A
   target-specific expectation uses `<artifact-id>.<target-triple>` as its stable
   Release Plan ID. Platform asset stems use `<artifact-id>-<platform>` and prepend
-  `settings.artifact-namespace-prefix` when configured. Version 1 platform names
+  `settings.artifact-namespace-prefix` when configured. Platform names
   are `linux-x86_64`, `linux-arm64`, `macos-arm64`, and `windows-x86_64`. Windows
   assets use `.zip`; other platform archives use `.tar.gz`. Archive roots equal
   their asset stem and contain exactly one declared executable or native library
@@ -48,6 +47,5 @@ validation-criteria: >-
   locked planning and execution, Cargo JSON message selection, crate contents,
   platform archive structure, dirty local-result handling, authoritative-source
   evidence, and rejection of missing, duplicate, renamed, or undeclared outputs.
-  Recipe and config version keys agree, every primitive and runner reference
-  resolves, and retained version 1 expands identically to its compatibility
-  snapshot.
+  Every primitive and runner reference resolves, and the compiled catalog
+  expands identically to its committed conformance expectation.

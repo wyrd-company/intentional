@@ -3,15 +3,15 @@
 #   realizes: pypi-registry
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/ecosystems/pypi-registry.config.yml
+$id: "https://intentional.foo/schemas/0.2/ecosystems/pypi-registry/config"
 title: PyPI Registry recipe configuration catalog
 $defs:
-  version-1:
+  configuration:
     type: object
     additionalProperties: false
-  destination-version-1:
+  destination:
     type: object
     additionalProperties: false
-    required: [registry]
+    required: [ registry ]
     properties:
       registry: { const: pypi }

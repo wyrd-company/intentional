@@ -1,85 +1,46 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships:
   realizes: pubdev-registry
   part-of: dart
 role: distribution
-versions:
-  1:
-    configuration: ./pubdev-registry.config.yml#/$defs/version-1
-    destination: ./pubdev-registry.config.yml#/$defs/destination-version-1
-    primitives:
-      - { id: pubdev-preflight, version: 1 }
-      - { id: pubdev-publish, version: 1 }
-      - { id: pubdev-observe, version: 1 }
-      - { id: pubdev-verify, version: 1 }
-    tools:
-      - {
-          id: dart,
-          resolution: { default: 3.12.2 },
-          install: { id: install-dart, version: 1 },
-        }
-    accepted-artifact-kinds: [dart-package-archive]
-    credentials: []
-    github-permissions:
-      distribute: { contents: read, id-token: write }
-      observe: { contents: read }
-    preflight:
-      - {
-          id: probe-pubdev,
-          uses: { id: pubdev-preflight, version: 1 },
-          with: { agreement: [archive-digest, downloaded-bytes] },
-        }
-    distribute:
-      - {
-          id: publish-pubdev,
-          uses: { id: pubdev-publish, version: 1 },
-          with:
-            {
-              authentication: trusted-publishing,
-              artifact: exact-sealed-archive,
-            },
-        }
-    observe:
-      - {
-          id: observe-pubdev,
-          uses: { id: pubdev-observe, version: 1 },
-          with: { retrieval: public-client, deadline-seconds: 600 },
-        }
-    verify:
-      - {
-          id: verify-pubdev,
-          uses: { id: pubdev-verify, version: 1 },
-          with: { compare: [name, version, archive-digest, downloaded-bytes] },
-        }
-    requirements:
-      - { id: existing-pubdev-package, class: operational }
-      - { id: release-unit-tag-matches-package-version, class: operational }
-      - { id: pubdev-trusted-publisher, class: authority }
-      - { id: public-package-readback, class: security-control }
-    control-subtractions: []
-    guarantees:
-      - {
-          id: exact-pubdev-package,
-          statement: Public pub.dev bytes agree with the sealed archive.,
-        }
-      - {
-          id: repository-bound-authority,
-          statement: Distribution uses repository-bound OpenID Connect and no standing token.,
-        }
-    conformance:
-      cases:
-        - {
-            id: absent-version,
-            fixture: fixtures/pubdev/absent,
-            asserts: [trusted-distribution, exact-archive],
-          }
-        - {
-            id: conflict,
-            fixture: fixtures/pubdev/conflict,
-            asserts: [conflict-rejection, no-overwrite],
-          }
-      live:
-        {
-          operation: pubdev-live-conformance,
-          proves: [trusted-publishing, public-readback, idempotent-retry],
-        }
+configuration: ./pubdev-registry.config.yml#/$defs/configuration
+destination: ./pubdev-registry.config.yml#/$defs/destination
+primitives:
+  - pubdev-preflight
+  - pubdev-publish
+  - pubdev-observe
+  - pubdev-verify
+tools:
+  - { id: dart, resolution: { default: 3.12.2 }, install: install-dart }
+accepted-artifact-kinds: [ dart-package-archive ]
+credentials: []
+github-permissions:
+  distribute:
+    contents: read
+    id-token: write
+  observe:
+    contents: read
+preflight:
+  - { id: probe-pubdev, uses: pubdev-preflight, with: { agreement: [ archive-digest, downloaded-bytes ] } }
+distribute:
+  - { id: publish-pubdev, uses: pubdev-publish, with: { authentication: trusted-publishing, artifact: exact-sealed-archive } }
+observe:
+  - { id: observe-pubdev, uses: pubdev-observe, with: { retrieval: public-client, deadline-seconds: 600 } }
+verify:
+  - { id: verify-pubdev, uses: pubdev-verify, with: { compare: [ name, version, archive-digest, downloaded-bytes ] } }
+requirements:
+  - { id: existing-pubdev-package, class: operational }
+  - { id: release-unit-tag-matches-package-version, class: operational }
+  - { id: pubdev-trusted-publisher, class: authority }
+  - { id: public-package-readback, class: security-control }
+control-subtractions: []
+guarantees:
+  - { id: exact-pubdev-package, statement: Public pub.dev bytes agree with the sealed archive. }
+  - { id: repository-bound-authority, statement: Distribution uses repository-bound OpenID Connect and no standing token. }
+conformance:
+  cases:
+    - { id: absent-version, fixture: fixtures/pubdev/absent, asserts: [ trusted-distribution, exact-archive ] }
+    - { id: conflict, fixture: fixtures/pubdev/conflict, asserts: [ conflict-rejection, no-overwrite ] }
+  live:
+    operation: pubdev-live-conformance
+    proves: [ trusted-publishing, public-readback, idempotent-retry ]

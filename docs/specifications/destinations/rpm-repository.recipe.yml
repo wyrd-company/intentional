@@ -1,84 +1,32 @@
-$schema: https://intentional.foo/schemas/recipe-catalog.yml
+$schema: https://intentional.foo/schemas/0.2/recipe-catalog
 relationships: { realizes: rpm-repository, part-of: rpm }
 role: distribution
-versions:
-  1:
-    configuration: ./rpm-repository.config.yml#/$defs/version-1
-    destination: ./rpm-repository.config.yml#/$defs/destination-version-1
-    primitives:
-      [
-        { id: rpm-preflight, version: 1 },
-        { id: invoke-delivery-action, version: 1 },
-        { id: rpm-observe, version: 1 },
-        { id: rpm-verify, version: 1 },
-      ]
-    tools: []
-    accepted-artifact-kinds: [rpm-package]
-    credentials:
-      [{ id: delivery-token, process-variable: INTENTIONAL_RPM_DELIVERY_TOKEN }]
-    github-permissions:
-      { distribute: { contents: read }, observe: { contents: read } }
-    preflight:
-      [
-        {
-          id: probe-rpm-index,
-          uses: { id: rpm-preflight, version: 1 },
-          with: { agreement: [package, version, architecture, sha256] },
-        },
-      ]
-    distribute:
-      [
-        {
-          id: deliver-rpm-package,
-          uses: { id: invoke-delivery-action, version: 1 },
-          with:
-            {
-              action: configured-pinned-action,
-              artifact: exact-sealed-package,
-            },
-        },
-      ]
-    observe:
-      - {
-          id: observe-rpm-index,
-          uses: { id: rpm-observe, version: 1 },
-          with: { retrieval: public-client, deadline-seconds: 600 },
-        }
-    verify:
-      - {
-          id: verify-rpm-package,
-          uses: { id: rpm-verify, version: 1 },
-          with: { compare: [index, sha256, downloaded-bytes] },
-        }
-    requirements:
-      [
-        { id: pinned-delivery-action, class: authority },
-        { id: public-rpm-readback, class: security-control },
-      ]
-    control-subtractions: []
-    guarantees:
-      - {
-          id: exact-rpm-package,
-          statement: Public repository bytes agree with the sealed RPM package.,
-        }
-      - {
-          id: repository-owned-delivery,
-          statement: Destination-specific delivery behavior remains in the pinned repository Action.,
-        }
-    conformance:
-      cases:
-        - {
-            id: rpm-delivery,
-            fixture: fixtures/rpm/delivery,
-            asserts: [pinned-action, exact-package, public-index],
-          }
-        - {
-            id: rpm-conflict,
-            fixture: fixtures/rpm/conflict,
-            asserts: [conflict-rejection, no-overwrite],
-          }
-      live:
-        {
-          operation: rpm-live-conformance,
-          proves: [pinned-action, public-readback, idempotent-retry],
-        }
+configuration: ./rpm-repository.config.yml#/$defs/configuration
+destination: ./rpm-repository.config.yml#/$defs/destination
+primitives: [ rpm-preflight, invoke-delivery-action, rpm-observe, rpm-verify ]
+tools: []
+accepted-artifact-kinds: [ rpm-package ]
+credentials: [ { id: delivery-token, process-variable: INTENTIONAL_RPM_DELIVERY_TOKEN } ]
+github-permissions:
+  distribute:
+    contents: read
+  observe:
+    contents: read
+preflight: [ { id: probe-rpm-index, uses: rpm-preflight, with: { agreement: [ package, version, architecture, sha256 ] } } ]
+distribute: [ { id: deliver-rpm-package, uses: invoke-delivery-action, with: { action: configured-pinned-action, artifact: exact-sealed-package } } ]
+observe:
+  - { id: observe-rpm-index, uses: rpm-observe, with: { retrieval: public-client, deadline-seconds: 600 } }
+verify:
+  - { id: verify-rpm-package, uses: rpm-verify, with: { compare: [ index, sha256, downloaded-bytes ] } }
+requirements: [ { id: pinned-delivery-action, class: authority }, { id: public-rpm-readback, class: security-control } ]
+control-subtractions: []
+guarantees:
+  - { id: exact-rpm-package, statement: Public repository bytes agree with the sealed RPM package. }
+  - { id: repository-owned-delivery, statement: Destination-specific delivery behavior remains in the pinned repository Action. }
+conformance:
+  cases:
+    - { id: rpm-delivery, fixture: fixtures/rpm/delivery, asserts: [ pinned-action, exact-package, public-index ] }
+    - { id: rpm-conflict, fixture: fixtures/rpm/conflict, asserts: [ conflict-rejection, no-overwrite ] }
+  live:
+    operation: rpm-live-conformance
+    proves: [ pinned-action, public-readback, idempotent-retry ]

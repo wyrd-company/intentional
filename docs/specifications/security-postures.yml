@@ -6,26 +6,28 @@ relationships:
   models:
     - intentional
 description: >-
-  Defines Intentional's versioned managed-workflow security-posture catalog. A
+  Defines Intentional's managed-workflow security-posture catalog. A
   posture starts from the canonical control set, removes only named controls,
   declares every guarantee lost with those controls, and carries the complete
   remaining GitHub setting contract. Release Workspace configuration selects a
-  posture by stable identifier and positive integer version. Release Plans and
-  evidence preserve that identity, removed-control set, required settings, and
-  remaining guarantees. `security-postures.catalog.yml` is the maintained
-  catalog and `security-postures.schema.yml` is its machine-readable definition.
+  posture by stable identifier. Release Plans and evidence preserve that
+  identity, removed-control set, required settings, remaining guarantees, and
+  exact producing Intentional version. `security-postures.catalog.yml` is the
+  maintained catalog and `security-postures.schema.yml` is its machine-readable
+  definition.
 format: json-schema
 validation-criteria: >-
   The maintained catalog validates against
   `docs/specifications/security-postures.schema.yml` as YAML interpreted by JSON
-  Schema Draft 2020-12. Profile identifiers are stable IDs and version keys are
-  positive integers. Every removed control exists in the canonical control set.
+  Schema Draft 2020-12. Profile identifiers are stable IDs. Every removed
+  control exists in the canonical control set.
   Every removed control names all guarantees it removes. Remaining guarantees
   equal canonical guarantees minus those removals. Required settings are exact,
   uniquely identified, and sufficient for every retained authority path and
-  guarantee. Profile versions are immutable within an Intentional major line.
+  guarantee. A posture contract changes according to the Intentional semantic
+  versioning design.
 
-  Profile `robust` version 1 removes no controls. It requires the repository-owner
+  Profile `robust` removes no controls. It requires the repository-owner
   GitHub App authority, protected default branch and managed tag namespaces with
   App-scoped bypass, the fixed protected release environment, immutable GitHub
   Releases, artifact attestations, and pinned GitHub Actions execution. The

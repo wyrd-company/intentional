@@ -49,10 +49,10 @@ validation-criteria: >-
   statement, uploads it and accepted attachments, reads all assets back, creates
   and verifies required attestations, and requests immutable publication with
   the recorded prerelease flag. The statement declares that required transition;
-  it does not claim that the transition has occurred. Under `contract-1`,
-  `immutable: true` and required final-evidence attestation are the robust
-  posture's closure values. A posture that subtracts either control uses an
-  interpretation contract whose Release Evidence schema represents that
-  subtraction explicitly. Release asset sources use
+  it does not claim that the transition has occurred. `immutable: true` and a
+  required final-evidence attestation are the robust posture values encoded by
+  this compatibility line. A posture that subtracts either control requires a
+  schema whose closure manifest represents that subtraction explicitly. Release
+  asset sources use
   `artifact/<package>/<artifact>`, `contribution/<namespace>`, or a reserved
   `protocol/<identity>` value so assembly can resolve every asset to its input.

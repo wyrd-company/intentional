@@ -2,13 +2,12 @@
 # relationships: { realizes: arch-user-repository }
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/destinations/arch-user-repository.config.yml
+$id: "https://intentional.foo/schemas/0.2/destinations/arch-user-repository/config"
 title: Arch User Repository recipe configuration catalog
 $defs:
-  version-1: { type: object, additionalProperties: false }
-  destination-version-1:
+  configuration: { type: object, additionalProperties: false }
+  destination:
     type: object
     additionalProperties: false
-    required: [package-name]
-    properties:
-      { package-name: { type: string, pattern: "^[a-z0-9][a-z0-9+._-]*$" } }
+    required: [ package-name ]
+    properties: { package-name: { type: string, pattern: "^[a-z0-9][a-z0-9+._-]*$" } }

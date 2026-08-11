@@ -3,20 +3,20 @@
 #   realizes: custom-release-gates
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/custom-release-gates.yml
+$id: https://intentional.foo/schemas/0.2/custom-release-gates
 title: Intentional Custom Release Gate interface
 type: object
 additionalProperties: false
-required: [$schema, path, gate, inputs, outputs, secrets, permission-ceiling]
+required: [ $schema, path, gate, inputs, outputs, secrets, permission-ceiling ]
 properties:
   $schema:
-    const: https://intentional.foo/schemas/custom-release-gates.yml
+    const: https://intentional.foo/schemas/0.2/custom-release-gates
   path:
     enum:
       - .github/workflows/intentional-custom-candidate-release-gate.yml
       - .github/workflows/intentional-custom-release-unit-record-gate.yml
   gate:
-    enum: [candidate-release, release-unit-record]
+    enum: [ candidate-release, release-unit-record ]
   inputs:
     type: object
   outputs:
@@ -28,7 +28,7 @@ properties:
   permission-ceiling:
     type: object
     additionalProperties: false
-    required: [contents]
+    required: [ contents ]
     properties:
       contents:
         const: read
@@ -36,7 +36,7 @@ allOf:
   - if:
       properties:
         gate: { const: candidate-release }
-      required: [gate]
+      required: [ gate ]
     then:
       properties:
         path:
@@ -46,7 +46,7 @@ allOf:
   - if:
       properties:
         gate: { const: release-unit-record }
-      required: [gate]
+      required: [ gate ]
     then:
       properties:
         path:
@@ -57,7 +57,7 @@ $defs:
   required-string-input:
     type: object
     additionalProperties: false
-    required: [type, required]
+    required: [ type, required ]
     properties:
       type: { const: string }
       required: { const: true }
@@ -68,13 +68,11 @@ $defs:
       - plan-digest
       - source-commit
       - source-tree
-      - interpretation-contract
       - generator-version
     properties:
       plan-digest: { $ref: "#/$defs/required-string-input" }
       source-commit: { $ref: "#/$defs/required-string-input" }
       source-tree: { $ref: "#/$defs/required-string-input" }
-      interpretation-contract: { $ref: "#/$defs/required-string-input" }
       generator-version: { $ref: "#/$defs/required-string-input" }
   release-unit-record-inputs:
     type: object
