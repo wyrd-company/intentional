@@ -1532,3 +1532,123 @@ fn rejects_supplied_plan_digest_mismatch() {
         .failure()
         .stderr(predicate::str::contains("digest mismatch"));
 }
+
+#[test]
+fn annotated_pre_intentional_tags_are_tolerated_as_history() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    git(
+        &repo.root,
+        &["tag", "-a", "sample@1.0.0", "-m", "Release 1.0.0"],
+    );
+    assert_eq!(git(&repo.root, &["cat-file", "-t", "sample@1.0.0"]), "tag");
+
+    let existing = tag_object_id(&repo.root, "sample@1.0.0");
+
+    repo.cli().arg("status").assert().success();
+    repo.cli().arg("check").assert().success();
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+
+    // Baseline is established by the pre-existing history, not by retagging it.
+    assert_eq!(tag_object_id(&repo.root, "sample@1.0.0"), existing);
+    assert_eq!(git(&repo.root, &["tag", "--list"]), "sample@1.0.0");
+}
+
+#[test]
+fn lightweight_pre_intentional_tags_are_tolerated_as_history() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.tag("sample@1.0.0");
+    assert_eq!(
+        git(&repo.root, &["cat-file", "-t", "sample@1.0.0"]),
+        "commit"
+    );
+
+    let existing = tag_object_id(&repo.root, "sample@1.0.0");
+
+    repo.cli().arg("status").assert().success();
+    repo.cli().arg("check").assert().success();
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    assert_eq!(tag_object_id(&repo.root, "sample@1.0.0"), existing);
+}
+
+#[test]
+fn annotated_tag_with_complete_intentional_record_is_validated() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    assert_eq!(git(&repo.root, &["cat-file", "-t", "sample@1.0.0"]), "tag");
+    assert!(git(&repo.root, &["cat-file", "-p", "sample@1.0.0"]).contains("plan-digest: "));
+
+    repo.cli().arg("status").assert().success();
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn annotated_tag_with_partial_intentional_record_is_rejected() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "sample@1.0.0",
+            "-m",
+            "contract: contract-1\nversion: 1.0.0\n",
+        ],
+    );
+
+    repo.cli()
+        .arg("status")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "annotated tag sample@1.0.0 is missing Intentional record field",
+        ));
+}
+
+#[test]
+fn release_tagging_still_refuses_a_recordless_tag_at_the_release_version() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".intentional/config.yml",
+        &config("committed").replace(
+            "        template: 'sample@{version}'\n",
+            "        template: 'sample@{version}'\n      mirror:\n        role: projection\n        template: 'mirror@{version}'\n",
+        ),
+    );
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.tag("sample@1.0.0");
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("patch", "Fix a defect."),
+    );
+    repo.commit("add intent");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    // A recordless tag already occupies the projection stream at this version.
+    repo.tag("mirror@1.0.1");
+
+    repo.cli()
+        .arg("tag")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "existing tag mirror@1.0.1 is not an annotated Intentional record",
+        ));
+}

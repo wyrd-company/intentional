@@ -292,6 +292,11 @@ impl TagResult {
                 })?
                 .is_some()
             {
+                if baseline {
+                    // Pre-Intentional history already marks this version. The
+                    // baseline is established by that tag; do not retag it.
+                    continue;
+                }
                 return Err(Error::Validation(format!(
                     "existing tag {} is not an annotated Intentional record",
                     candidate.name
@@ -988,6 +993,32 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(issues)
 }
 
+/// Fields every Intentional tag record carries.
+const RECORD_FIELDS: [&str; 6] = [
+    "contract",
+    "generator",
+    "plan-digest",
+    "tag-id",
+    "version",
+    "baseline",
+];
+
+/// First required record field absent from `fields`, or `None` when the record
+/// is complete.
+fn missing_record_field(fields: &BTreeMap<String, String>) -> Option<&'static str> {
+    RECORD_FIELDS
+        .into_iter()
+        .find(|required| !fields.contains_key(*required))
+}
+
+/// Whether `fields` carries any Intentional record field, i.e. whether the tag
+/// claims to be an Intentional record at all.
+fn carries_record_field(fields: &BTreeMap<String, String>) -> bool {
+    RECORD_FIELDS
+        .into_iter()
+        .any(|required| fields.contains_key(required))
+}
+
 struct ParsedTagRecord {
     target: gix::ObjectId,
     fields: BTreeMap<String, String>,
@@ -1024,21 +1055,17 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
         .filter_map(|line| line.split_once(": "))
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
         .collect::<BTreeMap<_, _>>();
-    for required in [
-        "contract",
-        "generator",
-        "plan-digest",
-        "tag-id",
-        "version",
-        "baseline",
-    ] {
-        if !fields.contains_key(required) {
-            return Err(Error::Validation(format!(
-                "annotated tag {name} is missing Intentional record field {required}"
-            )));
-        }
+    let Some(missing) = missing_record_field(&fields) else {
+        return Ok(Some(ParsedTagRecord { target, fields }));
+    };
+    if !carries_record_field(&fields) {
+        // Pre-Intentional history: an annotated tag with no Intentional record
+        // field at all is tolerated exactly like a lightweight tag.
+        return Ok(None);
     }
-    Ok(Some(ParsedTagRecord { target, fields }))
+    Err(Error::Validation(format!(
+        "annotated tag {name} is missing Intentional record field {missing}"
+    )))
 }
 
 fn verify_existing_prerequisite(
@@ -1208,6 +1235,41 @@ mod tests {
         };
         let error = verify_plan_generator(&generator).expect_err("malformed version");
         assert!(error.to_string().contains("not valid SemVer"));
+    }
+
+    fn record_fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn fieldless_tag_carries_no_record() {
+        let fields = record_fields(&[("Release", "1.0.0")]);
+        assert!(!carries_record_field(&fields));
+        assert_eq!(missing_record_field(&fields), Some("contract"));
+    }
+
+    #[test]
+    fn partial_record_still_carries_a_record_field() {
+        let fields = record_fields(&[("contract", "contract-1"), ("version", "1.0.0")]);
+        assert!(carries_record_field(&fields));
+        assert_eq!(missing_record_field(&fields), Some("generator"));
+    }
+
+    #[test]
+    fn complete_record_is_missing_nothing() {
+        let fields = record_fields(&[
+            ("contract", "contract-1"),
+            ("generator", "intentional 0.1.0"),
+            ("plan-digest", "sha256:abc"),
+            ("tag-id", "release-unit/sample/primary"),
+            ("version", "1.0.0"),
+            ("baseline", "true"),
+        ]);
+        assert!(carries_record_field(&fields));
+        assert_eq!(missing_record_field(&fields), None);
     }
 
     #[test]
