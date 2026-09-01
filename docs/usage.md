@@ -108,6 +108,13 @@ versions, manifest drift, tag-record issues, and missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
+Tags created before Intentional carry no Intentional record. Both lightweight
+tags and annotated tags without any Intentional record field are tolerated as
+pre-Intentional history: they supply the current version and raise no issue.
+`tag --baseline` leaves such a tag in place instead of retagging it. An
+annotated tag that carries any Intentional record field is validated in full,
+so a partial or corrupt record fails closed.
+
 ## Preview the plan
 
 `plan` writes canonical, digest-bound release-plan JSON to standard output
