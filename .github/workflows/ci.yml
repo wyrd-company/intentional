@@ -69,7 +69,9 @@ jobs:
           bash -n scripts/release/*.sh
           python3 scripts/release/verify-versions.py
       - name: Exercise matching, conflicting, and retry paths
-        run: scripts/release/test-retry.sh
+        run: |
+          scripts/release/test-retry.sh
+          scripts/release/test-homebrew-publication.sh
       - name: Guard Linux GNU release baseline and consumer contract
         run: |
           scripts/release/assert-release-workflow-baseline.sh
