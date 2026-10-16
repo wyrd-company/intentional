@@ -302,7 +302,7 @@ jobs:
           scripts/release/render-homebrew-formula.sh "$TAG" dist "$GENERATED"
 
           if [[ -f "$FORMULA" ]]; then
-          CURRENT_VERSION="$(sed -nE 's/^[[:space:]]*version "([^"]+)"/\1/p' "$FORMULA")"
+          CURRENT_VERSION="$(scripts/release/read-homebrew-version.sh "$FORMULA")"
           if [[ "$CURRENT_VERSION" == "$TAG" ]]; then
           if ! cmp --silent "$FORMULA" "$GENERATED"; then
           echo "Homebrew formula $TAG already exists with different contents." >&2

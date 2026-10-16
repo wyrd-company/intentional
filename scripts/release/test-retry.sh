@@ -156,7 +156,7 @@ formula_two="$temporary/intentional-two.rb"
 "$root/scripts/release/render-homebrew-formula.sh" "$version" "$artifacts" "$formula_one"
 "$root/scripts/release/render-homebrew-formula.sh" "$version" "$artifacts" "$formula_two"
 cmp "$formula_one" "$formula_two"
-grep -q "version \"$version\"" "$formula_one"
+[[ "$("$root/scripts/release/read-homebrew-version.sh" "$formula_one")" == "$version" ]]
 
 archive_fixture="$temporary/intentional"
 printf 'native executable' > "$archive_fixture"
