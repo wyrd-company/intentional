@@ -30,14 +30,12 @@ cat > "$output" <<FORMULA
 class Intentional < Formula
   desc "Intent-driven polyglot release and versioning tool"
   homepage "https://github.com/$repository"
+  url "https://github.com/$repository/releases/download/$version/intentional-macos-arm64.tar.gz"
+  sha256 "$macos_arm64_sha256"
   license "Apache-2.0"
-  version "$version"
 
   on_macos do
-    on_arm do
-      url "https://github.com/$repository/releases/download/$version/intentional-macos-arm64.tar.gz"
-      sha256 "$macos_arm64_sha256"
-    end
+    depends_on arch: :arm
   end
 
   on_linux do
