@@ -1,7 +1,7 @@
 ---
 docs: true
 title: Configuration
-order: 4
+order: 5
 relationships:
   implements: intent-driven-polyglot-release
 ---
@@ -159,8 +159,112 @@ Intentional rejects unknown release units, invalid bumps, and empty prose.
 | `devcontainer-feature.json` | `json` | `committed` |
 | `devcontainer-template.json` | `json` | `committed` |
 
-Each candidate contains source evidence, extracted identity and version when
-available, and only the projection or tag suggestions supported by that
-evidence. Set its `resolution` to `independent`, `projection`, or `excluded`,
-then rerun `init`. Managed and excluded receipts let later runs distinguish
-unchanged evidence from a manifest that needs a new decision.
+### Discovery candidates and receipts
+
+The shared detector contract uses one artifact-neutral candidate shape.
+Candidate ids are stable hashes of the detector id and exact workspace-relative
+path. File digests, native identity, and raw version text remain initialization
+evidence. Projection and tag suggestions appear only when extraction supplies
+the fields they require. Extraction diagnostics report unreadable or missing
+fields but do not claim that an artifact is publishable.
+
+The `devcontainer-feature.json` and `devcontainer-template.json` detectors are
+distinct. Each reads only the top-level `id` and `version`, suggests the `id`
+as native identity, and exposes a committed JSON projection at `/version` when
+the version is Semantic Versioning 2.0.0. Missing, unreadable, or unsupported
+identity/version evidence produces an extraction diagnostic. These detectors
+do not inspect companion files such as `install.sh` or `devcontainer.json`, nor
+do they inspect workflows, OCI registries, publication state, or overall
+artifact correctness.
+
+An initialization-plan candidate has this shape (shown as an excerpt):
+
+```yaml
+discovery-candidates:
+  - id: candidate:d888bb15d92b6478bbb66e9f2a01a12da7113e30d3a59440365a25e8f317ce0f
+    detector: sample-manifest
+    path: packages/library/manifest.json
+    evidence:
+      - path: packages/library/manifest.json
+        digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    native-identity: library
+    raw-version:
+      value: "1.2.3"
+      evidence:
+        - path: packages/library/manifest.json
+          digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    projection:
+      adapter: json
+      path: packages/library/manifest.json
+      mode: committed
+      pointer: /version
+    tag:
+      id: primary
+      role: primary
+      template: "{id}@{version}"
+    resolution:
+      kind: independent
+      release-unit: library
+```
+
+A resolution is `independent`, `projection`, or `excluded`. Independent and
+projection resolutions name the final release-unit id. A projection names
+`target-candidate` when it follows an independent candidate in the same plan;
+without that field it targets an already configured release unit. Initialization
+rejects duplicate release-unit creators, absent targets, identity disagreement,
+and projection cycles.
+
+Applied choices leave generic discovery receipts in canonical configuration:
+
+```yaml
+discovery:
+  managed-paths:
+    - detector: sample-manifest
+      path: packages/library/manifest.json
+      release-unit: library
+  excluded-paths:
+    - detector: sample-manifest
+      path: examples/example/manifest.json
+      evidence-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+```
+
+Managed receipts preserve the chosen release-unit relationship. Excluded
+receipts bind the exact detector/path identity to its evidence digest, so
+changed evidence requires a new resolution rather than silently inheriting an
+old exclusion. Paths are literal workspace-relative paths, not globs. Init
+scans configured repositories too: matching receipts make reruns no-ops, while
+new or changed excluded paths reopen the same candidate workflow.
+
+## Version interpretation and release groups
+
+`settings.pre-1-0-bump-mapping` selects one of two contracts:
+
+- `component`: `major`, `minor`, and `patch` increment the corresponding
+  SemVer component. This matches Changesets and is recommended during adoption.
+- `compatibility`: before 1.0, `major` advances `0.x.y` to `0.(x+1).0`, while
+  `minor` and `patch` advance to `0.x.(y+1)`. New repositories use this mapping.
+
+At and after 1.0, both mappings use ordinary SemVer component increments.
+
+```yaml
+fixed:
+  - [ library, application ]
+linked:
+  - [ service, utility ]
+```
+
+When any fixed member receives a direct or dependency-propagated bump, every
+member releases at one version derived from the group's highest current version
+and highest requested bump. A suspended fixed member blocks the shared release.
+
+Linked groups release only affected members. Releasing members use the highest
+current version across the whole group and the highest bump among affected
+members; unaffected members retain their current versions. A suspended linked
+member blocks only when it would release. A release unit belongs to at most one
+fixed or linked group.
+
+When init reconciles an existing configuration, current non-development npm
+manifest dependencies own edges between npm release units. Removing such a
+manifest dependency removes its `depends-on` edge. Configured edges to release
+units without an npm projection remain authoritative because an npm manifest
+cannot represent those cross-ecosystem or non-native ordering relationships.

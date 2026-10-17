@@ -1,7 +1,7 @@
 ---
 docs: true
 title: Usage
-order: 3
+order: 4
 relationships:
   implements: intent-driven-polyglot-release
 ---
@@ -28,48 +28,13 @@ The output is a valid `SKILL.md` and can be installed directly into an agent's
 skill directory. Keeping the guide in the binary makes its command and safety
 guidance travel with the CLI version it describes.
 
-## Bootstrap the workspace
+## Initialize before declaring changes
 
-`init` requires a Git repository. It recursively discovers supported manifests
-within the repository's Git-ignore and hard-cache boundary. Package-manager
-workspace membership informs recommendations, dependency analysis, and
-Changesets parity but never limits discovery.
-
-```bash
-intentional init
-```
-
-Every discovery result first appears as a candidate in
-`.intentional/init-plan.yml`. Resolve each candidate as:
-
-- `independent`: create a release unit;
-- `projection`: attach the manifest to another release unit; or
-- `excluded`: record why the manifest is outside Intentional's inventory.
-
-Resolution fields use the schema's kebab-case spelling:
-
-```yaml
-resolution:
-  kind: projection
-  release-unit: sample-library
-  target-candidate: candidate:0000000000000000000000000000000000000000000000000000000000000000
-```
-
-Rerun `intentional init` after setting the explicit resolutions. Intentional
-writes `.intentional/config.yml` only after the complete candidate graph
-validates. This prevents discovery guesses from silently becoming release
-authority.
-
-Candidates retain detector/path identity even when multiple manifests declare
-the same native name. Explicit resolutions determine ownership before final
-configuration validation.
-
-During Changesets adoption, a manifest mapped onto another artifact can expose
-an explicit `retain` or `remove` integration choice. Probable-proxy diagnostics
-separate supporting and contradictory structural evidence and state their
-uncertainty. Prose and semantic keyword matching are not evidence. A removal is
-performed only during explicit takeover, after the resolution authorizes it and
-a fresh repository-use check finds no non-Changesets references.
+For a repository without `.intentional/config.yml`, follow the
+[initialization guide](https://wyrd.foo/docs/intentional/initialization). It covers
+candidate resolutions, already released repositories, Go modules, baseline
+versions, and Changesets adoption. Once configuration and version authority are
+established, use the release workflow below.
 
 ## Declare an intent
 
@@ -104,7 +69,8 @@ intentional check
 ```
 
 `status` lists pending intents, tag-derived current versions, projected next
-versions, manifest drift, tag-record issues, and missing baselines.
+versions, suspended release blockers, manifest drift, tag-record issues, and
+missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
@@ -124,6 +90,12 @@ intents, release notes, expected tags, required phases, and tag order:
 ```bash
 intentional plan > release-plan.json
 ```
+
+The sealed payload contains the interpretation contract, generator identity,
+old and new versions, contributing intent ids, rendered release notes,
+release-unit and workspace tags, phase declarations, `tag-after` prerequisites,
+and tag order. It contains no publication graph. Preserve the exact output;
+do not hand-edit or reformat the sealed plan.
 
 ## Project the versions
 
@@ -152,12 +124,17 @@ plan to verify its digest and expected target state:
 intentional tag --plan release-plan.json
 ```
 
+Without `--plan`, a final release is recovered from the intents deleted by the
+release commit; a channel release is recovered from its retained intents.
+
 If a tag requires an executor phase, declare it explicitly:
 
 ```bash
 intentional tag --plan release-plan.json --phase before-publication
 ```
 
+The phase declaration does not assert or verify publication. External
+continuous delivery owns publication sequencing and registry evidence.
 Intentional verifies `tag-after` prerequisites before creating a dependent
 tag. An exact existing selected record satisfies the operation, so repeating
 the same dry run or tag command verifies completed records and creates only
@@ -193,30 +170,59 @@ intentional plan --channel beta > release-plan.json
 intentional apply --channel beta
 git add -A
 git commit -m "chore: apply beta release"
-intentional tag --channel beta
+intentional tag --channel beta --plan release-plan.json
 ```
 
-A channel `apply` retains intents; a later channel-less `apply` consolidates the
-prerelease changelog sections into the final release.
+The first release is `X.Y.Z-beta.1`; later iterations advance from existing
+tag records. A channel `apply` retains intents; a later channel-less `apply`
+consolidates the prerelease changelog sections into the final release.
 
-## Adopt a Changesets repository
+## Self-hosted repository releases
 
-When `.changeset/config.json` exists, ordinary `init` preserves Changesets as
-the authority and writes an adoption plan. Resolve candidate ownership,
-ignored-package disposition, contract differences, and the reported repository
-integrations until the plan proves release parity. Then preview and perform the
-explicit takeover:
+When the sealed plan was generated by the immediately preceding published
+Intentional but tagging requires the newly materialized workspace binary (for
+example deterministic tagger headers introduced in the release being applied),
+never call the installed older binary for tag creation.
+
+Verification stays dry-run safe by default:
 
 ```console
-intentional init
-intentional init --take-over --dry-run
-intentional init --take-over
-git add -A
-git commit -m "Adopt Intentional"
-intentional tag --baseline
+SEALED_PLAN=/path/to/release-plan.json task self-release:verify
 ```
 
-Takeover changes only Intentional and recognized Changesets state in one
-rollback-capable transaction. Repository-specific scripts and workflows remain
-the user's responsibility. Baseline tags are created against the externally
-committed takeover state, so the authority boundary stays explicit.
+Real annotated tag creation uses the same build, version-agreement, and sealed-plan
+checks, but runs the materialized `target/release/intentional` without
+`--dry-run` only through the guarded operator path:
+
+```console
+SEALED_PLAN=/path/to/release-plan.json \
+CREATE_ACK=create-annotated-tag \
+task self-release:tag
+```
+
+`CREATE_ACK` must be exactly `create-annotated-tag`. CI and routine checks use
+only `self-release:verify` and `scripts/release/test-self-hosted-tag.sh`; they
+never invoke the create path.
+
+## Dry runs
+
+Every mutating command supports `--dry-run` and prints the same operation set as
+the real invocation:
+
+```console
+intentional init --dry-run
+intentional init --take-over --dry-run
+intentional add --release-unit library:patch --message "Correct a defect." --dry-run
+intentional apply --dry-run
+intentional stamp --prerelease alpha --dry-run
+intentional tag --dry-run
+intentional tag --baseline --dry-run
+```
+
+## GitHub Action
+
+The plumbing action downloads a released Linux binary and runs one command.
+Pin it to a plain SemVer tag. The action exposes canonical `plan` JSON and a
+changed-release-unit boolean. It accepts `status`, `plan`, `stamp`, `apply`, and
+`tag`; `channel` applies to release commands, `prerelease` applies to `stamp`,
+and `dry-run` applies to mutating commands.

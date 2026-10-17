@@ -80,32 +80,142 @@ Package-manager workspace membership is evidence for inference,
 recommendations, dependency analysis, and parity; it is not an inclusion
 boundary.
 
-The first run may write `.intentional/init-plan.yml` and exit with code `2`.
-That means explicit input is required; it is not an operational failure. Read
-the evidence and diagnostics, then set every candidate resolution to one of:
+The first run writes `.intentional/init-plan.yml` when candidates need input
+and exits with code `2`. This means explicit decisions are required, not an
+operational failure. An empty `inferred-config.release-units` is expected;
+do not populate it manually to resolve candidates.
 
-- `independent`: create a release unit for the candidate.
-- `projection`: attach the candidate manifest to another release unit.
-- `excluded`: record that the candidate is outside the managed inventory.
+### Resolve every discovered candidate
 
-Edit only the plan's documented resolution fields. Do not discard extraction
-diagnostics or invent cross-ecosystem identity. Rerun the same `init` command;
-Intentional writes `.intentional/config.yml` only when the complete candidate
-graph validates. Review and commit the resulting configuration before creating
-baseline tags.
+Every item under `discovery-candidates` requires `resolution.kind`. The first
+plan omits `resolution`; add it to each candidate alongside `detector`, `path`,
+`projection`, and `tag`. Use these complete resolution mappings:
 
-Use the schema's kebab-case field spelling:
+Create a release unit for a standalone application or library:
+
+```yaml
+resolution:
+  kind: independent
+  release-unit: sample-application
+```
+
+Choose a stable logical release-unit id. It need not match the native package
+name or directory, does not rename the package, and becomes the id used by
+`add --release-unit` and explicit baseline versions.
+
+Attach another manifest to a release unit created by a candidate in this plan:
 
 ```yaml
 resolution:
   kind: projection
-  release-unit: sample-library
+  release-unit: sample-application
   target-candidate: candidate:0000000000000000000000000000000000000000000000000000000000000000
 ```
 
-Candidates remain distinct by detector and exact path even when their native
-identities match. Resolve each path explicitly; do not collapse duplicates
-before the plan applies every resolution.
+Replace the placeholder with the actual `id` of the candidate whose resolution
+is `independent` and creates `sample-application`. For a release unit already
+in `.intentional/config.yml`, omit `target-candidate`.
+
+Leave an artifact outside the managed inventory:
+
+```yaml
+resolution:
+  kind: excluded
+```
+
+`excluded` accepts neither `release-unit` nor a free-text reason field. It does
+not delete the artifact. Both `independent` and `projection` require
+`release-unit`. Every path must be resolved, even when native identities match.
+Do not collapse duplicate candidates or invent cross-ecosystem identity.
+
+### Example: a root Go module
+
+This excerpt shows where to insert the resolution. Preserve the actual
+candidate id, evidence, native identity, and generated suggestions; do not
+replace the full plan with this excerpt:
+
+```yaml
+discovery-candidates:
+  - id: candidate:0000000000000000000000000000000000000000000000000000000000000000
+    detector: go-module
+    path: go.mod
+    # Keep the generated evidence and native-identity fields here.
+    projection:
+      adapter: go
+      path: go.mod
+      mode: none
+    tag:
+      id: primary
+      role: primary
+      template: '{id}@{version}'
+    resolution:
+      kind: independent
+      release-unit: sample-application
+```
+
+`projection.mode` controls version materialization, not candidate ownership.
+It does not satisfy `resolution.kind`. Go uses mode `none`; `go.mod` has no
+application version field, so the release version comes from Git tags.
+
+### Apply and verify initialization
+
+Edit only schema-supported resolution fields. Keep fingerprints, evidence,
+extraction diagnostics, inferred configuration, suggestions, and state intact.
+Rerun the same command, optionally previewing it first:
+
+```bash
+intentional init --dry-run
+intentional init
+```
+
+Intentional validates the complete candidate graph before writing
+`.intentional/config.yml`, creating `.intentional/intents/`, and removing the
+transient plan. Review release-unit ids, projection modes, and tag templates,
+then commit the configuration through the authorized surrounding workflow.
+Initialization itself creates neither commits nor tags.
+
+Run `intentional status` and `intentional check` after configuration is ready.
+If a missing baseline is reported, use the baseline procedure below before
+expecting `check` to pass. Init also scans configured repositories; matching
+receipts make reruns no-ops, while new candidates or changed excluded evidence
+reopen the resolution workflow.
+
+### Adopt a repository that already released a version
+
+Existing releases do not require Changesets takeover unless Changesets is
+actually configured. Resolve candidates normally and review the generated
+configuration before committing. Inspect local tags and available history.
+The default primary tag template is `{id}@{version}`. If releases use bare
+versions, change the generated configuration's template to `{version}`:
+
+```yaml
+release-units:
+  sample-application:
+    # Keep the generated path, projections, and discovery receipts.
+    tags:
+      primary:
+        role: primary
+        template: '{version}'
+```
+
+Preserve the rest of the configuration; this is an excerpt. Edit the resulting
+configuration after init, not the generated candidate suggestion. Commit it
+once the template matches the existing stream. `{version}` matches `0.1.0`;
+`{id}@{version}` selects a different stream.
+
+Lightweight tags and annotated tags with no Intentional record fields are
+accepted as pre-Intentional history. An existing matching `0.1.0` tag supplies
+current version `0.1.0`, including for a Go module. Do not recreate that tag,
+move it, create a replacement baseline, or author an intent to repeat the
+release. `tag --baseline` preserves it and ignores an explicit `--version` for
+that existing stream. Tags with any Intentional record fields
+must pass full record validation.
+
+Verify with `status` and `check`. If an expected baseline appears missing,
+inspect the template and locally available release history before creating a
+new tag stream. Once validation succeeds, author intents for subsequent
+changes. Existing build and publication automation remains owned by the
+repository's release workflow.
 
 ## Adopt a Changesets repository
 
@@ -197,17 +307,36 @@ safe. Any record mismatch fails closed.
 
 ## Establish baseline tags
 
-Use baselines when `status` or `check` reports that a configured release unit
-has no tag-derived authority. Commit configuration and verify existing manifest
-versions first, then preview and create baselines:
+Use baselines only when a configured tag stream has no matching existing tag.
+Commit configuration first and inspect existing tags before creating one.
+Matching pre-Intentional tags already supply authority and remain unchanged.
+
+When version-bearing projections all agree, preview and create a baseline:
 
 ```bash
 intentional tag --baseline --dry-run
 intentional tag --baseline
 ```
 
-If projections cannot supply an unambiguous version, pass explicit values with
-repeatable `--version release-unit=X.Y.Z` or `--version workspace/tag=X.Y.Z`.
+If there is no version-bearing projection, including for Go modules, an
+explicit version is required. For an already released application's current
+version of `0.1.0`:
+
+```bash
+intentional tag --baseline --version sample-application=0.1.0 --dry-run
+intentional tag --baseline --version sample-application=0.1.0
+```
+
+Use the actual release-unit id. A new unreleased repository can start from an
+explicit `0.0.0` baseline. Named workspace tag streams without matching tags
+need `--version workspace/release=X.Y.Z`. Repeat `--version` for multiple
+streams. Version-bearing projections must agree with an explicit baseline;
+an override cannot hide drift.
+
+Baselines create local annotated tags at the current commit, not at an earlier
+release commit. Inspect dry-run targets and consider the repository's
+publication triggers before the surrounding workflow pushes tags. A baseline
+does not itself publish a release. Finish with `status` and `check`.
 Do not combine `--baseline` with `--channel` or `--plan`.
 
 ## Stamp injected build versions
