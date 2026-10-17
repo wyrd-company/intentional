@@ -59,15 +59,17 @@ Run `intentional init` in a Git repository. Resolve the generated candidates,
 rerun initialization, and verify current-version authority. Then declare
 changes with intents, apply a release plan, commit, and tag.
 
-- [Initialization](docs/initialization.md): candidate resolution examples,
-  already released repositories, Go baselines, and Changesets adoption.
-- [Usage](docs/usage.md): intents, release plans, tags, build versions, and
-  prerelease channels.
-- [Configuration](docs/config.md): release units, projections, tag templates,
-  dependency propagation, and release groups.
-- [Installation](docs/install.md): platforms, binary verification, and GitHub
-  Actions.
-- [Overview](docs/overview.md): the release model and supported ecosystems.
+- [Initialization](https://wyrd.foo/docs/intentional/initialization): candidate
+  resolution examples, already released repositories, Go baselines, and
+  Changesets adoption.
+- [Usage](https://wyrd.foo/docs/intentional/usage): intents, release plans, tags,
+  build versions, and prerelease channels.
+- [Configuration](https://wyrd.foo/docs/intentional/config): release units,
+  projections, tag templates, dependency propagation, and release groups.
+- [Installation](https://wyrd.foo/docs/intentional/install): platforms, binary
+  verification, and GitHub Actions.
+- [Overview](https://wyrd.foo/docs/intentional/overview): the release model and
+  supported ecosystems.
 
 Print the complete agent workflow guide embedded in your installed version:
 
