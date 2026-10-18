@@ -139,8 +139,12 @@ impl TagResult {
         for (id, release_unit) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
             if repository.has_matching_tag(id, &primary.template)? {
-                let version = repository.current_version(id, &primary.template)?;
-                versions.insert(id.clone(), version.to_string());
+                let version = repository
+                    .current_version(id, &primary.template)?
+                    .to_string();
+                if !is_established(&git, &render_tag(&primary.template, id, &version))? {
+                    versions.insert(id.clone(), version);
+                }
                 continue;
             }
             let mut evidence = Vec::new();
@@ -188,8 +192,10 @@ impl TagResult {
         for (id, tag) in &config.workspace_tags {
             let canonical = Config::workspace_tag_id(id);
             if repository.has_matching_tag(id, &tag.template)? {
-                let version = repository.current_version(id, &tag.template)?;
-                versions.insert(canonical, version.to_string());
+                let version = repository.current_version(id, &tag.template)?.to_string();
+                if !is_established(&git, &render_tag(&tag.template, id, &version))? {
+                    versions.insert(canonical, version);
+                }
                 continue;
             }
             let version = explicit.get(&canonical).ok_or_else(|| {
@@ -198,6 +204,12 @@ impl TagResult {
                 ))
             })?;
             versions.insert(canonical, version.to_string());
+        }
+        if versions.is_empty() {
+            return Err(Error::Validation(
+                "every release unit already has an Intentional release record; nothing to baseline"
+                    .to_owned(),
+            ));
         }
         let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
         Self::from_versions(root, &config, &versions, None, true, digest.as_deref())
@@ -1074,6 +1086,21 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
     Err(Error::Validation(format!(
         "annotated tag {name} is missing Intentional record field {missing}"
     )))
+}
+
+/// Whether tag `name` is an Intentional record that a baseline must leave
+/// alone: a release record, or a baseline record on an earlier commit. A
+/// baseline record at HEAD is a retry and stays in the baseline set;
+/// pre-Intentional history carries no record and stays as well.
+fn is_established(repository: &gix::Repository, name: &str) -> Result<bool> {
+    let Some(record) = read_tag_record(repository, name)? else {
+        return Ok(false);
+    };
+    let head = repository
+        .head_id()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+        .detach();
+    Ok(record.fields.get("baseline").map(String::as_str) != Some("true") || record.target != head)
 }
 
 /// Whether tag `name` exists and peels to the HEAD commit.

@@ -376,3 +376,116 @@ fn recordless_primary_tag_at_head_is_still_refused() {
         ));
     assert!(!repo.tags().iter().any(|tag| tag == "alpha@0.1.2"));
 }
+
+fn record_field(repo: &TestRepo, tag: &str, field: &str) -> String {
+    git(&repo.root, &["tag", "-l", "--format=%(contents)", tag])
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{field}: ")).map(str::to_owned))
+        .unwrap_or_else(|| panic!("tag {tag} has no {field} field"))
+}
+
+/// Add release unit `gamma` beside the released fixture units.
+fn add_gamma(repo: &TestRepo) {
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", ".", "docs/docs.yml", "/products/alpha/version", ""),
+            yaml_unit("beta", "docs", "docs.yml", "/products/beta/version", ""),
+            yaml_unit("gamma", "gamma", "gamma.yml", "/version", ""),
+        ]),
+    );
+    repo.write("gamma/gamma.yml", "version: 0.0.0\n");
+    repo.commit("add gamma release unit");
+}
+
+#[test]
+fn baseline_for_a_unit_added_after_others_released_tags_only_that_unit() {
+    let repo = shared_yaml_repository();
+    let alpha_release = repo.tag_target("alpha@0.1.1");
+    let beta_release = repo.tag_target("beta@0.1.1");
+    add_gamma(&repo);
+    let before = repo.tags();
+
+    repo.cli()
+        .args(["tag", "--baseline", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("gamma@0.0.0"))
+        .stdout(predicate::str::contains("alpha@").not())
+        .stdout(predicate::str::contains("beta@").not());
+    assert_eq!(repo.tags(), before);
+
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    let mut created = repo.tags();
+    created.retain(|tag| !before.contains(tag));
+    assert_eq!(created, ["gamma@0.0.0"]);
+    assert_eq!(
+        repo.tag_target("gamma@0.0.0"),
+        git(&repo.root, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(record_field(&repo, "gamma@0.0.0", "baseline"), "true");
+    assert_eq!(repo.tag_target("alpha@0.1.1"), alpha_release);
+    assert_eq!(repo.tag_target("beta@0.1.1"), beta_release);
+
+    // A retry at the same commit is idempotent.
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    assert_eq!(repo.tags().len(), before.len() + 1);
+
+    // The new unit then releases alone while the others stay put.
+    repo.intent("gamma-first-0004", &[("gamma", "patch")], "Ship gamma.");
+    repo.release(false);
+    assert!(repo.tags().contains(&"gamma@0.0.1".to_owned()));
+    assert!(!repo.tags().iter().any(|tag| tag == "alpha@0.1.2"));
+    assert_eq!(repo.tag_target("alpha@0.1.1"), alpha_release);
+}
+
+#[test]
+fn baseline_for_a_unit_added_after_an_earlier_baseline_tags_only_that_unit() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[yaml_unit(
+            "alpha",
+            ".",
+            "docs/docs.yml",
+            "/products/alpha/version",
+            "",
+        )]),
+    );
+    repo.write("docs/docs.yml", "products:\n  alpha:\n    version: 0.1.0\n");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    let alpha_baseline = repo.tag_target("alpha@0.1.0");
+
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", ".", "docs/docs.yml", "/products/alpha/version", ""),
+            yaml_unit("gamma", "gamma", "gamma.yml", "/version", ""),
+        ]),
+    );
+    repo.write("gamma/gamma.yml", "version: 0.0.0\n");
+    repo.commit("add gamma release unit");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    let mut tags = repo.tags();
+    tags.sort();
+    assert_eq!(tags, ["alpha@0.1.0", "gamma@0.0.0"]);
+    assert_eq!(repo.tag_target("alpha@0.1.0"), alpha_baseline);
+}
+
+#[test]
+fn baseline_with_every_unit_released_reports_nothing_to_baseline() {
+    let repo = shared_yaml_repository();
+    let before = repo.tags();
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("nothing to baseline"));
+    assert_eq!(repo.tags(), before);
+}
