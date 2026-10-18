@@ -19,7 +19,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-intentional-core = { path = "../core", version = "0.1.7" }
+intentional-core = { path = "../core", version = "0.1.8" }
 semver.workspace = true
 
 [dev-dependencies]
