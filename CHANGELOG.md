@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.7
+
+### Fixes
+
+- Keep every release unit's edit when units at different paths project into one shared file.
+- Tolerate annotated pre-Intentional tags as history in tag records.
+- Tag releases in which only some release units moved; units already at their released version are no longer treated as part of the next release.
+- Generate Homebrew formulae that pass strict audit and style checks.
+
 ## 0.1.6
 
 ### Fixes
