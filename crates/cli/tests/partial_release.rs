@@ -500,7 +500,10 @@ fn baseline_for_a_unit_added_later_leaves_an_established_workspace_tag_alone() {
             "workspace-tags:\n  release:\n    template: 'release-{version}'\nrelease-units:",
         )
     };
-    repo.write(".intentional/config.yml", &workspace(&[alpha.clone()]));
+    repo.write(
+        ".intentional/config.yml",
+        &workspace(std::slice::from_ref(&alpha)),
+    );
     repo.write("docs/docs.yml", "products:\n  alpha:\n    version: 0.1.0\n");
     repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
