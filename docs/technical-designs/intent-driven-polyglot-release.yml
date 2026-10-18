@@ -324,9 +324,9 @@ proposed-design:
     explicit baseline version. Baseline tags use the configured primary,
     projection, and workspace templates, are annotated with the contract and
     plan digest, target the takeover commit, and do not require a phase. A
-    release unit whose current tag is already an Intentional record is
-    established and outside the baseline set, unless that record is a
-    baseline at the commit being tagged; a release unit added after others
+    release unit or workspace tag whose current tag is already an Intentional
+    record is established and outside the baseline set, unless that record is
+    a baseline at the commit being tagged; a release unit added after others
     have released therefore receives its baseline alone.
   command-surface: >-
     init requires a Git repository, discovers candidates, and produces or

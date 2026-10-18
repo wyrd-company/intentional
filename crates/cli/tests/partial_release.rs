@@ -489,3 +489,39 @@ fn baseline_with_every_unit_released_reports_nothing_to_baseline() {
         .stderr(predicate::str::contains("nothing to baseline"));
     assert_eq!(repo.tags(), before);
 }
+
+#[test]
+fn baseline_for_a_unit_added_later_leaves_an_established_workspace_tag_alone() {
+    let repo = TestRepo::new();
+    let alpha = yaml_unit("alpha", ".", "docs/docs.yml", "/products/alpha/version", "");
+    let workspace = |units: &[String]| {
+        config(units).replace(
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: 'release-{version}'\nrelease-units:",
+        )
+    };
+    repo.write(".intentional/config.yml", &workspace(&[alpha.clone()]));
+    repo.write("docs/docs.yml", "products:\n  alpha:\n    version: 0.1.0\n");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=1.0.0"])
+        .assert()
+        .success();
+    let workspace_baseline = repo.tag_target("release-1.0.0");
+
+    repo.write(
+        ".intentional/config.yml",
+        &workspace(&[
+            alpha,
+            yaml_unit("gamma", "gamma", "gamma.yml", "/version", ""),
+        ]),
+    );
+    repo.write("gamma/gamma.yml", "version: 0.0.0\n");
+    repo.commit("add gamma release unit");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    let mut tags = repo.tags();
+    tags.sort();
+    assert_eq!(tags, ["alpha@0.1.0", "gamma@0.0.0", "release-1.0.0"]);
+    assert_eq!(repo.tag_target("release-1.0.0"), workspace_baseline);
+}
