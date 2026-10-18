@@ -15,7 +15,7 @@ use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// One planned file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,6 +166,7 @@ impl<'a> WorkingTree<'a> {
     }
 
     fn read(&mut self, relative: &Path) -> Result<String> {
+        let relative = &normalized(relative);
         if let Some(text) = self.current.get(relative) {
             return Ok(text.clone());
         }
@@ -179,6 +180,7 @@ impl<'a> WorkingTree<'a> {
     }
 
     fn read_optional(&mut self, relative: &Path) -> Result<Option<String>> {
+        let relative = &normalized(relative);
         if let Some(text) = self.current.get(relative) {
             return Ok(Some(text.clone()));
         }
@@ -200,6 +202,7 @@ impl<'a> WorkingTree<'a> {
     }
 
     fn set(&mut self, relative: PathBuf, contents: String) {
+        let relative = normalized(&relative);
         self.original.entry(relative.clone()).or_insert(None);
         self.current.insert(relative, contents);
     }
@@ -213,6 +216,14 @@ impl<'a> WorkingTree<'a> {
             .map(|(path, contents)| FileWrite { path, contents })
             .collect()
     }
+}
+
+/// One working-tree key per file, so `./docs/x` and `docs/x` share edits.
+fn normalized(relative: &Path) -> PathBuf {
+    relative
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect()
 }
 
 fn edit_projection_version(
@@ -473,6 +484,24 @@ mod tests {
         assert_eq!(
             output,
             "# Changelog\n\n## 1.0.1\n\n### Fixes\n\n- Correct a defect.\n"
+        );
+    }
+
+    #[test]
+    fn working_tree_shares_edits_across_equivalent_relative_paths() {
+        let mut tree = WorkingTree::new(Path::new("/nonexistent-workspace"));
+        tree.set(PathBuf::from("./docs/docs.yml"), "a: 1\nb: 0\n".to_owned());
+        let shared = tree.read(Path::new("docs/docs.yml")).expect("shared edit");
+        tree.set(
+            PathBuf::from("docs/docs.yml"),
+            shared.replace("b: 0", "b: 1"),
+        );
+        assert_eq!(
+            tree.finish(),
+            [FileWrite {
+                path: PathBuf::from("docs/docs.yml"),
+                contents: "a: 1\nb: 1\n".to_owned(),
+            }]
         );
     }
 }
