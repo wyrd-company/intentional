@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+### Fixes
+
+- Establish a baseline for a release unit added after other release units have released.
+
 ## 0.1.7
 
 ### Fixes
