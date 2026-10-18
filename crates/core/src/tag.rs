@@ -207,7 +207,7 @@ impl TagResult {
         }
         if versions.is_empty() {
             return Err(Error::Validation(
-                "every release unit already has an Intentional release record; nothing to baseline"
+                "every release unit and workspace tag is already established by an Intentional record; nothing to baseline"
                     .to_owned(),
             ));
         }
