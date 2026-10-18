@@ -87,7 +87,15 @@ impl TagResult {
             }
             let (_, primary) = config.primary_tag(id)?;
             let current = repository.current_version(id, &primary.template)?;
-            if version < current {
+            // A unit still at its tagged version is part of this release only
+            // when that tag marks HEAD, which is a retry of this release.
+            // Otherwise it did not move and is not in the release set.
+            let unmoved = version == current
+                && !tag_targets_head(
+                    &git,
+                    &render_tag(&primary.template, id, &current.to_string()),
+                )?;
+            if version < current || unmoved {
                 continue;
             }
             versions_by_release_unit.insert(id.clone(), version);
@@ -1066,6 +1074,25 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
     Err(Error::Validation(format!(
         "annotated tag {name} is missing Intentional record field {missing}"
     )))
+}
+
+/// Whether tag `name` exists and peels to the HEAD commit.
+fn tag_targets_head(repository: &gix::Repository, name: &str) -> Result<bool> {
+    let Some(mut reference) = repository
+        .try_find_reference(format!("refs/tags/{name}").as_str())
+        .map_err(|error| Error::Git(format!("failed to inspect tag {name}: {error}")))?
+    else {
+        return Ok(false);
+    };
+    let target = reference
+        .peel_to_id()
+        .map_err(|error| Error::Git(format!("failed to peel tag {name}: {error}")))?
+        .detach();
+    let head = repository
+        .head_id()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+        .detach();
+    Ok(target == head)
 }
 
 fn verify_existing_prerequisite(

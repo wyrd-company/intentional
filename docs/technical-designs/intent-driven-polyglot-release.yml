@@ -411,7 +411,12 @@ proposed-design:
     previous release's tag. In both paths the recomputed result must match
     the materialized tree (projections and the leading changelog section,
     which serves as witness, not source); on mismatch, tag refuses and
-    reports the divergence. When verifying a supplied sealed plan, tag
+    reports the divergence. The witnessed release set holds each release
+    unit whose leading changelog section is newer than its latest primary
+    tag, or equal to it while that tag already marks the commit being
+    tagged; a unit whose leading section equals a tag on an earlier commit
+    did not move and is outside the comparison, so a release may move any
+    subset of release units. When verifying a supplied sealed plan, tag
     reconstructs the plan payload using the recorded plan-generator version
     rather than the tagging binary version so self-hosted releases can apply
     with an older published Intentional and tag with the materialized release
