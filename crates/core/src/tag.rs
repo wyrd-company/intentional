@@ -9,12 +9,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
-use crate::plan::{canonical_json, Generator, ReleasePlan};
+use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
 use semver::Version;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -229,10 +228,7 @@ impl TagResult {
             versions,
             baseline,
         };
-        let baseline_digest = format!(
-            "sha256:{:x}",
-            Sha256::digest(canonical_json(&payload)?.as_bytes())
-        );
+        let baseline_digest = sha256_digest(canonical_json(&payload)?.as_bytes());
         let digest = release_digest.unwrap_or(&baseline_digest);
         let mut candidates = BTreeMap::<String, TagCandidate>::new();
         for (release_unit_id, version) in versions {

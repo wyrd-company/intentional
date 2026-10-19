@@ -276,7 +276,7 @@ impl ReleasePlan {
             tag_order: &tag_order,
         };
         let payload_json = canonical_json(&payload)?;
-        let digest = format!("sha256:{:x}", Sha256::digest(payload_json.as_bytes()));
+        let digest = sha256_digest(payload_json.as_bytes());
         Ok(Self {
             digest,
             contract: config.contract.clone(),
@@ -303,10 +303,7 @@ impl ReleasePlan {
             tags: &self.tags,
             tag_order: &self.tag_order,
         };
-        let actual = format!(
-            "sha256:{:x}",
-            Sha256::digest(canonical_json(&payload)?.as_bytes())
-        );
+        let actual = sha256_digest(canonical_json(&payload)?.as_bytes());
         if actual != self.digest {
             return Err(Error::Validation(format!(
                 "release plan digest mismatch: expected {}, computed {actual}",
@@ -315,6 +312,22 @@ impl ReleasePlan {
         }
         Ok(())
     }
+}
+
+/// Render the SHA-256 digest of `bytes` as `sha256:` followed by lowercase hex.
+pub fn sha256_digest(bytes: &[u8]) -> String {
+    format!("sha256:{}", lower_hex(&Sha256::digest(bytes)))
+}
+
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes.iter().fold(
+        String::with_capacity(bytes.len() * 2),
+        |mut output, byte| {
+            let _ = write!(output, "{byte:02x}");
+            output
+        },
+    )
 }
 
 /// Serialize a value as compact JSON with recursively sorted object keys.
@@ -534,6 +547,14 @@ mod tests {
     }
 
     #[test]
+    fn sha256_digest_renders_prefixed_lowercase_hex() {
+        assert_eq!(
+            sha256_digest(b"abc"),
+            "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn digest_is_stable_for_same_payload() {
         let release_units = vec![PlanReleaseUnit {
             id: "sample".to_owned(),
@@ -559,8 +580,8 @@ mod tests {
             tag_order: &order,
         };
         let json = canonical_json(&payload).expect("canonical payload");
-        let first = format!("sha256:{:x}", Sha256::digest(json.as_bytes()));
-        let second = format!("sha256:{:x}", Sha256::digest(json.as_bytes()));
+        let first = sha256_digest(json.as_bytes());
+        let second = sha256_digest(json.as_bytes());
         assert_eq!(first, second);
         assert_eq!(first.len(), "sha256:".len() + 64);
     }

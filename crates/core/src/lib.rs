@@ -37,8 +37,8 @@ pub use model::{
     Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
 pub use plan::{
-    canonical_json, render_changelog_section, ChangelogEntry, Generator, PlanReleaseUnit, PlanTag,
-    ReleasePlan,
+    canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,
+    PlanReleaseUnit, PlanTag, ReleasePlan,
 };
 pub use stamp::StampResult;
 pub use status::{
