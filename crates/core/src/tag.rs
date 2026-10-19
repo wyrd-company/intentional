@@ -136,12 +136,18 @@ impl TagResult {
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions = BTreeMap::new();
         for (id, release_unit) in &config.release_units {
-            let (_, primary) = config.primary_tag(id)?;
+            let (primary_id, primary) = config.primary_tag(id)?;
             if repository.has_matching_tag(id, &primary.template)? {
                 let version = repository
                     .current_version(id, &primary.template)?
                     .to_string();
-                if !is_established(&git, &render_tag(&primary.template, id, &version))? {
+                if !is_established(
+                    &git,
+                    &render_tag(&primary.template, id, &version),
+                    &Config::release_unit_tag_id(id, primary_id),
+                    &version,
+                    &config.contract,
+                )? {
                     versions.insert(id.clone(), version);
                 }
                 continue;
@@ -192,7 +198,13 @@ impl TagResult {
             let canonical = Config::workspace_tag_id(id);
             if repository.has_matching_tag(id, &tag.template)? {
                 let version = repository.current_version(id, &tag.template)?.to_string();
-                if !is_established(&git, &render_tag(&tag.template, id, &version))? {
+                if !is_established(
+                    &git,
+                    &render_tag(&tag.template, id, &version),
+                    &canonical,
+                    &version,
+                    &config.contract,
+                )? {
                     versions.insert(canonical, version);
                 }
                 continue;
@@ -1085,16 +1097,43 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
 /// Whether tag `name` is an Intentional record that a baseline must leave
 /// alone: a release record, or a baseline record on an earlier commit. A
 /// baseline record at HEAD is a retry and stays in the baseline set;
-/// pre-Intentional history carries no record and stays as well.
-fn is_established(repository: &gix::Repository, name: &str) -> Result<bool> {
+/// pre-Intentional history carries no record and stays as well. A record
+/// whose identity does not match the tag it occupies is refused.
+fn is_established(
+    repository: &gix::Repository,
+    name: &str,
+    expected_id: &str,
+    expected_version: &str,
+    expected_contract: &str,
+) -> Result<bool> {
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(false);
+    };
+    for (field, expected) in [
+        ("tag-id", expected_id),
+        ("version", expected_version),
+        ("contract", expected_contract),
+    ] {
+        if record.fields.get(field).map(String::as_str) != Some(expected) {
+            return Err(Error::Validation(format!(
+                "release tag {name} has unexpected {field}"
+            )));
+        }
+    }
+    let baseline = match record.fields.get("baseline").map(String::as_str) {
+        Some("true") => true,
+        Some("false") => false,
+        _ => {
+            return Err(Error::Validation(format!(
+                "release tag {name} has unexpected baseline"
+            )))
+        }
     };
     let head = repository
         .head_id()
         .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
         .detach();
-    Ok(record.fields.get("baseline").map(String::as_str) != Some("true") || record.target != head)
+    Ok(!baseline || record.target != head)
 }
 
 /// Whether tag `name` exists and peels to the HEAD commit.
