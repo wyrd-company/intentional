@@ -20,7 +20,7 @@ clap = { version = "4.5", features = ["derive"] }
 gix = "0.89"
 glob = "0.3"
 node-semver = "2.2"
-rand = "0.8"
+rand = "0.10"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
