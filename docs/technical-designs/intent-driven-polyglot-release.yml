@@ -146,8 +146,15 @@ proposed-design:
     the releasing members; unaffected members retain their versions. A
     suspended linked member blocks only when it would release. Excluded
     release units cannot appear in either group, and a release unit belongs to at most
-    one release group. Dependency propagation and group constraints are
-    evaluated to a fixed point before the release plan is sealed.
+    one release group. Dependency propagation raises a dependent to at least
+    the configured internal-dependency bump only when the dependent and its
+    dependency share an ecosystem adapter, because propagation releases the
+    dependent manifest whose internal dependency range the release rewrites.
+    Generic format adapters carry no dependency ranges. An edge without a
+    shared ecosystem adapter orders releases and carries no bump; release
+    groups couple versions across ecosystems. Dependency propagation and group
+    constraints are evaluated to a fixed point before the release plan is
+    sealed.
   tag-contract: >-
     Every tag is an annotated release record carrying the interpretation
     contract, generator name and version, and release-plan digest. Newly created

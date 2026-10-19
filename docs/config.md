@@ -77,7 +77,7 @@ release-units:
 
 | Key | Values | Meaning |
 | --- | --- | --- |
-| `internal-dependency-bump` | `major`, `minor`, `patch` | Minimum bump propagated to internal dependents. |
+| `internal-dependency-bump` | `major`, `minor`, `patch` | Minimum bump propagated to internal dependents that share an ecosystem adapter with the dependency. |
 | `pre-1-0-bump-mapping` | `component`, `compatibility` | Interpretation of bump names before 1.0.0. |
 
 New workspaces use `compatibility`: before 1.0.0, `major` advances the minor
@@ -108,6 +108,18 @@ Each projection has an adapter, relative file path, and mode. Generic `json`,
 
 The ecosystem adapters are `npm`, `cargo`, `pub`, `python`, `msbuild`, and
 `go`. The generic adapters are `json`, `toml`, and `yaml`.
+
+### Dependency propagation
+
+When a release unit releases, each unit that lists it in `depends-on` receives
+at least the `internal-dependency-bump`, but only when both units have a
+projection with the same ecosystem adapter. In that case the dependent's
+manifest holds a version range on the dependency, and the release rewrites it,
+so the dependent changes and must release too. A `depends-on` edge between
+units without a shared ecosystem adapter, including any unit that projects
+only through generic adapters, orders releases and carries no bump. To make
+units in different ecosystems release together, put them in a `fixed` or
+`linked` group.
 
 ### Tags, phases, and order
 

@@ -508,13 +508,41 @@ release-units:
       - { adapter: cargo, file: Cargo.toml, mode: committed }
     tags:
       primary: { role: primary, template: '{id}@{version}' }
+  bundle:
+    path: bundle
+    depends-on: [library]
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+      - { adapter: yaml, file: bundle.yml, pointer: /version, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  manual:
+    path: manual
+    projections:
+      - { adapter: yaml, file: manual.yml, pointer: /version, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
+  manual-index:
+    path: manual-index
+    depends-on: [manual]
+    projections:
+      - { adapter: yaml, file: index.yml, pointer: /version, mode: committed }
+    tags:
+      primary: { role: primary, template: '{id}@{version}' }
 "#,
         )
         .expect("valid config");
-        let declared = BTreeMap::from([("library".to_owned(), Bump::Minor)]);
+        let declared = BTreeMap::from([
+            ("library".to_owned(), Bump::Minor),
+            ("manual".to_owned(), Bump::Minor),
+        ]);
         let effective = effective_bumps(&config, &declared);
         assert_eq!(effective["application"], Bump::Patch);
         assert_eq!(effective["unrelated"], Bump::None);
+        // One shared ecosystem adapter is enough, whatever else a unit projects.
+        assert_eq!(effective["bundle"], Bump::Patch);
+        // Generic adapters carry no dependency ranges, so they never propagate.
+        assert_eq!(effective["manual-index"], Bump::None);
     }
 
     fn group_config(group: &str, mapping: &str, suspended: bool) -> Config {
