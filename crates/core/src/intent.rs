@@ -8,8 +8,8 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::model::Bump;
-use rand::seq::SliceRandom;
-use rand::Rng;
+use rand::seq::IndexedRandom;
+use rand::RngExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -105,12 +105,12 @@ impl IntentDraft {
     /// Validate and render a new intent with a generated memorable slug.
     pub fn plan(self, root: &Path, config: &Config) -> Result<IntentWrite> {
         validate_draft(&self.release_units, &self.message, config)?;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let adjective = ADJECTIVES
             .choose(&mut rng)
             .expect("adjectives are non-empty");
         let noun = NOUNS.choose(&mut rng).expect("nouns are non-empty");
-        let suffix: u32 = rng.gen_range(0..=0xffff);
+        let suffix: u32 = rng.random_range(0..=0xffff);
         let slug = format!("{adjective}-{noun}-{suffix:04x}");
         let relative = PathBuf::from(INTENTS_PATH).join(format!("{slug}.md"));
         let path = root.join(&relative);
