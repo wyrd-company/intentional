@@ -56,7 +56,7 @@ jobs:
         with:
           tool: cross@0.2.5
 
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
 
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
@@ -101,7 +101,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cross@0.2.5
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - name: Cache Cargo inputs and build output
         uses: actions/cache@v4
         with:
@@ -174,6 +174,6 @@ jobs:
           intentional-smoke \
           ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 \
           arm64-ubuntu-24.04
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - name: Run ARM64 library tests natively on host
         run: cargo test --workspace --locked

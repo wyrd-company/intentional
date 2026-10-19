@@ -938,13 +938,11 @@ fn deleted_intents_between(
                 if path.starts_with(crate::intent::INTENTS_PATH)
                     && path.extension().is_some_and(|extension| extension == "md")
                 {
-                    let object = id
-                        .object()
-                        .map_err(|error| std::io::Error::other(error.to_string()))?;
+                    let object = id.object()?;
                     deleted.push((path, object.data.clone()));
                 }
             }
-            Ok::<_, std::io::Error>(gix::object::tree::diff::Action::Continue)
+            Ok(gix::object::tree::diff::Action::Continue(()))
         })
         .map_err(|error| Error::Git(format!("failed to inspect release diff: {error}")))?;
     deleted.sort_by(|left, right| left.0.cmp(&right.0));
