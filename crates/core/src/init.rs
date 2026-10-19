@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
 };
-use crate::plan::canonical_json;
+use crate::plan::{canonical_json, lower_hex, sha256_digest};
 use crate::version::{
     bump_version_with_mapping, effective_bumps, resolve_versions, ReleaseUnitVersion,
 };
@@ -194,7 +194,7 @@ impl DiscoveryCandidate {
         identity.update(detector.as_bytes());
         identity.update([0]);
         identity.update(path.as_bytes());
-        Ok(format!("candidate:{:x}", identity.finalize()))
+        Ok(format!("candidate:{}", lower_hex(&identity.finalize())))
     }
 
     fn validate(&self) -> Result<()> {
@@ -2512,7 +2512,7 @@ fn devcontainer_candidate(root: &Path, path: &Path) -> Result<Option<DiscoveryCa
     let bytes = std::fs::read(path).map_err(|error| Error::io(path, error))?;
     let source = SourceEvidence {
         path: relative.clone(),
-        digest: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        digest: sha256_digest(&bytes),
         lines: Vec::new(),
     };
     let mut diagnostics = Vec::new();
@@ -4011,7 +4011,7 @@ fn evidence(root: &Path, relative: &Path, lines: Vec<usize>) -> Result<SourceEvi
     let bytes = std::fs::read(&path).map_err(|error| Error::io(&path, error))?;
     Ok(SourceEvidence {
         path: relative.to_owned(),
-        digest: format!("sha256:{:x}", Sha256::digest(&bytes)),
+        digest: sha256_digest(&bytes),
         lines,
     })
 }
@@ -4050,10 +4050,7 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
             evidence(root, &path, Vec::new())?.digest,
         );
     }
-    Ok(format!(
-        "sha256:{:x}",
-        Sha256::digest(canonical_json(&source)?.as_bytes())
-    ))
+    Ok(sha256_digest(canonical_json(&source)?.as_bytes()))
 }
 
 fn verify_takeover_preconditions(

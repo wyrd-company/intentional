@@ -5,13 +5,12 @@
 
 use assert_cmd::Command;
 use intentional_core::{
-    canonical_json, initialize, Adapter, CandidateResolution, Generator, InitPlan, InitState,
-    PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
+    canonical_json, initialize, sha256_digest, Adapter, CandidateResolution, Generator, InitPlan,
+    InitState, PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
 };
 use predicates::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -1437,10 +1436,7 @@ fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) ->
         tags: &plan.tags,
         tag_order: &plan.tag_order,
     };
-    plan.digest = format!(
-        "sha256:{:x}",
-        Sha256::digest(canonical_json(&payload).expect("canonical JSON").as_bytes())
-    );
+    plan.digest = sha256_digest(canonical_json(&payload).expect("canonical JSON").as_bytes());
     plan
 }
 
