@@ -2,4 +2,4 @@
 intentional: patch
 ---
 
-Raise the minimum supported Rust version to 1.88 and update gix to 0.89.
+Building from source now requires Rust 1.88 or later, so that Intentional can use gix 0.89.

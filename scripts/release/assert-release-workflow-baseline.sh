@@ -68,4 +68,19 @@ for file in "$workflow" "$evidence_workflow"; do
   fi
 done
 
+ci_workflow="$root/.github/workflows/ci.yml"
+for file in "$workflow" "$evidence_workflow" "$ci_workflow"; do
+  while read -r pin; do
+    if [[ "$pin" != "$RUST_VERSION" ]]; then
+      echo "Pinned Rust toolchain $pin in $file does not match RUST_VERSION=$RUST_VERSION." >&2
+      exit 1
+    fi
+  done < <(grep -Eo 'dtolnay/rust-toolchain@[0-9][0-9.]*' "$file" | cut -d@ -f2)
+done
+
+if ! grep -Fxq "rust-version = \"${RUST_VERSION%.*}\"" "$root/Cargo.toml"; then
+  echo "Cargo.toml rust-version must match RUST_VERSION=$RUST_VERSION." >&2
+  exit 1
+fi
+
 echo "Release workflow preserves the pinned Linux GNU baseline."
