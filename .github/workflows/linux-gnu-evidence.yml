@@ -28,7 +28,7 @@ jobs:
     name: Verify cross-rs image provenance (ghcr.io)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify public :0.2.5 tags resolve to pinned digests and labels
         run: scripts/release/verify-linux-gnu-baseline-provenance-online.sh
 
@@ -49,7 +49,7 @@ jobs:
             artifact_name: intentional-linux-arm64
             bin_path: target/aarch64-unknown-linux-gnu/release/intentional
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install cross
         uses: taiki-e/install-action@v2
@@ -97,7 +97,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: taiki-e/install-action@v2
         with:
           tool: cross@0.2.5
@@ -128,7 +128,7 @@ jobs:
           - label: ubuntu-24.04
             image: ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: intentional-linux-x86_64-evidence
@@ -149,7 +149,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: intentional-linux-arm64-evidence
