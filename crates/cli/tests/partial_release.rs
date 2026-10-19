@@ -528,3 +528,86 @@ fn baseline_for_a_unit_added_later_leaves_an_established_workspace_tag_alone() {
     assert_eq!(tags, ["alpha@0.1.0", "gamma@0.0.0", "release-1.0.0"]);
     assert_eq!(repo.tag_target("release-1.0.0"), workspace_baseline);
 }
+
+/// Rewrite annotated tag `tag` in place with `field` replaced by `value`.
+fn forge_record_field(repo: &TestRepo, tag: &str, field: &str, value: &str) {
+    let target = repo.tag_target(tag);
+    let message = git(&repo.root, &["tag", "-l", "--format=%(contents)", tag])
+        .lines()
+        .map(|line| match line.strip_prefix(&format!("{field}: ")) {
+            Some(_) => format!("{field}: {value}"),
+            None => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    git(
+        &repo.root,
+        &["tag", "-f", "-a", tag, &target, "-m", &message],
+    );
+}
+
+#[test]
+fn baseline_refuses_an_established_record_with_a_foreign_identity() {
+    for (field, value) in [
+        ("tag-id", "release-unit/other/primary"),
+        ("version", "8.8.8"),
+        ("contract", "contract-other"),
+        ("baseline", "maybe"),
+    ] {
+        let repo = shared_yaml_repository();
+        forge_record_field(&repo, "alpha@0.1.1", field, value);
+        add_gamma(&repo);
+        let before = repo.tags();
+        repo.cli()
+            .args(["tag", "--baseline"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "release tag alpha@0.1.1 has unexpected {field}"
+            )));
+        assert_eq!(repo.tags(), before, "{field} forgery created tags");
+    }
+}
+
+#[test]
+fn baseline_refuses_an_established_workspace_record_with_a_foreign_identity() {
+    let repo = TestRepo::new();
+    let alpha = yaml_unit("alpha", ".", "docs/docs.yml", "/products/alpha/version", "");
+    let workspace = |units: &[String]| {
+        config(units).replace(
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: 'release-{version}'\nrelease-units:",
+        )
+    };
+    repo.write(
+        ".intentional/config.yml",
+        &workspace(std::slice::from_ref(&alpha)),
+    );
+    repo.write("docs/docs.yml", "products:\n  alpha:\n    version: 0.1.0\n");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=1.0.0"])
+        .assert()
+        .success();
+    forge_record_field(&repo, "release-1.0.0", "tag-id", "workspace/other");
+
+    repo.write(
+        ".intentional/config.yml",
+        &workspace(&[
+            alpha,
+            yaml_unit("gamma", "gamma", "gamma.yml", "/version", ""),
+        ]),
+    );
+    repo.write("gamma/gamma.yml", "version: 0.0.0\n");
+    repo.commit("add gamma release unit");
+    let before = repo.tags();
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release tag release-1.0.0 has unexpected tag-id",
+        ));
+    assert_eq!(repo.tags(), before);
+}
