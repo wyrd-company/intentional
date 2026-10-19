@@ -147,7 +147,7 @@ jobs:
   native-arm64:
     name: Native ARM64 GNU evidence
     needs: build
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
