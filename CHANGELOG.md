@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+### Breaking
+
+- Building from source now requires Rust 1.88 or later, so that Intentional can use gix 0.89.
+
+### Fixes
+
+- Clarify repository initialization and existing-release bootstrap in the documentation and embedded agent skill; keep the README focused on getting started.
+
 ## 0.1.8
 
 ### Fixes
