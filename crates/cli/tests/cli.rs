@@ -1703,6 +1703,13 @@ fn annotated_tag_with_complete_intentional_record_is_validated() {
 
     repo.cli().arg("status").assert().success();
     repo.cli().arg("check").assert().success();
+    repo.cli()
+        .args(["verify", "sample@1.0.0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "guarantee: baseline-reconstruction",
+        ));
 }
 
 #[test]

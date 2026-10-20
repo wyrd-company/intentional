@@ -437,10 +437,12 @@ commands:
         For a baseline tag record, it recomputes the baseline set at the
         tagged commit and verifies the baseline digest and every tag that
         establishing the baseline creates. A stream leaves the set only
-        through a tag record on an earlier commit under the fixed tagger that
-        agrees with its tag; every tag record at the baseline commit is
-        verified as a baseline tag. A tag without a tag record on an earlier
-        commit supplies its version and is not verified as a baseline tag.
+        through a tag record under the fixed tagger that agrees with its tag
+        and sits on an earlier commit or is a tag of a Release reconstructed
+        at the baseline commit. A tag without a tag record supplies its
+        version and is not verified as a baseline tag. Verification reads Git
+        history only, so a baseline created from uncommitted configuration
+        fails.
       - >-
         Error diagnostic codes are `tag-missing`, `tag-not-annotated`,
         `tag-record-missing`, `tag-record-invalid`, `tagger-mismatch`,

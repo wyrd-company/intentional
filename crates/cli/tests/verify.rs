@@ -487,18 +487,6 @@ fn verify_passes_for_a_baseline_whose_version_a_tag_without_a_record_supplies() 
 }
 
 #[test]
-fn verify_fails_for_a_baseline_tag_without_a_record_at_the_baseline_commit() {
-    let repo = baseline_repo();
-    git(&repo.root, &["tag", "-d", "mirror@1.2.3"]);
-    git(&repo.root, &["tag", "mirror@1.2.3"]);
-    let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
-    assert_eq!(
-        report["identity_tags"],
-        serde_json::json!(["sample-library@1.2.3", "0.1.0"])
-    );
-}
-
-#[test]
 fn verify_fails_for_a_baseline_tag_that_only_later_history_holds() {
     let repo = baseline_repo();
     let message = repo.message("mirror@1.2.3");
@@ -920,14 +908,131 @@ fn verify_fails_for_a_baseline_whose_earlier_release_record_names_another_versio
     assert_earlier_release_record_fails("version", "version");
 }
 
+/// `tag --baseline` leaves a lightweight or annotated tag without a tag
+/// record in place at the baseline commit itself; verify accepts it as the
+/// history that supplies its version.
 #[test]
-fn verify_checks_every_tag_record_at_the_baseline_commit_as_a_baseline_tag() {
+fn verify_passes_for_a_baseline_whose_recordless_primary_tag_marks_the_baseline_commit() {
+    for history in [
+        &["tag", "sample-library@1.2.3"][..],
+        &["tag", "-a", "sample-library@1.2.3", "-m", "Release 1.2.3"][..],
+    ] {
+        let repo = TestRepo::new();
+        repo.write(
+            "package.json",
+            "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+        );
+        repo.write(".intentional/config.yml", CONFIG);
+        repo.write(".intentional/intents/.gitkeep", "");
+        repo.commit("add fixture");
+        git(&repo.root, history);
+        repo.cli()
+            .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+            .assert()
+            .success()
+            .stdout("create annotated tag mirror@1.2.3\ncreate annotated tag 0.1.0\n");
+        for tag in ["mirror@1.2.3", "0.1.0"] {
+            assert_baseline_verified(&repo, tag, &["mirror@1.2.3", "0.1.0"]);
+        }
+    }
+}
+
+/// A Release tagged at the baseline commit establishes its unit there, so
+/// `tag --baseline` creates only the tags of the other streams, and verify
+/// leaves the Release's tags out of the baseline.
+#[test]
+fn verify_passes_for_a_baseline_at_the_commit_of_a_release_it_excludes() {
     let repo = baseline_after_a_release_repo(false);
-    let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+    assert_eq!(
+        git(&repo.root, &["rev-list", "-n", "1", "sample-library@1.3.0"]),
+        git(&repo.root, &["rev-parse", "HEAD"])
+    );
+    assert_baseline_verified(&repo, "0.1.0", &["0.1.0"]);
+}
+
+#[test]
+fn verify_passes_for_a_baseline_at_a_release_commit_from_another_producing_version() {
+    let repo = baseline_after_a_release_repo(false);
+    let message = repo.message("sample-library@1.3.0");
+    let current = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
+    repo.forge(
+        "sample-library@1.3.0",
+        "HEAD",
+        &message
+            .replace(
+                &plan_digest(&message),
+                &format!("sha256:{}", "d".repeat(64)),
+            )
+            .replace(&current, "generator: intentional 0.0.1"),
+    );
+    assert_baseline_verified(&repo, "0.1.0", &["0.1.0"]);
+}
+
+/// A non-baseline tag record at the baseline commit leaves its unit out of
+/// the baseline only when it is a Release tag there; otherwise the unit stays
+/// in the set and its tags fail as baseline tags.
+#[test]
+fn verify_fails_for_a_baseline_at_a_release_commit_whose_release_tag_is_not_that_release() {
+    for defect in [
+        "no tagger",
+        "another tagger",
+        "altered plan-digest",
+        "baseline digest",
+    ] {
+        let repo = baseline_after_a_release_repo(false);
+        let name = "sample-library@1.3.0";
+        let message = repo.message(name);
+        let baseline = plan_digest(&repo.message("0.1.0"));
+        match defect {
+            "no tagger" => repo.strip_tagger(name),
+            "another tagger" => {
+                git(&repo.root, &["tag", "-d", name]);
+                git(&repo.root, &["tag", "-a", name, "-m", &message]);
+            }
+            "altered plan-digest" => repo.forge(
+                name,
+                "HEAD",
+                &message.replace(
+                    &plan_digest(&message),
+                    &format!("sha256:{}", "d".repeat(64)),
+                ),
+            ),
+            _ => repo.forge(
+                name,
+                "HEAD",
+                &message.replace(&plan_digest(&message), &baseline),
+            ),
+        }
+        let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+        assert!(
+            report["diagnostics"]
+                .to_string()
+                .contains(&format!("identity tag {name} has unexpected")),
+            "{defect}: {report:#}"
+        );
+    }
+}
+
+/// `verify` reads Git history only: a baseline created from configuration
+/// that the baseline commit does not hold cannot be recomputed.
+#[test]
+fn verify_fails_for_a_baseline_created_from_uncommitted_configuration() {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.commit("add package");
+    repo.write(".intentional/config.yml", CONFIG);
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+        .assert()
+        .success();
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "reconstruction-failed");
     assert!(
         report["diagnostics"]
             .to_string()
-            .contains("sample-library@1.3.0 has unexpected plan-digest, baseline"),
+            .contains(".intentional/config.yml"),
         "{report:#}"
     );
 }

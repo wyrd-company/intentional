@@ -201,19 +201,27 @@ For a baseline it checks three things:
   carries a baseline tag record for the same digest, and has the same fixed
   tagger.
 
-A stream is outside the baseline set only when its current tag carries a tag
-record on an earlier commit, has the fixed tagger, and agrees with the tag it
-occupies. Every tag record at the baseline commit is checked as a baseline tag,
-so a Release tagged at that same commit fails with `identity-tag-mismatch`. A
-tag without a tag record on an earlier commit is pre-Intentional history: it
-supplies its version, and `tag --baseline` leaves it in place, so `verify` does
-not check it as a baseline tag. A tag without a tag record at the baseline
-commit itself fails with `identity-tag-mismatch`, and a tag that only later
-history holds counts as missing. A recomputed baseline digest that differs
-fails with `baseline-digest-mismatch`, or is the advisory
-`producing-version-differs` when the tag record names another Intentional
-version. A baseline whose only source for a version is a deleted tag cannot be
-recomputed and fails with `reconstruction-failed`.
+`verify` accepts what `tag --baseline` leaves out of the set and in place:
+
+- A stream already established by a tag record is outside the set. The tag
+  record must have the fixed tagger and agree with the tag it occupies, and
+  either sit on an earlier commit or be a tag of a Release that `verify`
+  reconstructs at the baseline commit itself.
+- A tag without a tag record, lightweight or annotated, is pre-Intentional
+  history: it supplies its version and is not checked as a baseline tag.
+
+Any other tag of a stream keeps the stream in the set, so its tags are checked
+as baseline tags and fail with `identity-tag-mismatch` or
+`identity-tag-missing`. A tag that only later history holds counts as missing.
+A recomputed baseline digest that differs fails with
+`baseline-digest-mismatch`, or is the advisory `producing-version-differs`
+when the tag record names another Intentional version. A baseline whose only
+source for a version is a deleted tag cannot be recomputed and fails with
+`reconstruction-failed`.
+
+`verify` reads Git history only. Commit the configuration before
+`tag --baseline`: a baseline created from uncommitted configuration fails with
+`reconstruction-failed`.
 
 ## Stamp build versions
 

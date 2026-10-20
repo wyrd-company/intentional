@@ -5,7 +5,10 @@
 
 //! Verification of a baseline tag record.
 
-use super::{check_identity_tags, read_tag, Identity, TagState, Tagger, Verification};
+use super::{
+    check_identity_tags, is_release_tag, producing_version, read_tag, Agreement, Identity,
+    TagState, Tagger, Verification,
+};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
@@ -44,7 +47,15 @@ pub(super) fn verify(
             &config,
             &BTreeMap::new(),
             &|name, id, version| {
-                established_before(&history, target, &config.contract, name, id, version)
+                established_before(
+                    repository,
+                    &history,
+                    target,
+                    &config.contract,
+                    name,
+                    id,
+                    version,
+                )
             },
         )?;
         Ok((config, versions))
@@ -59,22 +70,21 @@ pub(super) fn verify(
             return Ok(());
         }
     };
-    let producing = record
-        .generator
-        .strip_prefix("intentional ")
-        .unwrap_or(&record.generator);
-    match baseline_digest(&config.contract, producing, &versions) {
-        Ok(digest) if digest == record.plan_digest => {
+    let producing = producing_version(record);
+    match baseline_digest(&config.contract, producing, &versions)
+        .map(|digest| Agreement::of(digest == record.plan_digest, producing))
+    {
+        Ok(Agreement::Equal) => {
             verification.guarantees.push("baseline-reconstruction");
         }
-        Ok(_) if producing == crate::VERSION => verification.error(
+        Ok(Agreement::Differs) => verification.error(
             "baseline-digest-mismatch",
             format!(
                 "the baseline set recomputed at {target} does not have the recorded digest {}",
                 record.plan_digest
             ),
         ),
-        Ok(_) => verification.advisory(
+        Ok(Agreement::DiffersUnderAnotherVersion) => verification.advisory(
             "producing-version-differs",
             format!(
                 "produced by intentional {producing}; the baseline set recomputed with intentional {} differs from the recorded digest {}",
@@ -100,13 +110,20 @@ pub(super) fn verify(
 }
 
 /// Whether tag `name`, the current tag of one stream, establishes that stream
-/// before the baseline commit, read through the same reader as every
-/// identity tag: a tag record on an earlier commit, under the fixed tagger,
-/// whose tag ID, version, and contract agree with the tag it occupies. A tag
-/// record at the baseline commit never establishes its stream, so that every
-/// tag record there is checked as a baseline tag. Any other tag leaves the
-/// stream in the baseline set, where the identity check judges it.
+/// outside the baseline, as `tag --baseline` decides, read through the same
+/// reader as every identity tag. The tag must carry a tag record under the
+/// fixed tagger whose tag ID, version, and contract agree with the tag it
+/// occupies, and be one of:
+///
+/// - a tag record on an earlier commit;
+/// - a non-baseline tag record at the baseline commit that is an identity tag
+///   of a Release reconstructing there.
+///
+/// A baseline tag record at the baseline commit is a tag of this baseline.
+/// Any other tag leaves the stream in the baseline set, where the identity
+/// check judges it.
 fn established_before(
+    repository: &gix::Repository,
     history: &gix::Repository,
     baseline_commit: gix::ObjectId,
     contract: &str,
@@ -114,18 +131,19 @@ fn established_before(
     id: &str,
     version: &str,
 ) -> Result<bool> {
-    Ok(match read_tag(history, name)? {
-        TagState::Recorded {
-            record,
-            target,
-            tagger,
-        } => {
-            target != baseline_commit
-                && tagger == Tagger::Fixed
-                && record.tag_id == id
-                && record.version == version
-                && record.contract == contract
-        }
-        _ => false,
-    })
+    let TagState::Recorded {
+        record,
+        target,
+        tagger,
+    } = read_tag(history, name)?
+    else {
+        return Ok(false);
+    };
+    let agrees = tagger == Tagger::Fixed
+        && record.tag_id == id
+        && record.version == version
+        && record.contract == contract;
+    Ok(agrees
+        && (target != baseline_commit
+            || (!record.baseline && is_release_tag(repository, target, &record, name))))
 }

@@ -217,14 +217,10 @@ enum Tagger {
 enum TagState {
     /// No such tag.
     Missing,
-    /// Symbolic or lightweight; the detail says which. A lightweight tag
-    /// names the commit it tags.
-    NotAnnotated {
-        kind: &'static str,
-        target: Option<gix::ObjectId>,
-    },
-    /// Annotated without a tag record, and the commit it tags.
-    Unclaimed { target: gix::ObjectId },
+    /// Symbolic or lightweight; the detail says which.
+    NotAnnotated(&'static str),
+    /// Annotated without a tag record.
+    Unclaimed,
     /// A tag record that the codec or its target refuses.
     Invalid(String),
     /// A decoded tag record, the commit it tags, and how it is tagged.
@@ -243,10 +239,7 @@ fn read_tag(repository: &gix::Repository, name: &str) -> Result<TagState> {
         return Ok(TagState::Missing);
     };
     let Some(object_id) = reference.try_id().map(|id| id.detach()) else {
-        return Ok(TagState::NotAnnotated {
-            kind: "symbolic",
-            target: None,
-        });
+        return Ok(TagState::NotAnnotated("symbolic"));
     };
     let target = reference
         .peel_to_id()
@@ -256,17 +249,14 @@ fn read_tag(repository: &gix::Repository, name: &str) -> Result<TagState> {
         .find_object(object_id)
         .map_err(|error| Error::Git(format!("failed to read tag {name}: {error}")))?;
     let Ok(tag_object) = object.try_into_tag() else {
-        return Ok(TagState::NotAnnotated {
-            kind: "lightweight",
-            target: Some(target),
-        });
+        return Ok(TagState::NotAnnotated("lightweight"));
     };
     let decoded = tag_object
         .decode()
         .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
     let message = decoded.message.to_string();
     if !TagRecord::is_claimed_by(&message) {
-        return Ok(TagState::Unclaimed { target });
+        return Ok(TagState::Unclaimed);
     }
     let record = match TagRecord::decode(&message) {
         Ok(record) => record,
@@ -323,11 +313,11 @@ fn selected_record(
 ) -> Result<Option<(TagRecord, gix::ObjectId)>> {
     match read_tag(repository, tag)? {
         TagState::Missing => verification.error("tag-missing", format!("tag {tag} does not exist")),
-        TagState::NotAnnotated { kind, .. } => verification.error(
+        TagState::NotAnnotated(kind) => verification.error(
             "tag-not-annotated",
             format!("tag {tag} is {kind}; a Release tag is an annotated tag"),
         ),
-        TagState::Unclaimed { .. } => verification.error(
+        TagState::Unclaimed => verification.error(
             "tag-record-missing",
             format!("annotated tag {tag} carries no tag record"),
         ),
@@ -456,19 +446,81 @@ fn release_unit_versions(
     Ok(versions)
 }
 
+/// How a recomputed digest agrees with the digest a tag record carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Agreement {
+    /// The digests are equal.
+    Equal,
+    /// The digests differ, and the record names the running version.
+    Differs,
+    /// The digests differ, and the record names another producing version,
+    /// whose semantics the running binary does not carry.
+    DiffersUnderAnotherVersion,
+}
+
+impl Agreement {
+    fn of(equal: bool, producing: &str) -> Self {
+        if equal {
+            Self::Equal
+        } else if producing == crate::VERSION {
+            Self::Differs
+        } else {
+            Self::DiffersUnderAnotherVersion
+        }
+    }
+
+    /// Whether verification accepts the digest: equal, or different under
+    /// another producing version, which is an advisory.
+    fn accepted(self) -> bool {
+        self != Self::Differs
+    }
+}
+
+/// The bare producing version a tag record names.
+fn producing_version(record: &TagRecord) -> &str {
+    record
+        .generator
+        .strip_prefix("intentional ")
+        .unwrap_or(&record.generator)
+}
+
+/// How the plan of `release` agrees with the digest `record` carries.
+fn plan_digest_agreement(release: &Reconstruction, record: &TagRecord) -> Result<Agreement> {
+    let producing = producing_version(record);
+    let digests = release.apply.plan.candidate_digests(producing)?;
+    Ok(Agreement::of(
+        digests.contains(&record.plan_digest),
+        producing,
+    ))
+}
+
+/// Whether `record`, the tag record of tag `name` at `target`, is an identity
+/// tag of a Release that reconstructs at `target`: the recomputed plan names
+/// the tag at its tag ID and version, and its digest is accepted.
+fn is_release_tag(
+    repository: &gix::Repository,
+    target: gix::ObjectId,
+    record: &TagRecord,
+    name: &str,
+) -> bool {
+    let Ok(release) = reconstruct(repository, target, record) else {
+        return false;
+    };
+    release.apply.plan.tags.iter().any(|planned| {
+        planned.name == name && planned.id == record.tag_id && planned.version == record.version
+    }) && plan_digest_agreement(&release, record).is_ok_and(Agreement::accepted)
+}
+
 fn check_plan_digest(
     release: &Reconstruction,
     record: &TagRecord,
     verification: &mut Verification,
 ) -> Result<()> {
-    let producing = record
-        .generator
-        .strip_prefix("intentional ")
-        .unwrap_or(&record.generator);
-    let digests = release.apply.plan.candidate_digests(producing)?;
-    if digests.contains(&record.plan_digest) {
+    let producing = producing_version(record);
+    let agreement = plan_digest_agreement(release, record)?;
+    if agreement == Agreement::Equal {
         verification.guarantees.push("plan-reconstruction");
-    } else if producing == crate::VERSION {
+    } else if agreement == Agreement::Differs {
         verification.error(
             "plan-digest-mismatch",
             format!(
@@ -547,9 +599,9 @@ struct Identity<'a> {
 
 /// Check that `tag` is one of `identities` and that every identity tag carries
 /// a tag record that agrees with `record`, at `target`, under the fixed
-/// tagger. For a baseline, a tag without a tag record on an earlier commit is
-/// pre-Intentional history that supplies its version, which establishing the
-/// baseline leaves in place.
+/// tagger. For a baseline, a lightweight or annotated tag without a tag record
+/// is pre-Intentional history that supplies its version, which establishing
+/// the baseline leaves in place.
 fn check_identity_tags(
     repository: &gix::Repository,
     tag: &str,
@@ -599,16 +651,10 @@ fn check_identity_tags(
                 );
                 continue;
             }
-            TagState::NotAnnotated {
-                target: Some(history),
-                ..
-            }
-            | TagState::Unclaimed { target: history }
-                if record.baseline && history != target =>
-            {
+            TagState::NotAnnotated("lightweight") | TagState::Unclaimed if record.baseline => {
                 continue;
             }
-            TagState::NotAnnotated { .. } | TagState::Unclaimed { .. } => {
+            TagState::NotAnnotated(_) | TagState::Unclaimed => {
                 failed = true;
                 verification.error(
                     "identity-tag-mismatch",

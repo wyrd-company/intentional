@@ -135,11 +135,14 @@ proposed-design:
     tags that commit reaches, computes the baseline digest payload under the
     tag record's generator version, and compares its digest with the
     recorded `plan-digest` under the same advisory rule. A stream leaves the
-    recomputed set only through a tag record on an earlier commit that the
-    same reader accepts: the fixed tagger, and the tag ID, version, and
-    contract of the tag it occupies. Every tag record at the baseline commit
-    stays in the set. It then checks that
+    recomputed set only through a tag record that the same reader accepts:
+    the fixed tagger, and the tag ID, version, and contract of the tag it
+    occupies, on an earlier commit or as a tag of a Release that verify
+    reconstructs at the baseline commit, whose plan names the tag and whose
+    digest the release check accepts. It then checks that
     every tag that baseline establishment creates for the set carries a
     baseline tag record for the same digest at that commit under the fixed
-    tagger. A tag without a tag record on an earlier commit is pre-Intentional
-    history that supplies its version and is not checked as a baseline tag.
+    tagger. A tag without a tag record is pre-Intentional history that
+    supplies its version and is not checked as a baseline tag. A baseline
+    created from configuration that the baseline commit does not hold cannot
+    be recomputed from history and fails.
