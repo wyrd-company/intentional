@@ -19,15 +19,13 @@ use crate::apply::ApplyResult;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
-use crate::tag::{
-    baseline_versions, materialized_release_parent, recover_deleted_intents, render_tag,
-    tag_candidates,
-};
-use crate::tag_record::baseline_digest;
+use crate::tag::{materialized_release_parent, recover_deleted_intents, render_tag};
 use crate::tag_record::TagRecord;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
+
+mod baseline;
 
 /// Tagger name of every Intentional tag object.
 const TAGGER_NAME: &str = "Intentional";
@@ -166,7 +164,7 @@ pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
     verification.baseline = record.baseline;
     verification.guarantees.push("tag-record");
     if record.baseline {
-        verify_baseline(&repository, tag, target, &record, &mut verification)?;
+        baseline::verify(&repository, tag, target, &record, &mut verification)?;
         return Ok(verification.finish());
     }
 
@@ -202,85 +200,6 @@ pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
         &mut verification,
     )?;
     Ok(verification.finish())
-}
-
-/// Verify a baseline tag record: recompute the baseline set at the commit it
-/// tags, check the digest of its payload, and check the tag record of every
-/// tag that establishing that set creates.
-fn verify_baseline(
-    repository: &gix::Repository,
-    tag: &str,
-    target: gix::ObjectId,
-    record: &TagRecord,
-    verification: &mut Verification,
-) -> Result<()> {
-    let checkout = match Checkout::of(repository, target) {
-        Ok(checkout) => checkout,
-        Err(error) => {
-            verification.error(
-                "reconstruction-failed",
-                format!("the baseline of {tag} cannot be reconstructed: {error}"),
-            );
-            return Ok(());
-        }
-    };
-    let reconstructed = Config::load(checkout.root()).and_then(|config| {
-        let versions = baseline_versions(checkout.root(), &config, &BTreeMap::new())?;
-        Ok((config, versions))
-    });
-    let (config, versions) = match reconstructed {
-        Ok(reconstructed) => reconstructed,
-        Err(error) => {
-            verification.error(
-                "reconstruction-failed",
-                format!("the baseline of {tag} cannot be reconstructed: {error}"),
-            );
-            return Ok(());
-        }
-    };
-    let producing = record
-        .generator
-        .strip_prefix("intentional ")
-        .unwrap_or(&record.generator);
-    match baseline_digest(&config.contract, producing, &versions) {
-        Ok(digest) if digest == record.plan_digest => {
-            verification.guarantees.push("baseline-reconstruction");
-        }
-        Ok(_) if producing == crate::VERSION => verification.error(
-            "baseline-digest-mismatch",
-            format!(
-                "the baseline set recomputed at {target} does not have the recorded digest {}",
-                record.plan_digest
-            ),
-        ),
-        Ok(_) => verification.advisory(
-            "producing-version-differs",
-            format!(
-                "produced by intentional {producing}; the baseline set recomputed with intentional {} differs from the recorded digest {}",
-                crate::VERSION,
-                record.plan_digest
-            ),
-        ),
-        Err(error) => verification.error(
-            "reconstruction-failed",
-            format!("the baseline digest of {tag} cannot be recomputed: {error}"),
-        ),
-    }
-    let candidates = tag_candidates(&config, &versions);
-    let identities = candidates
-        .iter()
-        .map(|(id, candidate)| Identity {
-            id,
-            name: &candidate.name,
-            version: &candidate.version,
-        })
-        .collect::<Vec<_>>();
-    // Tags are read in the checkout, which holds only the tags whose target
-    // the baseline commit reaches: a tag that marks later history cannot
-    // stand in for one the baseline established.
-    let history = gix::discover(checkout.root())
-        .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
-    check_identity_tags(&history, tag, target, record, &identities, verification)
 }
 
 /// Whether a tag object is tagged the way Intentional tags.
@@ -788,10 +707,12 @@ mod tests {
         assert!(advised.finish().verified);
     }
 
-    /// Diagnostic codes this module passes to `error` or `advisory`.
+    /// Diagnostic codes this module and its children pass to `error` or
+    /// `advisory`.
     fn emitted_codes() -> BTreeSet<String> {
-        let source = include_str!("verify.rs");
-        let source = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let verify = include_str!("verify.rs");
+        let verify = &verify[..verify.find("#[cfg(test)]").expect("test module")];
+        let source = [verify, include_str!("verify/baseline.rs")].concat();
         let mut codes = BTreeSet::new();
         for call in [".error(", ".advisory("] {
             for (index, _) in source.match_indices(call) {
