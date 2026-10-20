@@ -306,6 +306,17 @@ validates exact existing tag records and creates only missing selected tag
 records, so dry-run verification and recovery after partial or complete tag
 creation are safe. Any tag record mismatch fails closed.
 
+After every planned tag exists, verify the Release from any of its tags:
+
+```bash
+intentional verify <tag> --json
+```
+
+`verify` needs Git history only. Exit `0` means every check passed; report any
+`producing-version-differs` advisory with the result. Exit `1` names the failed
+check in a diagnostic code; investigate it before any publication step relies
+on the Release.
+
 ## Establish baseline tags
 
 Use baselines only when a configured tag stream has no matching existing tag.

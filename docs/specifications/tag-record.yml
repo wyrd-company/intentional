@@ -42,6 +42,5 @@ validation-criteria: >-
   prefixed with `sha256:`. A present `tag-role` is `workspace` for a workspace
   tag ID and `primary` or `projection` for a Release Unit tag ID. Semantic
   validation resolves every prerequisite record and verifies its tag ID,
-  annotated-tag object ID, target, version, generator, and plan digest against
-  the sealed plan. Exact existing objects satisfy creation; any disagreement is
+  target, version, contract, and plan digest against the sealed plan. Exact existing objects satisfy creation; any disagreement is
   a conflict.

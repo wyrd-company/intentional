@@ -445,6 +445,14 @@ commands:
         Verification needs Git history and no hosting-platform credentials.
         It reconstructs the canonical plan and materialized source from the
         selected tag and verifies the complete core identity-tag set.
+      - >-
+        Error diagnostic codes are `tag-missing`, `tag-not-annotated`,
+        `tag-record-missing`, `tag-record-invalid`, `tagger-mismatch`,
+        `baseline-record`, `reconstruction-failed`, `plan-digest-mismatch`,
+        `materialized-tree-mismatch`, `identity-tag-missing`, and
+        `identity-tag-mismatch`. A recomputed digest that differs for a tag
+        record naming another producing version is the advisory
+        `producing-version-differs`, which does not fail verification.
   - name: model
     summary: Write the Release Model that release process templates read.
     mode: non-interactive

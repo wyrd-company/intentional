@@ -152,12 +152,33 @@ after apply.
 
 ## Verify a release
 
-`verify` reconstructs one established Release from its exact annotated tag. Core
-verification uses Git history and needs no hosting-platform credentials:
+`verify` checks one established Release from any of its annotated identity
+tags. It reads Git history only, so it needs no network and no
+hosting-platform credentials:
 
 ```bash
 intentional verify sample-library@1.2.3
+intentional verify sample-library@1.2.3 --json
 ```
+
+It checks four things:
+
+- The tag is annotated, carries a valid tag record, and is tagged by
+  `Intentional <intentional@wyrd.company>` at the time of the commit it tags.
+- The Release Plan recomputed at the commit the release was planned from has
+  the plan digest the tag record carries.
+- The release commit holds the files that applying that plan writes, and none
+  of the intents it consumes.
+- Every tag the plan names exists at the release commit with a tag record for
+  the same plan digest.
+
+`verify` exits `0` when every check passes and `1` otherwise. Each failure is a
+diagnostic with a stable code, such as `tag-not-annotated`,
+`plan-digest-mismatch`, `materialized-tree-mismatch`, or
+`identity-tag-missing`. A tag that another Intentional version produced can
+recompute to a different digest under this version. That difference is the
+advisory `producing-version-differs` and does not fail verification. A
+baseline tag is not a Release; `verify` reports it as `baseline-record`.
 
 ## Stamp build versions
 

@@ -62,18 +62,20 @@ proposed-design:
 
   annotated-tag-records: >-
     Every Intentional-created tag is annotated. Its canonical message is its tag
-    record, which holds tag role, version, producing Intentional version,
-    Release Plan digest, target identity, baseline status, and verified
-    prerequisite tags. Intentional derives tagger identity from a fixed product
-    identity and tagger time from the target commit's committer timestamp and
-    offset. Ambient Git configuration, runner timezone, wall-clock time,
-    randomness, and network state cannot change the tag object.
+    record, which holds the interpretation contract, producing Intentional
+    version, Release Plan digest, tag ID, version, and baseline status.
+    Verification takes the tag's role and prerequisites from the plan and its
+    target from the tag object, so a tag record needs none of them. Intentional
+    derives tagger identity from a fixed product identity and tagger time from
+    the target commit's committer timestamp and offset. Ambient Git
+    configuration, runner timezone, wall-clock time, randomness, and network
+    state cannot change the tag object.
 
   tag-prerequisites: >-
     A tag can require other canonical tag records. Before creating it,
     Intentional resolves every prerequisite expected by the sealed plan and
-    verifies target commit, version, producing version, plan digest, and tag
-    role. The plan contains the deterministic topological order. An exact
+    verifies its target commit, tag ID, version, contract, and plan digest. The
+    plan contains the deterministic topological order. An exact
     existing tag satisfies its operation; an incompatible object is a conflict.
 
   tag-phases: >-
@@ -101,9 +103,10 @@ proposed-design:
   idempotency-and-conflict: >-
     Every mutating operation computes an expected immutable result before
     writing. An exact existing commit or tag satisfies the operation. An object
-    at the same identity with another target, version, producing version, plan,
-    or prerequisite is a conflict and remains unchanged. Partial execution can
-    therefore rerun the same protocol without a separate recovery mode.
+    at the same identity with another target, tag ID, version, contract, plan
+    digest, or baseline status is a conflict and remains unchanged. Partial
+    execution can therefore rerun the same protocol without a separate
+    recovery mode.
 
   channel-records: >-
     Channel Releases carry the same sealed-plan and tag-record guarantees as
@@ -113,6 +116,17 @@ proposed-design:
     and materializes the consolidated changelog.
 
   verification: >-
-    `intentional verify <tag>` checks annotated tags, canonical plan
-    reconstruction, and the materialized source without hosting-platform
-    credentials.
+    `intentional verify <tag>` checks one established Release from any of its
+    identity tags with Git history only and without hosting-platform
+    credentials. It checks the tag record and its fixed tagger, finds the
+    commit the release was planned from as recovery does, and recomputes the
+    plan there under the tag record's producing version. It then checks that
+    the recomputed plan has the recorded digest, that the release commit holds
+    the content that materializing the plan writes at each path it writes and
+    none of the intents it consumes, and that every tag in the plan carries a
+    tag record for the same digest at the release commit. A recomputed digest
+    that differs for a tag record naming another producing version is an
+    advisory, because
+    the running binary does not carry earlier versions' planning semantics; a
+    difference under the running version fails. A baseline tag establishes
+    authority without a Release, and verify reports it as such.

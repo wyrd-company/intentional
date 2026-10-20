@@ -512,3 +512,58 @@ fn check_identity_tags(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    /// Diagnostic codes this module passes to `error` or `advisory`.
+    fn emitted_codes() -> BTreeSet<String> {
+        let source = include_str!("verify.rs");
+        let source = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let mut codes = BTreeSet::new();
+        for call in [".error(", ".advisory("] {
+            for (index, _) in source.match_indices(call) {
+                let rest = source[index + call.len()..].trim_start();
+                if let Some(code) = rest
+                    .strip_prefix('"')
+                    .and_then(|rest| rest.split_once('"'))
+                    .map(|(code, _)| code)
+                {
+                    codes.insert(code.to_owned());
+                }
+            }
+        }
+        codes
+    }
+
+    #[test]
+    fn the_cli_specification_names_every_diagnostic_code() {
+        let specification: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/command-line-interface.spec.yml"
+        ))
+        .expect("CLI specification parses");
+        let verify = specification["commands"]
+            .as_sequence()
+            .expect("commands")
+            .iter()
+            .find(|command| command["name"] == "verify")
+            .expect("verify command");
+        let notes = verify["notes"]
+            .as_sequence()
+            .expect("notes")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let named = notes
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let emitted = emitted_codes();
+        assert!(emitted.len() >= 12, "{emitted:?}");
+        assert_eq!(named, emitted);
+    }
+}
