@@ -8,34 +8,38 @@ description: >-
   Defines the tag record, the canonical protocol message carried by every
   annotated Git tag that Intentional creates. The Git tag object and its message
   together bind one configured tag identity and semantic version to a target
-  commit, exact producing Intentional version, plan or baseline digest, and
-  verified prerequisite tag objects. `docs/specifications/tag-record.schema.yml`
-  is the machine-readable definition of the message fields.
+  commit, interpretation contract, exact producing Intentional version, plan or
+  baseline digest, and verified prerequisite tag objects.
+  `docs/specifications/tag-record.schema.yml` is the machine-readable
+  definition of the message fields.
 format: json-schema
 validation-criteria: >-
   A conforming tag is an annotated Git tag whose message begins with the fixed
   protocol header `intentional release record`, followed by one blank line and
-  newline-delimited `key: value` protocol fields. Scalar fields occur once in
-  schema order. Each `prerequisite: <tag-id> <tag-object>` entry follows in
+  newline-delimited `key: value` protocol fields. Every tag record carries
+  `contract`, `generator`, `plan-digest`, `tag-id`, `version`, and `baseline`;
+  `tag-role`, `target`, and `prerequisites` are optional members. Scalar fields
+  occur once in schema order. Each `prerequisite: <tag-id> <tag-object>` entry follows in
   lexical `tag-id` order. Parsing projects those repeated entries into the
   `prerequisites` array validated by
   `docs/specifications/tag-record.schema.yml`. Canonical field names use
   kebab-case. `generator` is the line-encoded form of the Release Plan
   `generator`: the literal tool name `intentional`, one space, and the same
-  semantic version. The message target must equal the annotated tag object's
+  semantic version. A present `target` equals the annotated tag object's
   target commit. The fixed tagger name and email are `Intentional` and
   `intentional@wyrd.company`; tagger time and offset equal the target commit's
   committer time and offset. When `baseline` is false, the tag record's
   `plan-digest` equals its sealed Release Plan digest. A baseline tag record's
   `plan-digest` is computed from the object defined by
   `#/$defs/baseline-digest-payload` in the Tag Record schema. Its exact fields
-  are the bare `generator` semantic version, `versions`, and `baseline: true`.
+  are the interpretation `contract`, the bare `generator` semantic version,
+  `versions`, and `baseline: true`.
   `versions` maps each Release Unit ID and canonical workspace tag ID in the
   complete baseline set to its semantic version. The payload uses the Release
   Plan canonical JSON rules: object keys sort lexically at every depth,
   serialization is compact UTF-8 JSON, and the digest is lowercase SHA-256
-  prefixed with `sha256:`. Workspace tag IDs require `tag-role: workspace`.
-  Release Unit tag IDs require `tag-role: primary` or `projection`. Semantic
+  prefixed with `sha256:`. A present `tag-role` is `workspace` for a workspace
+  tag ID and `primary` or `projection` for a Release Unit tag ID. Semantic
   validation resolves every prerequisite record and verifies its tag ID,
   annotated-tag object ID, target, version, generator, and plan digest against
   the sealed plan. Exact existing objects satisfy creation; any disagreement is

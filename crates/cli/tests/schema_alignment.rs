@@ -1,12 +1,14 @@
 // ---
 // relationships:
-//   tests: release-workspace
+//   tests:
+//     - release-workspace
+//     - tag-record
 // ---
 
 //! Validates what Intentional reads and writes against the published schemas.
 
 use assert_cmd::Command;
-use intentional_core::Config;
+use intentional_core::{canonical_json, sha256_digest, Config};
 use jsonschema::{Registry, Validator};
 use serde_json::{json, Value};
 use std::fs;
@@ -15,6 +17,9 @@ use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 
 const CONFIG_ID: &str = "https://intentional.foo/schemas/0.2/config";
+const TAG_RECORD_ID: &str = "https://intentional.foo/schemas/0.2/tag-record";
+const BASELINE_PAYLOAD_ID: &str =
+    "https://intentional.foo/schemas/0.2/tag-record#/$defs/baseline-digest-payload";
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -71,6 +76,37 @@ fn assert_invalid(reference: &str, instance: &Value) {
         !schema_errors(reference, instance).is_empty(),
         "{reference} accepts instance {instance}"
     );
+}
+
+/// Project a tag record message onto the object the Tag Record schema
+/// validates: scalar `key: value` lines, `baseline` as a boolean, and
+/// repeated `prerequisite` lines as the `prerequisites` array.
+fn tag_record_fields(message: &str) -> Value {
+    let mut lines = message.lines();
+    assert_eq!(lines.next(), Some("intentional release record"));
+    assert_eq!(lines.next(), Some(""));
+    let mut fields = serde_json::Map::new();
+    let mut prerequisites = Vec::new();
+    for line in lines {
+        let (key, value) = line.split_once(": ").expect("tag record field line");
+        match key {
+            "baseline" => {
+                fields.insert(key.to_owned(), json!(value.parse::<bool>().expect("bool")));
+            }
+            "prerequisite" => {
+                let (tag_id, tag_object) = value.split_once(' ').expect("prerequisite pair");
+                prerequisites.push(json!({ "tag-id": tag_id, "tag-object": tag_object }));
+            }
+            _ => {
+                let previous = fields.insert(key.to_owned(), json!(value));
+                assert!(previous.is_none(), "repeated tag record field {key}");
+            }
+        }
+    }
+    if !prerequisites.is_empty() {
+        fields.insert("prerequisites".to_owned(), Value::Array(prerequisites));
+    }
+    Value::Object(fields)
 }
 
 struct TestRepo {
@@ -198,4 +234,49 @@ fn release_workspace_schema_rejects_unpublished_identities_and_missing_contract(
         .expect("config object")
         .remove("contract");
     assert_invalid(CONFIG_ID, &without_contract);
+}
+
+#[test]
+fn tag_records_written_by_released_0_2_0_validate() {
+    for fixture in [
+        "release-unit-tag-record.txt",
+        "workspace-tag-record.txt",
+        "baseline-tag-record.txt",
+    ] {
+        let message = read_repository_file(&format!(
+            "docs/specifications/fixtures/released-0.2.0/{fixture}"
+        ));
+        let fields = tag_record_fields(&message);
+        assert_eq!(fields["contract"], "contract-1", "{fixture}");
+        assert_valid(TAG_RECORD_ID, &fields);
+    }
+}
+
+#[test]
+fn baseline_digest_payload_written_by_released_0_2_0_validates_and_reproduces() {
+    let payload: Value = serde_json::from_str(&read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/baseline-digest-payload.json",
+    ))
+    .expect("baseline payload JSON");
+    assert_valid(BASELINE_PAYLOAD_ID, &payload);
+    let baseline = tag_record_fields(&read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/baseline-tag-record.txt",
+    ));
+    assert_eq!(
+        sha256_digest(canonical_json(&payload).expect("canonical").as_bytes()),
+        baseline["plan-digest"].as_str().expect("baseline digest")
+    );
+}
+
+#[test]
+fn tag_record_schema_rejects_a_record_without_contract() {
+    let message = read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/workspace-tag-record.txt",
+    );
+    let mut fields = tag_record_fields(&message);
+    fields.as_object_mut().expect("fields").remove("contract");
+    assert_invalid(TAG_RECORD_ID, &fields);
+    let mut workspace_as_primary = tag_record_fields(&message);
+    workspace_as_primary["tag-role"] = json!("primary");
+    assert_invalid(TAG_RECORD_ID, &workspace_as_primary);
 }

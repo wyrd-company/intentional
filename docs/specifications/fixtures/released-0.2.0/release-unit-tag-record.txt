@@ -1,0 +1,8 @@
+intentional release record
+
+contract: contract-1
+generator: intentional 0.2.0
+plan-digest: sha256:cd4f1ebfe3db2b887ecfd646383c5887e48b261a4e7512efb02289ee867120e2
+tag-id: release-unit/sample-library/primary
+version: 1.3.0
+baseline: false
