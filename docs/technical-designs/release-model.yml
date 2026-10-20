@@ -17,9 +17,9 @@ background:
     Intentional resolves Release Units, projections, tag streams, dependency
     edges, and release groups from `.intentional/config.yml` and the manifests
     it projects into. Release processes are rendered by Toha templates. A Toha
-    template receives values through interview answers, which the snapshot
-    records and an update replays, and through static `data` inside the
-    template. The Toha template composition design adds contract documents: a
+    template receives values through interview answers, which Toha records in
+    the committed applied record `.toha.json` and an update replays, and
+    through static `data` inside the template. The Toha template composition design adds contract documents: a
     `type: document` question accepts a JSON value whose `$schema` member names
     a schema the question declares, `apply --input FILE` submits such a
     document to every question that accepts its schema, and a question can name
@@ -145,10 +145,10 @@ proposed-design:
     owner, default branch, or hosting provider, because those differ between
     clones and forks of one commit. It holds no producing Intentional version,
     timestamp, or digest of itself, because upgrading Intentional must not make
-    a committed model stale. It holds no custom gate locations, workflow file names, job
-    names, or publication targets: a release process defines them, its template
-    records them as Toha answers in the project snapshot, and conformance
-    tooling reads them from that snapshot.
+    a committed model stale. It holds no custom gate locations, workflow file
+    names, job names, or publication targets: a release process defines them,
+    Toha records its template's answers in `.toha.json`, and conformance tooling
+    reads them from that file.
 
   member-naming: >-
     Release Model member names use snake_case, the identifier form of Toha
@@ -174,8 +174,10 @@ proposed-design:
     document to standard output and nothing to the tree. The command validates
     the Release Workspace first and writes nothing when validation fails. It
     exits `0` on success and `1` on invalid input or operational failure.
-    Every Intentional command that rewrites `.intentional/config.yml` also
-    rewrites an existing Release Model in the same operation set.
+    `intentional init` writes the Release Model in the same operation set
+    whenever it writes `.intentional/config.yml`. Every other Intentional
+    command that rewrites `.intentional/config.yml` also rewrites an existing
+    Release Model in the same operation set and leaves an absent one absent.
 
   staleness-check: >-
     When `.intentional/release-model.json` exists, `intentional check` builds the
@@ -213,38 +215,42 @@ proposed-design:
     default file `.intentional/release-model.json`. Toha reads that file from
     the working tree on every apply, update, stage, and preview, so
     `toha apply <template> .` and every later update render from the committed
-    model and never replay the model recorded in the snapshot. A Release Model
+    model and never replay the model recorded in `.toha.json`. A Release Model
     submitted in the run, with `--input` or an answers document, takes the
     place of the file for that run. When the file is missing and the run
     submits no model, the question is unanswered: Toha asks a person for the
     file and returns the question to a script or agent, and renders nothing
-    until it is answered. `intentional model` is the repair. The snapshot
+    until it is answered. `intentional model` is the repair. `.toha.json`
     records the model the process was rendered from, so a comparison of the
     recorded and committed models shows a process that needs an update. The
     Toha template composition design defines the document question's
     default-file field and its resolution order. Intentional never runs Toha,
     and Toha never runs Intentional.
 
-  shared-document-crate: >-
-    Intentional publishes `intentional-release-model`, an IO-free crate with no
-    Gitoxide, file-system, process, or network dependency. It holds
-    `RELEASE_MODEL_SCHEMA_ID`, `ReleaseModel`, `ModelPaths`, `ReleaseUnitEntry`,
-    `ProjectionEntry`, `SourceEntry`, `ReleaseUnitTagEntry`, `WorkspaceTagEntry`,
-    `ReleaseGroups`, `ReleaseGroupMembership`, `ReleaseRecordPolicy`,
-    `Disposition`, `parse_release_model(&[u8])`, and
-    `to_canonical_json(&ReleaseModel)`, plus the embedded schema. Intentional
-    core builds the model with these types. Airlock parses the model with them.
-    The Toha shared document crate holds the snapshot and answers-envelope
-    types and the contract-document `$schema` reader, and no Release Model
-    type; the two crates agree only on the top-level `$schema` member, compared
-    by exact string equality.
+  model-codec: >-
+    `intentional-core` holds the Release Model types, `ReleaseModel`,
+    `ModelPaths`, `ReleaseUnitEntry`, `ProjectionEntry`, `SourceEntry`,
+    `ReleaseUnitTagEntry`, `WorkspaceTagEntry`, `ReleaseGroups`,
+    `ReleaseGroupMembership`, `ReleaseRecordPolicy`, and `Disposition`, and the
+    schema identity `RELEASE_MODEL_SCHEMA_ID`. `ReleaseModel::encode` writes the
+    canonical bytes `serialization-and-ordering` defines, and
+    `ReleaseModel::decode` reads a document and rejects one that is not the
+    current Release Model contract, as the tag record and Release Plan codecs
+    do. `intentional model` writes with `encode`; `intentional check` compares
+    the committed bytes with `encode` of a fresh projection and uses `decode`
+    only to report a file that is not the current contract. No other tool links
+    these types. The schema is the only contract between Intentional and the
+    model's readers, and the top-level `$schema` member, compared by exact
+    string equality, is the only identity they share.
 
   conformance-consumers: >-
-    Airlock reads the committed model over the forge API to learn the Release
-    Units and their release-record policy, and reads template identities and
-    process answers from Toha snapshots. Documentation publishers read primary
-    tag templates from the model; `release-units.<id>.tags.primary.template`
-    in configuration keeps its spelling and meaning.
+    Airlock reads the committed model at the audited revision as plain JSON,
+    validates it against a vendored copy of the Release Model schema, and takes
+    the Release Units and their release-record policy from it. It reads template
+    identity and process answers from `.toha.json` at the same revision.
+    Documentation publishers read primary tag templates from the model;
+    `release-units.<id>.tags.primary.template` in configuration keeps its
+    spelling and meaning.
 
   alternatives-considered: >-
     Emitting a Toha answers document binds Intentional to one template's formal
@@ -254,13 +260,16 @@ proposed-design:
     is rejected; `--stdout` remains for harnesses. Naming the schema on the
     Intentional compatibility line, such as `schemas/0.3/release-model`, would
     break every applied template on each Intentional line change, so the model
-    takes its own line. A declared unit `kind` would make Intentional classify
-    processes, so the model exposes ecosystems and discovery sources instead.
+    takes its own line. A Release Model types crate shared with readers would
+    add a second contract beside the schema and a release unit to keep in step,
+    so readers validate the JSON against a vendored schema copy. A declared
+    unit `kind` would make Intentional classify processes, so the model exposes
+    ecosystems and discovery sources instead.
     Kebab-case member names match configuration but force subscript access in
     every template expression, so the model uses snake_case.
 
   out-of-scope: >-
     Rendering, reconciling, or validating workflow files; custom gate and
     workflow naming; publication configuration; Toha document
-    questions and snapshot formats; and emission of earlier Release Model
+    questions and the `.toha.json` format; and emission of earlier Release Model
     lines.
