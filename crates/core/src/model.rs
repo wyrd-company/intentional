@@ -84,6 +84,20 @@ pub enum ReleaseUnitDisposition {
     Suspended,
 }
 
+/// Whether every release of a release unit has a release record on its primary tag.
+///
+/// The surrounding release process creates the record; Intentional creates none
+/// under either value.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseRecordPolicy {
+    /// Every release has a release record, such as a GitHub Release.
+    #[default]
+    Required,
+    /// The release unit has no release record; its tag records are its complete record.
+    None,
+}
+
 /// Version-authority role of a release-unit tag.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

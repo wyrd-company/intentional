@@ -40,7 +40,8 @@ pub use init::{
 };
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition,
+    TagPhase, TagRole,
 };
 pub use plan::{
     canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,

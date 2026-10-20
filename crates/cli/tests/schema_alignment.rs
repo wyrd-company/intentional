@@ -293,6 +293,36 @@ fn release_workspace_schema_takes_an_optional_published_identity_and_requires_co
 }
 
 #[test]
+fn parser_and_release_workspace_schema_agree_on_release_record_values() {
+    let schema = published_schema("release-workspace");
+    let field = &schema["$defs"]["release-unit"]["properties"]["release-record"];
+    assert_eq!(field["enum"], json!(["required", "none"]));
+    assert_eq!(field["default"], json!("required"));
+
+    let text = read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml");
+    let with_policy = |value: &str| {
+        text.replace(
+            "    path: .\n",
+            &format!("    path: .\n    release-record: {value}\n"),
+        )
+    };
+    for value in ["required", "none"] {
+        let config = with_policy(value);
+        assert!(config.contains("release-record"), "fixture takes the field");
+        Config::from_yaml(&config).unwrap_or_else(|error| panic!("{value}: {error}"));
+        assert_valid(CONFIG_ID, &yaml_to_json(&config));
+    }
+    for value in ["optional", "Required", "''"] {
+        let config = with_policy(value);
+        assert!(
+            Config::from_yaml(&config).is_err(),
+            "the parser accepts release-record {value}"
+        );
+        assert_invalid(CONFIG_ID, &yaml_to_json(&config));
+    }
+}
+
+#[test]
 fn tag_records_written_by_released_0_2_0_validate() {
     for fixture in [
         "release-unit-tag-record.txt",

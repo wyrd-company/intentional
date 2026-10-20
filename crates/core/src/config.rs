@@ -7,7 +7,8 @@
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition,
+    TagPhase, TagRole,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -150,6 +151,9 @@ pub struct ReleaseUnitConfig {
     /// Whether releases may include this release unit.
     #[serde(default, skip_serializing_if = "is_managed")]
     pub disposition: ReleaseUnitDisposition,
+    /// Whether every release has a release record that the surrounding process creates.
+    #[serde(default, skip_serializing_if = "is_required")]
+    pub release_record: ReleaseRecordPolicy,
     /// Version-bearing ecosystem and format projections. Empty means tag-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projections: Vec<Projection>,
@@ -162,6 +166,10 @@ pub struct ReleaseUnitConfig {
 
 fn is_managed(disposition: &ReleaseUnitDisposition) -> bool {
     *disposition == ReleaseUnitDisposition::Managed
+}
+
+fn is_required(policy: &ReleaseRecordPolicy) -> bool {
+    *policy == ReleaseRecordPolicy::Required
 }
 
 /// One named release-unit tag.
@@ -698,6 +706,36 @@ release-units:
             Pre1BumpMapping::Component
         );
         assert_eq!(config.primary_tag("library").expect("primary").0, "primary");
+    }
+
+    #[test]
+    fn release_record_policy_defaults_to_required_and_omits_it_when_written() {
+        let config = Config::from_yaml(VALID).expect("valid config");
+        assert!(config
+            .release_units
+            .values()
+            .all(|unit| unit.release_record == ReleaseRecordPolicy::Required));
+        assert!(!config
+            .to_yaml()
+            .expect("serializes")
+            .contains("release-record"));
+
+        let none = VALID.replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    release-record: none\n",
+        );
+        let config = Config::from_yaml(&none).expect("release-record none loads");
+        assert_eq!(
+            config.release_units["library"].release_record,
+            ReleaseRecordPolicy::None
+        );
+        assert_eq!(
+            config.release_units["application"].release_record,
+            ReleaseRecordPolicy::Required
+        );
+        let written = config.to_yaml().expect("serializes");
+        assert!(written.contains("release-record: none"), "{written}");
+        assert_eq!(Config::from_yaml(&written).expect("reloads"), config);
     }
 
     #[test]

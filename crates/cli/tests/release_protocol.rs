@@ -438,3 +438,72 @@ fn an_existing_tag_with_another_target_is_a_conflict_and_stays_unchanged() {
     assert_eq!(git(&repo.root, &["rev-parse", "mirror@1.3.0"]), before);
     assert!(!repo.tags().contains(&"sample-library@1.3.0".to_owned()));
 }
+
+/// Remove the members that name the commit and tree a plan was computed from;
+/// those differ whenever the configuration bytes differ.
+fn without_source(mut plan: Value) -> Value {
+    let members = plan.as_object_mut().expect("plan object");
+    members.remove("source");
+    members.remove("digest");
+    plan
+}
+
+/// Tag record fields that do not name a commit, tree, or plan digest.
+fn release_record_fields(repo: &TestRepo, tag: &str) -> Vec<String> {
+    git(&repo.root, &["cat-file", "tag", tag])
+        .lines()
+        .skip_while(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("plan-digest: ") && !line.starts_with("prerequisite: "))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn release_record_policy_does_not_change_plan_apply_or_tag() {
+    let releases = [
+        "    release-record: required\n",
+        "    release-record: none\n",
+    ]
+    .map(|policy| {
+        let repo = release_repo(policy);
+        let plan = without_source(repo.plan(&[]));
+        let apply = repo.cli().arg("apply").output().expect("apply command");
+        assert!(apply.status.success(), "apply failed");
+        let applied = git(&repo.root, &["diff", "HEAD"]);
+        repo.commit("apply release");
+        let tag = repo.cli().arg("tag").output().expect("tag command");
+        assert!(tag.status.success(), "tag failed");
+        let after = repo
+            .cli()
+            .args(["tag", "--phase", "after-publication"])
+            .output()
+            .expect("tag command");
+        assert!(after.status.success(), "tag --phase failed");
+        let records: Vec<Vec<String>> = ["sample-library@1.3.0", "mirror@1.3.0", "0.0.1"]
+            .iter()
+            .map(|tag| release_record_fields(&repo, tag))
+            .collect();
+        (
+            plan,
+            apply.stdout,
+            applied,
+            tag.stdout,
+            after.stdout,
+            records,
+        )
+    });
+    assert!(
+        !releases[0].0.to_string().contains("release-record")
+            && !releases[0].0.to_string().contains("release_record"),
+        "the plan carries no release-record policy"
+    );
+    assert!(
+        releases[0]
+            .5
+            .iter()
+            .all(|fields| fields.iter().any(|line| line.starts_with("version: "))),
+        "each tag record carries its fields: {:?}",
+        releases[0].5
+    );
+    assert_eq!(releases[0], releases[1]);
+}

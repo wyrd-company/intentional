@@ -126,6 +126,9 @@ $defs:
       disposition:
         enum: [ managed, suspended ]
         default: managed
+      release-record:
+        enum: [ required, none ]
+        default: required
       projections:
         type: array
         items:

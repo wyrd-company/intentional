@@ -18,6 +18,10 @@ pub const OPEN_TYPES: &[(&str, &str)] = &[
     ("model::ProjectionMode", "vocabulary enum mirroring a published schema enum"),
     ("model::Pre1BumpMapping", "vocabulary enum mirroring a published schema enum"),
     ("model::ReleaseUnitDisposition", "vocabulary enum mirroring a published schema enum"),
+    (
+        "model::ReleaseRecordPolicy",
+        "vocabulary enum mirroring a published schema enum; a closed set",
+    ),
     ("model::TagRole", "vocabulary enum mirroring a published schema enum"),
     ("model::TagPhase", "vocabulary enum mirroring a published schema enum"),
     ("tag_record::TagRecordRole", "vocabulary enum mirroring a published schema enum"),

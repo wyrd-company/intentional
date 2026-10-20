@@ -9,8 +9,12 @@ description: >-
   Defines the normative `.intentional/config.yml` contract for one Release
   Workspace. The document records an optional schema identity, the required
   interpretation contract `contract-1`, workspace settings, Release Units with
-  their version projections, dependencies, dispositions, and tag streams, fixed
-  and linked release groups, workspace tag streams, and discovery receipts.
+  their version projections, dependencies, dispositions, release-record
+  policies, and tag streams, fixed and linked release groups, workspace tag
+  streams, and discovery receipts. A Release Unit's `release-record` is
+  `required`, the default, or `none`; it states whether the surrounding release
+  process creates a release record for each release, and Intentional creates
+  none under either value.
   Workspace-tag mappings use bare stable keys; normalized records qualify them
   as `workspace/<key>`. Release-unit tag references use
   `release-unit/<release-unit>/<tag>`. A tag stream can require an executor

@@ -13,7 +13,8 @@ use crate::config::{
 use crate::error::{Error, Result};
 use crate::identity::{native_identity, xml_element};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition,
+    TagRole,
 };
 use crate::plan::{canonical_json, lower_hex, sha256_digest};
 use crate::version::{
@@ -1162,6 +1163,7 @@ fn apply_candidate_resolutions(
             ReleaseUnitConfig {
                 path,
                 disposition: ReleaseUnitDisposition::Managed,
+                release_record: ReleaseRecordPolicy::Required,
                 projections: projection.into_iter().collect(),
                 tags: BTreeMap::from([(
                     tag.id.clone(),
@@ -2221,6 +2223,7 @@ fn materialize_discovery_inventory(
             ReleaseUnitConfig {
                 path,
                 disposition: ReleaseUnitDisposition::Managed,
+                release_record: ReleaseRecordPolicy::Required,
                 projections,
                 tags: BTreeMap::from([(
                     tag.id.clone(),
