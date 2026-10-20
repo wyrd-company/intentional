@@ -128,13 +128,13 @@ proposed-design:
   release-record-policy: >-
     `release-units.<id>.release-record` in `.intentional/config.yml` takes
     `required` or `none`, and omission means `required`. `required` states that
-    every release of the unit has a release record on its primary tag, such as
-    a GitHub Release, created by the surrounding process. `none` states that the
-    annotated tags are the unit's complete release record; documentation units
-    and Dev Container Feature and Template units use it. Intentional core
-    creates no release record under either value. The model copies the policy
-    to `release_record`, where process templates and conformance checks read it
-    from one source.
+    every release of the unit has a release record on its primary tag, such as a
+    GitHub Release, created by the surrounding process. `none` states that the
+    unit has no release record and its tag records are its complete record;
+    documentation units and Dev Container Feature and Template units use it.
+    Intentional core creates no release record under either value. The model
+    copies the policy to `release_record`, where process templates and
+    conformance checks read it from one source.
 
   excluded-content: >-
     The model never contains secrets, credentials, token or environment names,

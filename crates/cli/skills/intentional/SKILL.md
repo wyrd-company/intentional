@@ -204,13 +204,13 @@ configuration after init, not the generated candidate suggestion. Commit it
 once the template matches the existing stream. `{version}` matches `0.1.0`;
 `{id}@{version}` selects a different stream.
 
-Lightweight tags and annotated tags with no Intentional record fields are
+Lightweight tags and annotated tags with no tag record fields are
 accepted as pre-Intentional history. An existing matching `0.1.0` tag supplies
 current version `0.1.0`, including for a Go module. Do not recreate that tag,
 move it, create a replacement baseline, or author an intent to repeat the
 release. `tag --baseline` preserves it and ignores an explicit `--version` for
-that existing stream. Tags with any Intentional record fields
-must pass full record validation.
+that existing stream. Tags with any tag record fields
+must pass full tag record validation.
 
 Verify with `status` and `check`. If an expected baseline appears missing,
 inspect the template and locally available release history before creating a
@@ -285,7 +285,7 @@ versions, internal dependency ranges, changelogs, and consumed intents match
 the accepted release. The surrounding harness must then commit the applied
 tree.
 
-After that commit, create annotated release records against the same saved
+After that commit, create annotated tag records against the same saved
 plan:
 
 ```bash
@@ -302,9 +302,9 @@ intentional tag --plan release-plan.json --phase before-publication
 Never claim a publication phase speculatively. Intentional verifies phase and
 `tag-after` prerequisites and computes deterministic tag order. Tags remain
 local until the authorized harness pushes them. Repeating the same tag command
-validates exact existing records and creates only missing selected records, so
-dry-run verification and recovery after partial or complete tag creation are
-safe. Any record mismatch fails closed.
+validates exact existing tag records and creates only missing selected tag
+records, so dry-run verification and recovery after partial or complete tag
+creation are safe. Any tag record mismatch fails closed.
 
 ## Establish baseline tags
 

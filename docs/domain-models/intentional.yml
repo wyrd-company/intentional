@@ -17,7 +17,8 @@ aggregates:
       streams and their required phases, workspace settings, and discovery
       receipts. A Release Unit is an entity that owns one version, one
       changelog, and one release-record policy, which states whether every
-      release of the unit has a release record on its primary tag. The Release
+      release of the unit has a release record: the GitHub Release that the
+      release process publishes for the unit on its primary tag. The Release
       Model is a projection of this state.
     commands:
       - name: Reconcile Release Workspace
@@ -75,10 +76,11 @@ aggregates:
       One durable authoritative transition from a source state to released
       versions. It comes into existence when the verified release commit and
       annotated identity tags exist as authoritative repository objects. It owns
-      its sealed global Release Plan, source identity, and tag records. Plan
-      computation and materialization are candidate operations and do not
-      create a Release. A tag that requires an executor phase joins the Release
-      when the process declares that phase.
+      its sealed global Release Plan, source identity, and tag records, the
+      canonical messages of its annotated tags. Plan computation and
+      materialization are candidate operations and do not create a Release. A
+      tag that requires an executor phase joins the Release when the process
+      declares that phase.
     commands:
       - name: Establish Release
         description: >-

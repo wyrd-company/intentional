@@ -68,7 +68,7 @@ release-units:
 | `contract` | Versioned interpretation semantics used by plans and tags. |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
-| `workspace-tags` | Repository-level release records and triggers. |
+| `workspace-tags` | Repository-level tag streams and triggers. |
 | `fixed` | Groups whose managed members release at one shared version. |
 | `linked` | Groups whose releasing members share a version calculation. |
 | `discovery` | Managed and excluded candidate receipts. |
@@ -134,7 +134,7 @@ Common templates are:
 
 - `{id}@{version}` for a release-unit namespace, such as
   `sample-library@1.4.0`;
-- `{version}` for a single-release-unit repository or workspace release record.
+- `{version}` for a single-release-unit repository or a workspace tag.
 
 Set `require-phase` to `before-publication` or `after-publication` when the
 executor must declare the external phase before creating a tag. Set

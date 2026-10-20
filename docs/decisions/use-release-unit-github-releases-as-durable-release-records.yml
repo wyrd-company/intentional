@@ -1,5 +1,5 @@
 $schema: https://refinery.systems/ontology/decision-record
-name: Use Release Unit GitHub Releases as durable Release records
+name: Use Release Unit GitHub Releases as durable release records
 
 relationships:
   contextualizes:
@@ -33,7 +33,7 @@ considered-options:
   3: >-
     Use one GitHub Release for every affected Release Unit, on the Release
     Unit's primary tag, with that unit's version and release notes. A Release
-    Unit whose annotated tags are its complete record says so in configuration
+    Unit whose tag records are its complete record says so in configuration
     and has no GitHub Release.
 
 decision-outcome:

@@ -46,27 +46,28 @@ proposed-design:
   release-protocol: >-
     `intentional plan` computes the digest-bound candidate. `intentional apply`
     materializes its tree. The surrounding release process creates the commit.
-    `intentional tag --plan` verifies that commit against the saved candidate and
-    creates the exact annotated tag records, which establishes the Release in the
-    repository. The process owns every push, build, release record, and
+    `intentional tag --plan` verifies that commit against the saved candidate
+    and creates the exact annotated tag records, which establishes the Release
+    in the repository. The process owns every push, build, release record, and
     publication. The protocol provides versioning, changelogs, final-release
-    intent consumption, and tag-backed Release records, and the same commands
-    serve a person, a harness, and a rendered release process.
+    intent consumption, and the tag records that establish the Release, and the
+    same commands serve a person, a harness, and a rendered release process.
 
   release-records: >-
-    The Release Model design owns release-record policy and its placement on
-    the primary tag. The Release Plan supplies each releasing unit's version,
-    primary tag, and release notes, so a process derives a record's identity
-    and text from the sealed plan.
+    A release record is the GitHub Release that the surrounding process
+    publishes for one Release Unit. The Release Model design owns release-record
+    policy and its placement on the primary tag. The Release Plan supplies each
+    releasing unit's version, primary tag, and release notes, so a process
+    derives a release record's identity and text from the sealed plan.
 
   annotated-tag-records: >-
-    Every Intentional-created tag is annotated. Its canonical message records
-    tag role, version, producing Intentional version, Release Plan digest,
-    target identity, baseline status, and verified prerequisite tags.
-    Intentional derives tagger identity from a fixed product identity and tagger
-    time from the target commit's committer timestamp and offset. Ambient Git
-    configuration, runner timezone, wall-clock time, randomness, and network
-    state cannot change the tag object.
+    Every Intentional-created tag is annotated. Its canonical message is its tag
+    record, which holds tag role, version, producing Intentional version,
+    Release Plan digest, target identity, baseline status, and verified
+    prerequisite tags. Intentional derives tagger identity from a fixed product
+    identity and tagger time from the target commit's committer timestamp and
+    offset. Ambient Git configuration, runner timezone, wall-clock time,
+    randomness, and network state cannot change the tag object.
 
   tag-prerequisites: >-
     A tag can require other canonical tag records. Before creating it,

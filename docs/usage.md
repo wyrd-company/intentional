@@ -7,7 +7,7 @@ relationships:
 ---
 
 A release has three Intentional-owned moves: declare change intent, project the
-accepted plan into the working tree, and create annotated release records. The
+accepted plan into the working tree, and create annotated tag records. The
 surrounding harness owns review, commits, pushes, publication, and forge
 operations.
 
@@ -74,12 +74,12 @@ missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
-Tags created before Intentional carry no Intentional record. Both lightweight
-tags and annotated tags without any Intentional record field are tolerated as
+Tags created before Intentional carry no tag record. Both lightweight tags and
+annotated tags without any tag record field are tolerated as
 pre-Intentional history: they supply the current version and raise no issue.
 `tag --baseline` leaves such a tag in place instead of retagging it. An
-annotated tag that carries any Intentional record field is validated in full,
-so a partial or corrupt record fails closed.
+annotated tag that carries any tag record field is validated in full, so a
+partial or corrupt tag record fails closed.
 
 ## Preview the plan
 

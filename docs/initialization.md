@@ -165,12 +165,12 @@ intentional check
 ```
 
 Matching pre-Intentional lightweight tags and annotated tags without
-Intentional record fields supply current-version authority. With a matching
+tag record fields supply current-version authority. With a matching
 `0.1.0` tag, the current version is `0.1.0`: no new baseline tag or repeat release
 is needed. Do not recreate or move that tag. `tag --baseline` also leaves it in
 place, ignoring an explicit `--version` for that existing stream. A tag carrying
-any Intentional record field is validated in full;
-partial or corrupt records fail validation.
+any tag record field is validated in full;
+partial or corrupt tag records fail validation.
 
 For Go this works without a manifest version. If the expected tag is present
 but `status` reports a missing baseline, inspect the configured template and

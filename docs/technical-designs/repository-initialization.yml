@@ -127,8 +127,8 @@ proposed-design:
     establishment reads agreeing version-bearing projections or explicit values
     for tag-only Release Units, then creates primary, projection, and workspace
     tag streams against the externally created takeover commit. A Release Unit
-    or workspace tag stream whose current tag is already an Intentional record
-    is established and outside the baseline set, unless that record is a
+    or workspace tag stream whose current tag already carries a tag record is
+    established and outside the baseline set, unless that tag record is a
     baseline at the commit being tagged; a Release Unit added after others have
     released therefore receives its baseline alone.
 
