@@ -10,6 +10,7 @@ pub mod apply;
 pub mod check;
 pub mod config;
 pub mod error;
+pub mod identity;
 pub mod init;
 pub mod intent;
 mod materialize;
@@ -30,6 +31,7 @@ pub use config::{
     ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
+pub use identity::native_identity;
 pub use init::{
     discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,
     CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate, ExtractionDiagnostic,

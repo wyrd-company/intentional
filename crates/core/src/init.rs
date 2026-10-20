@@ -11,6 +11,7 @@ use crate::config::{
     CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT, LEGACY_CONFIG_SCHEMA,
 };
 use crate::error::{Error, Result};
+use crate::identity::{native_identity, xml_element};
 use crate::model::{
     Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
 };
@@ -2670,89 +2671,62 @@ fn is_project_manifest(path: &Path, adapter: Adapter) -> Result<bool> {
 
 fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<String>)> {
     let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    match adapter {
-        Adapter::Npm => {
-            let value: JsonValue = serde_json::from_str(&text).map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            Ok((
-                required_string(&value["name"], path, "name")?,
-                value["version"].as_str().map(str::to_owned),
-            ))
-        }
-        Adapter::Cargo => {
-            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            let package = document.get("package").ok_or_else(|| {
-                Error::Validation(format!("{} has no package table", path.display()))
-            })?;
-            let name = package
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no package.name", path.display()))
-                })?;
-            let version = package
-                .get("version")
-                .and_then(toml_edit::Item::as_str)
-                .map(str::to_owned);
-            Ok((name.to_owned(), version))
-        }
-        Adapter::Pub => {
-            let value: serde_yaml::Value = serde_yaml::from_str(&text)?;
-            let name = value["name"]
-                .as_str()
-                .ok_or_else(|| Error::Validation(format!("{} has no name", path.display())))?;
-            Ok((
-                name.to_owned(),
-                value["version"].as_str().map(str::to_owned),
-            ))
-        }
-        Adapter::Python => {
-            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            let project = document.get("project").ok_or_else(|| {
-                Error::Validation(format!("{} has no project table", path.display()))
-            })?;
-            let name = project
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no project.name", path.display()))
-                })?;
-            let version = project
-                .get("version")
-                .and_then(toml_edit::Item::as_str)
-                .map(str::to_owned);
-            Ok((name.to_owned(), version))
-        }
-        Adapter::Go => {
-            let name = text
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("module "))
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no module directive", path.display()))
-                })?;
-            Ok((name.to_owned(), None))
-        }
-        Adapter::Msbuild => {
-            let name = xml_element(&text, "PackageId")
-                .or_else(|| xml_element(&text, "AssemblyName"))
-                .or_else(|| {
-                    path.file_stem()
-                        .and_then(|value| value.to_str())
-                        .map(str::to_owned)
-                })
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no package identity", path.display()))
-                })?;
-            Ok((name, xml_element(&text, "Version")))
-        }
+    manifest_text_identity(path, adapter, &text)
+}
+
+fn manifest_text_identity(
+    path: &Path,
+    adapter: Adapter,
+    text: &str,
+) -> Result<(String, Option<String>)> {
+    let name = native_identity(adapter, path, text)?
+        .ok_or_else(|| missing_identity(path, adapter, text))?;
+    Ok((name, manifest_version(adapter, text)))
+}
+
+/// The initialization error for a readable manifest without a native identity.
+fn missing_identity(path: &Path, adapter: Adapter, text: &str) -> Error {
+    let has_table = |table: &str| {
+        text.parse::<toml_edit::DocumentMut>()
+            .is_ok_and(|document| document.get(table).is_some())
+    };
+    let missing = match adapter {
+        Adapter::Npm => "string name",
+        Adapter::Cargo if !has_table("package") => "package table",
+        Adapter::Cargo => "package.name",
+        Adapter::Pub => "name",
+        Adapter::Python if !has_table("project") => "project table",
+        Adapter::Python => "project.name",
+        Adapter::Go => "module directive",
+        Adapter::Msbuild => "package identity",
         Adapter::Json | Adapter::Toml | Adapter::Yaml => {
             unreachable!("generic adapters are not discovered")
         }
+    };
+    Error::Validation(format!("{} has no {missing}", path.display()))
+}
+
+/// The manifest version of a manifest that `native_identity` already read.
+fn manifest_version(adapter: Adapter, text: &str) -> Option<String> {
+    let toml_version = |table: &str| {
+        text.parse::<toml_edit::DocumentMut>()
+            .ok()?
+            .get(table)?
+            .get("version")?
+            .as_str()
+            .map(str::to_owned)
+    };
+    match adapter {
+        Adapter::Npm => serde_json::from_str::<JsonValue>(text).ok()?["version"]
+            .as_str()
+            .map(str::to_owned),
+        Adapter::Cargo => toml_version("package"),
+        Adapter::Pub => serde_yaml::from_str::<serde_yaml::Value>(text).ok()?["version"]
+            .as_str()
+            .map(str::to_owned),
+        Adapter::Python => toml_version("project"),
+        Adapter::Msbuild => xml_element(text, "Version"),
+        Adapter::Go | Adapter::Json | Adapter::Toml | Adapter::Yaml => None,
     }
 }
 
@@ -2761,22 +2735,6 @@ fn npm_manifest_is_private(path: &Path) -> Result<bool> {
     let value: JsonValue = serde_json::from_str(&text)
         .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
     Ok(value["private"].as_bool() == Some(true))
-}
-
-fn required_string(value: &JsonValue, path: &Path, field: &str) -> Result<String> {
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| Error::Validation(format!("{} has no string {field}", path.display())))
-}
-
-fn xml_element(text: &str, name: &str) -> Option<String> {
-    let start = format!("<{name}>");
-    let end = format!("</{name}>");
-    text.split_once(&start)?
-        .1
-        .split_once(&end)
-        .map(|(value, _)| value.trim().to_owned())
 }
 
 fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDependencyEdge>> {
@@ -4504,6 +4462,123 @@ mod tests {
             r#"const manifest = "examples/sample.json";"#,
             path
         ));
+    }
+
+    #[test]
+    fn manifest_identity_reads_identity_and_version_per_adapter() {
+        let cases = [
+            (
+                Adapter::Npm,
+                "package.json",
+                r#"{"name":"sample-library","version":"1.0.0"}"#,
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Pub,
+                "pubspec.yaml",
+                "name: sample-library\nversion: 1.0.0\n",
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[project]\nname = \"sample-library\"\n",
+                "sample-library",
+                None,
+            ),
+            (
+                Adapter::Go,
+                "go.mod",
+                "module sample-library\n",
+                "sample-library",
+                None,
+            ),
+            (
+                Adapter::Msbuild,
+                "src/Sample.csproj",
+                "<Project><PropertyGroup><AssemblyName>sample-assembly</AssemblyName><Version>1.0.0</Version></PropertyGroup></Project>",
+                "sample-assembly",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Msbuild,
+                "src/Sample.csproj",
+                "<Project />",
+                "Sample",
+                None,
+            ),
+        ];
+        for (adapter, file, text, identity, version) in cases {
+            let (actual_identity, actual_version) =
+                manifest_text_identity(Path::new(file), adapter, text).expect("identity");
+            assert_eq!(actual_identity, identity, "{adapter:?}");
+            assert_eq!(actual_version.as_deref(), version, "{adapter:?}");
+        }
+    }
+
+    #[test]
+    fn manifest_identity_keeps_its_error_when_no_identity_is_found() {
+        let cases = [
+            (
+                Adapter::Npm,
+                "package.json",
+                r#"{"version":"1.0.0"}"#,
+                "has no string name",
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[workspace]\n",
+                "has no package table",
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[package]\n",
+                "has no package.name",
+            ),
+            (
+                Adapter::Pub,
+                "pubspec.yaml",
+                "version: 1.0.0\n",
+                "has no name",
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[tool]\n",
+                "has no project table",
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[project]\n",
+                "has no project.name",
+            ),
+            (
+                Adapter::Go,
+                "go.mod",
+                "go 1.22\n",
+                "has no module directive",
+            ),
+        ];
+        for (adapter, file, text, missing) in cases {
+            let error =
+                manifest_text_identity(Path::new(file), adapter, text).expect_err("no identity");
+            assert_eq!(
+                error.to_string(),
+                format!("validation failed: {file} {missing}")
+            );
+        }
     }
 
     #[test]
