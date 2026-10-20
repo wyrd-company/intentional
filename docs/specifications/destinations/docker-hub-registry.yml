@@ -1,7 +1,0 @@
-$schema: https://refinery.systems/ontology/specification
-relationships:
-  { realizes: [oci, ecosystem-recipes, recipe-catalog], models: intentional }
-description: Defines exact Open Container Initiative subject distribution to Docker Hub.
-format: json-schema
-validation-criteria: >-
-  Publisher alone receives username and token. Public pull verifies immutable and alias descriptor digests.

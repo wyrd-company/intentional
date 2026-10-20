@@ -1,8 +1,0 @@
-$schema: https://refinery.systems/ontology/specification
-relationships:
-  { realizes: [debian, ecosystem-recipes, recipe-catalog], models: intentional }
-description: Defines delivery of sealed Debian packages through a repository-owned pinned Action.
-format: json-schema
-validation-criteria: >-
-  Delivery receives exact package bytes and only its target secret. Public suite
-  and component indexes and downloaded package bytes agree with the sealed artifact.

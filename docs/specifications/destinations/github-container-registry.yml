@@ -1,8 +1,0 @@
-$schema: https://refinery.systems/ontology/specification
-relationships:
-  { realizes: [oci, ecosystem-recipes, recipe-catalog], models: intentional }
-description: Defines exact Open Container Initiative subject distribution to GitHub Container Registry.
-format: json-schema
-validation-criteria: >-
-  Publisher uses only packages write on its job token. Verifier uses packages
-  read or public anonymous access and confirms immutable and alias descriptor digests.

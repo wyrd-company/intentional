@@ -9,16 +9,13 @@ objective: >-
 proposed-design:
   identity-and-authority: >-
     Release Unit identity is stable workspace configuration and independent of
-    ecosystem package names. One Release Unit can own several projections and
-    Packages while retaining one version and changelog. Exactly one configured
-    annotated tag stream is primary and supplies current-version authority.
-    Projection tags record the same Release Unit release in other namespaces.
-    Workspace tags record repository-wide release streams without becoming
-    Release Unit version authority. Workspace streams are optional for the
-    portable protocol. Managed-workflow adoption requires one workspace stream
-    designated as the global release stream and Release Record trigger. Tag
-    templates produce plain semantic versions unless their configured namespace
-    adds other text.
+    ecosystem package names. One Release Unit can own several projections while
+    retaining one version and changelog. Exactly one configured annotated tag
+    stream is primary and supplies current-version authority. Projection tags
+    record the same Release Unit release in other namespaces. Workspace tags
+    record repository-wide release streams without becoming Release Unit version
+    authority, and every workspace stream is optional. Tag templates produce
+    plain semantic versions unless their configured namespace adds other text.
 
   change-intent: >-
     A Change Intent maps one or more Release Unit identifiers to major, minor,
@@ -85,24 +82,34 @@ proposed-design:
   version-projections: >-
     A committed projection materializes the Release Unit version in source. An
     injected projection receives a build version without becoming committed
-    authority. A tag-only projection stores no manifest version. Native adapters
-    update version fields and internal dependency requirements using ecosystem
-    rules. JSON, TOML, and YAML adapters update an explicit path. Writers preserve
-    unrelated formatting, comments, field order, quoting, and whitespace.
+    authority. A tag-only projection stores no manifest version. One native
+    version field has exactly one Release Unit owner. Native adapters update
+    version fields and internal dependency requirements using ecosystem rules. A
+    Cargo package that declares `version.workspace = true` projects through the
+    workspace root's `[workspace.package].version`, and materialization writes
+    that field once. JSON, TOML, and YAML adapters read and update only the
+    scalar at an explicit pointer; the projected file is source authority for
+    that field and nothing else. Writers preserve unrelated formatting,
+    comments, field order, quoting, and whitespace.
 
   changelog: >-
     One deterministic CommonMark changelog belongs to each Release Unit. The
     release section groups consumed intent by semantic significance and includes
     generated internal-dependency entries. An intent affecting several Release
     Units contributes its prose to each corresponding changelog. A Release Unit
-    with several projections or Packages still receives one section. A final
+    with several projections still receives one section. A final
     Release consolidates channel sections for the same version into the final
     section.
 
   tag-streams: >-
     Primary, projection, and workspace tags for one Release target the same
-    commit and carry agreeing Intentional generator, Release Plan digest, and
-    version evidence. A workspace stream computes its next version from its own
+    commit and carry agreeing producing Intentional version, Release Plan
+    digest, and version evidence. Primary and workspace tag templates never
+    prefix the version with `v`. A projection tag uses one only where its
+    ecosystem requires that syntax: a Go module pairs its primary tag with
+    `v{version}` at the repository root, or `<module-subdirectory>/v{version}`
+    for a nested module, where the subdirectory omits a trailing `/vN`
+    major-version directory. A workspace stream computes its next version from its own
     latest tag and the highest effective bump among participating Release Units.
     A new tag stream requires explicit baseline evidence. Tag prerequisite edges
     form an acyclic graph and produce deterministic creation order.

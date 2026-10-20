@@ -1,8 +1,0 @@
-$schema: https://refinery.systems/ontology/specification
-relationships:
-  { realizes: [rpm, ecosystem-recipes, recipe-catalog], models: intentional }
-description: Defines delivery of sealed RPM packages through a repository-owned pinned Action.
-format: json-schema
-validation-criteria: >-
-  Delivery receives exact package bytes and only its target secret. Public channel
-  metadata and downloaded package bytes agree with the sealed artifact.
