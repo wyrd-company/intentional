@@ -126,11 +126,13 @@ intentional init
 ```
 
 Ordinary initialization writes `.intentional/config.yml` and
-`.intentional/release-model.json`, creates
+`.intentional/release-model.json`, ensures the model's LF checkout rule in root
+`.gitattributes`, creates
 `.intentional/intents/`, and removes `.intentional/init-plan.yml` when the
 complete candidate graph validates. Review the generated configuration,
-including release-unit ids and tag templates, then commit it through your
-normal repository workflow. Init does not commit, publish, or create tags.
+including release-unit ids and tag templates, then commit configuration,
+`.intentional/release-model.json`, and `.gitattributes` through your normal
+repository workflow. Init does not commit, publish, or create tags.
 
 A later `init` scans configured repositories too. Matching receipts make it a
 no-op; new candidates or changed excluded evidence require explicit input.
@@ -138,16 +140,18 @@ no-op; new candidates or changed excluded evidence require explicit input.
 ## Continue to a release process
 
 A ready result ends with `next: apply a release process template`. Commit the
-configuration and `.intentional/release-model.json` before applying your chosen
-template. Initialization configures no release process and never runs a template
-tool. Every Release Unit it creates uses the default `required` release-record
+configuration, `.intentional/release-model.json`, and `.gitattributes` before
+applying your chosen template. Initialization configures no release process and
+never runs a template tool. Every Release Unit it creates uses the default
+`required` release-record
 policy; configuration omits `release-record` for this default.
 
 A no-op rerun does not write an absent model. In that case the output first names
 `next: intentional model`, then `next: apply a release process template`. A plan
 that needs input and an invalid repository name no handoff. A dry run describes
 the actions after its planned writes. A ready imported plan counts the model
-write in its planned takeover operations and names only the template step.
+and attributes writes in its planned takeover operations and names only the
+template step.
 Complete takeover before following that handoff.
 
 `init --json` returns an Initialization Plan, including on ordinary success:
@@ -308,7 +312,8 @@ contract is also explicit, and current divergence remains blocking.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes
-canonical Intentional state, moves pending intents, removes recognized
+canonical Intentional configuration and Release Model, ensures the model's LF
+rule in `.gitattributes`, moves pending intents, removes recognized
 `.changeset/` state, applies explicitly authorized proxy-manifest removals, and
 consumes the one transient initialization plan.
 References in workflows, package scripts and dependencies, lockfiles, release

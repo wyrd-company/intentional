@@ -511,8 +511,11 @@ commands:
       modes:
         - name: operation
           description: >-
-            Reports `written` or `unchanged` for
-            `.intentional/release-model.json`.
+            Reports `written` when `.intentional/release-model.json` or only its
+            root `.gitattributes` LF checkout rule needs a change; reports
+            `unchanged` when both are current. Model and initialization model
+            writes ensure `.intentional/release-model.json text eol=lf`,
+            preserving unrelated attributes bytes. Dry-run changes neither file.
           machine-readable: false
         - name: release-model
           description: Prints the canonical Release Model document selected by --stdout.

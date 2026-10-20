@@ -850,6 +850,10 @@ fn takeover_can_amend_existing_attributes_within_its_transaction() {
     }
     fs::write(plan_path, plan.to_yaml().unwrap()).unwrap();
     repo.cli().arg("init").assert().success();
+    let ready: InitPlan =
+        serde_yaml::from_slice(&fs::read(repo.path().join(".intentional/init-plan.yml")).unwrap())
+            .unwrap();
+    assert_eq!(ready.planned_operations[2], "write .gitattributes");
     let before = fs::read(repo.path().join(".gitattributes")).unwrap();
     repo.cli()
         .args(["init", "--take-over", "--dry-run"])
@@ -873,4 +877,96 @@ fn takeover_can_amend_existing_attributes_within_its_transaction() {
             .unwrap()
             .as_bytes()
     );
+}
+
+#[test]
+fn takeover_ready_plan_matches_dry_run_attributes_operations() {
+    for attributes in [
+        None,
+        Some("# operator\n*.json text eol=crlf\n"),
+        Some(".intentional/release-model.json text eol=lf\n"),
+    ] {
+        let repo = Repo::new();
+        fs::remove_file(repo.path().join(".intentional/config.yml")).unwrap();
+        repo.write(".changeset/config.json", r#"{"changelog":false,"commit":false,"fixed":[],"linked":[],"access":"public","baseBranch":"main","updateInternalDependencies":"patch","ignore":[]}"#);
+        if let Some(attributes) = attributes {
+            repo.write(".gitattributes", attributes);
+        }
+        git(repo.path(), &["add", "."]);
+        git(repo.path(), &["commit", "-qm", "fixture"]);
+        repo.cli().arg("init").assert().code(2);
+        let path = repo.path().join(".intentional/init-plan.yml");
+        let mut plan: InitPlan = serde_yaml::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for candidate in &mut plan.discovery_candidates {
+            candidate.resolution = Some(CandidateResolution::Projection {
+                release_unit: "sample-library".to_owned(),
+                target_candidate: None,
+            });
+        }
+        fs::write(&path, plan.to_yaml().unwrap()).unwrap();
+        repo.cli().arg("init").assert().success();
+        let saved_plan = fs::read(&path).unwrap();
+        let ready: InitPlan = serde_yaml::from_slice(&saved_plan).unwrap();
+        let needs_attributes = attributes != Some(".intentional/release-model.json text eol=lf\n");
+        assert_eq!(
+            ready
+                .planned_operations
+                .iter()
+                .filter(|op| *op == "write .gitattributes")
+                .count(),
+            usize::from(needs_attributes)
+        );
+        if needs_attributes {
+            assert_eq!(ready.planned_operations[2], "write .gitattributes");
+        }
+        let dry_run = repo
+            .cli()
+            .args(["init", "--take-over", "--dry-run", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let dry_run: InitPlan = serde_json::from_slice(&dry_run).unwrap();
+        assert_eq!(ready.planned_operations, dry_run.planned_operations);
+        assert_eq!(fs::read(&path).unwrap(), saved_plan);
+        assert_eq!(
+            fs::read(repo.path().join(".gitattributes")).ok(),
+            attributes.map(|text| text.as_bytes().to_vec())
+        );
+    }
+}
+
+#[test]
+fn model_replaces_attributes_without_truncating_existing_inode() {
+    let repo = Repo::new();
+    repo.cli().arg("model").assert().success();
+    let original = b"# operator\n*.json text eol=crlf\n";
+    fs::write(repo.path().join(".gitattributes"), original).unwrap();
+    // A hard link retains the original inode, revealing truncating writes even
+    // when the final contents at the destination look correct.
+    let retained = repo.path().join("attributes-backup");
+    fs::hard_link(repo.path().join(".gitattributes"), &retained).unwrap();
+    repo.cli().arg("model").assert().success();
+    assert_eq!(fs::read(retained).unwrap(), original);
+    assert_model_attributes(&repo);
+    assert!(fs::read_dir(repo.path()).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with("..gitattributes-")));
+}
+
+#[test]
+fn ordinary_init_replaces_attributes_without_truncating_existing_inode() {
+    let repo = Repo::new();
+    fs::remove_file(repo.path().join(".intentional/config.yml")).unwrap();
+    let original = b"# operator\n*.json text eol=crlf\n";
+    fs::write(repo.path().join(".gitattributes"), original).unwrap();
+    let retained = repo.path().join("attributes-backup");
+    fs::hard_link(repo.path().join(".gitattributes"), &retained).unwrap();
+    resolve_init(&repo);
+    repo.cli().arg("init").assert().success();
+    assert_eq!(fs::read(retained).unwrap(), original);
+    assert_model_attributes(&repo);
 }

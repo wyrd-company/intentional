@@ -427,30 +427,38 @@ pub fn write_release_model(root: &Path, dry_run: bool) -> Result<bool> {
     if !dry_run {
         if let Some(attributes) = &attributes {
             let path = root.join(".gitattributes");
-            std::fs::write(&path, attributes).map_err(|error| Error::io(&path, error))?;
+            write_model_file(&path, attributes)?;
         }
         if model_changed {
-            std::fs::create_dir_all(path.parent().expect("model parent"))
-                .map_err(|error| Error::io(&path, error))?;
-            let temporary =
-                path.with_file_name(format!(".release-model-{:016x}.tmp", rand::random::<u64>()));
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)
-                .map_err(|error| Error::io(&temporary, error))?;
-            let result = (|| {
-                file.write_all(bytes.as_bytes())
-                    .map_err(|error| Error::io(&temporary, error))?;
-                drop(file);
-                std::fs::rename(&temporary, &path).map_err(|error| Error::io(&path, error))
-            })();
-            if result.is_err() {
-                let _ = std::fs::remove_file(&temporary);
-            }
-            result?;
+            write_model_file(&path, bytes.as_bytes())?;
         }
     }
     Ok(model_changed || attributes.is_some())
+}
+
+// Stage beside the destination so readers see either the old or complete file.
+pub(crate) fn write_model_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(path.parent().expect("output parent"))
+        .map_err(|error| Error::io(path, error))?;
+    let temporary = path.with_file_name(format!(
+        ".{}-{:016x}.tmp",
+        path.file_name().expect("output filename").to_string_lossy(),
+        rand::random::<u64>()
+    ));
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|error| Error::io(&temporary, error))?;
+    let result = (|| {
+        file.write_all(bytes)
+            .map_err(|error| Error::io(&temporary, error))?;
+        drop(file);
+        std::fs::rename(&temporary, path).map_err(|error| Error::io(path, error))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }

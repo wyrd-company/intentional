@@ -36,6 +36,10 @@ validation-criteria: >-
   Model. `verify` reconstructs core Release identity from an exact annotated
   tag. `model` writes the canonical Release Model to
   `.intentional/release-model.json`, or to standard output under `--stdout`.
-  It reports `written` or `unchanged`; `--json` emits `operation`, `path`, and
-  `dry_run`, and conflicts with `--stdout`. Initialization writes the model
-  whenever it writes configuration.
+  Model writes and initialization model writes ensure the root `.gitattributes`
+  rule `.intentional/release-model.json text eol=lf`, preserving unrelated bytes.
+  `model` reports `written` when either the model or only its attributes need a
+  change, and `unchanged` when both are current. `--dry-run` changes neither
+  file; `--stdout` changes nothing in the tree. `--json` emits `operation`,
+  `path`, and `dry_run`, and conflicts with `--stdout`. Initialization writes
+  the model whenever it writes configuration.

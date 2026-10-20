@@ -831,7 +831,13 @@ impl InitResult {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
             }
-            std::fs::write(&path, contents).map_err(|error| Error::io(&path, error))?;
+            if relative == Path::new(".gitattributes")
+                || relative == Path::new(crate::RELEASE_MODEL_PATH)
+            {
+                crate::release_model::write_model_file(&path, contents)?;
+            } else {
+                std::fs::write(&path, contents).map_err(|error| Error::io(&path, error))?;
+            }
         }
         for relative in &self.deletes {
             let path = root.join(relative);
@@ -910,17 +916,18 @@ fn with_release_model(root: &Path, mut result: InitResult) -> Result<InitResult>
         result
             .writes
             .push((PathBuf::from(crate::RELEASE_MODEL_PATH), model.into_bytes()));
+        let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
+        if !result.operations.contains(&operation) {
+            result.operations.insert(1, operation);
+        }
         if let Some(attributes) = crate::release_model::model_attributes(root)? {
             result
                 .writes
                 .push((PathBuf::from(".gitattributes"), attributes));
-            result
-                .operations
-                .insert(1, "write .gitattributes".to_owned());
-        }
-        let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
-        if !result.operations.contains(&operation) {
-            result.operations.insert(1, operation);
+            let operation = "write .gitattributes".to_owned();
+            if !result.operations.contains(&operation) {
+                result.operations.insert(2, operation);
+            }
         }
     }
     with_release_process_handoff(root, result)
@@ -2095,7 +2102,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         }
     }
     let source_fingerprint = fingerprint(root, &evidence_paths)?;
-    let planned_operations = takeover_operations(root, &converted_intents, &proxy_removals);
+    let planned_operations = takeover_operations(root, &converted_intents, &proxy_removals)?;
     let mut plan = InitPlan {
         schema: INIT_PLAN_SCHEMA.to_owned(),
         state,
@@ -4159,11 +4166,14 @@ fn takeover_operations(
     root: &Path,
     intents: &[ConvertedIntent],
     proxy_removals: &[ProxyRemoval],
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut operations = vec![
         format!("write {CONFIG_PATH}"),
         format!("write {}", crate::RELEASE_MODEL_PATH),
     ];
+    if crate::release_model::model_attributes(root)?.is_some() {
+        operations.push("write .gitattributes".to_owned());
+    }
     operations.extend(intents.iter().map(|intent| {
         format!(
             "write {} from {}",
@@ -4177,7 +4187,7 @@ fn takeover_operations(
             .map(|path| format!("delete {}", path.display())),
     );
     operations.push("after commit: intentional tag --baseline".to_owned());
-    operations
+    Ok(operations)
 }
 
 fn takeover_deletes(root: &Path, proxy_removals: &[ProxyRemoval]) -> Vec<PathBuf> {
