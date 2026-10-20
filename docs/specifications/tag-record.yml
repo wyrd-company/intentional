@@ -2,14 +2,13 @@ $schema: https://refinery.systems/ontology/specification
 relationships:
   realizes:
     - release-planning-and-records
-    - evidence
   models:
     - intentional
 description: >-
   Defines the canonical protocol record carried by every annotated Git tag that
   Intentional creates. The Git tag object and its message together bind one
   configured tag identity and semantic version to a target commit, exact
-  Intentional generator, plan or baseline digest, and verified
+  producing Intentional version, plan or baseline digest, and verified
   prerequisite tag objects.
   `docs/specifications/tag-record.schema.yml` is the machine-readable definition
   of the message fields.
@@ -21,7 +20,7 @@ validation-criteria: >-
   `prerequisite: <tag-id> <tag-object>` entry follows in lexical `tag-id` order.
   Parsing projects those repeated entries into the `prerequisites` array validated by
   `docs/specifications/tag-record.schema.yml`. Canonical field names use
-  kebab-case. `generator` is the line-encoded form of the Release Plan generator:
+  kebab-case. `generator` is the line-encoded form of the Release Plan `generator`:
   the literal tool name `intentional`, one space, and the same semantic version.
   The message target must equal the annotated tag object's target commit. The
   fixed tagger name and email are `Intentional` and
