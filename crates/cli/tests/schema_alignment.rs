@@ -266,11 +266,19 @@ fn initialization_writes_the_compatibility_line_configuration_schema() {
 }
 
 #[test]
-fn release_workspace_schema_rejects_unpublished_identities_and_missing_contract() {
+fn release_workspace_schema_takes_an_optional_published_identity_and_requires_contract() {
     let text = read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml");
     let mut config = yaml_to_json(&text);
     config["$schema"] = json!(CONFIG_ID);
     assert_valid(CONFIG_ID, &config);
+
+    let without_schema = text
+        .lines()
+        .filter(|line| !line.starts_with("$schema:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Config::from_yaml(&without_schema).expect("configuration without $schema loads");
+    assert_valid(CONFIG_ID, &yaml_to_json(&without_schema));
 
     let mut unpublished = config.clone();
     unpublished["$schema"] = json!("https://intentional.foo/schemas/0.3/config");
@@ -393,6 +401,16 @@ fn release_plan_schema_rejects_drift_from_the_released_shape() {
         .expect("workspace tag");
     workspace["role"] = json!("primary");
     assert_invalid(RELEASE_PLAN_ID, &workspace_with_role);
+
+    let mut release_unit_without_role = plan.clone();
+    let primary = release_unit_without_role["tags"]
+        .as_array_mut()
+        .expect("tags")
+        .iter_mut()
+        .find(|tag| tag["id"] == "release-unit/sample-library/primary")
+        .expect("primary tag");
+    primary.as_object_mut().expect("tag").remove("role");
+    assert_invalid(RELEASE_PLAN_ID, &release_unit_without_role);
 }
 
 #[test]
