@@ -64,7 +64,7 @@ proposed-design:
     and `intentional check` fails when it differs from a fresh in-memory
     projection. A release process template declares a Toha document question
     that accepts the Release Model schema identity and names
-    `.intentional/release-model.json` as its default file, so every apply and
+    `.intentional/release-model.json` as its `input`, so every apply and
     update renders from the committed model. The Release Model has its own
     contract line, `https://intentional.foo/schemas/release-model/1`,
     independent of the Intentional compatibility line.
@@ -202,14 +202,17 @@ proposed-design:
     representation at the identity, following schema-and-binary-publication.
 
   template-acceptance: >-
-    A template accepts the model through a Toha document question whose schema
-    list contains a vendored copy of each Release Model schema it supports and
-    whose default file is `.intentional/release-model.json`. The
-    copy's `$id` is the published identity, so the accepted major is explicit in
-    the template. Because each line is open to added members, a template written
-    against an earlier copy of line `1` accepts a later line `1` document. A
-    template that supports two lines lists both schemas and branches on
-    `$schema`.
+    A template accepts the model through a Toha document question whose
+    `schema` names the URI of each Release Model line it supports and whose
+    `input` is `.intentional/release-model.json`, so the accepted line is
+    explicit in the template. The template vendors each of those schemas in its
+    `schemas` directory, where Toha indexes each file by its `$id`. Toha
+    resolves a URI from that directory first and by a hosted fetch otherwise.
+    Hosted Release Model URIs do not resolve until hosting exists, so a template
+    vendors every Release Model schema it names. Because each line is open to
+    added members, a template written against an earlier copy of line `1`
+    accepts a later line `1` document. A template that supports two lines names
+    both URIs, vendors both schemas, and branches on `$schema`.
 
   toha-handoff: >-
     The release process template's document question names
