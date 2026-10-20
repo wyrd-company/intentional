@@ -3,7 +3,7 @@
 #   realizes: release-plan
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/0.2/release-plan
+$id: https://intentional.foo/schemas/0.3/release-plan
 title: Intentional Release Plan
 type: object
 additionalProperties: false
@@ -16,7 +16,7 @@ required:
   - tag_order
 properties:
   $schema:
-    const: https://intentional.foo/schemas/0.2/release-plan
+    const: https://intentional.foo/schemas/0.3/release-plan
   digest:
     $ref: "#/$defs/digest"
   contract:

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Release Plan schema identifier written into every plan.
-pub const RELEASE_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.2/release-plan";
+pub const RELEASE_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.3/release-plan";
 
 /// The commit and tree a release plan was computed from.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

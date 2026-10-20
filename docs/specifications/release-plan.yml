@@ -24,7 +24,7 @@ validation-criteria: >-
   complete canonical object with only `digest` omitted, so every other member
   present, including `$schema` and `source`, is inside the digest. Object keys
   sort lexically. Plan members use snake_case. `$schema` is
-  `https://intentional.foo/schemas/0.2/release-plan`. `contract` is the
+  `https://intentional.foo/schemas/0.3/release-plan`. `contract` is the
   interpretation contract of the Release Workspace configuration. `source`
   names the commit and tree the plan was computed from; a plan computed in a
   repository with no commit carries no `source`. `$schema` and `source` are

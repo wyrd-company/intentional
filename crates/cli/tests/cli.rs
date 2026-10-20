@@ -1541,7 +1541,7 @@ fn accepts_sealed_plan_written_without_schema_and_source_members() {
 fn rejects_supplied_plan_with_another_schema_identity() {
     let repo = TestRepo::new();
     prepare_applied_release_with_plan(&repo, |mut plan| {
-        plan.schema = Some("https://intentional.foo/schemas/0.3/release-plan".to_owned());
+        plan.schema = Some("https://intentional.foo/schemas/0.2/release-plan".to_owned());
         reseal_plan_with_generator(plan, "0.2.0")
     });
     repo.cli()

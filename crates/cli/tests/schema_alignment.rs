@@ -18,7 +18,7 @@ use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 
 const CONFIG_ID: &str = "https://intentional.foo/schemas/0.2/config";
-const RELEASE_PLAN_ID: &str = "https://intentional.foo/schemas/0.2/release-plan";
+const RELEASE_PLAN_ID: &str = "https://intentional.foo/schemas/0.3/release-plan";
 const TAG_RECORD_ID: &str = "https://intentional.foo/schemas/0.2/tag-record";
 const BASELINE_PAYLOAD_ID: &str =
     "https://intentional.foo/schemas/0.2/tag-record#/$defs/baseline-digest-payload";
