@@ -254,3 +254,24 @@ fn encoding_refuses_a_record_its_schema_rejects() {
         other => panic!("expected a schema failure, got {other:?}"),
     }
 }
+
+#[test]
+fn encoding_refuses_a_prerequisite_tag_id_named_twice() {
+    let mut record = TagRecord::decode(&fixture(COMPLETE_RECORD)).expect("complete record");
+    let repeated = TagPrerequisite {
+        tag_id: record.prerequisites[0].tag_id.clone(),
+        tag_object: "2".repeat(40),
+    };
+    assert_ne!(repeated, record.prerequisites[0]);
+    record.prerequisites.push(repeated.clone());
+    match record.encode() {
+        Err(Error::Validation(detail)) => assert_eq!(
+            detail,
+            format!(
+                "tag record names prerequisite {} more than once",
+                repeated.tag_id
+            )
+        ),
+        other => panic!("expected a validation failure, got {other:?}"),
+    }
+}

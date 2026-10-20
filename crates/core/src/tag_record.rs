@@ -124,7 +124,7 @@ impl TagRecord {
     }
 
     /// Encode the canonical message. The fields must satisfy the published Tag
-    /// Record schema.
+    /// Record schema, and each prerequisite tag ID must occur once.
     pub fn encode(&self) -> Result<String> {
         let mut record = self.clone();
         record
@@ -134,6 +134,7 @@ impl TagRecord {
             Error::Validation(format!("tag record serialization failed: {error}"))
         })?;
         schema::validate(SchemaRecord::TagRecord, &fields)?;
+        require_unique_prerequisites(&record.prerequisites)?;
         let mut message = format!("{TAG_RECORD_HEADER}\n\n");
         for key in SCALAR_FIELDS {
             match &fields[key] {
@@ -154,22 +155,12 @@ impl TagRecord {
     /// Decode a tag record message. The message must be canonical, and its
     /// fields must satisfy the published Tag Record schema. The final newline
     /// is optional, because Git drops it when a signature follows the message.
+    /// Decoding re-encodes the record, so it refuses what encoding refuses.
     pub fn decode(message: &str) -> Result<Self> {
         let fields = project(message)?;
         schema::validate(SchemaRecord::TagRecord, &fields)?;
         let record: Self = serde_json::from_value(fields)
             .map_err(|error| Error::Validation(format!("invalid tag record: {error}")))?;
-        let mut prerequisites = BTreeSet::new();
-        if let Some(repeated) = record
-            .prerequisites
-            .iter()
-            .find(|prerequisite| !prerequisites.insert(prerequisite.tag_id.as_str()))
-        {
-            return Err(Error::Validation(format!(
-                "tag record names prerequisite {} more than once",
-                repeated.tag_id
-            )));
-        }
         let canonical = record.encode()?;
         if message.strip_suffix('\n').unwrap_or(message) != canonical.trim_end_matches('\n') {
             return Err(Error::Validation(
@@ -178,6 +169,23 @@ impl TagRecord {
             ));
         }
         Ok(record)
+    }
+}
+
+/// Refuse a prerequisite tag ID that occurs more than once. The schema's
+/// `uniqueItems` refuses only identical entries, not one tag ID paired with
+/// two tag objects.
+fn require_unique_prerequisites(prerequisites: &[TagPrerequisite]) -> Result<()> {
+    let mut tag_ids = BTreeSet::new();
+    match prerequisites
+        .iter()
+        .find(|prerequisite| !tag_ids.insert(prerequisite.tag_id.as_str()))
+    {
+        Some(repeated) => Err(Error::Validation(format!(
+            "tag record names prerequisite {} more than once",
+            repeated.tag_id
+        ))),
+        None => Ok(()),
     }
 }
 
