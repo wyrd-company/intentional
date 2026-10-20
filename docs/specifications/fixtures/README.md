@@ -54,3 +54,24 @@ gives its bytes. A Release Plan document ends with the one newline that
 - `tag-record/invalid/`: `complete.txt` with one schema violation each, named
   for the violation. A tag record carries no `$schema` member;
   `schema-member.txt` shows that such a line is an undeclared member.
+
+# Release Model fixtures
+
+`release-model/` holds hand-built Release Model documents in canonical form:
+members sorted by code point, two-space indentation, and one trailing newline.
+The `release_model_schema` test of `intentional-core` validates every document
+against `docs/specifications/release-model.schema.yml`.
+
+- `release-model/complete.json`: managed, suspended, and tag-only Release
+  Units, both `release_record` values, a generic format projection with a
+  `pointer` and no `native_identity`, fixed and linked release groups, and two
+  workspace tags.
+- `release-model/unknown-members.json`: `complete.json` with one undefined
+  member in every object kind. It validates, because every Release Model
+  object admits members it does not define.
+- `release-model/unlisted-adapter.json`: `complete.json` with one more
+  Release Unit whose adapter is not a known value. It validates, because
+  `adapter` and `ecosystems` are open string values.
+- `release-model/invalid/`: `complete.json` with one schema violation each,
+  named for the violation. The test states the location and keyword each one
+  fails with, and fails when a fixture on disk has no stated violation.

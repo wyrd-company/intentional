@@ -1,0 +1,74 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - release-model
+  models:
+    - intentional
+description: >-
+  Defines the Release Model, the committed `.intentional/release-model.json`
+  document that `intentional model` writes as the template-facing projection of
+  one Release Workspace. The document records its schema identity, the fixed
+  Intentional paths, each Release Unit with its path, changelog, disposition,
+  release-record policy, dependencies, release-group membership, ecosystems,
+  projections, discovery sources, and tag streams, the workspace tag streams,
+  and the fixed and linked release groups. It holds no version, plan, intent,
+  remote, producing Intentional version, timestamp, or process setting.
+  `docs/specifications/release-model.schema.yml` is the machine-readable
+  definition. The schema is self-contained, so a release process template
+  vendors that one file. A template validates the model against its vendored
+  copy; the identity `https://intentional.foo/schemas/release-model/1` names the
+  contract and is not fetched, because nothing serves it.
+format: json-schema
+validation-criteria: >-
+  A conforming Release Model validates against
+  `docs/specifications/release-model.schema.yml` as JSON interpreted by JSON
+  Schema Draft 2020-12. `$schema` is
+  `https://intentional.foo/schemas/release-model/1`, and a reader selects the
+  contract by exact string equality on it. Member names use snake_case.
+  Configured identifiers keep their configured spelling as map keys: a
+  `release_units` key is the Release Unit ID, a Release Unit `tags` key is the
+  configured tag key such as `primary`, and a `workspace_tags` key is the bare
+  configured workspace tag key such as `release`. `tag_after` holds canonical
+  tag IDs, `release-unit/<release-unit>/<tag>` or `workspace/<key>`. `paths`
+  holds the fixed values `.intentional/config.yml`, `.intentional/intents`, and
+  `.intentional/release-model.json`. Every Release Unit entry carries `path`,
+  `changelog`, `disposition` (`managed` or `suspended`), `release_record`
+  (`required` or `none`), `depends_on`, `ecosystems`, `projections`, `sources`,
+  and `tags`; `release_group` is present exactly when the Release Unit belongs
+  to a fixed or linked group, and then holds that group's `kind` and its
+  complete `members` list. An empty `projections` list marks a Release Unit
+  whose version exists only in its tags. Every projection carries `adapter`,
+  `file` relative to the Release Unit path, `workspace_file` relative to the
+  workspace root, and `mode` (`committed`, `injected`, or `none`). `adapter`
+  and each `ecosystems` item are open string values. The known ecosystem
+  adapters are `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go`; the known
+  generic format adapters are `json`, `toml`, and `yaml`. A projection with a
+  generic format adapter carries `pointer` and no `native_identity`. A
+  projection with an ecosystem adapter carries `native_identity` exactly when
+  the adapter's identity rule finds one in the manifest. `ecosystems` lists the
+  distinct ecosystem adapters among the projections. Every source carries
+  `detector` and workspace-relative `path`. Every Release Unit tag carries
+  `role` (`primary` or `projection`), `template`, and `tag_after`; every
+  workspace tag carries `template` and `tag_after`; either carries
+  `require_phase` (`before-publication` or `after-publication`) exactly when
+  its configuration declares one. Templates are the configured tag templates,
+  verbatim. `release_groups` carries `fixed` and `linked`, each a list of member
+  lists. Optional members are omitted, never `null`, and every list member is
+  written even when empty. Every object admits members that the schema does not
+  define, and readers ignore them. The schema states member names, types,
+  presence, enumerations, and identifier grammar; the Release Workspace
+  configuration contract owns template grammar, group size, tag cardinality,
+  and reference integrity, and `intentional model` writes a model only from a
+  configuration that passes them. The document is UTF-8 JSON with object
+  members sorted by code point, two-space indentation, `\n` line endings, and
+  one trailing newline. `projections` keeps configuration order; `depends_on`,
+  `ecosystems`, `release_group.members`, `tag_after`, each member list, and each
+  list of member lists are sorted; `sources` sorts by `path`, then `detector`.
+  Once a released Intentional names `https://intentional.foo/schemas/release-model/1`,
+  that schema never changes the meaning or acceptance of anything it already
+  describes. Adding an optional member stays within line `1`; removing,
+  renaming, retyping, or tightening a described member, value, or rule is line
+  `2`. `adapter` and each `ecosystems` item are the only open values in the
+  Release Model: a new adapter stays within the line. Every other enumerated
+  member, `mode`, `require_phase`, `disposition`, `release_record`, `role`, and
+  `kind`, is closed, and a new value for any of them mints the next line.
