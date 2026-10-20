@@ -3,77 +3,33 @@ relationships:
   realizes:
     - repository-initialization
     - intent-and-versioning
-    - managed-workflow
-    - ecosystem-recipes
   models:
     - intentional
 description: >-
   Defines the normative `.intentional/config.yml` contract for one Release
-  Workspace. The document records Release Units, Packages, managed artifacts,
-  Signing recipes, Distribution Targets, artifact exclusions, version
-  projections, dependency and release groups, tag streams, discovery receipts,
-  and the durable choice to adopt or decline managed GitHub workflow.
-  Workspace-tag mappings use bare stable keys. The workflow `global-tag` names
-  one of those keys directly; normalized records qualify it as
-  `workspace/<key>`. Release-unit tag references use
-  `release-unit/<release-unit>/<tag>`. Package, artifact, and Distribution Target
-  keys are local to their containing mappings and supply their authored
-  identities without repeated `id` fields.
-  A Distribution Target has the qualified protocol identity
-  `distribution/<release-unit-id>/<package-id>/<target-id>`.
-  Its authored form selects one maintained recipe by stable identity through
-  `uses` and places recipe-specific and destination-specific values in one
-  `with` mapping. Package and Signing selections use the same `uses` and `with`
-  grammar. Initialization recommends and writes those selections after user
-  acceptance; users do not author recipe definitions.
-  A Signing selection uses the same compact selector and optional `with` mapping
-  beside its input artifact identity. Workspace settings record the durable
-  Azure Artifact Signing Public Trust subscriber identity expected from every
-  released Windows Portable Executable under the robust managed posture.
-  Managed security-posture references resolve by stable identity through the
-  maintained posture catalog. The Release Workspace schema compatibility line
-  and exact producing Intentional version own configuration, recipe, posture,
-  and runtime meaning.
+  Workspace. The document records workspace settings, Release Units with their
+  version projections, dependencies, dispositions, and tag streams, fixed and
+  linked release groups, workspace tag streams, and discovery receipts.
+  Workspace-tag mappings use bare stable keys; normalized records qualify them
+  as `workspace/<key>`. Release-unit tag references use
+  `release-unit/<release-unit>/<tag>`. A tag stream can require an executor
+  phase, `before-publication` or `after-publication`, before Intentional
+  creates its tag. The configuration names no release process, publication
+  target, credential, or gate location; a release process reads Release
+  Workspace facts from the Release Model. The Release Workspace schema
+  compatibility line and the exact producing Intentional version own
+  configuration and runtime meaning.
   `docs/specifications/release-workspace.schema.yml` is the machine-readable
   definition.
 format: json-schema
 validation-criteria: >-
   A conforming configuration validates against
   `docs/specifications/release-workspace.schema.yml` as YAML interpreted by JSON
-  Schema Draft 2020-12, passes Intentional's semantic
-  validation, and produces the same normalized model regardless of mapping key
-  order. Unknown fields are rejected. Semantic validation proves Release Unit,
-  Package, artifact, Signing recipe, Distribution Target, exclusion, group,
-  dependency, tag, discovery-receipt, and workflow-posture references;
-  qualified Distribution identity and graph acyclicity; exactly one
-  primary tag per Release Unit; and recipe support. When managed workflow is
-  adopted, validation also proves that every Package retains at least one
-  managed artifact and that the global-tag value names a configured
-  workspace-tag key whose template is exactly `{version}`.
-  A Distribution Target's `uses` selector resolves one maintained Distribution
-  recipe. The selected catalog assigns each `with` property to its disjoint
-  configuration or destination schema, validates the combined closed mapping,
-  and normalizes it into separate resolved recipe configuration and destination
-  values for the Release Plan. Recipe-specific Package, artifact, and Signing
-  configuration is validated by the maintained producing recipe selected by its
-  stable identifier. A Signing `uses` selector
-  resolves one maintained Signing recipe. Azure recipe resolution injects the
-  workspace subscriber identity into resolved configuration and preserves the
-  recipe-fixed organization-variable contract. Robust managed validation rejects
-  any Windows executable artifact without a planned Signing transformation.
-  Every configured native selector resolves exactly one artifact candidate under
-  that producing recipe. A derived artifact names a non-empty unique set of
-  Release Unit-qualified Package and artifact identities whose kinds its
-  Package recipe accepts; dependencies are acyclic. Qualified artifact
-  references use `<release-unit>/<package>/<artifact>`.
-  Every Signing selection references another configured artifact in the same
-  Package, signing dependencies are acyclic, and the signed output is a distinct
-  artifact identity. Every artifact exclusion references an existing Release
-  Unit and Package and cannot equal a managed artifact identity. An optional
-  workspace-wide artifact namespace prefix is a stable ID. Credential secret
-  prefix defaults to `INTENTIONAL_`; an override uses uppercase letters, digits,
-  and underscores and ends with one underscore. Generation rejects any derived
-  artifact or secret name collision after canonical escaping. Primary and
+  Schema Draft 2020-12, passes Intentional's semantic validation, and produces
+  the same normalized model regardless of mapping key order. Unknown fields are
+  rejected. Semantic validation proves Release Unit, group, dependency, tag,
+  and discovery-receipt references; exactly one primary tag per Release Unit;
+  unique rendered tag templates; and an acyclic `tag-after` graph. Primary and
   workspace tag templates never use a `v` version prefix. A Release Unit
   projection tag may use one only when its native ecosystem contract requires
   that platform syntax.

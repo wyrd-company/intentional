@@ -771,12 +771,12 @@ release-units:
                 .as_sequence()
                 .expect("managed receipt required fields")
                 .len(),
-            4
+            3
         );
-        assert_eq!(
-            discovery["properties"]["managed-paths"]["items"]["properties"]["package"]["$ref"]
-                .as_str(),
-            Some("#/$defs/stable-id")
+        assert!(
+            discovery["properties"]["managed-paths"]["items"]["properties"]
+                .get("package")
+                .is_none()
         );
         assert_eq!(
             discovery["properties"]["excluded-paths"]["items"]["properties"]["evidence-digest"]
