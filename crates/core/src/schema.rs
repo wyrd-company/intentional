@@ -145,6 +145,29 @@ mod tests {
         }
     }
 
+    /// The packaged crate embeds `schemas/`, so each entry must be a link to
+    /// the published file. Packaging runs on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn packaged_schema_links_resolve_to_the_published_files() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for name in [
+            "release-workspace.schema.yml",
+            "release-plan.schema.yml",
+            "tag-record.schema.yml",
+        ] {
+            let link = manifest.join("schemas").join(name);
+            let metadata = std::fs::symlink_metadata(&link).expect("schema link");
+            assert!(metadata.file_type().is_symlink(), "{name} is not a link");
+            assert_eq!(
+                std::fs::canonicalize(&link).expect("link resolves"),
+                std::fs::canonicalize(manifest.join("../../docs/specifications").join(name))
+                    .expect("published schema"),
+                "{name}"
+            );
+        }
+    }
+
     #[test]
     fn release_plan_schema_identity_matches_the_written_identity() {
         let (id, _) = published(RELEASE_PLAN_SCHEMA).expect("Release Plan schema");
