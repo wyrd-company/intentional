@@ -7,10 +7,14 @@ $id: https://intentional.foo/schemas/0.2/config
 title: Intentional workspace configuration
 type: object
 additionalProperties: false
-required: [ $schema, release-units ]
+required: [ contract, release-units ]
 properties:
   $schema:
-    const: https://intentional.foo/schemas/0.2/config
+    enum:
+      - https://intentional.foo/schemas/0.2/config
+      - https://intentional.foo/schemas/config.yml
+  contract:
+    const: contract-1
   settings:
     type: object
     additionalProperties: false

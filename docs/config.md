@@ -21,7 +21,7 @@ produces explicit candidates before it writes canonical configuration.
 ## Configuration file
 
 ```yaml
-$schema: https://intentional.foo/schemas/config.yml
+$schema: https://intentional.foo/schemas/0.2/config
 contract: contract-1
 settings:
   internal-dependency-bump: patch
@@ -64,8 +64,8 @@ release-units:
 
 | Key | Purpose |
 | --- | --- |
-| `$schema` | Schema URL for editor validation. |
-| `contract` | Versioned interpretation semantics used by plans and tags. |
+| `$schema` | Optional schema identity for editor validation. `init` writes `https://intentional.foo/schemas/0.2/config`; the earlier value `https://intentional.foo/schemas/config.yml` is also accepted. |
+| `contract` | Required. Versioned interpretation semantics used by plans and tags; `contract-1` is the only value. |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
 | `workspace-tags` | Repository-level tag streams and triggers. |

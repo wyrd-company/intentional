@@ -16,8 +16,11 @@ use std::path::{Component, Path, PathBuf};
 /// Location of the workspace configuration.
 pub const CONFIG_PATH: &str = ".intentional/config.yml";
 
-/// Published configuration schema identifier.
-pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
+/// Configuration schema identifier for the current compatibility line, written by initialization.
+pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/0.2/config";
+
+/// Configuration schema identifier written by Intentional 0.1.x and 0.2.0. Readers accept it.
+pub const LEGACY_CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
 
 /// Current interpretation contract written by initialization.
 pub const CURRENT_CONTRACT: &str = "contract-1";
@@ -784,9 +787,16 @@ release-units:
                 .as_str(),
             Some("^sha256:[0-9a-f]{64}$")
         );
+        let identities: Vec<&str> = schema["properties"]["$schema"]["enum"]
+            .as_sequence()
+            .expect("configuration schema identities")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        assert_eq!(identities, [CONFIG_SCHEMA, LEGACY_CONFIG_SCHEMA]);
         assert_eq!(
-            schema["properties"]["$schema"]["const"].as_str(),
-            Some("https://intentional.foo/schemas/0.2/config")
+            schema["properties"]["contract"]["const"].as_str(),
+            Some(CURRENT_CONTRACT)
         );
         assert_eq!(
             schema["properties"]["workspace-tags"]["propertyNames"]["$ref"].as_str(),

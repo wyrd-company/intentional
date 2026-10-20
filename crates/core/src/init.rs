@@ -8,7 +8,7 @@
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
     Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
+    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT, LEGACY_CONFIG_SCHEMA,
 };
 use crate::error::{Error, Result};
 use crate::model::{
@@ -653,10 +653,10 @@ fn validate_empty_inferred_config(config: &Config) -> Result<()> {
     if config
         .schema
         .as_deref()
-        .is_some_and(|schema| schema != CONFIG_SCHEMA)
+        .is_some_and(|schema| schema != CONFIG_SCHEMA && schema != LEGACY_CONFIG_SCHEMA)
     {
         return Err(Error::Validation(format!(
-            "empty inferred config schema must be {CONFIG_SCHEMA}"
+            "empty inferred config schema must be {CONFIG_SCHEMA} or {LEGACY_CONFIG_SCHEMA}"
         )));
     }
     if config.contract != CURRENT_CONTRACT {

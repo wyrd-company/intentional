@@ -7,9 +7,10 @@ relationships:
     - intentional
 description: >-
   Defines the normative `.intentional/config.yml` contract for one Release
-  Workspace. The document records workspace settings, Release Units with their
-  version projections, dependencies, dispositions, and tag streams, fixed and
-  linked release groups, workspace tag streams, and discovery receipts.
+  Workspace. The document records an optional schema identity, the required
+  interpretation contract `contract-1`, workspace settings, Release Units with
+  their version projections, dependencies, dispositions, and tag streams, fixed
+  and linked release groups, workspace tag streams, and discovery receipts.
   Workspace-tag mappings use bare stable keys; normalized records qualify them
   as `workspace/<key>`. Release-unit tag references use
   `release-unit/<release-unit>/<tag>`. A tag stream can require an executor
@@ -27,7 +28,10 @@ validation-criteria: >-
   `docs/specifications/release-workspace.schema.yml` as YAML interpreted by JSON
   Schema Draft 2020-12, passes Intentional's semantic validation, and produces
   the same normalized model regardless of mapping key order. Unknown fields are
-  rejected. Semantic validation proves Release Unit, group, dependency, tag,
+  rejected. A present `$schema` is either the compatibility-line identity
+  `https://intentional.foo/schemas/0.2/config`, which initialization writes, or
+  `https://intentional.foo/schemas/config.yml`, which readers also accept.
+  Semantic validation proves Release Unit, group, dependency, tag,
   and discovery-receipt references; exactly one primary tag per Release Unit;
   unique rendered tag templates; and an acyclic `tag-after` graph. Primary and
   workspace tag templates never use a `v` version prefix. A Release Unit
