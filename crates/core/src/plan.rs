@@ -24,7 +24,19 @@ use std::path::Path;
 pub const RELEASE_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.3/release-plan";
 
 /// The commit and tree a release plan was computed from.
+///
+/// Read it from [`ReleasePlan::source`]. Code outside this crate cannot build
+/// it with a struct literal, so that a later member is not a breaking change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::PlanSource;
+///
+/// fn source(commit: String, tree: String) -> PlanSource {
+///     PlanSource { commit, tree }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanSource {
     /// Source commit object id.
     pub commit: String,
@@ -61,7 +73,28 @@ impl PlanSource {
 }
 
 /// One release unit in a canonical release plan.
+///
+/// Read it from [`ReleasePlan::release_units`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::{Bump, PlanReleaseUnit};
+///
+/// fn unit(id: String, bump: Bump) -> PlanReleaseUnit {
+///     PlanReleaseUnit {
+///         id,
+///         old_version: String::new(),
+///         new_version: String::new(),
+///         bump,
+///         contributing_intent_ids: Vec::new(),
+///         tag_ids: Vec::new(),
+///         release_notes: String::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanReleaseUnit {
     /// Release-unit id.
     pub id: String,
@@ -80,7 +113,20 @@ pub struct PlanReleaseUnit {
 }
 
 /// Generator identity embedded inside the sealed payload.
+///
+/// Read it from [`ReleasePlan::generator`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::Generator;
+///
+/// fn generator(tool: String, version: String) -> Generator {
+///     Generator { tool, version }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Generator {
     /// Tool name.
     pub tool: String,
@@ -89,7 +135,27 @@ pub struct Generator {
 }
 
 /// One annotated tag record in creation order.
+///
+/// Read it from [`ReleasePlan::tags`]. Code outside this crate cannot build it
+/// with a struct literal, so that a later member is not a breaking change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::PlanTag;
+///
+/// fn tag(id: String, name: String, version: String) -> PlanTag {
+///     PlanTag {
+///         id,
+///         name,
+///         version,
+///         release_unit: None,
+///         role: None,
+///         require_phase: None,
+///         tag_after: Vec::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanTag {
     /// Canonical configuration tag id.
     pub id: String,
@@ -112,7 +178,31 @@ pub struct PlanTag {
 }
 
 /// Canonical digest-bound release plan.
+///
+/// Compute a plan with [`ReleasePlan::build`] or [`ReleasePlan::from_inputs`],
+/// or read one with [`ReleasePlan::decode`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::{Generator, PlanReleaseUnit, PlanTag, ReleasePlan};
+///
+/// fn plan(generator: Generator, units: Vec<PlanReleaseUnit>, tags: Vec<PlanTag>) -> ReleasePlan {
+///     ReleasePlan {
+///         schema: None,
+///         digest: String::new(),
+///         contract: String::new(),
+///         generator,
+///         source: None,
+///         channel: None,
+///         release_units: units,
+///         tags,
+///         tag_order: Vec::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReleasePlan {
     /// Release Plan schema identity. Plans written before this member existed omit it.
     #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
@@ -154,12 +244,25 @@ struct PlanPayload<'a> {
 }
 
 /// One release note assigned to a semantic bump group.
+///
+/// Build it with [`ChangelogEntry::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChangelogEntry {
     /// Section group.
     pub bump: Bump,
     /// Markdown changelog prose.
     pub text: String,
+}
+
+impl ChangelogEntry {
+    /// An entry in the `bump` group with `text` as its prose.
+    pub fn new(bump: Bump, text: impl Into<String>) -> Self {
+        Self {
+            bump,
+            text: text.into(),
+        }
+    }
 }
 
 impl ReleasePlan {
@@ -576,10 +679,7 @@ fn note_entries(
             intent
                 .release_units
                 .get(release_unit_id)
-                .map(|bump| ChangelogEntry {
-                    bump: *bump,
-                    text: intent.message.clone(),
-                })
+                .map(|bump| ChangelogEntry::new(*bump, intent.message.clone()))
         })
         .collect::<Vec<_>>();
     for dependency in &config.release_units[release_unit_id].depends_on {

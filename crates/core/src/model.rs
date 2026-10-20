@@ -116,6 +116,7 @@ impl fmt::Display for TagPhase {
 /// Manifest or generic format adapter used by a projection.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Adapter {
     /// npm `package.json`.
     Npm,

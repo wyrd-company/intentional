@@ -19,6 +19,7 @@ use std::path::Path;
 
 /// One annotated Git tag to create.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlannedTag {
     /// Canonical configured tag id.
     pub id: String,
@@ -30,6 +31,7 @@ pub struct PlannedTag {
 
 /// Planned annotated tags for an applied release or baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TagResult {
     /// Tags in prerequisite-safe order.
     pub tags: Vec<PlannedTag>,

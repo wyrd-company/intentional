@@ -24,6 +24,7 @@ const TAG_RECORD_SCHEMA: &str = include_str!(concat!(env!("OUT_DIR"), "/tag-reco
 
 /// A durable record kind with a published schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SchemaRecord {
     /// A sealed Release Plan.
     ReleasePlan,

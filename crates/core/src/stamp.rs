@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// Complete projection-only stamp mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StampResult {
     /// Changed injected projections.
     pub writes: Vec<FileWrite>,

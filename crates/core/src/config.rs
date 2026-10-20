@@ -28,6 +28,7 @@ pub const CURRENT_CONTRACT: &str = "contract-1";
 /// Complete workspace configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Config {
     /// Optional schema URL for editor and validation tooling.
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
@@ -71,6 +72,7 @@ impl Default for Config {
 /// Durable receipts for resolved discovery candidates.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DiscoveryConfig {
     /// Candidate paths incorporated into configured release units.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -89,6 +91,7 @@ impl DiscoveryConfig {
 /// Receipt connecting one detector/path identity to a configured release unit.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ManagedPathReceipt {
     /// Stable detector id.
     pub detector: String,
@@ -101,6 +104,7 @@ pub struct ManagedPathReceipt {
 /// Receipt excluding one detector/path identity while its evidence is unchanged.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ExcludedPathReceipt {
     /// Stable detector id.
     pub detector: String,
@@ -113,6 +117,7 @@ pub struct ExcludedPathReceipt {
 /// Workspace-wide release behavior.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Settings {
     /// Minimum bump propagated to internal dependents.
     #[serde(default = "default_dependency_bump")]
@@ -138,6 +143,7 @@ const fn default_dependency_bump() -> Bump {
 /// One independently versioned release unit.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ReleaseUnitConfig {
     /// Release-unit directory relative to the workspace root.
     pub path: PathBuf,
@@ -161,6 +167,7 @@ fn is_managed(disposition: &ReleaseUnitDisposition) -> bool {
 /// One named release-unit tag.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct TagConfig {
     /// Whether this tag supplies version authority or projects it.
     pub role: TagRole,
@@ -177,6 +184,7 @@ pub struct TagConfig {
 /// One named workspace-level tag.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct WorkspaceTagConfig {
     /// Tag name template containing `{version}`.
     pub template: String,
@@ -191,6 +199,7 @@ pub struct WorkspaceTagConfig {
 /// A version projection into a manifest or arbitrary file.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Projection {
     /// Adapter specialization.
     pub adapter: Adapter,

@@ -57,6 +57,7 @@ pub enum InitState {
 /// One source artifact used as initialization evidence.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SourceEvidence {
     /// Workspace-relative source path.
     pub path: PathBuf,
@@ -70,6 +71,7 @@ pub struct SourceEvidence {
 /// Optional raw version text together with the evidence from which it was extracted.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct RawVersionEvidence {
     /// Uninterpreted version text supplied by the artifact.
     pub value: String,
@@ -80,6 +82,7 @@ pub struct RawVersionEvidence {
 /// A projection a detector can suggest when its required fields were extracted.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CandidateProjectionSuggestion {
     /// Adapter specialization.
     pub adapter: Adapter,
@@ -95,6 +98,7 @@ pub struct CandidateProjectionSuggestion {
 /// A tag a detector can suggest without granting it version authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CandidateTagSuggestion {
     /// Suggested tag id within the resolved release unit.
     pub id: String,
@@ -107,6 +111,7 @@ pub struct CandidateTagSuggestion {
 /// Evidence-backed extraction problem that does not assert artifact invalidity.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ExtractionDiagnostic {
     /// Stable diagnostic identity within the candidate.
     pub id: String,
@@ -147,6 +152,7 @@ pub enum CandidateResolution {
 /// Artifact-neutral evidence emitted by any release-unit detector.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DiscoveryCandidate {
     /// Stable hash of detector and exact path identity.
     pub id: String,
@@ -336,6 +342,7 @@ impl DiscoveryCandidate {
 /// One detector invocation before its candidates are flattened into an initialization plan.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DetectorResult {
     /// Stable detector id.
     pub detector: String,
@@ -422,6 +429,7 @@ fn validate_source_evidence(evidence: &[SourceEvidence], description: &str) -> R
 /// One finite initialization decision or warning.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct InitDiagnostic {
     /// Stable diagnostic identity.
     pub id: String,
@@ -460,6 +468,7 @@ pub struct InitDiagnostic {
 /// One side of a Changesets takeover parity comparison.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityRelease {
     /// Aggregate requested bump after dependency and group propagation.
     pub requested_bump: Bump,
@@ -470,6 +479,7 @@ pub struct ParityRelease {
 /// Changesets and proposed release results used for takeover parity.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityReleaseUnit {
     /// Release-unit id.
     pub release_unit: String,
@@ -486,6 +496,7 @@ pub struct ParityReleaseUnit {
 /// Deterministic parity comparison.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityResult {
     /// `equivalent` when all logical releases agree; otherwise `blocked`.
     pub status: String,
@@ -496,6 +507,7 @@ pub struct ParityResult {
 /// One pending Changesets file converted losslessly at takeover.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ConvertedIntent {
     /// Changeset filename stem retained as the Intentional intent id.
     pub id: String,
@@ -522,6 +534,7 @@ impl ConvertedIntent {
 /// Durable, editable handoff produced while Changesets still owns authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct InitPlan {
     /// Published schema location.
     #[serde(rename = "$schema")]
@@ -763,6 +776,7 @@ fn validate_projection_target(
 
 /// Planned initialization or takeover output.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct InitResult {
     /// Computed process outcome.
     pub state: InitState,

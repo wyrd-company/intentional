@@ -28,6 +28,7 @@ const NOUNS: &[&str] = &[
 
 /// Parsed change intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Intent {
     /// Stable identifier derived from the filename stem.
     pub id: String,
@@ -50,6 +51,7 @@ pub struct IntentDraft {
 
 /// Planned intent file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IntentWrite {
     /// Target path relative to the workspace.
     pub path: PathBuf,

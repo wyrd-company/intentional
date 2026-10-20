@@ -51,8 +51,21 @@ pub enum TagRecordRole {
 }
 
 /// One verified prerequisite tag object.
+///
+/// Build it with [`TagPrerequisite::new`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::TagPrerequisite;
+///
+/// fn prerequisite(tag_id: String, tag_object: String) -> TagPrerequisite {
+///     TagPrerequisite { tag_id, tag_object }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub struct TagPrerequisite {
     /// Canonical tag ID of the prerequisite.
     pub tag_id: String,
@@ -60,9 +73,42 @@ pub struct TagPrerequisite {
     pub tag_object: String,
 }
 
+impl TagPrerequisite {
+    /// A prerequisite naming `tag_id` and its annotated tag object.
+    pub fn new(tag_id: &str, tag_object: &str) -> Self {
+        Self {
+            tag_id: tag_id.to_owned(),
+            tag_object: tag_object.to_owned(),
+        }
+    }
+}
+
 /// The protocol fields of one tag record.
+///
+/// Build it with [`TagRecord::new`], or read one with [`TagRecord::decode`].
+/// Code outside this crate cannot build it with a struct literal, so that a
+/// later member is not a breaking change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::TagRecord;
+///
+/// fn record(contract: String, generator: String, plan_digest: String) -> TagRecord {
+///     TagRecord {
+///         contract,
+///         generator,
+///         plan_digest,
+///         tag_id: String::new(),
+///         tag_role: None,
+///         version: String::new(),
+///         target: None,
+///         baseline: false,
+///         prerequisites: Vec::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub struct TagRecord {
     /// Interpretation contract.
     pub contract: String,

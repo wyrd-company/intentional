@@ -13,6 +13,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors produced by `intentional-core`.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// A configuration or intent is invalid.
     #[error("validation failed: {0}")]

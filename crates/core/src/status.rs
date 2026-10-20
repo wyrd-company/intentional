@@ -25,6 +25,7 @@ pub const MISSING_BASELINE_NEXT_ACTION: &str = "intentional tag --baseline";
 
 /// Version status for one release unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReleaseUnitStatus {
     /// Release-unit id.
     pub id: String,
@@ -38,6 +39,7 @@ pub struct ReleaseUnitStatus {
 
 /// Complete read-only workspace status.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WorkspaceStatus {
     /// Pending intent ids.
     pub intents: Vec<String>,
@@ -53,6 +55,7 @@ pub struct WorkspaceStatus {
 
 /// One manifest drift finding.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Drift {
     /// Release-unit id.
     pub release_unit: String,

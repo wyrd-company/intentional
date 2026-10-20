@@ -39,6 +39,7 @@ pub enum Severity {
 
 /// One stable verification finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct VerifyDiagnostic {
     /// Stable diagnostic code.
     pub code: &'static str,
@@ -50,6 +51,7 @@ pub struct VerifyDiagnostic {
 
 /// The result of verifying one tag.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct Verification {
     /// Tag that was verified.
     pub tag: String,
