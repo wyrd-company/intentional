@@ -415,14 +415,39 @@ fn prompt(label: &str) -> Result<String> {
     Ok(value.trim().to_owned())
 }
 
+fn model(root: &std::path::Path, args: ModelArgs) -> Result<()> {
+    if args.stdout {
+        print!("{}", intentional_core::ReleaseModel::build(root)?.encode()?);
+        return Ok(());
+    }
+    let written = intentional_core::write_release_model(root, args.dry_run)?;
+    let operation = if written { "written" } else { "unchanged" };
+    if args.json {
+        println!(
+            "{}",
+            format_args!(
+                r#"{{"dry_run":{},"operation":"{}","path":"{}"}}"#,
+                args.dry_run,
+                operation,
+                intentional_core::RELEASE_MODEL_PATH
+            )
+        );
+    } else {
+        println!(
+            "{}{} {}",
+            if args.dry_run { "dry-run: " } else { "" },
+            operation,
+            intentional_core::RELEASE_MODEL_PATH
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Cli;
     use clap::CommandFactory;
     use std::collections::BTreeSet;
-
-    /// Commands the specification states ahead of their implementation.
-    const SPECIFIED_AHEAD: [&str; 1] = ["model"];
 
     fn long_flags(command: &clap::Command) -> BTreeSet<String> {
         command
@@ -464,7 +489,6 @@ mod tests {
             .expect("commands")
             .iter()
             .filter_map(|command| command["name"].as_str().map(str::to_owned))
-            .filter(|name| !SPECIFIED_AHEAD.contains(&name.as_str()))
             .collect::<BTreeSet<_>>();
         assert_eq!(shipped, specified);
         for command in specification["commands"].as_sequence().expect("commands") {
@@ -483,32 +507,4 @@ mod tests {
             BTreeSet::from(["--directory".to_owned()])
         );
     }
-}
-
-fn model(root: &std::path::Path, args: ModelArgs) -> Result<()> {
-    if args.stdout {
-        print!("{}", intentional_core::ReleaseModel::build(root)?.encode()?);
-        return Ok(());
-    }
-    let written = intentional_core::write_release_model(root, args.dry_run)?;
-    let operation = if written { "written" } else { "unchanged" };
-    if args.json {
-        println!(
-            "{}",
-            format_args!(
-                r#"{{"dry_run":{},"operation":"{}","path":"{}"}}"#,
-                args.dry_run,
-                operation,
-                intentional_core::RELEASE_MODEL_PATH
-            )
-        );
-    } else {
-        println!(
-            "{}{} {}",
-            if args.dry_run { "dry-run: " } else { "" },
-            operation,
-            intentional_core::RELEASE_MODEL_PATH
-        );
-    }
-    Ok(())
 }
