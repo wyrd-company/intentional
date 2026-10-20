@@ -751,3 +751,96 @@ fn verify_ignores_a_record_under_another_tag_name_when_finding_a_channel_source(
         ],
     );
 }
+
+#[test]
+fn verify_fails_for_a_tagger_that_differs_only_in_name_or_email() {
+    for (name, email) in [
+        ("Another Tagger", "intentional@wyrd.company"),
+        ("Intentional", "another@example.invalid"),
+    ] {
+        let repo = release_repo();
+        repo.release(&[]);
+        let message = repo.message("mirror@1.3.0");
+        let date = git(
+            &repo.root,
+            &["log", "-1", "--format=%cd", "--date=raw", "HEAD"],
+        );
+        git(&repo.root, &["tag", "-d", "mirror@1.3.0"]);
+        let output = ProcessCommand::new("git")
+            .args(["tag", "-a", "mirror@1.3.0", "-m", &message])
+            .env("GIT_COMMITTER_NAME", name)
+            .env("GIT_COMMITTER_EMAIL", email)
+            .env("GIT_COMMITTER_DATE", date)
+            .current_dir(&repo.root)
+            .output()
+            .expect("run git tag");
+        assert!(output.status.success(), "{output:?}");
+        assert_fails_with(&repo, "mirror@1.3.0", "tagger-mismatch");
+        assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    }
+}
+
+#[test]
+fn verify_fails_through_a_peer_that_is_lightweight() {
+    let repo = release_repo();
+    repo.release(&[]);
+    git(&repo.root, &["tag", "-d", "mirror@1.3.0"]);
+    git(&repo.root, &["tag", "mirror@1.3.0"]);
+    let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    assert!(
+        report.to_string().contains("carries no tag record"),
+        "{report:#}"
+    );
+}
+
+#[test]
+fn verify_fails_through_a_peer_whose_record_breaks_its_schema() {
+    let repo = release_repo();
+    repo.release(&[]);
+    let message = repo
+        .message("mirror@1.3.0")
+        .replace("contract: contract-1", "contract: contract-9");
+    repo.forge("mirror@1.3.0", "HEAD", &message);
+    let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    assert!(
+        report.to_string().contains("violates its published schema"),
+        "{report:#}"
+    );
+}
+
+#[test]
+fn verify_ignores_a_record_tagged_by_another_identity_when_finding_a_channel_source() {
+    let repo = release_repo();
+    repo.cli()
+        .args(["apply", "--channel", "rc"])
+        .assert()
+        .success();
+    repo.commit("apply release candidate");
+    repo.write("release-notes.md", "Release executor notes.\n");
+    repo.commit("record executor notes");
+    repo.cli()
+        .args(["tag", "--channel", "rc"])
+        .assert()
+        .success();
+    repo.cli()
+        .args(["tag", "--channel", "rc", "--phase", "after-publication"])
+        .assert()
+        .success();
+    // A configured name at another version, but not tagged by Intentional.
+    let message = repo
+        .message("sample-library@1.3.0-rc.1")
+        .replace("version: 1.3.0-rc.1", "version: 1.4.0-rc.1");
+    git(
+        &repo.root,
+        &["tag", "-a", "sample-library@1.4.0-rc.1", "-m", &message],
+    );
+    assert_verified(
+        &repo,
+        "sample-library@1.3.0-rc.1",
+        &[
+            "mirror@1.3.0-rc.1",
+            "sample-library@1.3.0-rc.1",
+            "0.0.1-rc.1",
+        ],
+    );
+}
