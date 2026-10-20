@@ -131,7 +131,9 @@ impl TagResult {
         let config = Config::load(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-        let versions = baseline_versions(root, &config, explicit)?;
+        let versions = baseline_versions(root, &config, explicit, &|name, id, version| {
+            is_established(&git, name, id, version, &config.contract)
+        })?;
         let digest = match existing_tag_set_digest(&git, &config, &versions, true)? {
             Some(existing) => existing,
             None => baseline_digest(&config.contract, crate::VERSION, &versions)?,
@@ -331,16 +333,17 @@ pub(crate) fn tag_candidates(
 }
 
 /// The complete baseline set at HEAD: every Release Unit and canonical
-/// workspace tag ID that no tag record establishes, at the version a matching
-/// tag, its projections, or `explicit` supplies.
+/// workspace tag ID whose current tag `established` does not report as
+/// established by a tag record, at the version a matching tag, its
+/// projections, or `explicit` supplies. `established` receives the tag name,
+/// canonical tag ID, and version of each stream's current tag.
 pub(crate) fn baseline_versions(
     root: &Path,
     config: &Config,
     explicit: &BTreeMap<String, Version>,
+    established: &dyn Fn(&str, &str, &str) -> Result<bool>,
 ) -> Result<BTreeMap<String, String>> {
     let repository = VersionRepository::discover(root)?;
-    let git = gix::discover(root)
-        .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let mut versions = BTreeMap::new();
     for (id, release_unit) in &config.release_units {
         let (primary_id, primary) = config.primary_tag(id)?;
@@ -348,12 +351,10 @@ pub(crate) fn baseline_versions(
             let version = repository
                 .current_version(id, &primary.template)?
                 .to_string();
-            if !is_established(
-                &git,
+            if !established(
                 &render_tag(&primary.template, id, &version),
                 &Config::release_unit_tag_id(id, primary_id),
                 &version,
-                &config.contract,
             )? {
                 versions.insert(id.clone(), version);
             }
@@ -405,12 +406,10 @@ pub(crate) fn baseline_versions(
         let canonical = Config::workspace_tag_id(id);
         if repository.has_matching_tag(id, &tag.template)? {
             let version = repository.current_version(id, &tag.template)?.to_string();
-            if !is_established(
-                &git,
+            if !established(
                 &render_tag(&tag.template, id, &version),
                 &canonical,
                 &version,
-                &config.contract,
             )? {
                 versions.insert(canonical, version);
             }
@@ -1212,7 +1211,7 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
 /// baseline tag record at HEAD is a retry and stays in the baseline set;
 /// pre-Intentional history carries no tag record and stays as well. A tag
 /// record whose identity does not match the tag it occupies is refused.
-fn is_established(
+pub(crate) fn is_established(
     repository: &gix::Repository,
     name: &str,
     expected_id: &str,

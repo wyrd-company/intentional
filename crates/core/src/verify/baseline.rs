@@ -34,7 +34,16 @@ pub(super) fn verify(
         }
     };
     let reconstructed = Config::load(checkout.root()).and_then(|config| {
-        let versions = baseline_versions(checkout.root(), &config, &BTreeMap::new())?;
+        let snapshot = gix::discover(checkout.root())
+            .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
+        let versions = baseline_versions(
+            checkout.root(),
+            &config,
+            &BTreeMap::new(),
+            &|name, id, version| {
+                crate::tag::is_established(&snapshot, name, id, version, &config.contract)
+            },
+        )?;
         Ok((config, versions))
     });
     let (config, versions) = match reconstructed {
