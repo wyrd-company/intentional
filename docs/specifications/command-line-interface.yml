@@ -4,21 +4,17 @@ relationships:
     - intent-driven-polyglot-release
     - repository-initialization
     - release-planning-and-records
-    - generation
-    - ecosystem-recipes
+    - release-model
   models:
     - intentional
 description: >-
   Defines Intentional's supported command-line interface for Release Workspace
-  reconciliation, Change Intent authoring, status, Release planning, recipe
-  builds, signing, and materialization, injected projection stamping, annotated tag authority,
-  Release verification, conformance, managed workflow generation, and embedded
-  agent guidance.
-  Managed workflow adoption is resolved through initialization rather than a
-  separate setup command. The `workflow` command owns explicit regeneration of
-  the adopted repository-resident projection. Generated workflow scripts and
-  the pinned Intentional binary form one generator-version implementation unit;
-  their private calls are not compatibility surfaces.
+  reconciliation, Change Intent authoring, status, Release planning,
+  materialization, injected projection stamping, annotated tag authority,
+  Release verification, conformance, Release Model emission, and embedded agent
+  guidance. Every command requires Git and no hosting platform; the
+  surrounding release process owns commits, pushes, release records, and
+  publication.
   `docs/specifications/command-line-interface.spec.yml` is the machine-readable
   command definition.
 format: cli
@@ -29,30 +25,14 @@ validation-criteria: >-
   Command tokens, nesting, aliases, option flags, value types, defaults,
   repetition, conflicts, requirements, interaction modes, output modes, and exit
   meanings agree with that asset. `--directory` establishes the repository root
-  for every relative path. Initialization keeps core configuration independent
-  of managed workflow adoption, treats origin detection as a recommendation,
-  preserves explicit adoption state, and never mutates GitHub repository or
-  organization settings. Dry-run commands compute and print the same ordered
-  operation set as mutation without changing repository state. `plan` emits the
-  canonical Release Plan. `tag` requires exactly one baseline or plan mode.
-  Plan mode verifies the materialized candidate before creating annotated
-  Release authority.
-  `build` requires exactly one sealed-plan or local-development mode. Plan mode
-  emits Release Artifact evidence only from authoritative sealed source; local
-  mode computes current candidate expectations, emits development results, and
-  reports planned Signing transformations as deferred. `sign` requires a sealed
-  plan and one qualified artifact identity. It executes the resolved Signing
-  recipe through its declared protected authority and emits a signed Release
-  Artifact record whose provenance binds the unsigned input.
-  `workflow generate` requires adopted
-  managed workflow configuration and reconciles the complete output set through
-  its valid ownership manifest. `check` applies core conformance everywhere and
-  managed workflow, recipe, posture, extension, generated-byte, and observable
-  GitHub-setting conformance only when managed workflow is adopted.
-  Managed conformance also validates selected interpretation and posture
-  catalogs, extracted Custom Release Gate interfaces, recipe support evidence,
-  and every
-  generated cross-job transport contract.
-  `verify` always reconstructs core Release identity from an exact annotated tag;
-  managed mode adds one Release Unit's durable GitHub record verification. Live
-  mode adds fresh Distribution observation without changing the Release Record.
+  for every relative path. Initialization configures no release process and
+  never mutates hosting-platform repository or organization settings. Dry-run
+  commands compute and print the same ordered operation set as mutation without
+  changing repository state. `plan` emits the canonical Release Plan. `tag`
+  requires exactly one baseline or plan mode. Plan mode verifies the
+  materialized candidate before creating annotated Release authority, and
+  creates a phased tag only under a matching `--phase` declaration. `check`
+  applies Release Workspace conformance and reports a stale committed Release
+  Model. `verify` reconstructs core Release identity from an exact annotated
+  tag. `model` writes the canonical Release Model to
+  `.intentional/release-model.json`, or to standard output under `--stdout`.

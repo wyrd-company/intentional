@@ -4,7 +4,7 @@ relationships:
 tool:
   name: intentional
   mode: interactive
-  summary: Manage intent-driven polyglot releases and optional generated release workflows.
+  summary: Manage intent-driven polyglot releases.
 global-options:
   - name: directory
     flags:
@@ -32,24 +32,6 @@ commands:
         description: Apply the explicit authority handoff from a ready imported-tool plan.
         required: false
         repeatable: false
-      - name: workflow
-        flags:
-          - --workflow
-        kind: flag
-        description: Resolve managed GitHub workflow adoption as adopted.
-        required: false
-        repeatable: false
-        conflicts-with:
-          - no-workflow
-      - name: no-workflow
-        flags:
-          - --no-workflow
-        kind: flag
-        description: Resolve managed GitHub workflow adoption as declined.
-        required: false
-        repeatable: false
-        conflicts-with:
-          - workflow
       - name: json
         flags:
           - --json
@@ -83,20 +65,13 @@ commands:
           meaning: The Initialization Plan requires owner resolutions or verified repository edits.
     examples:
       - intentional init
-      - intentional init --workflow
-      - intentional init --no-workflow --json
+      - intentional init --json
       - intentional init --take-over --dry-run
     notes:
       - >-
-        Origin detection recommends workflow adoption or decline. It never
-        overrides a durable resolution or substitutes for --workflow or
-        --no-workflow.
-      - >-
-        Reconciliation generates the managed output set when adoption is
-        resolved and the complete Initialization Plan is ready.
-      - >-
-        The command reports required GitHub settings for the resolved posture
-        and does not mutate repository or organization settings.
+        Initialization configures no release process and does not run a
+        template tool. Reconciliation rewrites an existing Release Model in
+        the same operation set as configuration.
   - name: add
     summary: Author a pending Change Intent.
     mode: interactive
@@ -168,7 +143,7 @@ commands:
         - name: human-readable
           description: >-
             Prints pending Change Intents, missing baselines, tag-record issues,
-            computed versions, projection drift, and managed-workflow drift.
+            computed versions, projection drift, and a stale Release Model.
           machine-readable: false
         - name: json
           description: >-
@@ -212,136 +187,6 @@ commands:
     examples:
       - intentional plan
       - intentional plan --channel preview
-  - name: build
-    summary: Execute Package recipes and collect their declared artifacts.
-    mode: non-interactive
-    options:
-      - name: plan
-        flags:
-          - --plan
-        kind: option
-        description: Release Plan whose sealed build units and artifact expectations are executed.
-        required: false
-        repeatable: false
-        conflicts-with:
-          - local
-        groups:
-          - build-mode
-        value:
-          type: file
-          arity:
-            min: 1
-            max: 1
-      - name: local
-        flags:
-          - --local
-        kind: flag
-        description: >-
-          Compute candidate expectations from current workspace state for
-          developer testing.
-        required: false
-        repeatable: false
-        conflicts-with:
-          - plan
-        groups:
-          - build-mode
-    groups:
-      - name: build-mode
-        members:
-          - plan
-          - local
-        rule: exactly-one
-        description: >-
-          Build executes either sealed Release Plan state or current local
-          candidate state.
-    output:
-      modes:
-        - name: build-results
-          description: >-
-            Prints each executed build unit and the staged artifact bundle or
-            development-result location it produced.
-          machine-readable: false
-      exit-codes:
-        - code: 0
-          meaning: Every selected build unit and artifact validation completed.
-        - code: 1
-          meaning: >-
-            Arguments, planning, source verification, recipe resolution,
-            toolchain validation, build execution, collection, or artifact
-            validation failed.
-    examples:
-      - intentional build --plan release-plan.json
-      - intentional build --local
-    notes:
-      - Relative plan paths resolve from --directory.
-      - >-
-        Plan mode validates the exact Intentional generator, resolved recipe
-        configuration, authoritative Release identity, and exact source before
-        producing Release Artifact records.
-      - >-
-        Local mode computes current candidate build units. A dirty work tree
-        continues with a warning and records dirty and untracked state. Its
-        output is a development result rather than Release Artifact evidence.
-      - >-
-        Builds write to their normal project output locations. Intentional
-        validates and collects exact declared outputs into isolated staging.
-  - name: sign
-    summary: Execute one Signing transformation sealed by a Release Plan.
-    mode: non-interactive
-    options:
-      - name: plan
-        flags:
-          - --plan
-        kind: option
-        description: Release Plan that seals the Signing recipe and input artifact.
-        required: true
-        repeatable: false
-        value:
-          type: file
-          arity:
-            min: 1
-            max: 1
-      - name: artifact
-        flags:
-          - --artifact
-        kind: option
-        description: >-
-          Qualified `<release-unit>/<package>/<artifact>` identity of the planned
-          signed output.
-        required: true
-        repeatable: false
-        value:
-          type: string
-          arity:
-            min: 1
-            max: 1
-    output:
-      modes:
-        - name: signed-artifact
-          description: >-
-            Prints the canonical signed bundle and Release Artifact record
-            locations.
-          machine-readable: false
-      exit-codes:
-        - code: 0
-          meaning: Planned Signing transformation and output validation completed.
-        - code: 1
-          meaning: >-
-            Plan, identity, input artifact, recipe, authority, signing,
-            timestamp, or output validation failed.
-    examples:
-      - intentional sign --plan release-plan.json --artifact sample/app/windows-x64
-    notes:
-      - Relative plan paths resolve from --directory.
-      - >-
-        The command resolves exactly one Signing expectation, verifies its
-        unsigned artifact bundle and record, and receives only authority declared
-        by that recipe.
-      - >-
-        Generated managed workflows and user-managed workflows invoke the same
-        public command. Azure recipes require their protected GitHub environment,
-        fixed organization variables, and OpenID Connect permission.
-      - Signing failure never returns or promotes the unsigned input as output.
   - name: apply
     summary: Materialize a candidate Release tree.
     mode: non-interactive
@@ -450,6 +295,23 @@ commands:
           arity:
             min: 1
             max: 1
+      - name: phase
+        flags:
+          - --phase
+        kind: option
+        description: >-
+          Executor phase declaration that selects the tags configured with the
+          same `require-phase`.
+        required: false
+        repeatable: false
+        examples:
+          - before-publication
+          - after-publication
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
       - name: plan
         flags:
           - --plan
@@ -492,15 +354,17 @@ commands:
           meaning: Arguments, Release state, plan verification, or tag creation failed.
     examples:
       - intentional tag --plan release-plan.json
+      - intentional tag --plan release-plan.json --phase before-publication
       - intentional tag --baseline --version example-unit:1.2.3
     notes:
       - Relative plan paths resolve from --directory.
       - Repeating --version for the same identity fails.
       - >-
-        Under managed adoption, protected managed tag namespaces are created
-        only by the generated workflow's App-authorized jobs.
+        Without --phase, the command creates only tags that require no phase.
+        A phase declaration states what the surrounding process has completed;
+        Intentional does not observe publication.
   - name: check
-    summary: Validate the Release Workspace and every adopted protocol projection.
+    summary: Validate the Release Workspace and its committed Release Model.
     mode: non-interactive
     options:
       - name: json
@@ -522,19 +386,21 @@ commands:
           machine-readable: true
       exit-codes:
         - code: 0
-          meaning: Core and adopted managed-workflow conformance passed.
+          meaning: Release Workspace conformance passed.
         - code: 1
           meaning: >-
-            Configuration, intent, planning, tag, generated output, extension,
-            recipe, posture, or observable GitHub-setting conformance failed.
+            Configuration, intent, planning, tag, or Release Model conformance
+            failed.
     examples:
       - intentional check
       - intentional check --json
     notes:
-      - A workspace that declines managed workflow runs only core conformance checks.
-      - The command reports settings it cannot observe separately from settings that disagree.
+      - >-
+        When `.intentional/release-model.json` exists, a committed model that
+        differs from a fresh projection is the `release-model-stale` error. An
+        absent model is not a diagnostic.
   - name: verify
-    summary: Verify one established Release and optionally one Release Unit record.
+    summary: Verify one established Release from its annotated tag.
     mode: non-interactive
     positional-arguments:
       - name: tag
@@ -548,25 +414,6 @@ commands:
             min: 1
             max: 1
     options:
-      - name: managed
-        flags:
-          - --managed
-        kind: flag
-        description: >-
-          Also verify the Release Unit's immutable GitHub Release, asset digests,
-          attestations, and embedded Release Evidence.
-        required: false
-        repeatable: false
-      - name: live
-        flags:
-          - --live
-        kind: flag
-        description: >-
-          Obtain fresh Distribution status through maintained consumer recipes.
-        required: false
-        repeatable: false
-        requires:
-          - managed
       - name: json
         flags:
           - --json
@@ -578,8 +425,7 @@ commands:
       modes:
         - name: human-readable
           description: >-
-            Reports verified identities, guarantees, historical claims, and
-            any current divergence requested by --live.
+            Reports verified identities, guarantees, and historical claims.
           machine-readable: false
         - name: json
           description: >-
@@ -590,62 +436,59 @@ commands:
         - code: 0
           meaning: Every verification requested by the invocation passed.
         - code: 1
-          meaning: >-
-            Tag, plan, materialized source, managed record, attestation,
-            evidence, recipe, or live destination verification failed.
+          meaning: Tag, plan, or materialized source verification failed.
     examples:
       - intentional verify example-unit@1.2.3
-      - intentional verify example-unit@1.2.3 --managed
-      - intentional verify example-unit@1.2.3 --managed --live --json
+      - intentional verify example-unit@1.2.3 --json
     notes:
       - >-
-        Core verification needs Git history and no hosting-platform credentials.
+        Verification needs Git history and no hosting-platform credentials.
         It reconstructs the canonical plan and materialized source from the
         selected tag and verifies the complete core identity-tag set.
-      - >-
-        --managed requires a selected Release Unit tag and reads its corresponding
-        GitHub Release without Distribution credentials.
-      - >-
-        --live reports current Distribution state without changing the immutable
-        Release Record.
-  - name: workflow
-    summary: Operate the generated managed-workflow projection.
+  - name: model
+    summary: Write the Release Model that release process templates read.
     mode: non-interactive
-    subcommands:
-      - name: generate
-        summary: Reconcile the complete repository-resident managed workflow output.
-        mode: non-interactive
-        options:
-          - name: dry-run
-            flags:
-              - --dry-run
-            kind: flag
-            description: Print the exact create, replace, and stale-removal operation set.
-            required: false
-            repeatable: false
-        output:
-          modes:
-            - name: operations
-              description: >-
-                Prints deterministic creates, replacements, stale removals, and
-                conformance diagnostics.
-              machine-readable: false
-          exit-codes:
-            - code: 0
-              meaning: Managed output was reconciled, already conformed, or was previewed.
-            - code: 1
-              meaning: >-
-                Workflow adoption, posture, recipe, extension, graph, rendering,
-                prior ownership, or filesystem validation failed.
-        examples:
-          - intentional workflow generate
-          - intentional workflow generate --dry-run
-        notes:
-          - The command requires managed workflow adoption in Release Workspace configuration.
-          - >-
-            Stale files are removed only when the prior valid ownership manifest
-            identifies their exact paths.
-          - The command does not mutate GitHub repository or organization settings.
+    options:
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Report the operation without writing the Release Model.
+        required: false
+        repeatable: false
+      - name: stdout
+        flags:
+          - --stdout
+        kind: flag
+        description: Write the Release Model to standard output and nothing to the tree.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: operation
+          description: >-
+            Reports `written` or `unchanged` for
+            `.intentional/release-model.json`.
+          machine-readable: false
+        - name: release-model
+          description: Prints the canonical Release Model document selected by --stdout.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: The Release Model was written, already current, previewed, or printed.
+        - code: 1
+          meaning: Release Workspace input was invalid or the operation failed.
+    examples:
+      - intentional model
+      - intentional model --dry-run
+      - intentional model --stdout
+    notes:
+      - >-
+        The command validates the Release Workspace first and writes nothing
+        when validation fails.
+      - >-
+        The model is a pure function of tracked files at one commit. No
+        command reads it back as input.
   - name: skill
     summary: Print the agent-facing Intentional workflow skill.
     mode: non-interactive
@@ -666,6 +509,5 @@ notes:
     Help and version flags follow the command parser's standard behavior and are
     omitted from individual command definitions.
   - >-
-    Core commands require Git and no hosting platform. Managed workflow adoption,
-    generation, and conformance add the GitHub contract selected by the Release
-    Workspace security posture.
+    Every command requires Git and no hosting platform. The surrounding release
+    process owns commits, pushes, release records, and publication.
