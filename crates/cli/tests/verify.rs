@@ -863,51 +863,61 @@ fn verify_passes_for_a_baseline_after_a_release_that_establishes_its_unit() {
 /// A release tag record on an earlier commit establishes its unit outside
 /// the baseline only when the verifying reader accepts it. Otherwise the unit
 /// stays in the set, and its tags fail as baseline tags.
-#[test]
-fn verify_fails_for_a_baseline_whose_earlier_release_record_fails_the_verifying_reader() {
-    for (defect, field) in [
-        ("no tagger", "tagger"),
-        ("another tagger", "tagger"),
-        ("tag-id", "tag-id"),
-        ("version", "version"),
-    ] {
-        let repo = baseline_after_a_release_repo(true);
-        let release = git(&repo.root, &["rev-parse", "HEAD~1"]);
-        let name = "sample-library@1.3.0";
-        let message = repo.message(name);
-        match defect {
-            "no tagger" => repo.strip_tagger(name),
-            "another tagger" => {
-                git(&repo.root, &["tag", "-d", name]);
-                git(&repo.root, &["tag", "-a", name, "-m", &message, &release]);
-            }
-            "tag-id" => repo.forge(
-                name,
-                &release,
-                &message.replace(
-                    "tag-id: release-unit/sample-library/primary",
-                    "tag-id: release-unit/sample-library/mirror",
-                ),
-            ),
-            _ => repo.forge(
-                name,
-                &release,
-                &message.replace("version: 1.3.0", "version: 1.3.1"),
-            ),
+fn assert_earlier_release_record_fails(defect: &str, field: &str) {
+    let repo = baseline_after_a_release_repo(true);
+    let release = git(&repo.root, &["rev-parse", "HEAD~1"]);
+    let name = "sample-library@1.3.0";
+    let message = repo.message(name);
+    match defect {
+        "no tagger" => repo.strip_tagger(name),
+        "another tagger" => {
+            git(&repo.root, &["tag", "-d", name]);
+            git(&repo.root, &["tag", "-a", name, "-m", &message, &release]);
         }
-        let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
-        let unexpected = report["diagnostics"]
-            .as_array()
-            .expect("diagnostics")
-            .iter()
-            .filter_map(|diagnostic| diagnostic["message"].as_str())
-            .find(|message| {
-                message.starts_with(&format!("identity tag {name} has unexpected target"))
-            })
-            .unwrap_or_else(|| panic!("{defect}: {report:#}"))
-            .to_owned();
-        assert!(unexpected.contains(field), "{defect}: {unexpected}");
+        "tag-id" => repo.forge(
+            name,
+            &release,
+            &message.replace(
+                "tag-id: release-unit/sample-library/primary",
+                "tag-id: release-unit/sample-library/mirror",
+            ),
+        ),
+        _ => repo.forge(
+            name,
+            &release,
+            &message.replace("version: 1.3.0", "version: 1.3.1"),
+        ),
     }
+    let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+    let unexpected = report["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["message"].as_str())
+        .find(|message| message.starts_with(&format!("identity tag {name} has unexpected target")))
+        .unwrap_or_else(|| panic!("{defect}: {report:#}"))
+        .to_owned();
+    assert!(unexpected.contains(field), "{defect}: {unexpected}");
+}
+
+#[test]
+fn verify_fails_for_a_baseline_whose_earlier_release_record_has_no_tagger() {
+    assert_earlier_release_record_fails("no tagger", "tagger");
+}
+
+#[test]
+fn verify_fails_for_a_baseline_whose_earlier_release_record_has_another_tagger() {
+    assert_earlier_release_record_fails("another tagger", "tagger");
+}
+
+#[test]
+fn verify_fails_for_a_baseline_whose_earlier_release_record_names_another_tag_id() {
+    assert_earlier_release_record_fails("tag-id", "tag-id");
+}
+
+#[test]
+fn verify_fails_for_a_baseline_whose_earlier_release_record_names_another_version() {
+    assert_earlier_release_record_fails("version", "version");
 }
 
 #[test]
