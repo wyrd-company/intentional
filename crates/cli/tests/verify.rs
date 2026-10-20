@@ -110,6 +110,39 @@ impl TestRepo {
         assert!(output.status.success(), "{output:?}");
     }
 
+    /// Replace tag `name` with a copy of its tag object that has no tagger
+    /// header, as Intentional before deterministic taggers wrote it.
+    fn strip_tagger(&self, name: &str) {
+        use std::io::Write;
+        let raw = git(&self.root, &["cat-file", "tag", name]);
+        let raw = raw
+            .lines()
+            .filter(|line| !line.starts_with("tagger "))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let mut child = ProcessCommand::new("git")
+            .args(["hash-object", "--literally", "-t", "tag", "-w", "--stdin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .current_dir(&self.root)
+            .spawn()
+            .expect("run git hash-object");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(raw.as_bytes())
+            .expect("write tag object");
+        let output = child.wait_with_output().expect("git hash-object");
+        assert!(output.status.success(), "{output:?}");
+        let object = String::from_utf8(output.stdout).expect("object id");
+        git(
+            &self.root,
+            &["update-ref", &format!("refs/tags/{name}"), object.trim()],
+        );
+    }
+
     fn message(&self, name: &str) -> String {
         let object = git(&self.root, &["cat-file", "tag", name]);
         let (_, message) = object.split_once("\n\n").expect("tag message");
@@ -602,4 +635,63 @@ fn verify_fails_for_a_tag_outside_the_release() {
     let message = repo.message("sample-library@1.3.0");
     repo.forge("copy@1.3.0", "HEAD", &message);
     assert_fails_with(&repo, "copy@1.3.0", "identity-tag-mismatch");
+}
+
+#[test]
+fn verify_fails_for_a_tag_without_a_tagger() {
+    let repo = release_repo();
+    repo.release(&[]);
+    repo.strip_tagger("mirror@1.3.0");
+    assert_fails_with(&repo, "mirror@1.3.0", "tagger-mismatch");
+}
+
+#[test]
+fn verify_fails_through_an_unchanged_peer_of_an_identity_tag_with_another_tagger() {
+    let repo = release_repo();
+    repo.release(&[]);
+    let message = repo.message("mirror@1.3.0");
+    git(&repo.root, &["tag", "-d", "mirror@1.3.0"]);
+    git(&repo.root, &["tag", "-a", "mirror@1.3.0", "-m", &message]);
+    let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.3.0", "0.0.1"])
+    );
+}
+
+#[test]
+fn verify_fails_through_an_unchanged_peer_of_an_identity_tag_without_a_tagger() {
+    let repo = release_repo();
+    repo.release(&[]);
+    repo.strip_tagger("mirror@1.3.0");
+    let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.3.0", "0.0.1"])
+    );
+}
+
+/// Each identity field a peer tag record can disagree on, one at a time.
+#[test]
+fn verify_fails_for_a_peer_record_that_disagrees_on_any_identity_field() {
+    for (field, from, to) in [
+        (
+            "tag-id",
+            "tag-id: release-unit/sample-library/mirror",
+            "tag-id: release-unit/sample-library/primary",
+        ),
+        ("version", "version: 1.3.0", "version: 1.3.1"),
+        ("baseline", "baseline: false", "baseline: true"),
+    ] {
+        let repo = release_repo();
+        repo.release(&[]);
+        let message = repo.message("mirror@1.3.0");
+        assert!(message.contains(from), "{field}");
+        repo.forge("mirror@1.3.0", "HEAD", &message.replace(from, to));
+        let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+        assert!(
+            report.to_string().contains(&format!("unexpected {field}")),
+            "{field}: {report:#}"
+        );
+    }
 }

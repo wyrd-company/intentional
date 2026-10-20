@@ -124,7 +124,8 @@ proposed-design:
     the recomputed plan has the recorded digest, that the release commit holds
     the content that materializing the plan writes at each path it writes and
     none of the intents it consumes, and that every tag in the plan carries a
-    tag record for the same digest at the release commit. A recomputed digest
+    tag record for the same digest at the release commit under the same fixed
+    tagger. A recomputed digest
     that differs for a tag record naming another producing version is an
     advisory, because
     the running binary does not carry earlier versions' planning semantics; a

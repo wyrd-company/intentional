@@ -1122,16 +1122,13 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-pub(crate) struct ParsedTagRecord {
+struct ParsedTagRecord {
     /// Commit the tag peels to.
-    pub(crate) target: gix::ObjectId,
-    pub(crate) record: TagRecord,
+    target: gix::ObjectId,
+    record: TagRecord,
 }
 
-pub(crate) fn read_tag_record(
-    repository: &gix::Repository,
-    name: &str,
-) -> Result<Option<ParsedTagRecord>> {
+fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<ParsedTagRecord>> {
     let Some(mut reference) = repository
         .try_find_reference(format!("refs/tags/{name}").as_str())
         .map_err(|error| Error::Git(format!("failed to inspect tag {name}: {error}")))?

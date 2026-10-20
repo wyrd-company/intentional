@@ -169,8 +169,8 @@ It checks four things:
   the plan digest the tag record carries.
 - The release commit holds the files that applying that plan writes, and none
   of the intents it consumes.
-- Every tag the plan names exists at the release commit with a tag record for
-  the same plan digest.
+- Every tag the plan names exists at the release commit, carries a tag record
+  for the same plan digest, and has the same fixed tagger.
 
 `verify` exits `0` when every check passes and `1` otherwise. Each failure is a
 diagnostic with a stable code, such as `tag-not-annotated`,
@@ -178,7 +178,9 @@ diagnostic with a stable code, such as `tag-not-annotated`,
 `identity-tag-missing`. A tag that another Intentional version produced can
 recompute to a different digest under this version. That difference is the
 advisory `producing-version-differs` and does not fail verification. A
-baseline tag is not a Release; `verify` reports it as `baseline-record`.
+baseline tag is not a Release; `verify` reports it as `baseline-record`. Tags
+that Intentional wrote before 0.1.6 have no tagger and fail with
+`tagger-mismatch`.
 
 ## Stamp build versions
 

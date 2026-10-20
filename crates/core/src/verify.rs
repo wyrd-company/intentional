@@ -15,7 +15,7 @@ use crate::apply::ApplyResult;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
-use crate::tag::{materialized_release_parent, read_tag_record, recover_deleted_intents};
+use crate::tag::{materialized_release_parent, recover_deleted_intents};
 use crate::tag_record::TagRecord;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -174,56 +174,69 @@ pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
     Ok(verification.finish())
 }
 
-/// Read the tag record of `tag` and the commit it tags, or record why not.
-fn selected_record(
-    repository: &gix::Repository,
-    tag: &str,
-    verification: &mut Verification,
-) -> Result<Option<(TagRecord, gix::ObjectId)>> {
+/// Whether a tag object is tagged the way Intentional tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tagger {
+    /// The fixed identity at the committer time and offset of the target.
+    Fixed,
+    /// No tagger header.
+    Absent,
+    /// Another identity, time, or offset.
+    Other,
+}
+
+/// What one tag ref holds, read by the same rules for every identity tag.
+enum TagState {
+    /// No such tag.
+    Missing,
+    /// Symbolic or lightweight; the detail says which.
+    NotAnnotated(&'static str),
+    /// Annotated without a tag record.
+    Unclaimed,
+    /// A tag record that the codec or its target refuses.
+    Invalid(String),
+    /// A decoded tag record, the commit it tags, and how it is tagged.
+    Recorded {
+        record: TagRecord,
+        target: gix::ObjectId,
+        tagger: Tagger,
+    },
+}
+
+fn read_tag(repository: &gix::Repository, name: &str) -> Result<TagState> {
     let Some(mut reference) = repository
-        .try_find_reference(format!("refs/tags/{tag}").as_str())
-        .map_err(|error| Error::Git(format!("failed to inspect tag {tag}: {error}")))?
+        .try_find_reference(format!("refs/tags/{name}").as_str())
+        .map_err(|error| Error::Git(format!("failed to inspect tag {name}: {error}")))?
     else {
-        verification.error("tag-missing", format!("tag {tag} does not exist"));
-        return Ok(None);
+        return Ok(TagState::Missing);
     };
     let Some(object_id) = reference.try_id().map(|id| id.detach()) else {
-        verification.error("tag-not-annotated", format!("tag {tag} is symbolic"));
-        return Ok(None);
+        return Ok(TagState::NotAnnotated("symbolic"));
     };
     let target = reference
         .peel_to_id()
-        .map_err(|error| Error::Git(format!("failed to peel tag {tag}: {error}")))?
+        .map_err(|error| Error::Git(format!("failed to peel tag {name}: {error}")))?
         .detach();
     let object = repository
         .find_object(object_id)
-        .map_err(|error| Error::Git(format!("failed to read tag {tag}: {error}")))?;
+        .map_err(|error| Error::Git(format!("failed to read tag {name}: {error}")))?;
     let Ok(tag_object) = object.try_into_tag() else {
-        verification.error(
-            "tag-not-annotated",
-            format!("tag {tag} is lightweight; a Release tag is an annotated tag"),
-        );
-        return Ok(None);
+        return Ok(TagState::NotAnnotated("lightweight"));
     };
     let decoded = tag_object
         .decode()
-        .map_err(|error| Error::Git(format!("failed to decode tag {tag}: {error}")))?;
+        .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
     let message = decoded.message.to_string();
     if !TagRecord::is_claimed_by(&message) {
-        verification.error(
-            "tag-record-missing",
-            format!("annotated tag {tag} carries no tag record"),
-        );
-        return Ok(None);
+        return Ok(TagState::Unclaimed);
     }
     let record = match TagRecord::decode(&message) {
         Ok(record) => record,
         Err(error) => {
-            verification.error(
-                "tag-record-invalid",
-                format!("annotated tag {tag}: {}", error.in_document(tag.to_owned())),
-            );
-            return Ok(None);
+            return Ok(TagState::Invalid(format!(
+                "annotated tag {name}: {}",
+                error.in_document(name.to_owned())
+            )))
         }
     };
     if record
@@ -231,36 +244,79 @@ fn selected_record(
         .as_ref()
         .is_some_and(|recorded| gix::ObjectId::from_hex(recorded.as_bytes()).ok() != Some(target))
     {
-        verification.error(
-            "tag-record-invalid",
-            format!("annotated tag {tag} records a target other than the commit it tags"),
-        );
-        return Ok(None);
+        return Ok(TagState::Invalid(format!(
+            "annotated tag {name} records a target other than the commit it tags"
+        )));
     }
-    let tagger = decoded
+    let tagger = match decoded
         .tagger()
-        .map_err(|error| Error::Git(format!("failed to decode the tagger of {tag}: {error}")))?;
-    if let Some(tagger) = tagger {
-        let commit = repository
-            .find_commit(target)
-            .map_err(|error| Error::Git(format!("failed to read commit {target}: {error}")))?;
-        let committer = commit
-            .committer()
-            .map_err(|error| Error::Git(format!("failed to read the committer: {error}")))?;
-        if tagger.name != TAGGER_NAME
-            || tagger.email != TAGGER_EMAIL
-            || tagger.time != committer.time
-        {
-            verification.error(
-                "tagger-mismatch",
-                format!(
-                    "tag {tag} is not tagged by {TAGGER_NAME} <{TAGGER_EMAIL}> at the time of the commit it tags"
-                ),
-            );
-            return Ok(None);
+        .map_err(|error| Error::Git(format!("failed to decode the tagger of {name}: {error}")))?
+    {
+        None => Tagger::Absent,
+        Some(tagger) => {
+            let commit = repository
+                .find_commit(target)
+                .map_err(|error| Error::Git(format!("failed to read commit {target}: {error}")))?;
+            let committer = commit
+                .committer()
+                .map_err(|error| Error::Git(format!("failed to read the committer: {error}")))?;
+            if tagger.name == TAGGER_NAME
+                && tagger.email == TAGGER_EMAIL
+                && tagger.time == committer.time
+            {
+                Tagger::Fixed
+            } else {
+                Tagger::Other
+            }
         }
+    };
+    Ok(TagState::Recorded {
+        record,
+        target,
+        tagger,
+    })
+}
+
+/// Read the tag record of `tag` and the commit it tags, or record why not.
+fn selected_record(
+    repository: &gix::Repository,
+    tag: &str,
+    verification: &mut Verification,
+) -> Result<Option<(TagRecord, gix::ObjectId)>> {
+    match read_tag(repository, tag)? {
+        TagState::Missing => verification.error("tag-missing", format!("tag {tag} does not exist")),
+        TagState::NotAnnotated(kind) => verification.error(
+            "tag-not-annotated",
+            format!("tag {tag} is {kind}; a Release tag is an annotated tag"),
+        ),
+        TagState::Unclaimed => verification.error(
+            "tag-record-missing",
+            format!("annotated tag {tag} carries no tag record"),
+        ),
+        TagState::Invalid(detail) => verification.error("tag-record-invalid", detail),
+        TagState::Recorded {
+            tagger: Tagger::Absent,
+            ..
+        } => verification.error(
+            "tagger-mismatch",
+            format!("tag {tag} has no tagger; Intentional tags as {TAGGER_NAME} <{TAGGER_EMAIL}>"),
+        ),
+        TagState::Recorded {
+            tagger: Tagger::Other,
+            ..
+        } => verification.error(
+            "tagger-mismatch",
+            format!(
+                "tag {tag} is not tagged by {TAGGER_NAME} <{TAGGER_EMAIL}> at the time of the commit it tags"
+            ),
+        ),
+        TagState::Recorded {
+            record,
+            target,
+            tagger: Tagger::Fixed,
+        } => return Ok(Some((record, target))),
     }
-    Ok(Some((record, target)))
+    Ok(None)
 }
 
 /// The plan and materialization recomputed at the commit the release was
@@ -322,10 +378,9 @@ fn release_unit_versions(
             continue;
         }
         let name = reference.name().shorten().to_string();
-        let Ok(Some(parsed)) = read_tag_record(repository, &name) else {
+        let TagState::Recorded { record, .. } = read_tag(repository, &name)? else {
             continue;
         };
-        let record = parsed.record;
         if record.baseline || record.plan_digest != digest {
             continue;
         }
@@ -451,38 +506,37 @@ fn check_identity_tags(
         );
     }
     for planned in tags {
-        let parsed = match read_tag_record(repository, &planned.name) {
-            Ok(Some(parsed)) => parsed,
-            Ok(None) => {
+        let (identity, identity_target, tagger) = match read_tag(repository, &planned.name)? {
+            TagState::Recorded {
+                record,
+                target,
+                tagger,
+            } => (record, target, tagger),
+            TagState::Missing => {
                 failed = true;
-                let exists = repository
-                    .try_find_reference(format!("refs/tags/{}", planned.name).as_str())
-                    .map_err(|error| {
-                        Error::Git(format!("failed to inspect tag {}: {error}", planned.name))
-                    })?
-                    .is_some();
-                if exists {
-                    verification.error(
-                        "identity-tag-mismatch",
-                        format!("identity tag {} carries no tag record", planned.name),
-                    );
-                } else {
-                    verification.error(
-                        "identity-tag-missing",
-                        format!("identity tag {} does not exist", planned.name),
-                    );
-                }
+                verification.error(
+                    "identity-tag-missing",
+                    format!("identity tag {} does not exist", planned.name),
+                );
                 continue;
             }
-            Err(error) => {
+            TagState::NotAnnotated(_) | TagState::Unclaimed => {
                 failed = true;
-                verification.error("identity-tag-mismatch", error.to_string());
+                verification.error(
+                    "identity-tag-mismatch",
+                    format!("identity tag {} carries no tag record", planned.name),
+                );
+                continue;
+            }
+            TagState::Invalid(detail) => {
+                failed = true;
+                verification.error("identity-tag-mismatch", detail);
                 continue;
             }
         };
-        let identity = &parsed.record;
         let disagreements = [
-            ("target", parsed.target == target),
+            ("target", identity_target == target),
+            ("tagger", tagger == Tagger::Fixed),
             ("tag-id", identity.tag_id == planned.id),
             ("version", identity.version == planned.version),
             ("contract", identity.contract == record.contract),
