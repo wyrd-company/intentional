@@ -7,11 +7,9 @@ relationships:
 description: >-
   Defines the normative `.intentional/init-plan.yml` contract and equivalent
   structured output for Release Workspace reconciliation. The plan binds
-  repository evidence to inferred configuration, one optional Package suggestion
-  per discovery candidate, explicit
-  ownership and exclusion decisions, managed-workflow adoption, imported-tool
-  parity, detected Custom Release Gate interfaces, planned operations, and
-  computed readiness.
+  repository evidence to inferred configuration, explicit ownership and
+  exclusion decisions, imported-tool parity, planned operations, and computed
+  readiness.
   `docs/specifications/initialization-plan.schema.yml` is the machine-readable
   definition.
 format: json-schema
@@ -20,14 +18,11 @@ validation-criteria: >-
   `docs/specifications/initialization-plan.schema.yml` as YAML interpreted by
   JSON Schema Draft 2020-12 and passes Intentional's semantic validation.
   Unknown fields are rejected. Candidate identifiers and retained resolutions
-  must agree with current evidence. Every accepted candidate has one Package and
-  Release Unit ownership outcome or an evidence-bound exclusion. Workflow
-  recommendation derives from Git origin, while workflow adoption and security
-  posture require an explicit resolution. `ready` is valid only when every
-  diagnostic and candidate is resolved, workflow adoption is resolved, imported
-  parity is equivalent, the source fingerprint is current, and the inferred
-  Release Workspace configuration is valid. A plan with no imported release tool
-  represents parity as `equivalent` with an empty Release Unit comparison. Human-
-  readable and structured renderings must expose the same decisions and planned
-  operations. Each detected reserved Custom Release Gate workflow validates
-  against the Custom Release Gates specification before readiness.
+  must agree with current evidence. Every accepted candidate has one Release
+  Unit ownership outcome or an evidence-bound exclusion. `ready` is valid only
+  when every diagnostic and candidate is resolved, imported parity is
+  equivalent, the source fingerprint is current, and the inferred Release
+  Workspace configuration is valid. A plan with no imported release tool
+  represents parity as `equivalent` with an empty Release Unit comparison.
+  Human-readable and structured renderings must expose the same decisions and
+  planned operations.

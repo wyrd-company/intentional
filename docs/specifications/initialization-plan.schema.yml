@@ -105,8 +105,6 @@ $defs:
         maxProperties: 0
   detector-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
-  stable-id:
-    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   release-unit-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
@@ -144,17 +142,6 @@ $defs:
             minItems: 1
             items:
               $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
-      package:
-        type: object
-        additionalProperties: false
-        required: [ path, recipe ]
-        properties:
-          path:
-            oneOf:
-              - const: "."
-              - $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
-          recipe:
-            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
       projection:
         type: object
         additionalProperties: false
@@ -206,22 +193,18 @@ $defs:
     oneOf:
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit, package ]
+        required: [ kind, release-unit ]
         properties:
           kind: { const: independent }
           release-unit:
             $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
-          package:
-            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
       - type: object
         additionalProperties: false
-        required: [ kind, release-unit, package ]
+        required: [ kind, release-unit ]
         properties:
           kind: { const: projection }
           release-unit:
             $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
-          package:
-            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/stable-id"
           target-candidate:
             type: string
             pattern: "^candidate:[0-9a-f]{64}$"

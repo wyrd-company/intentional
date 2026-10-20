@@ -4859,6 +4859,13 @@ release-units:
             kinds,
             BTreeSet::from(["excluded", "independent", "projection"])
         );
+        for variant in variants {
+            assert!(variant["properties"].get("package").is_none());
+        }
+        assert!(schema["$defs"]["discovery-candidate"]["properties"]
+            .get("package")
+            .is_none());
+        assert!(schema["properties"].get("workflow-adoption").is_none());
         assert_eq!(
             schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
                 ["$ref"]
