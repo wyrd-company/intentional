@@ -1849,6 +1849,7 @@ fn init_handoff_ready_without_model_and_no_op_rerun() {
             .arg("init")
             .assert()
             .success()
+            .stdout(predicate::str::contains("initialization state: ready\n"))
             .stdout(predicate::str::contains(
                 "next: intentional model\nnext: apply a release process template\n",
             ));
@@ -1907,6 +1908,9 @@ fn init_handoff_needs_input_and_invalid_repository_name_no_actions() {
         .arg("init")
         .assert()
         .code(2)
+        .stdout(predicate::str::contains(
+            "initialization state: needs-input\n",
+        ))
         .stdout(predicate::str::contains("next:").not());
     let output = repo
         .cli()

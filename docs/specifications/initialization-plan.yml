@@ -31,4 +31,6 @@ validation-criteria: >-
   model` only if the model remains absent, then `apply a release process
   template`. A needs-input result omits this member. The post-commit baseline
   command precedes the handoff during takeover. Next actions are computed on
-  every run; editing them grants no authority.
+  every run; editing them grants no authority. Ready imported plans count the
+  model write in their planned takeover operations before takeover is applied.
+  The handoff follows completion of those operations.

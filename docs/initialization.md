@@ -146,7 +146,9 @@ policy; configuration omits `release-record` for this default.
 A no-op rerun does not write an absent model. In that case the output first names
 `next: intentional model`, then `next: apply a release process template`. A plan
 that needs input and an invalid repository name no handoff. A dry run describes
-the actions after its planned writes.
+the actions after its planned writes. A ready imported plan counts the model
+write in its planned takeover operations and names only the template step.
+Complete takeover before following that handoff.
 
 `init --json` returns an Initialization Plan, including on ordinary success:
 `state` is `ready`, `inferred-config` carries the configuration, and optional

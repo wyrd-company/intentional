@@ -82,7 +82,9 @@ proposed-design:
     action. If no Release Model exists after the planned operations, it first
     names `intentional model`. A no-op reconciliation leaves an absent model
     absent and names both actions in that order. A plan that needs input names
-    no release process handoff.
+    no release process handoff. A ready imported plan counts the model write in
+    its planned takeover operations before takeover is applied; its handoff names
+    only the template step, to follow completion of those operations.
     The core release protocol needs no release process: planning,
     materialization, versioning, changelog production, and verified
     establishment from a harness-created commit and Intentional-created tags

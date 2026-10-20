@@ -791,7 +791,7 @@ pub struct InitResult {
     pub contents: String,
     /// Exact operations.
     pub operations: Vec<String>,
-    /// Structured plan when adopting Changesets.
+    /// Schema-backed Initialization Plan for every successful or needs-input result.
     pub plan: Option<InitPlan>,
     writes: Vec<(PathBuf, String)>,
     deletes: Vec<PathBuf>,
@@ -857,6 +857,10 @@ impl InitResult {
                 .writes
                 .iter()
                 .any(|(path, _)| path == Path::new(crate::RELEASE_MODEL_PATH))
+            && !self.plan.as_ref().is_some_and(|plan| {
+                plan.planned_operations
+                    .contains(&format!("write {}", crate::RELEASE_MODEL_PATH))
+            })
         {
             actions.push("intentional model".to_owned());
         }
@@ -864,15 +868,12 @@ impl InitResult {
         actions
     }
 
-    /// Structured output matching the written configuration or initialization plan.
+    /// Structured Initialization Plan output.
     pub fn to_json(&self) -> Result<String> {
-        match &self.plan {
-            Some(plan) => plan.to_json(),
-            None => {
-                let config = Config::from_yaml(&self.contents)?;
-                canonical_json(&config)
-            }
-        }
+        self.plan
+            .as_ref()
+            .expect("initialization always produces a schema-backed plan")
+            .to_json()
     }
 }
 

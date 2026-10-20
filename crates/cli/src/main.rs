@@ -314,7 +314,11 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
     if args.json {
         println!("{}", result.to_json()?);
     } else {
-        println!("initialization state: {:?}", result.state);
+        let state = match result.state {
+            InitState::NeedsInput => "needs-input",
+            InitState::Ready | InitState::Success => "ready",
+        };
+        println!("initialization state: {state}");
         for operation in &result.operations {
             println!("{operation}");
         }

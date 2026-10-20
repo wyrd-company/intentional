@@ -75,7 +75,10 @@ commands:
         if the model remains absent after planned operations, it first names
         intentional model. Needs-input results name no handoff. Ordinary success
         with --json emits a ready Initialization Plan with inferred-config and
-        optional ordered next-actions. Takeover prints its post-commit baseline
+        optional ordered next-actions. A ready imported plan counts its planned
+        takeover model write before takeover is applied and names only the template.
+        Human and JSON state labels are ready or needs-input.
+        Takeover prints its post-commit baseline
         command before the handoff.
   - name: add
     summary: Author a pending Change Intent.
