@@ -19,8 +19,9 @@ validation-criteria: >-
   newline-delimited `key: value` protocol fields. Every tag record carries
   `contract`, `generator`, `plan-digest`, `tag-id`, `version`, and `baseline`;
   `tag-role`, `target`, and `prerequisites` are optional members. Scalar fields
-  occur once in schema order. Each `prerequisite: <tag-id> <tag-object>` entry follows in
-  lexical `tag-id` order. Parsing projects those repeated entries into the
+  occur once in schema order. Each `prerequisite: <tag-id> <tag-object>` entry
+  follows in lexical `tag-id` order, and each prerequisite `tag-id` occurs at
+  most once. Parsing projects those repeated entries into the
   `prerequisites` array validated by
   `docs/specifications/tag-record.schema.yml`. Canonical field names use
   kebab-case. `generator` is the line-encoded form of the Release Plan
