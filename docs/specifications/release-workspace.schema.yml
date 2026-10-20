@@ -74,6 +74,8 @@ $defs:
       Durable Azure Artifact Signing Public Trust subscriber identity Extended
       Key Usage value.
     pattern: '^1[.]3[.]6[.]1[.]4[.]1[.]311[.]97[.](?!(?:1[.]3[.]1|1[.]4[.]1)(?:[.]|$))[0-9]+(?:[.][0-9]+){3,}$'
+  tag-phase:
+    enum: [ before-publication, after-publication ]
   workspace-tag-id:
     type: string
     pattern: "^workspace/[a-z0-9][a-z0-9._-]*$"
@@ -275,6 +277,8 @@ $defs:
         enum: [ primary, projection ]
       template:
         $ref: "#/$defs/tag-template"
+      require-phase:
+        $ref: "#/$defs/tag-phase"
       tag-after:
         type: array
         uniqueItems: true
@@ -296,6 +300,8 @@ $defs:
     properties:
       template:
         $ref: "#/$defs/workspace-tag-template"
+      require-phase:
+        $ref: "#/$defs/tag-phase"
       tag-after:
         type: array
         uniqueItems: true

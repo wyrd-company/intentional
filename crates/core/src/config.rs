@@ -804,6 +804,21 @@ release-units:
             schema["$defs"]["workspace-tag"]["properties"]["tag-after"]["items"]["$ref"].as_str(),
             Some("#/$defs/tag-id")
         );
+        for tag in ["release-unit-tag", "workspace-tag"] {
+            assert_eq!(
+                schema["$defs"][tag]["properties"]["require-phase"]["$ref"].as_str(),
+                Some("#/$defs/tag-phase")
+            );
+        }
+        let phases: Vec<&str> = schema["$defs"]["tag-phase"]["enum"]
+            .as_sequence()
+            .expect("tag phase values")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        let implemented = [TagPhase::BeforePublication, TagPhase::AfterPublication]
+            .map(|phase| phase.to_string());
+        assert_eq!(phases, implemented);
     }
 
     #[test]

@@ -130,7 +130,7 @@ release commit; a channel release is recovered from its retained intents.
 If a tag requires an executor phase, declare it explicitly:
 
 ```bash
-intentional tag --plan release-plan.json --phase before-distribution
+intentional tag --plan release-plan.json --phase before-publication
 ```
 
 The phase declaration does not assert or verify publication. External

@@ -1867,15 +1867,15 @@ release-units:
       primary:
         role: primary
         template: 'package-a@{version}'
-        require-phase: before-distribution
+        require-phase: before-publication
       witness:
         role: projection
         template: 'witness@{version}'
-        require-phase: before-distribution
+        require-phase: before-publication
       mirror:
         role: projection
         template: 'mirror@{version}'
-        require-phase: after-distribution
+        require-phase: after-publication
         tag-after: [release-unit/package-a/primary]
 "#,
     );
@@ -1920,42 +1920,42 @@ release-units:
         .stderr(predicate::str::contains("no unphased release tags"));
     repository
         .cli()
-        .args(["tag", "--phase", "after-distribution"])
+        .args(["tag", "--phase", "after-publication"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("missing prerequisite tag"));
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution"])
+        .args(["tag", "--phase", "before-publication"])
         .assert()
         .success();
     repository
         .cli()
-        .args(["tag", "--phase", "after-distribution"])
+        .args(["tag", "--phase", "after-publication"])
         .assert()
         .success();
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution", "--dry-run"])
+        .args(["tag", "--phase", "before-publication", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution"])
+        .args(["tag", "--phase", "before-publication"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     repository
         .cli()
-        .args(["tag", "--phase", "after-distribution"])
+        .args(["tag", "--phase", "after-publication"])
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
     git(&repository.root, &["tag", "-d", "witness@1.1.0"]);
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution", "--dry-run"])
+        .args(["tag", "--phase", "before-publication", "--dry-run"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -1964,7 +1964,7 @@ release-units:
         .stdout(predicate::str::contains("package-a@1.1.0").not());
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution"])
+        .args(["tag", "--phase", "before-publication"])
         .assert()
         .success();
     assert_eq!(
@@ -1985,7 +1985,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution"])
+        .args(["tag", "--phase", "before-publication"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -2012,7 +2012,7 @@ release-units:
       primary:
         role: primary
         template: 'package-a@{version}'
-        require-phase: before-distribution
+        require-phase: before-publication
   package-b:
     path: packages/package-b
     projections:
@@ -2021,7 +2021,7 @@ release-units:
       primary:
         role: primary
         template: 'package-b@{version}'
-        require-phase: after-distribution
+        require-phase: after-publication
 "#,
     );
     for id in ["package-a", "package-b"] {
@@ -2050,7 +2050,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "before-distribution"])
+        .args(["tag", "--phase", "before-publication"])
         .assert()
         .success();
     assert_eq!(
@@ -2059,7 +2059,7 @@ release-units:
     );
     repository
         .cli()
-        .args(["tag", "--phase", "after-distribution"])
+        .args(["tag", "--phase", "after-publication"])
         .assert()
         .success();
     assert_eq!(

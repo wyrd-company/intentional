@@ -31,8 +31,8 @@ that authority and the repository's release procedure defines them.
 
 Do not add a `v` prefix to primary or workspace tag versions. Use one on a
 projection tag only when an ecosystem contract requires it. Do not infer
-registries, Distribution order, privacy, or
-deployment behavior from discovered manifests.
+registries, publication order, privacy, or deployment behavior from discovered
+manifests.
 
 ## Orient before changing state
 
@@ -47,7 +47,7 @@ deployment behavior from discovered manifests.
    ```
 
 4. Read `.intentional/config.yml` to identify exact release-unit ids,
-   projection modes, tag identities, and tag prerequisites.
+   projection modes, tag phases, and tag prerequisites.
 5. Use `-C PATH` or `--directory PATH` when the target is not the current
    directory. Shell redirections still resolve from the shell's directory, not
    from `-C`.
@@ -292,11 +292,19 @@ plan:
 intentional tag --plan release-plan.json
 ```
 
-Intentional verifies `tag-after` prerequisites and computes deterministic tag
-order. Tags remain local until the authorized harness pushes them. Repeating the
-same tag command validates exact existing records and creates only missing
-selected records, so dry-run verification and recovery after partial or complete
-tag creation are safe. Any record mismatch fails closed.
+If configuration requires an executor phase, pass the phase that reflects what
+the surrounding release process has actually completed:
+
+```bash
+intentional tag --plan release-plan.json --phase before-publication
+```
+
+Never claim a publication phase speculatively. Intentional verifies phase and
+`tag-after` prerequisites and computes deterministic tag order. Tags remain
+local until the authorized harness pushes them. Repeating the same tag command
+validates exact existing records and creates only missing selected records, so
+dry-run verification and recovery after partial or complete tag creation are
+safe. Any record mismatch fails closed.
 
 ## Establish baseline tags
 
@@ -364,7 +372,7 @@ between those operations.
 
 ## Diagnose failures
 
-- Run the failing command with the same `-C`, channel, and plan inputs;
+- Run the failing command with the same `-C`, channel, plan, and phase inputs;
   changing inputs can hide state divergence.
 - Rerun `status` and `check`, then inspect the named config, intent, manifest,
   changelog, plan, or tag record.

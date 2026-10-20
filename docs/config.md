@@ -46,6 +46,7 @@ release-units:
       pub:
         role: projection
         template: "sample-library-pub@{version}"
+        require-phase: before-publication
   sample-application:
     path: packages/application
     depends-on: [ sample-library ]
@@ -135,7 +136,7 @@ Common templates are:
   `sample-library@1.4.0`;
 - `{version}` for a single-release-unit repository or workspace release record.
 
-Set `require-phase` to `before-distribution` or `after-distribution` when the
+Set `require-phase` to `before-publication` or `after-publication` when the
 executor must declare the external phase before creating a tag. Set
 `tag-after` to tag ids that must already exist and agree with the planned
 commit, version, contract, and digest. Intentional rejects cycles and emits the

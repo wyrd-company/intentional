@@ -37,13 +37,14 @@ interpretation contract, Intentional version, and canonical plan digest to the
 target commit. Primary, projection, and workspace tags for one release agree
 on the version, commit, contract, and digest.
 
-A tag may declare another tag as a prerequisite. Intentional verifies those
-records and computes a deterministic tag order. The portable harness or managed
-workflow decides when Distribution and other external effects occur.
+Tags may require a `before-publication` or `after-publication` phase. A tag may
+also declare another tag as a prerequisite. Intentional verifies those
+conditions and computes a deterministic tag order; the surrounding release
+harness decides when publication and other external effects occur.
 
-The portable command-line protocol leaves commits and pushes to its surrounding
-harness. Managed workflow performs repository and Distribution operations under
-its configured GitHub authority. Tag templates do not add a `v` prefix.
+Intentional never creates commits, pushes branches or tags, publishes to a
+registry, opens pull requests, or operates a forge. `tag` is its only
+Git-writing command. Tag templates do not add a `v` prefix.
 
 ## Supported ecosystems
 
@@ -67,4 +68,4 @@ reformatting unrelated content:
 Ecosystem adapters know their native version and dependency fields. Generic
 `json`, `toml`, and `yaml` projections use an explicit pointer to an arbitrary
 version field. Discovery proves only what manifest evidence supports; it does
-not infer registries, Distribution policy, or repository-specific choreography.
+not infer registries, publication policy, or repository-specific choreography.
