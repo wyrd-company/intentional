@@ -191,15 +191,17 @@ proposed-design:
 
   schema-identity-and-versioning: >-
     The Release Model is a cross-tool contract with its own line. Its schema
-    identity is `https://intentional.foo/schemas/release-model/<major>`, and the
-    first line is `1`. Within a line, Intentional only adds optional members and
-    never changes the meaning, type, or presence rules of an existing member.
-    Every object in the schema admits members it does not define, and readers
-    ignore them. Removing, renaming, retyping, or redefining a member starts the
-    next line and is a major Intentional change. Intentional emits only the
-    current line. Authoritative YAML is
+    identity is `https://intentional.foo/schemas/release-model/<line>`, and the
+    first line is `1`. A line never changes the meaning or acceptance of
+    anything it already describes. Within a line, Intentional only adds optional
+    members, and each addition is a minor Intentional change. Every object in
+    the schema admits members it does not define, and readers ignore them.
+    Removing, renaming, retyping, or tightening a member, or changing its
+    meaning, mints the next line, `release-model/2`, and is a major Intentional
+    change. Intentional emits only the current line. Authoritative YAML is
     `docs/specifications/release-model.schema.yml`; publication serves its JSON
-    representation at the identity, following schema-and-binary-publication.
+    representation at the identity, following schema-and-binary-publication,
+    and until hosting exists readers vendor a copy.
 
   template-acceptance: >-
     A template accepts the model through a Toha document question whose
@@ -209,10 +211,11 @@ proposed-design:
     `schemas` directory, where Toha indexes each file by its `$id`. Toha
     resolves a URI from that directory first and by a hosted fetch otherwise.
     Hosted Release Model URIs do not resolve until hosting exists, so a template
-    vendors every Release Model schema it names. Because each line is open to
-    added members, a template written against an earlier copy of line `1`
-    accepts a later line `1` document. A template that supports two lines names
-    both URIs, vendors both schemas, and branches on `$schema`.
+    vendors every Release Model schema it names. A template reads only the
+    members it knows, and a line only gains optional members, so a template
+    written against an earlier copy of line `1` accepts a later line `1`
+    document. A template that supports two lines names both URIs, vendors both
+    schemas, and branches on `$schema`.
 
   toha-handoff: >-
     The release process template's document question names
