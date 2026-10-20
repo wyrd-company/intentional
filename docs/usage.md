@@ -201,7 +201,11 @@ For a baseline it checks three things:
   carries a baseline tag record for the same digest, and has the same fixed
   tagger.
 
-A tag without a tag record on an earlier commit is pre-Intentional history: it
+A stream is outside the baseline set only when its current tag carries a tag
+record on an earlier commit, has the fixed tagger, and agrees with the tag it
+occupies. Every tag record at the baseline commit is checked as a baseline tag,
+so a Release tagged at that same commit fails with `identity-tag-mismatch`. A
+tag without a tag record on an earlier commit is pre-Intentional history: it
 supplies its version, and `tag --baseline` leaves it in place, so `verify` does
 not check it as a baseline tag. A tag without a tag record at the baseline
 commit itself fails with `identity-tag-mismatch`, and a tag that only later

@@ -134,7 +134,11 @@ proposed-design:
     the complete baseline set at the tagged commit from configuration and the
     tags that commit reaches, computes the baseline digest payload under the
     tag record's generator version, and compares its digest with the
-    recorded `plan-digest` under the same advisory rule. It then checks that
+    recorded `plan-digest` under the same advisory rule. A stream leaves the
+    recomputed set only through a tag record on an earlier commit that the
+    same reader accepts: the fixed tagger, and the tag ID, version, and
+    contract of the tag it occupies. Every tag record at the baseline commit
+    stays in the set. It then checks that
     every tag that baseline establishment creates for the set carries a
     baseline tag record for the same digest at that commit under the fixed
     tagger. A tag without a tag record on an earlier commit is pre-Intentional

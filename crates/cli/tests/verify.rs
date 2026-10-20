@@ -672,6 +672,256 @@ fn verify_fails_for_a_baseline_record_outside_the_baseline_set() {
     assert_eq!(report["identity_tags"], serde_json::json!(BASELINE_TAGS));
 }
 
+/// Rewrite one tag of `baseline_repo()` with a defect.
+fn damage(repo: &TestRepo, name: &str, defect: &str) {
+    match defect {
+        "no tagger" => repo.strip_tagger(name),
+        "another tagger" => {
+            let message = repo.message(name);
+            git(&repo.root, &["tag", "-d", name]);
+            git(&repo.root, &["tag", "-a", name, "-m", &message]);
+        }
+        "baseline false" => {
+            let message = repo
+                .message(name)
+                .replace("baseline: true", "baseline: false");
+            repo.forge(name, "HEAD", &message);
+        }
+        "deleted" => {
+            git(&repo.root, &["tag", "-d", name]);
+        }
+        _ => panic!("unknown defect {defect}"),
+    }
+}
+
+/// Give the selected tag another generator version, so that its baseline
+/// digest difference is an advisory.
+fn from_another_generator(repo: &TestRepo, name: &str) {
+    let current = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
+    let message = repo
+        .message(name)
+        .replace(&current, "generator: intentional 0.0.1");
+    repo.forge(name, "HEAD", &message);
+}
+
+#[test]
+fn verify_fails_through_the_workspace_tag_when_the_primary_lost_its_tagger_and_baseline_flag() {
+    let repo = baseline_repo();
+    damage(&repo, "sample-library@1.2.3", "baseline false");
+    damage(&repo, "sample-library@1.2.3", "no tagger");
+    damage(&repo, "mirror@1.2.3", "deleted");
+    from_another_generator(&repo, "0.1.0");
+    let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+    let errors = codes(&report, "error");
+    assert!(
+        errors.contains(&"identity-tag-missing".to_owned()),
+        "{report:#}"
+    );
+    let diagnostics = report["diagnostics"].to_string();
+    assert!(
+        diagnostics.contains("sample-library@1.2.3 has unexpected tagger, baseline"),
+        "{report:#}"
+    );
+    assert_eq!(report["identity_tags"], serde_json::json!(["0.1.0"]));
+}
+
+#[test]
+fn verify_fails_through_the_primary_tag_when_the_workspace_peer_reads_baseline_false() {
+    let repo = baseline_repo();
+    damage(&repo, "0.1.0", "baseline false");
+    from_another_generator(&repo, "sample-library@1.2.3");
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
+    assert!(
+        report["diagnostics"]
+            .to_string()
+            .contains("0.1.0 has unexpected baseline"),
+        "{report:#}"
+    );
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["mirror@1.2.3", "sample-library@1.2.3"])
+    );
+}
+
+/// Every defect in a primary or workspace tag fails verification through
+/// every other selected tag, also when the selected tag names another
+/// generator version. A stream's own tags cannot take it out of the set.
+#[test]
+fn verify_fails_for_each_primary_or_workspace_defect_through_every_other_tag() {
+    for (damaged, defect, code, detail) in [
+        (
+            "sample-library@1.2.3",
+            "no tagger",
+            "identity-tag-mismatch",
+            "sample-library@1.2.3 has unexpected tagger",
+        ),
+        (
+            "sample-library@1.2.3",
+            "another tagger",
+            "identity-tag-mismatch",
+            "sample-library@1.2.3 has unexpected tagger",
+        ),
+        (
+            "sample-library@1.2.3",
+            "baseline false",
+            "identity-tag-mismatch",
+            "sample-library@1.2.3 has unexpected baseline",
+        ),
+        (
+            "sample-library@1.2.3",
+            "deleted",
+            "identity-tag-missing",
+            "sample-library@1.2.3 does not exist",
+        ),
+        (
+            "0.1.0",
+            "no tagger",
+            "identity-tag-mismatch",
+            "0.1.0 has unexpected tagger",
+        ),
+        (
+            "0.1.0",
+            "another tagger",
+            "identity-tag-mismatch",
+            "0.1.0 has unexpected tagger",
+        ),
+        (
+            "0.1.0",
+            "baseline false",
+            "identity-tag-mismatch",
+            "0.1.0 has unexpected baseline",
+        ),
+    ] {
+        for selected in BASELINE_TAGS.into_iter().filter(|tag| *tag != damaged) {
+            for another_generator in [false, true] {
+                let repo = baseline_repo();
+                damage(&repo, damaged, defect);
+                if another_generator {
+                    from_another_generator(&repo, selected);
+                }
+                let case = format!(
+                    "{damaged} {defect}, verify {selected}, another generator {another_generator}"
+                );
+                let (exit, report) = repo.verify(selected);
+                assert_eq!(exit, 1, "{case}: {report:#}");
+                assert!(
+                    codes(&report, "error").contains(&code.to_owned()),
+                    "{case}: {report:#}"
+                );
+                assert!(
+                    report["diagnostics"].to_string().contains(detail),
+                    "{case}: {report:#}"
+                );
+            }
+        }
+    }
+}
+
+/// `CONFIG` without the workspace tag's order after the primary tag, so that
+/// the workspace tag stream can be baselined alone.
+fn unordered_workspace_config() -> String {
+    let ordered = "    require-phase: after-publication\n    tag-after:\n      - release-unit/sample-library/primary\n";
+    assert!(CONFIG.contains(ordered));
+    CONFIG.replace(ordered, "    require-phase: after-publication\n")
+}
+
+/// sample-library released at 1.3.0 with its primary and mirror tags only,
+/// on `unordered_workspace_config()`; `later` commits once more after the
+/// release. Then a baseline of the workspace tag stream at HEAD.
+fn baseline_after_a_release_repo(later: bool) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.write(".intentional/config.yml", &unordered_workspace_config());
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("add fixture");
+    git(&repo.root, &["tag", "sample-library@1.2.3"]);
+    repo.intent("sample-otter-0001", "Add a sample capability.");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo.cli().arg("tag").assert().success();
+    if later {
+        repo.write("release-notes.md", "Release executor notes.\n");
+        repo.commit("record executor notes");
+    }
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+        .assert()
+        .success()
+        .stdout("create annotated tag 0.1.0\n");
+    repo
+}
+
+#[test]
+fn verify_passes_for_a_baseline_after_a_release_that_establishes_its_unit() {
+    let repo = baseline_after_a_release_repo(true);
+    assert_baseline_verified(&repo, "0.1.0", &["0.1.0"]);
+}
+
+/// A release tag record on an earlier commit establishes its unit outside
+/// the baseline only when the verifying reader accepts it. Otherwise the unit
+/// stays in the set, and its tags fail as baseline tags.
+#[test]
+fn verify_fails_for_a_baseline_whose_earlier_release_record_fails_the_verifying_reader() {
+    for (defect, field) in [
+        ("no tagger", "tagger"),
+        ("another tagger", "tagger"),
+        ("tag-id", "tag-id"),
+        ("version", "version"),
+    ] {
+        let repo = baseline_after_a_release_repo(true);
+        let release = git(&repo.root, &["rev-parse", "HEAD~1"]);
+        let name = "sample-library@1.3.0";
+        let message = repo.message(name);
+        match defect {
+            "no tagger" => repo.strip_tagger(name),
+            "another tagger" => {
+                git(&repo.root, &["tag", "-d", name]);
+                git(&repo.root, &["tag", "-a", name, "-m", &message, &release]);
+            }
+            "tag-id" => repo.forge(
+                name,
+                &release,
+                &message.replace(
+                    "tag-id: release-unit/sample-library/primary",
+                    "tag-id: release-unit/sample-library/mirror",
+                ),
+            ),
+            _ => repo.forge(
+                name,
+                &release,
+                &message.replace("version: 1.3.0", "version: 1.3.1"),
+            ),
+        }
+        let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+        let unexpected = report["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .filter_map(|diagnostic| diagnostic["message"].as_str())
+            .find(|message| {
+                message.starts_with(&format!("identity tag {name} has unexpected target"))
+            })
+            .unwrap_or_else(|| panic!("{defect}: {report:#}"))
+            .to_owned();
+        assert!(unexpected.contains(field), "{defect}: {unexpected}");
+    }
+}
+
+#[test]
+fn verify_checks_every_tag_record_at_the_baseline_commit_as_a_baseline_tag() {
+    let repo = baseline_after_a_release_repo(false);
+    let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+    assert!(
+        report["diagnostics"]
+            .to_string()
+            .contains("sample-library@1.3.0 has unexpected plan-digest, baseline"),
+        "{report:#}"
+    );
+}
+
 /// The baseline tags written by released `0.2.0` on the workspace the fixture
 /// README describes.
 #[test]

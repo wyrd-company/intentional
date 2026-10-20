@@ -1211,7 +1211,7 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
 /// baseline tag record at HEAD is a retry and stays in the baseline set;
 /// pre-Intentional history carries no tag record and stays as well. A tag
 /// record whose identity does not match the tag it occupies is refused.
-pub(crate) fn is_established(
+fn is_established(
     repository: &gix::Repository,
     name: &str,
     expected_id: &str,

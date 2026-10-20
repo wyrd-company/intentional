@@ -5,7 +5,7 @@
 
 //! Verification of a baseline tag record.
 
-use super::{check_identity_tags, Identity, Verification};
+use super::{check_identity_tags, read_tag, Identity, TagState, Tagger, Verification};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
@@ -33,15 +33,18 @@ pub(super) fn verify(
             return Ok(());
         }
     };
+    // Every tag is read in the checkout, which holds only the tags whose
+    // target the baseline commit reaches: a tag that marks later history
+    // cannot stand in for one the baseline established.
+    let history = gix::discover(checkout.root())
+        .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
     let reconstructed = Config::load(checkout.root()).and_then(|config| {
-        let snapshot = gix::discover(checkout.root())
-            .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
         let versions = baseline_versions(
             checkout.root(),
             &config,
             &BTreeMap::new(),
             &|name, id, version| {
-                crate::tag::is_established(&snapshot, name, id, version, &config.contract)
+                established_before(&history, target, &config.contract, name, id, version)
             },
         )?;
         Ok((config, versions))
@@ -93,10 +96,36 @@ pub(super) fn verify(
             version: &candidate.version,
         })
         .collect::<Vec<_>>();
-    // Tags are read in the checkout, which holds only the tags whose target
-    // the baseline commit reaches: a tag that marks later history cannot
-    // stand in for one the baseline established.
-    let history = gix::discover(checkout.root())
-        .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
     check_identity_tags(&history, tag, target, record, &identities, verification)
+}
+
+/// Whether tag `name`, the current tag of one stream, establishes that stream
+/// before the baseline commit, read through the same reader as every
+/// identity tag: a tag record on an earlier commit, under the fixed tagger,
+/// whose tag ID, version, and contract agree with the tag it occupies. A tag
+/// record at the baseline commit never establishes its stream, so that every
+/// tag record there is checked as a baseline tag. Any other tag leaves the
+/// stream in the baseline set, where the identity check judges it.
+fn established_before(
+    history: &gix::Repository,
+    baseline_commit: gix::ObjectId,
+    contract: &str,
+    name: &str,
+    id: &str,
+    version: &str,
+) -> Result<bool> {
+    Ok(match read_tag(history, name)? {
+        TagState::Recorded {
+            record,
+            target,
+            tagger,
+        } => {
+            target != baseline_commit
+                && tagger == Tagger::Fixed
+                && record.tag_id == id
+                && record.version == version
+                && record.contract == contract
+        }
+        _ => false,
+    })
 }
