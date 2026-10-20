@@ -362,38 +362,95 @@ fn json_error(error: serde_json::Error) -> Error {
     Error::Validation(format!("invalid Release Model JSON: {error}"))
 }
 
-/// Write a complete validated model, preserving an already-current file.
-/// Returns true when bytes were written. A dry run only reports that result.
+// Keep unrelated bytes, including non-UTF-8 comments and original line endings.
+// Put the dedicated rule last so later wildcard rules cannot override it.
+pub(crate) fn model_attributes(root: &Path) -> Result<Option<Vec<u8>>> {
+    let path = root.join(".gitattributes");
+    let current = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(Error::io(&path, error)),
+    };
+    let mut updated = Vec::new();
+    let mut attributes = Vec::new();
+    let lines = current
+        .split_inclusive(|byte| *byte == b'\n')
+        .collect::<Vec<_>>();
+    let model_line = lines.iter().rposition(|line| {
+        matches!(
+            line.split(|byte| byte.is_ascii_whitespace()).next(),
+            Some(b".intentional/release-model.json" | b"/.intentional/release-model.json")
+        )
+    });
+    for (index, line) in lines.iter().enumerate() {
+        if Some(index) == model_line {
+            for attribute in line.split(|byte| byte.is_ascii_whitespace()).skip(1) {
+                if attribute.is_empty() {
+                    continue;
+                }
+                let name = attribute
+                    .strip_prefix(b"-")
+                    .or_else(|| attribute.strip_prefix(b"!"))
+                    .unwrap_or(attribute);
+                let name = name.split(|byte| *byte == b'=').next().unwrap();
+                if name != b"text" && name != b"eol" && name != b"crlf" {
+                    attributes.push(attribute.to_vec());
+                }
+            }
+        } else {
+            updated.extend_from_slice(line);
+        }
+    }
+    if !updated.is_empty() && !updated.ends_with(b"\n") {
+        updated.push(b'\n');
+    }
+    updated.extend_from_slice(b".intentional/release-model.json");
+    for attribute in attributes {
+        updated.push(b' ');
+        updated.extend(attribute);
+    }
+    updated.extend_from_slice(b" text eol=lf\n");
+    Ok((updated != current).then_some(updated))
+}
+
+/// Write a complete validated model and ensure its LF checkout attribute.
+/// Returns true when either file changes. A dry run only reports that result.
 pub fn write_release_model(root: &Path, dry_run: bool) -> Result<bool> {
     let bytes = ReleaseModel::build(root)?.encode()?;
+    let attributes = model_attributes(root)?;
     let path = root.join(RELEASE_MODEL_PATH);
-    match std::fs::read(&path) {
-        Ok(current) if current == bytes.as_bytes() => return Ok(false),
-        Ok(_) => (),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+    let model_changed = match std::fs::read(&path) {
+        Ok(current) => current != bytes.as_bytes(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
         Err(error) => return Err(Error::io(&path, error)),
-    }
+    };
     if !dry_run {
-        std::fs::create_dir_all(path.parent().expect("model parent"))
-            .map_err(|error| Error::io(&path, error))?;
-        let temporary =
-            path.with_file_name(format!(".release-model-{:016x}.tmp", rand::random::<u64>()));
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| Error::io(&temporary, error))?;
-        let result = (|| {
-            file.write_all(bytes.as_bytes())
-                .map_err(|error| Error::io(&temporary, error))?;
-            drop(file);
-            std::fs::rename(&temporary, &path).map_err(|error| Error::io(&path, error))
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
+        if let Some(attributes) = &attributes {
+            let path = root.join(".gitattributes");
+            std::fs::write(&path, attributes).map_err(|error| Error::io(&path, error))?;
         }
-        result?;
+        if model_changed {
+            std::fs::create_dir_all(path.parent().expect("model parent"))
+                .map_err(|error| Error::io(&path, error))?;
+            let temporary =
+                path.with_file_name(format!(".release-model-{:016x}.tmp", rand::random::<u64>()));
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|error| Error::io(&temporary, error))?;
+            let result = (|| {
+                file.write_all(bytes.as_bytes())
+                    .map_err(|error| Error::io(&temporary, error))?;
+                drop(file);
+                std::fs::rename(&temporary, &path).map_err(|error| Error::io(&path, error))
+            })();
+            if result.is_err() {
+                let _ = std::fs::remove_file(&temporary);
+            }
+            result?;
+        }
     }
-    Ok(true)
+    Ok(model_changed || attributes.is_some())
 }

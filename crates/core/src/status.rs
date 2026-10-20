@@ -30,6 +30,14 @@ pub const RELEASE_MODEL_STALE_CODE: &str = "release-model-stale";
 /// Stable recovery action for a stale Release Model.
 pub const RELEASE_MODEL_STALE_NEXT_ACTION: &str = "intentional model";
 
+/// Shared human diagnostic for a stale Release Model, including its repair action.
+pub fn release_model_stale_message() -> String {
+    format!(
+        "[{}] .intentional/release-model.json differs from workspace inputs; run {}",
+        RELEASE_MODEL_STALE_CODE, RELEASE_MODEL_STALE_NEXT_ACTION
+    )
+}
+
 /// Version status for one release unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]

@@ -793,7 +793,7 @@ pub struct InitResult {
     pub operations: Vec<String>,
     /// Schema-backed Initialization Plan for every successful or needs-input result.
     pub plan: Option<InitPlan>,
-    writes: Vec<(PathBuf, String)>,
+    writes: Vec<(PathBuf, Vec<u8>)>,
     deletes: Vec<PathBuf>,
     proxy_removals: Vec<ProxyRemoval>,
     takeover: bool,
@@ -904,11 +904,20 @@ fn with_release_model(root: &Path, mut result: InitResult) -> Result<InitResult>
         .iter()
         .find(|(path, _)| path == Path::new(CONFIG_PATH))
     {
-        let config = Config::from_yaml(contents)?;
+        let config =
+            Config::from_yaml(std::str::from_utf8(contents).expect("generated config is UTF-8"))?;
         let model = crate::ReleaseModel::from_config(root, &config)?.encode()?;
         result
             .writes
-            .push((PathBuf::from(crate::RELEASE_MODEL_PATH), model));
+            .push((PathBuf::from(crate::RELEASE_MODEL_PATH), model.into_bytes()));
+        if let Some(attributes) = crate::release_model::model_attributes(root)? {
+            result
+                .writes
+                .push((PathBuf::from(".gitattributes"), attributes));
+            result
+                .operations
+                .insert(1, "write .gitattributes".to_owned());
+        }
         let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
         if !result.operations.contains(&operation) {
             result.operations.insert(1, operation);
@@ -952,7 +961,7 @@ fn with_release_process_handoff(root: &Path, mut result: InitResult) -> Result<I
             result.contents = plan.to_yaml()?;
             for (path, contents) in &mut result.writes {
                 if path == Path::new(INIT_PLAN_PATH) {
-                    *contents = result.contents.clone();
+                    *contents = result.contents.clone().into_bytes();
                 }
             }
         }
@@ -1071,7 +1080,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
             ],
             contents: contents.clone(),
             plan: None,
-            writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
+            writes: vec![(PathBuf::from(CONFIG_PATH), contents.into_bytes())],
             deletes: vec![PathBuf::from(INIT_PLAN_PATH)],
             proxy_removals: Vec::new(),
             takeover: false,
@@ -1115,7 +1124,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
         operations: vec![format!("write {INIT_PLAN_PATH}")],
         contents: contents.clone(),
         plan: Some(plan),
-        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents.into_bytes())],
         deletes: Vec::new(),
         proxy_removals: Vec::new(),
         takeover: false,
@@ -2112,9 +2121,12 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
                     .to_owned(),
             ));
         }
-        let mut writes = vec![(PathBuf::from(CONFIG_PATH), plan.inferred_config.to_yaml()?)];
+        let mut writes = vec![(
+            PathBuf::from(CONFIG_PATH),
+            plan.inferred_config.to_yaml()?.into_bytes(),
+        )];
         for intent in &plan.converted_intents {
-            writes.push((intent.target.clone(), intent.contents()?));
+            writes.push((intent.target.clone(), intent.contents()?.into_bytes()));
         }
         let deletes = takeover_deletes(root, &proxy_removals);
         verify_proxy_removal_preconditions(root, &proxy_removals)?;
@@ -2140,7 +2152,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         operations: vec![format!("write {INIT_PLAN_PATH}")],
         contents: contents.clone(),
         plan: Some(plan),
-        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents.into_bytes())],
         deletes: Vec::new(),
         proxy_removals,
         takeover: false,
@@ -4119,7 +4131,7 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
 
 fn verify_takeover_preconditions(
     root: &Path,
-    writes: &[(PathBuf, String)],
+    writes: &[(PathBuf, Vec<u8>)],
     expected_fingerprint: &str,
     evidence_paths: &BTreeSet<PathBuf>,
 ) -> Result<()> {
@@ -4130,7 +4142,10 @@ fn verify_takeover_preconditions(
         ));
     }
     for (relative, _) in writes {
-        if relative != Path::new(crate::RELEASE_MODEL_PATH) && root.join(relative).exists() {
+        if relative != Path::new(crate::RELEASE_MODEL_PATH)
+            && relative != Path::new(".gitattributes")
+            && root.join(relative).exists()
+        {
             return Err(Error::Validation(format!(
                 "takeover target {} already exists; resolve the competing Intentional state first",
                 relative.display()
@@ -4206,7 +4221,7 @@ fn verify_proxy_removal_preconditions(root: &Path, removals: &[ProxyRemoval]) ->
 
 fn apply_takeover_transaction(
     root: &Path,
-    writes: &[(PathBuf, String)],
+    writes: &[(PathBuf, Vec<u8>)],
     deletes: &[PathBuf],
 ) -> Result<()> {
     let transaction = root.join(TRANSACTION_PATH);

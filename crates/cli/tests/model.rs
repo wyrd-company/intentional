@@ -66,6 +66,7 @@ fn model_written_unchanged_dry_run_stdout_and_json() {
         .success()
         .stdout(predicate::str::contains("dry-run: written"));
     assert!(!repo.path().join(RELEASE_MODEL_PATH).exists());
+    assert!(!repo.path().join(".gitattributes").exists());
     let output = repo
         .cli()
         .args(["model", "--stdout"])
@@ -624,4 +625,252 @@ fn check_and_status_preserve_model_read_errors() {
         );
     }
     assert!(repo.path().join(RELEASE_MODEL_PATH).is_dir());
+}
+
+fn assert_model_attributes(repo: &Repo) {
+    let output = ProcessCommand::new("git")
+        .args(["check-attr", "text", "eol", "--", RELEASE_MODEL_PATH])
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        ".intentional/release-model.json: text: set\n.intentional/release-model.json: eol: lf\n"
+    );
+}
+
+#[test]
+fn model_repairs_only_attributes_reports_written_and_preserves_model_mtime() {
+    let repo = Repo::new();
+    repo.cli().arg("model").assert().success();
+    let model = repo.read_model();
+    let modified = fs::metadata(repo.path().join(RELEASE_MODEL_PATH))
+        .unwrap()
+        .modified()
+        .unwrap();
+    fs::remove_file(repo.path().join(".gitattributes")).unwrap();
+    repo.cli().args(["model", "--dry-run", "--json"]).assert().success()
+        .stdout("{\"dry_run\":true,\"operation\":\"written\",\"path\":\".intentional/release-model.json\"}\n");
+    assert!(!repo.path().join(".gitattributes").exists());
+    assert_eq!(repo.read_model(), model);
+    repo.cli().args(["model", "--json"]).assert().success()
+        .stdout("{\"dry_run\":false,\"operation\":\"written\",\"path\":\".intentional/release-model.json\"}\n");
+    assert_model_attributes(&repo);
+    assert_eq!(repo.read_model(), model);
+    assert_eq!(
+        fs::metadata(repo.path().join(RELEASE_MODEL_PATH))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        modified
+    );
+}
+
+#[test]
+fn model_amends_its_rule_preserving_unrelated_bytes_and_is_idempotent() {
+    let repo = Repo::new();
+    // Later wildcard attributes must not undo the model rule. Non-UTF-8 comments
+    // and CRLF in the operator's other lines must survive byte for byte.
+    let before = b"# operator \xff\r\n*.png binary\r\n.intentional/release-model.json -text eol=crlf diff\r\n*.json text eol=crlf\r\n";
+    fs::write(repo.path().join(".gitattributes"), before).unwrap();
+    repo.cli().args(["model", "--dry-run"]).assert().success();
+    repo.cli().args(["model", "--stdout"]).assert().success();
+    assert_eq!(
+        fs::read(repo.path().join(".gitattributes")).unwrap(),
+        before
+    );
+    assert!(!repo.path().join(RELEASE_MODEL_PATH).exists());
+    repo.cli().arg("model").assert().success();
+    let expected = b"# operator \xff\r\n*.png binary\r\n*.json text eol=crlf\r\n.intentional/release-model.json diff text eol=lf\n";
+    assert_eq!(
+        fs::read(repo.path().join(".gitattributes")).unwrap(),
+        expected
+    );
+    assert_model_attributes(&repo);
+    repo.cli()
+        .arg("model")
+        .assert()
+        .success()
+        .stdout("unchanged .intentional/release-model.json\n");
+    assert_eq!(
+        fs::read(repo.path().join(".gitattributes")).unwrap(),
+        expected
+    );
+}
+
+#[test]
+fn init_ensures_attributes_preserving_existing_content_and_dry_run() {
+    for original in [None, Some(b"# operator\r\n*.bin binary\r\n".as_slice())] {
+        let repo = Repo::new();
+        fs::remove_file(repo.path().join(".intentional/config.yml")).unwrap();
+        if let Some(bytes) = original {
+            fs::write(repo.path().join(".gitattributes"), bytes).unwrap();
+        }
+        resolve_init(&repo);
+        repo.cli()
+            .args(["init", "--dry-run"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("write .gitattributes"));
+        assert_eq!(
+            fs::read(repo.path().join(".gitattributes")).ok().as_deref(),
+            original
+        );
+        assert!(!repo.path().join(RELEASE_MODEL_PATH).exists());
+        repo.cli().arg("init").assert().success();
+        assert_model_attributes(&repo);
+        let expected = [
+            original.unwrap_or_default(),
+            b".intentional/release-model.json text eol=lf\n",
+        ]
+        .concat();
+        assert_eq!(
+            fs::read(repo.path().join(".gitattributes")).unwrap(),
+            expected
+        );
+        repo.cli().arg("init").assert().success();
+        assert_eq!(
+            fs::read(repo.path().join(".gitattributes")).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn real_autocrlf_checkout_is_stale_without_attributes_and_fresh_after_writer_repair() {
+    let repo = checked_repo();
+    // Establish the mechanism with real Git before using the product repair:
+    // stdout authors canonical bytes without installing attributes.
+    let canonical = repo
+        .cli()
+        .args(["model", "--stdout"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    fs::write(repo.path().join(RELEASE_MODEL_PATH), &canonical).unwrap();
+    git(repo.path(), &["config", "core.autocrlf", "true"]);
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "model without attributes"]);
+    fs::remove_file(repo.path().join(RELEASE_MODEL_PATH)).unwrap();
+    git(repo.path(), &["checkout", "--", RELEASE_MODEL_PATH]);
+    let checkout = repo.read_model();
+    println!("Git checkout -- {RELEASE_MODEL_PATH}: core.autocrlf=true, no rule; canonical={} bytes, checkout={} bytes", canonical.len(), checkout.len());
+    assert_eq!(
+        checkout,
+        String::from_utf8(canonical.clone())
+            .unwrap()
+            .replace('\n', "\r\n")
+            .as_bytes(),
+        "the forced checkout must actually produce CRLF without the rule"
+    );
+    assert_stale(&repo);
+    repo.cli().arg("model").assert().success();
+    assert_model_attributes(&repo);
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "model LF attribute"]);
+    fs::remove_file(repo.path().join(RELEASE_MODEL_PATH)).unwrap();
+    git(repo.path(), &["checkout", "--", RELEASE_MODEL_PATH]);
+    assert_eq!(
+        repo.read_model(),
+        canonical,
+        "forced checkout with the rule must retain LF"
+    );
+    println!("Git checkout -- {RELEASE_MODEL_PATH}: after writer repair and commit; LF checkout={} bytes", repo.read_model().len());
+    repo.cli().arg("check").assert().success();
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("release-model-stale").not());
+    let output = repo
+        .cli()
+        .args(["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output).unwrap()["release_model_stale"],
+        false
+    );
+}
+
+#[test]
+fn stale_check_and_human_status_share_exact_diagnostic() {
+    let repo = checked_repo();
+    repo.write(RELEASE_MODEL_PATH, "changed bytes\n");
+    let check = repo
+        .cli()
+        .arg("check")
+        .assert()
+        .code(1)
+        .get_output()
+        .stderr
+        .clone();
+    let status = repo
+        .cli()
+        .arg("status")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let check = String::from_utf8(check).unwrap();
+    let status = String::from_utf8(status).unwrap();
+    let diagnostic = check
+        .trim_end()
+        .strip_prefix("validation failed: ")
+        .unwrap();
+    assert_eq!(status.lines().next().unwrap(), diagnostic);
+    assert_eq!(diagnostic, intentional_core::release_model_stale_message());
+    assert!(diagnostic.starts_with("[release-model-stale]"));
+    assert!(diagnostic.ends_with("run intentional model"));
+}
+
+#[test]
+fn takeover_can_amend_existing_attributes_within_its_transaction() {
+    let repo = Repo::new();
+    fs::remove_file(repo.path().join(".intentional/config.yml")).unwrap();
+    repo.write(".changeset/config.json", r#"{"changelog":false,"commit":false,"fixed":[],"linked":[],"access":"public","baseBranch":"main","updateInternalDependencies":"patch","ignore":[]}"#);
+    repo.write(".gitattributes", "# operator\n*.json text eol=crlf\n");
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "fixture"]);
+    repo.cli().arg("init").assert().code(2);
+    let plan_path = repo.path().join(".intentional/init-plan.yml");
+    let mut plan: InitPlan = serde_yaml::from_slice(&fs::read(&plan_path).unwrap()).unwrap();
+    for candidate in &mut plan.discovery_candidates {
+        candidate.resolution = Some(CandidateResolution::Projection {
+            release_unit: "sample-library".to_owned(),
+            target_candidate: None,
+        });
+    }
+    fs::write(plan_path, plan.to_yaml().unwrap()).unwrap();
+    repo.cli().arg("init").assert().success();
+    let before = fs::read(repo.path().join(".gitattributes")).unwrap();
+    repo.cli()
+        .args(["init", "--take-over", "--dry-run"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(repo.path().join(".gitattributes")).unwrap(),
+        before
+    );
+    repo.cli().args(["init", "--take-over"]).assert().success();
+    assert_model_attributes(&repo);
+    assert_eq!(
+        fs::read(repo.path().join(".gitattributes")).unwrap(),
+        b"# operator\n*.json text eol=crlf\n.intentional/release-model.json text eol=lf\n"
+    );
+    assert_eq!(
+        repo.read_model(),
+        ReleaseModel::build(repo.path())
+            .unwrap()
+            .encode()
+            .unwrap()
+            .as_bytes()
+    );
 }

@@ -43,7 +43,13 @@ manifests.
 ## Keep the Release Model current
 
 Run `intentional model` after changing Release Workspace configuration or manifest
-identities. Commit `.intentional/release-model.json` with those changes. Templates
+identities. Commit `.intentional/release-model.json` and root `.gitattributes`
+with those changes. `model` and initialization ensure the rule
+`.intentional/release-model.json text eol=lf` so that Git checks out canonical LF
+bytes even with `core.autocrlf=true`. They create `.gitattributes` if absent or
+append/amend only the model rule, preserving unrelated bytes. `written` means
+either file needs a change; `unchanged` leaves both untouched. Dry-run changes
+neither file. Check and status never repair either file. Templates
 read this file, which contains inventory, projections, native identities,
 discovery sources, tag templates, dependency edges, groups, and release-record
 policy. It contains no versions, pending intents, remote, clock, or process

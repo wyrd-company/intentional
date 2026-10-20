@@ -49,9 +49,14 @@ intentional model --stdout
 intentional model --json
 ```
 
-Commit the generated file with its source changes. The command reports `written`
-or `unchanged`; an unchanged file is left untouched. `--dry-run` reports the
-operation without writing. `--stdout` prints only the canonical JSON document and
+Commit the generated file and root `.gitattributes` with the source changes.
+Both `model` and initialization ensure `.intentional/release-model.json text eol=lf`
+so that Git checks out canonical LF bytes even with `core.autocrlf=true`.
+They append or amend only the model rule and preserve unrelated bytes.
+The command reports `written` when either file needs a change, or `unchanged`
+when both are current; an unchanged model is left untouched even when its
+attribute needs repair. `--dry-run` reports the operation without writing either
+file. `--stdout` prints only the canonical JSON document and
 leaves the tree unchanged. `--json` reports `operation`, `path`, and `dry_run` as
 JSON and cannot be combined with `--stdout`. Invalid configuration or an unreadable
 projection exits with code `1` and leaves the existing model untouched.

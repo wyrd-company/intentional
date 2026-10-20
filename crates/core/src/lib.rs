@@ -55,8 +55,8 @@ pub use release_model::{
 };
 pub use stamp::StampResult;
 pub use status::{
-    Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
-    RELEASE_MODEL_STALE_CODE, RELEASE_MODEL_STALE_NEXT_ACTION,
+    release_model_stale_message, Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE,
+    MISSING_BASELINE_NEXT_ACTION, RELEASE_MODEL_STALE_CODE, RELEASE_MODEL_STALE_NEXT_ACTION,
 };
 pub use tag::{tag_record_issues, PlannedTag, TagResult};
 pub use tag_record::{

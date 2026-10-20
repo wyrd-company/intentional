@@ -379,11 +379,7 @@ fn status(root: &std::path::Path, json: bool) -> Result<()> {
         return Ok(());
     }
     if status.release_model_stale {
-        println!(
-            "[{}] .intentional/release-model.json differs from workspace inputs; run {}",
-            intentional_core::RELEASE_MODEL_STALE_CODE,
-            intentional_core::RELEASE_MODEL_STALE_NEXT_ACTION
-        );
+        println!("{}", intentional_core::release_model_stale_message());
     }
     if status.intents.is_empty() {
         println!("Pending intents: none");

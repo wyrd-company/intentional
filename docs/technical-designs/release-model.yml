@@ -176,7 +176,13 @@ proposed-design:
   command-surface: >-
     `intentional model` writes the Release Model to
     `.intentional/release-model.json` and reports `written` or `unchanged`.
-    `--dry-run` reports the operation without writing. `--stdout` writes the
+    Both model-writing entry points ensure the root `.gitattributes` rule
+    `.intentional/release-model.json text eol=lf`, creating the file if absent
+    and appending or amending only the model rule. Unrelated bytes are preserved.
+    The model rule takes precedence over other root patterns. Commit the
+    attributes file with the model. `written` means the model or its attribute
+    needed a change; `unchanged` leaves both files untouched.
+    `--dry-run` reports the operation without writing either file. `--stdout` writes the
     document to standard output and nothing to the tree. The command validates
     the Release Workspace first and writes nothing when validation fails. It
     exits `0` on success and `1` on invalid input or operational failure.
@@ -192,7 +198,11 @@ proposed-design:
     `intentional model` as the repair. An absent file is not a diagnostic,
     because a workspace without a rendered release process needs no model. A
     file that does not parse as the current Release Model contract is the same
-    stale diagnostic. `intentional status` reports the same condition.
+    stale diagnostic. `intentional status` reports the same condition through
+    the same core diagnostic formatter. Comparison uses exact working-tree
+    bytes without line-ending normalization. The writer's LF attribute keeps
+    Git checkouts fresh even with `core.autocrlf=true`; check and status do not
+    repair the model or attributes.
 
   schema-identity-and-versioning: >-
     The Release Model is a cross-tool contract with its own line. Its schema
