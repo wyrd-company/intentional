@@ -636,38 +636,39 @@ fn supplied_release_plan(
         }
         Some(_) => {}
         None => {
-            let intents = match channel {
-                Some(_) => Intent::load_all(root, config)?,
-                None => recover_deleted_intents(root, config)?.0,
-            };
-            let generator_version = Some(plan.generator.version.as_str());
-            let expected = match partial_digest {
-                Some(_) => ReleasePlan::from_inputs_before(
-                    root,
-                    config,
-                    &intents,
-                    channel,
-                    Some(
-                        repository
-                            .head_id()
-                            .map_err(|error| {
-                                Error::Git(format!("failed to resolve HEAD: {error}"))
-                            })?
-                            .detach(),
-                    ),
-                    generator_version,
-                    None,
-                )?,
-                None => ReleasePlan::from_inputs_before(
-                    root,
-                    config,
-                    &intents,
-                    channel,
-                    None,
-                    generator_version,
-                    None,
-                )?,
+            let (intents, source) = release_inputs(root, config, &repository, versions, channel)?;
+            if let Some(supplied) = &plan.source {
+                if source.as_ref() != Some(supplied) {
+                    return Err(Error::Validation(match source {
+                        Some(source) => format!(
+                            "supplied release plan source {} is not {}, the commit the release was planned from",
+                            supplied.commit, source.commit
+                        ),
+                        None => format!(
+                            "supplied release plan source {} is not the commit the release was planned from; the release commit has no parent",
+                            supplied.commit
+                        ),
+                    }));
+                }
             }
+            let excluded_target = match partial_digest {
+                Some(_) => Some(
+                    repository
+                        .head_id()
+                        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+                        .detach(),
+                ),
+                None => None,
+            };
+            let expected = ReleasePlan::from_inputs_before(
+                root,
+                config,
+                &intents,
+                channel,
+                excluded_target,
+                Some(plan.generator.version.as_str()),
+                None,
+            )?
             .with_optional_members_of(&plan)?;
             if expected != plan {
                 return Err(Error::Validation(
@@ -732,23 +733,7 @@ fn recovered_release_plan(
 ) -> Result<ReleasePlan> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-    // The release commit materializes a plan computed from its parent: the
-    // commit before the one that deleted the intents, or, for a channel
-    // release, which keeps its intents, the commit before the one that
-    // materialized the release versions.
-    let (intents, source_commit) = match channel {
-        Some(_) => (
-            Intent::load_all(root, config)?,
-            materialized_release_parent(&repository, config, versions)?,
-        ),
-        None => {
-            let (intents, parent) = recover_deleted_intents(root, config)?;
-            (intents, Some(parent))
-        }
-    };
-    let source = source_commit
-        .map(|commit| PlanSource::of_commit(&repository, commit))
-        .transpose()?;
+    let (intents, source) = release_inputs(root, config, &repository, versions, channel)?;
     let partial_digest = existing_head_release_digest(&repository, config)?;
     let excluded_target = match &partial_digest {
         Some(_) => Some(
@@ -779,6 +764,33 @@ fn recovered_release_plan(
     verify_plan_release_unit_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
     Ok(plan)
+}
+
+/// The intents and source a release commit was planned from. The release
+/// commit materializes a plan computed from its parent: the commit before the
+/// one that deleted the intents, or, for a channel release, which keeps its
+/// intents, the commit before the one that materialized the release versions.
+fn release_inputs(
+    root: &Path,
+    config: &Config,
+    repository: &gix::Repository,
+    versions: &BTreeMap<String, String>,
+    channel: Option<&str>,
+) -> Result<(Vec<Intent>, Option<PlanSource>)> {
+    let (intents, source_commit) = match channel {
+        Some(_) => (
+            Intent::load_all(root, config)?,
+            materialized_release_parent(repository, config, versions)?,
+        ),
+        None => {
+            let (intents, parent) = recover_deleted_intents(root, config)?;
+            (intents, Some(parent))
+        }
+    };
+    let source = source_commit
+        .map(|commit| PlanSource::of_commit(repository, commit))
+        .transpose()?;
+    Ok((intents, source))
 }
 
 fn plan_versions(plan: &ReleasePlan) -> Result<BTreeMap<String, String>> {

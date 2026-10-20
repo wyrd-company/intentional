@@ -1538,6 +1538,29 @@ fn accepts_sealed_plan_written_without_schema_and_source_members() {
 }
 
 #[test]
+fn rejects_supplied_plan_whose_source_is_not_the_planned_commit() {
+    for altered in ["commit", "tree"] {
+        let repo = TestRepo::new();
+        prepare_applied_release_with_plan(&repo, |mut plan| {
+            let source = plan.source.as_mut().expect("plan source");
+            match altered {
+                "commit" => source.commit = git(&repo.root, &["rev-parse", "HEAD~1"]),
+                _ => source.tree = git(&repo.root, &["rev-parse", "HEAD~1^{tree}"]),
+            }
+            reseal_plan_with_generator(plan, env!("CARGO_PKG_VERSION"))
+        });
+        repo.cli()
+            .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "the commit the release was planned from",
+            ));
+        assert!(git(&repo.root, &["tag", "--list"]).is_empty(), "{altered}");
+    }
+}
+
+#[test]
 fn rejects_supplied_plan_with_another_schema_identity() {
     let repo = TestRepo::new();
     prepare_applied_release_with_plan(&repo, |mut plan| {
