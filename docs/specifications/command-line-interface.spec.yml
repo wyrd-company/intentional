@@ -288,8 +288,8 @@ commands:
         requires:
           - baseline
         examples:
-          - example-unit:1.2.3
-          - workspace/release:1.2.3
+          - example-unit=1.2.3
+          - workspace/release=1.2.3
         value:
           type: string
           arity:
@@ -355,7 +355,7 @@ commands:
     examples:
       - intentional tag --plan release-plan.json
       - intentional tag --plan release-plan.json --phase before-publication
-      - intentional tag --baseline --version example-unit:1.2.3
+      - intentional tag --baseline --version example-unit=1.2.3
     notes:
       - Relative plan paths resolve from --directory.
       - Repeating --version for the same identity fails.
