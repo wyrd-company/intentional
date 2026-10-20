@@ -21,8 +21,9 @@ background:
     records and an update replays, and through static `data` inside the
     template. The Toha template composition design adds contract documents: a
     `type: document` question accepts a JSON value whose `$schema` member names
-    a schema the question declares, and `apply --input FILE` submits such a
-    document to every question that accepts its schema.
+    a schema the question declares, `apply --input FILE` submits such a
+    document to every question that accepts its schema, and a question can name
+    a target-relative default file that Toha reads on every apply.
   problems:
     - >-
       A template that reads `.intentional/config.yml` couples itself to the
@@ -60,12 +61,12 @@ proposed-design:
     policy, plus workspace tag streams and the fixed Intentional paths. It is a
     pure function of tracked files at one commit. The document is committed,
     and `intentional check` fails when it differs from a fresh in-memory
-    projection. A release process template declares a document question that
-    accepts the Release Model schema identity, and the operator supplies the
-    committed file with `toha apply --input .intentional/release-model.json`.
-    The Release Model has its own contract line,
-    `https://intentional.foo/schemas/release-model/1`, independent of the
-    Intentional compatibility line.
+    projection. A release process template declares a Toha document question
+    that accepts the Release Model schema identity and names
+    `.intentional/release-model.json` as its default file, so every apply and
+    update renders from the committed model. The Release Model has its own
+    contract line, `https://intentional.foo/schemas/release-model/1`,
+    independent of the Intentional compatibility line.
 
   document-role: >-
     The Release Model is a derived document, like a lockfile. Release Workspace
@@ -199,7 +200,8 @@ proposed-design:
 
   template-acceptance: >-
     A template accepts the model through a Toha document question whose schema
-    list contains a vendored copy of each Release Model schema it supports. The
+    list contains a vendored copy of each Release Model schema it supports and
+    whose default file is `.intentional/release-model.json`. The
     copy's `$id` is the published identity, so the accepted major is explicit in
     the template. Because each line is open to added members, a template written
     against an earlier copy of line `1` accepts a later line `1` document. A
@@ -207,18 +209,24 @@ proposed-design:
     `$schema`.
 
   toha-handoff: >-
-    The operator applies and updates a release process with the committed model
-    as input: `toha apply <template> . --input .intentional/release-model.json`.
-    The snapshot records the model the process was rendered from, so a later
-    comparison of the recorded and committed models shows a process that needs
-    an update. An update that omits `--input` replays the recorded model, so
-    the proposal to the Toha composition design is a document question that
-    names a default target-relative path, `.intentional/release-model.json`,
-    read on every apply when no input is supplied. Intentional never runs
-    Toha, and Toha never runs Intentional.
+    The release process template's document question names the target-relative
+    default file `.intentional/release-model.json`. Toha reads that file from
+    the working tree on every apply, update, stage, and preview, so
+    `toha apply <template> .` and every later update render from the committed
+    model and never replay the model recorded in the snapshot. A Release Model
+    submitted in the run, with `--input` or an answers document, takes the
+    place of the file for that run. When the file is missing and the run
+    submits no model, the question is unanswered: Toha asks a person for the
+    file and returns the question to a script or agent, and renders nothing
+    until it is answered. A file that is not a Release Model document the
+    question accepts is refused like any invalid answer. `intentional model` is
+    the repair for both. The snapshot records the model the process was
+    rendered from, so a comparison of the recorded and committed models shows a
+    process that needs an update. The Toha template composition design defines
+    the document question's default-file field and its resolution order.
+    Intentional never runs Toha, and Toha never runs Intentional.
 
   shared-document-crate: >-
-    Proposal for reconciliation with the Toha template composition design.
     Intentional publishes `intentional-release-model`, an IO-free crate with no
     Gitoxide, file-system, process, or network dependency. It holds
     `RELEASE_MODEL_SCHEMA_ID`, `ReleaseModel`, `ModelPaths`, `ReleaseUnitEntry`,
