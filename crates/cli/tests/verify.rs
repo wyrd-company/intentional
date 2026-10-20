@@ -695,3 +695,59 @@ fn verify_fails_for_a_peer_record_that_disagrees_on_any_identity_field() {
         );
     }
 }
+
+#[test]
+fn verify_ignores_a_record_for_an_unknown_release_unit_when_finding_a_channel_source() {
+    let repo = release_repo();
+    repo.release(&["--channel", "rc"]);
+    let message = repo.message("sample-library@1.3.0-rc.1").replace(
+        "release-unit/sample-library/primary",
+        "release-unit/aaa/primary",
+    );
+    repo.forge("unrelated@1.3.0-rc.1", "HEAD", &message);
+    assert_verified(
+        &repo,
+        "sample-library@1.3.0-rc.1",
+        &[
+            "mirror@1.3.0-rc.1",
+            "sample-library@1.3.0-rc.1",
+            "0.0.1-rc.1",
+        ],
+    );
+    assert_fails_with(&repo, "unrelated@1.3.0-rc.1", "identity-tag-mismatch");
+}
+
+#[test]
+fn verify_ignores_a_record_under_another_tag_name_when_finding_a_channel_source() {
+    let repo = release_repo();
+    repo.cli()
+        .args(["apply", "--channel", "rc"])
+        .assert()
+        .success();
+    repo.commit("apply release candidate");
+    repo.write("release-notes.md", "Release executor notes.\n");
+    repo.commit("record executor notes");
+    repo.cli()
+        .args(["tag", "--channel", "rc"])
+        .assert()
+        .success();
+    repo.cli()
+        .args(["tag", "--channel", "rc", "--phase", "after-publication"])
+        .assert()
+        .success();
+    // A record whose version names another release, under a tag name that
+    // no configured template renders for it, must not choose the source.
+    let message = repo
+        .message("sample-library@1.3.0-rc.1")
+        .replace("version: 1.3.0-rc.1", "version: 1.4.0-rc.1");
+    repo.forge("zz-unrelated@1.4.0-rc.1", "HEAD", &message);
+    assert_verified(
+        &repo,
+        "sample-library@1.3.0-rc.1",
+        &[
+            "mirror@1.3.0-rc.1",
+            "sample-library@1.3.0-rc.1",
+            "0.0.1-rc.1",
+        ],
+    );
+}

@@ -15,7 +15,7 @@ use crate::apply::ApplyResult;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
-use crate::tag::{materialized_release_parent, recover_deleted_intents};
+use crate::tag::{materialized_release_parent, recover_deleted_intents, render_tag};
 use crate::tag_record::TagRecord;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -336,7 +336,7 @@ fn reconstruct(
     let channel = channel_of(&record.version);
     let source = match channel {
         Some(_) => {
-            let versions = release_unit_versions(repository, target, &record.plan_digest)?;
+            let versions = release_unit_versions(repository, &config, target, &record.plan_digest)?;
             let release_repository = gix::discover(release.root())
                 .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
             materialized_release_parent(&release_repository, &config, &versions)?.ok_or_else(
@@ -358,8 +358,12 @@ fn channel_of(version: &str) -> Option<&str> {
 }
 
 /// Release Unit versions from the tag records at `target` that carry `digest`.
+/// A record counts only when its tag ID names a configured Release Unit tag
+/// whose template renders the tag's own name at the recorded version, and
+/// when Intentional tagged it; any other tag at the commit is ignored.
 fn release_unit_versions(
     repository: &gix::Repository,
+    config: &Config,
     target: gix::ObjectId,
     digest: &str,
 ) -> Result<BTreeMap<String, String>> {
@@ -378,23 +382,37 @@ fn release_unit_versions(
             continue;
         }
         let name = reference.name().shorten().to_string();
-        let TagState::Recorded { record, .. } = read_tag(repository, &name)? else {
+        let TagState::Recorded {
+            record,
+            tagger: Tagger::Fixed,
+            ..
+        } = read_tag(repository, &name)?
+        else {
             continue;
         };
         if record.baseline || record.plan_digest != digest {
             continue;
         }
-        if let Some((release_unit, _)) = record
+        let Some((release_unit, tag_id)) = record
             .tag_id
             .strip_prefix("release-unit/")
             .and_then(|rest| rest.rsplit_once('/'))
+        else {
+            continue;
+        };
+        let configured = config
+            .release_units
+            .get(release_unit)
+            .and_then(|unit| unit.tags.get(tag_id));
+        if configured
+            .is_some_and(|tag| render_tag(&tag.template, release_unit, &record.version) == name)
         {
             versions.insert(release_unit.to_owned(), record.version.clone());
         }
     }
     if versions.is_empty() {
         return Err(Error::Validation(format!(
-            "no Release Unit tag record at {target} carries plan digest {digest}"
+            "no configured Release Unit tag at {target} carries plan digest {digest}"
         )));
     }
     Ok(versions)

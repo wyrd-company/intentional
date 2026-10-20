@@ -875,7 +875,10 @@ pub(crate) fn materialized_release_parent(
         .iter()
         .next()
         .ok_or_else(|| Error::Validation("no applied release is available to tag".to_owned()))?;
-    let changelog = config.release_units[release_unit_id]
+    let changelog = config
+        .release_units
+        .get(release_unit_id)
+        .ok_or_else(|| Error::Validation(format!("unknown release unit {release_unit_id}")))?
         .path
         .components()
         .filter(|component| matches!(component, std::path::Component::Normal(_)))
@@ -1305,7 +1308,7 @@ fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::Signa
     })
 }
 
-fn render_tag(template: &str, id: &str, version: &str) -> String {
+pub(crate) fn render_tag(template: &str, id: &str, version: &str) -> String {
     template.replace("{id}", id).replace("{version}", version)
 }
 
