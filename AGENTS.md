@@ -13,7 +13,11 @@ Intentional is an intent-driven polyglot release and versioning tool.
 ## Commands
 
 Use `task --list` to discover repository commands. Run `task check` before
-handoff.
+handoff; it is the full continuous-integration gate.
+
+Check this repository with the workspace binary: `task self-check` runs
+`intentional check` built from this checkout. The ambient `intentional` on
+`PATH` is a released version and does not know unreleased configuration.
 
 ## Repository conventions
 
