@@ -733,12 +733,13 @@ fn recovered_release_plan(
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     // The release commit materializes a plan computed from its parent: the
-    // commit before the one that deleted the intents, or HEAD's first parent
-    // for a channel release, which keeps its intents.
+    // commit before the one that deleted the intents, or, for a channel
+    // release, which keeps its intents, the commit before the one that
+    // materialized the release versions.
     let (intents, source_commit) = match channel {
         Some(_) => (
             Intent::load_all(root, config)?,
-            head_first_parent(&repository)?,
+            materialized_release_parent(&repository, config, versions)?,
         ),
         None => {
             let (intents, parent) = recover_deleted_intents(root, config)?;
@@ -849,12 +850,66 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
     Ok(())
 }
 
-fn head_first_parent(repository: &gix::Repository) -> Result<Option<gix::ObjectId>> {
-    let head = repository
+/// Parent of the first-parent commit that materialized the release: walking
+/// back from HEAD, the first commit whose parent does not lead a releasing
+/// unit's changelog with that unit's release version. `None` when the
+/// materializing commit has no parent.
+fn materialized_release_parent(
+    repository: &gix::Repository,
+    config: &Config,
+    versions: &BTreeMap<String, String>,
+) -> Result<Option<gix::ObjectId>> {
+    let (release_unit_id, version) = versions
+        .iter()
+        .next()
+        .ok_or_else(|| Error::Validation("no applied release is available to tag".to_owned()))?;
+    let changelog = config.release_units[release_unit_id]
+        .path
+        .components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .collect::<std::path::PathBuf>()
+        .join("CHANGELOG.md");
+    let mut release = repository
         .head_commit()
         .map_err(|error| Error::Git(format!("failed to resolve HEAD commit: {error}")))?;
-    let parent = head.parent_ids().next().map(|id| id.detach());
-    Ok(parent)
+    loop {
+        let Some(parent_id) = release.parent_ids().next() else {
+            return Ok(None);
+        };
+        let parent = parent_id
+            .object()
+            .map_err(|error| Error::Git(format!("failed to read release parent: {error}")))?
+            .try_into_commit()
+            .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
+        if changelog_version_at(&parent, &changelog)?.as_deref() != Some(version.as_str()) {
+            return Ok(Some(parent.id));
+        }
+        release = parent;
+    }
+}
+
+/// Leading changelog version of the file at `path` in `commit`, or `None` when
+/// the file is absent or leads with no version.
+fn changelog_version_at(commit: &gix::Commit<'_>, path: &Path) -> Result<Option<String>> {
+    let tree = commit
+        .tree()
+        .map_err(|error| Error::Git(format!("failed to read commit tree: {error}")))?;
+    let Some(entry) = tree
+        .lookup_entry_by_path(path)
+        .map_err(|error| Error::Git(format!("failed to look up {}: {error}", path.display())))?
+    else {
+        return Ok(None);
+    };
+    let object = entry
+        .object()
+        .map_err(|error| Error::Git(format!("failed to read {}: {error}", path.display())))?;
+    let Ok(text) = std::str::from_utf8(&object.data) else {
+        return Ok(None);
+    };
+    Ok(leading_changelog_version(text)
+        .ok()
+        .flatten()
+        .map(|version| version.to_string()))
 }
 
 /// Intents deleted by the latest first-parent commit that deleted any, with
