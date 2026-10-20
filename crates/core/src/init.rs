@@ -1640,7 +1640,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
             diagnostics.push(InitDiagnostic {
                 id: "private-package-tagging".to_owned(),
                 code: "private-package-tagging".to_owned(),
-                message: "Changesets suppresses private-package tags; Intentional creates annotated records for every managed release unit, independently from publication privacy.".to_owned(),
+                message: "Changesets suppresses private-package tags; Intentional creates annotated tag records for every managed release unit, independently from publication privacy.".to_owned(),
                 evidence: vec![config_evidence.clone()],
                 choices: vec!["intentional".to_owned()],
                 recommended: Some("intentional".to_owned()),

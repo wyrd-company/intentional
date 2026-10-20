@@ -3,7 +3,7 @@
 //   implements: tag-record
 // ---
 
-//! Annotated release records and baseline establishment.
+//! Annotated tag records and baseline establishment.
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -123,7 +123,7 @@ impl TagResult {
         match existing_tag_set_digest(&git, &config, &versions, false)? {
             Some(existing) if existing != plan.digest => {
                 return Err(Error::Validation(
-                    "release plan disagrees with existing release records".to_owned(),
+                    "release plan disagrees with existing tag records".to_owned(),
                 ));
             }
             _ => {}
@@ -221,7 +221,7 @@ impl TagResult {
         }
         if versions.is_empty() {
             return Err(Error::Validation(
-                "every release unit and workspace tag is already established by an Intentional record; nothing to baseline"
+                "every release unit and workspace tag is already established by a tag record; nothing to baseline"
                     .to_owned(),
             ));
         }
@@ -329,7 +329,7 @@ impl TagResult {
                     continue;
                 }
                 return Err(Error::Validation(format!(
-                    "existing tag {} is not an annotated Intentional record",
+                    "existing tag {} carries no annotated tag record",
                     candidate.name
                 )));
             }
@@ -637,7 +637,7 @@ fn supplied_release_plan(
     match existing_tag_set_digest(&repository, config, &plan_versions, false)? {
         Some(existing) if existing != plan.digest => {
             return Err(Error::Validation(
-                "supplied release plan disagrees with existing release records".to_owned(),
+                "supplied release plan disagrees with existing tag records".to_owned(),
             ));
         }
         Some(_) => {}
@@ -762,7 +762,7 @@ fn recovered_release_plan(
         .is_some_and(|digest| digest != &plan.digest)
     {
         return Err(Error::Validation(
-            "existing release records disagree with the recovered release plan".to_owned(),
+            "existing tag records disagree with the recovered release plan".to_owned(),
         ));
     }
     verify_plan_release_unit_versions(versions, &plan)?;
@@ -1040,8 +1040,8 @@ fn missing_record_field(fields: &BTreeMap<String, String>) -> Option<&'static st
         .find(|required| !fields.contains_key(*required))
 }
 
-/// Whether `fields` carries any Intentional record field, i.e. whether the tag
-/// claims to be an Intentional record at all.
+/// Whether `fields` carries any tag record field, i.e. whether the tag claims
+/// to carry a tag record at all.
 fn carries_record_field(fields: &BTreeMap<String, String>) -> bool {
     RECORD_FIELDS
         .into_iter()
@@ -1088,20 +1088,20 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
         return Ok(Some(ParsedTagRecord { target, fields }));
     };
     if !carries_record_field(&fields) {
-        // Pre-Intentional history: an annotated tag with no Intentional record
-        // field at all is tolerated exactly like a lightweight tag.
+        // Pre-Intentional history: an annotated tag with no tag record field
+        // at all is tolerated exactly like a lightweight tag.
         return Ok(None);
     }
     Err(Error::Validation(format!(
-        "annotated tag {name} is missing Intentional record field {missing}"
+        "annotated tag {name} is missing tag record field {missing}"
     )))
 }
 
-/// Whether tag `name` is an Intentional record that a baseline must leave
-/// alone: a release record, or a baseline record on an earlier commit. A
-/// baseline record at HEAD is a retry and stays in the baseline set;
-/// pre-Intentional history carries no record and stays as well. A record
-/// whose identity does not match the tag it occupies is refused.
+/// Whether tag `name` carries a tag record that a baseline must leave alone:
+/// a non-baseline tag record, or a baseline tag record on an earlier commit. A
+/// baseline tag record at HEAD is a retry and stays in the baseline set;
+/// pre-Intentional history carries no tag record and stays as well. A tag
+/// record whose identity does not match the tag it occupies is refused.
 fn is_established(
     repository: &gix::Repository,
     name: &str,

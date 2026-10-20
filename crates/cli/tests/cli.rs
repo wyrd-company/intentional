@@ -1612,7 +1612,7 @@ fn annotated_tag_with_partial_intentional_record_is_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "annotated tag sample@1.0.0 is missing Intentional record field",
+            "annotated tag sample@1.0.0 is missing tag record field",
         ));
 }
 
@@ -1645,6 +1645,6 @@ fn release_tagging_still_refuses_a_recordless_tag_at_the_release_version() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "existing tag mirror@1.0.1 is not an annotated Intentional record",
+            "existing tag mirror@1.0.1 carries no annotated tag record",
         ));
 }

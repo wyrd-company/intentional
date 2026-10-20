@@ -47,7 +47,7 @@ pub struct WorkspaceStatus {
     pub drift: Vec<Drift>,
     /// Release units whose primary baseline tag has not been established.
     pub missing_baselines: Vec<String>,
-    /// Recoverable missing or inconsistent annotated release records.
+    /// Recoverable missing or inconsistent annotated tag records.
     pub tag_record_issues: Vec<String>,
 }
 

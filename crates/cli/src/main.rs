@@ -46,7 +46,7 @@ enum Command {
     Apply(ChannelDryRunArgs),
     /// Write computed versions into injected projections only.
     Stamp(StampArgs),
-    /// Create annotated release records or establish baseline tags.
+    /// Create annotated tag records or establish baseline tags.
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,

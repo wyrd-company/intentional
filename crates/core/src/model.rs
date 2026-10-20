@@ -90,7 +90,7 @@ pub enum ReleaseUnitDisposition {
 pub enum TagRole {
     /// The single tag stream used to discover the release unit's current version.
     Primary,
-    /// An additional release record carrying the same logical version.
+    /// An additional tag carrying the same logical version.
     Projection,
 }
 
