@@ -4803,6 +4803,10 @@ release-units:
             .contains("may only contain schema, contract, settings, and release-units"));
 
         plan.inferred_config.discovery.excluded_paths.clear();
+        plan.inferred_config.schema = Some(LEGACY_CONFIG_SCHEMA.to_owned());
+        plan.validate()
+            .expect("an initialization plan written with the released schema value stays valid");
+
         plan.inferred_config.schema = Some("https://example.invalid/config.yml".to_owned());
         assert!(plan
             .validate()
