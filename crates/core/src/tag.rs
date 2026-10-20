@@ -37,10 +37,14 @@ pub struct TagResult {
     pub tags: Vec<PlannedTag>,
 }
 
+/// One configured tag rendered at the version of its Release Unit or
+/// workspace tag.
 #[derive(Debug, Clone)]
-struct TagCandidate {
-    name: String,
-    version: String,
+pub(crate) struct TagCandidate {
+    /// Rendered Git tag name.
+    pub(crate) name: String,
+    /// Version the tag records.
+    pub(crate) version: String,
     required_phase: Option<TagPhase>,
     prerequisites: Vec<String>,
 }
@@ -125,97 +129,9 @@ impl TagResult {
     /// Infer and plan initial annotated baseline tags.
     pub fn build_baseline(root: &Path, explicit: &BTreeMap<String, Version>) -> Result<Self> {
         let config = Config::load(root)?;
-        let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-        let mut versions = BTreeMap::new();
-        for (id, release_unit) in &config.release_units {
-            let (primary_id, primary) = config.primary_tag(id)?;
-            if repository.has_matching_tag(id, &primary.template)? {
-                let version = repository
-                    .current_version(id, &primary.template)?
-                    .to_string();
-                if !is_established(
-                    &git,
-                    &render_tag(&primary.template, id, &version),
-                    &Config::release_unit_tag_id(id, primary_id),
-                    &version,
-                    &config.contract,
-                )? {
-                    versions.insert(id.clone(), version);
-                }
-                continue;
-            }
-            let mut evidence = Vec::new();
-            for projection in &release_unit.projections {
-                if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
-                    continue;
-                }
-                let relative = release_unit.path.join(&projection.file);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| Error::io(root.join(&relative), error))?;
-                evidence.push((
-                    relative.clone(),
-                    read_projection_version(root, &relative, projection, &text)?,
-                ));
-            }
-            let version = match (evidence.first(), explicit.get(id)) {
-                (None, None) => {
-                    return Err(Error::Validation(format!(
-                        "tag-only release unit {id} requires --version {id}=X.Y.Z"
-                    )))
-                }
-                (None, Some(version)) => version.clone(),
-                (Some((_, first)), explicit_version) => {
-                    if evidence.iter().any(|(_, version)| version != first) {
-                        let detail = evidence
-                            .iter()
-                            .map(|(path, version)| format!("{}={version}", path.display()))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        return Err(Error::Validation(format!(
-                            "baseline projections disagree for {id}: {detail}"
-                        )));
-                    }
-                    let inferred = Version::parse(first)?;
-                    if explicit_version.is_some_and(|version| version != &inferred) {
-                        return Err(Error::Validation(format!(
-                            "explicit baseline for {id} disagrees with projection evidence {inferred}"
-                        )));
-                    }
-                    inferred
-                }
-            };
-            versions.insert(id.clone(), version.to_string());
-        }
-        for (id, tag) in &config.workspace_tags {
-            let canonical = Config::workspace_tag_id(id);
-            if repository.has_matching_tag(id, &tag.template)? {
-                let version = repository.current_version(id, &tag.template)?.to_string();
-                if !is_established(
-                    &git,
-                    &render_tag(&tag.template, id, &version),
-                    &canonical,
-                    &version,
-                    &config.contract,
-                )? {
-                    versions.insert(canonical, version);
-                }
-                continue;
-            }
-            let version = explicit.get(&canonical).ok_or_else(|| {
-                Error::Validation(format!(
-                    "workspace tag {id} requires --version {canonical}=X.Y.Z"
-                ))
-            })?;
-            versions.insert(canonical, version.to_string());
-        }
-        if versions.is_empty() {
-            return Err(Error::Validation(
-                "every release unit and workspace tag is already established by a tag record; nothing to baseline"
-                    .to_owned(),
-            ));
-        }
+        let versions = baseline_versions(root, &config, explicit)?;
         let digest = match existing_tag_set_digest(&git, &config, &versions, true)? {
             Some(existing) => existing,
             None => baseline_digest(&config.contract, crate::VERSION, &versions)?,
@@ -231,39 +147,7 @@ impl TagResult {
         baseline: bool,
         digest: &str,
     ) -> Result<Self> {
-        let mut candidates = BTreeMap::<String, TagCandidate>::new();
-        for (release_unit_id, version) in versions {
-            let Some(release_unit) = config.release_units.get(release_unit_id) else {
-                continue;
-            };
-            for (tag_id, tag) in &release_unit.tags {
-                let canonical = Config::release_unit_tag_id(release_unit_id, tag_id);
-                candidates.insert(
-                    canonical,
-                    TagCandidate {
-                        name: render_tag(&tag.template, release_unit_id, version),
-                        version: version.clone(),
-                        required_phase: tag.require_phase,
-                        prerequisites: tag.tag_after.clone(),
-                    },
-                );
-            }
-        }
-        for (tag_id, tag) in &config.workspace_tags {
-            let canonical = Config::workspace_tag_id(tag_id);
-            let Some(version) = versions.get(&canonical) else {
-                continue;
-            };
-            candidates.insert(
-                canonical,
-                TagCandidate {
-                    name: render_tag(&tag.template, tag_id, version),
-                    version: version.clone(),
-                    required_phase: tag.require_phase,
-                    prerequisites: tag.tag_after.clone(),
-                },
-            );
-        }
+        let candidates = tag_candidates(config, versions);
         let selected = if baseline {
             candidates.clone()
         } else {
@@ -402,6 +286,150 @@ impl TagResult {
         }
         Ok(())
     }
+}
+
+/// Every configured tag of the Release Units and workspace tags in `versions`,
+/// keyed by canonical tag ID, rendered at its version.
+pub(crate) fn tag_candidates(
+    config: &Config,
+    versions: &BTreeMap<String, String>,
+) -> BTreeMap<String, TagCandidate> {
+    let mut candidates = BTreeMap::<String, TagCandidate>::new();
+    for (release_unit_id, version) in versions {
+        let Some(release_unit) = config.release_units.get(release_unit_id) else {
+            continue;
+        };
+        for (tag_id, tag) in &release_unit.tags {
+            let canonical = Config::release_unit_tag_id(release_unit_id, tag_id);
+            candidates.insert(
+                canonical,
+                TagCandidate {
+                    name: render_tag(&tag.template, release_unit_id, version),
+                    version: version.clone(),
+                    required_phase: tag.require_phase,
+                    prerequisites: tag.tag_after.clone(),
+                },
+            );
+        }
+    }
+    for (tag_id, tag) in &config.workspace_tags {
+        let canonical = Config::workspace_tag_id(tag_id);
+        let Some(version) = versions.get(&canonical) else {
+            continue;
+        };
+        candidates.insert(
+            canonical,
+            TagCandidate {
+                name: render_tag(&tag.template, tag_id, version),
+                version: version.clone(),
+                required_phase: tag.require_phase,
+                prerequisites: tag.tag_after.clone(),
+            },
+        );
+    }
+    candidates
+}
+
+/// The complete baseline set at HEAD: every Release Unit and canonical
+/// workspace tag ID that no tag record establishes, at the version a matching
+/// tag, its projections, or `explicit` supplies.
+pub(crate) fn baseline_versions(
+    root: &Path,
+    config: &Config,
+    explicit: &BTreeMap<String, Version>,
+) -> Result<BTreeMap<String, String>> {
+    let repository = VersionRepository::discover(root)?;
+    let git = gix::discover(root)
+        .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+    let mut versions = BTreeMap::new();
+    for (id, release_unit) in &config.release_units {
+        let (primary_id, primary) = config.primary_tag(id)?;
+        if repository.has_matching_tag(id, &primary.template)? {
+            let version = repository
+                .current_version(id, &primary.template)?
+                .to_string();
+            if !is_established(
+                &git,
+                &render_tag(&primary.template, id, &version),
+                &Config::release_unit_tag_id(id, primary_id),
+                &version,
+                &config.contract,
+            )? {
+                versions.insert(id.clone(), version);
+            }
+            continue;
+        }
+        let mut evidence = Vec::new();
+        for projection in &release_unit.projections {
+            if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
+                continue;
+            }
+            let relative = release_unit.path.join(&projection.file);
+            let text = std::fs::read_to_string(root.join(&relative))
+                .map_err(|error| Error::io(root.join(&relative), error))?;
+            evidence.push((
+                relative.clone(),
+                read_projection_version(root, &relative, projection, &text)?,
+            ));
+        }
+        let version = match (evidence.first(), explicit.get(id)) {
+            (None, None) => {
+                return Err(Error::Validation(format!(
+                    "tag-only release unit {id} requires --version {id}=X.Y.Z"
+                )))
+            }
+            (None, Some(version)) => version.clone(),
+            (Some((_, first)), explicit_version) => {
+                if evidence.iter().any(|(_, version)| version != first) {
+                    let detail = evidence
+                        .iter()
+                        .map(|(path, version)| format!("{}={version}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(Error::Validation(format!(
+                        "baseline projections disagree for {id}: {detail}"
+                    )));
+                }
+                let inferred = Version::parse(first)?;
+                if explicit_version.is_some_and(|version| version != &inferred) {
+                    return Err(Error::Validation(format!(
+                        "explicit baseline for {id} disagrees with projection evidence {inferred}"
+                    )));
+                }
+                inferred
+            }
+        };
+        versions.insert(id.clone(), version.to_string());
+    }
+    for (id, tag) in &config.workspace_tags {
+        let canonical = Config::workspace_tag_id(id);
+        if repository.has_matching_tag(id, &tag.template)? {
+            let version = repository.current_version(id, &tag.template)?.to_string();
+            if !is_established(
+                &git,
+                &render_tag(&tag.template, id, &version),
+                &canonical,
+                &version,
+                &config.contract,
+            )? {
+                versions.insert(canonical, version);
+            }
+            continue;
+        }
+        let version = explicit.get(&canonical).ok_or_else(|| {
+            Error::Validation(format!(
+                "workspace tag {id} requires --version {canonical}=X.Y.Z"
+            ))
+        })?;
+        versions.insert(canonical, version.to_string());
+    }
+    if versions.is_empty() {
+        return Err(Error::Validation(
+            "every release unit and workspace tag is already established by a tag record; nothing to baseline"
+                .to_owned(),
+        ));
+    }
+    Ok(versions)
 }
 
 #[allow(clippy::too_many_arguments)]
