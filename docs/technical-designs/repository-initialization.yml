@@ -75,11 +75,11 @@ proposed-design:
   release-process-handoff: >-
     Initialization configures no release process and never runs a template
     tool. Each Release Unit it creates takes the default `required`
-    release-record policy; initialization never proposes `none`. Reconciliation
-    keeps an existing Release Model current, as the Release Model design's
-    command surface requires. A ready plan for a workspace with no committed Release Model
-    names `intentional model` and a release process template as the next
-    actions. The core release protocol needs no release process: planning,
+    release-record policy; initialization never proposes `none`. Whenever
+    initialization writes `.intentional/config.yml`, it writes the Release Model
+    in the same operation set, as the Release Model design's command surface
+    requires. A ready plan names a release process template as the next action.
+    The core release protocol needs no release process: planning,
     materialization, versioning, changelog production, and verified
     establishment from a harness-created commit and Intentional-created tags
     remain available without one.

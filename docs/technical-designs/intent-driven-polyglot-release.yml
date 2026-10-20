@@ -73,8 +73,8 @@ proposed-design:
   implementation-topology: >-
     A Rust core library implements the domain model, deterministic computation,
     adapters, canonical records, and validation. A thin Rust command-line binary
-    exposes those operations and embeds its agent-facing usage skill. The
-    IO-free `intentional-release-model` crate holds the Release Model types for
-    Intentional and its readers. Published schemas define configuration, Change
-    Intents, Initialization Plans, Release Plans, tag records, and the Release
-    Model. The setup Action installs an exact released binary.
+    exposes those operations and embeds its agent-facing usage skill. Published
+    schemas define configuration, Change Intents, Initialization Plans, Release
+    Plans, tag records, and the Release Model; tools that read the Release Model
+    validate it against its schema and link no Intentional crate. The setup
+    Action installs an exact released binary.
