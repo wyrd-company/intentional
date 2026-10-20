@@ -333,7 +333,7 @@ pub(crate) fn lower_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod schema_tests {
     #[test]
-    fn published_release_plan_schema_carries_shared_and_managed_contracts() {
+    fn published_release_plan_schema_carries_only_release_contracts() {
         let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
             "../../../docs/specifications/release-plan.schema.yml"
         ))
@@ -341,36 +341,23 @@ mod schema_tests {
         let required = schema["required"]
             .as_sequence()
             .expect("required release-plan fields");
-        for field in [
-            "$schema",
-            "source",
-            "workflow",
-            "packages",
-            "custom-release-gates",
-        ] {
+        for field in ["$schema", "source", "release-units", "tags", "tag-order"] {
             assert!(required.iter().any(|value| value.as_str() == Some(field)));
         }
-        assert!(required
-            .iter()
-            .any(|value| value.as_str() == Some("release-units")));
+        for field in ["workflow", "packages", "custom-release-gates"] {
+            assert!(schema["properties"].get(field).is_none(), "{field}");
+        }
         assert!(schema["properties"].get("release_units").is_none());
+        let release_unit = &schema["$defs"]["release-unit"];
         assert_eq!(
-            schema["$defs"]["release-unit"]["properties"]["id"]["$ref"].as_str(),
+            release_unit["properties"]["id"]["$ref"].as_str(),
             Some("#/$defs/stable-id")
         );
+        assert!(release_unit["properties"].get("release-record").is_none());
         assert_eq!(
-            schema["$defs"]["package"]["properties"]["recipe"]["$ref"].as_str(),
-            Some("#/$defs/resolved-recipe")
+            schema["$defs"]["tag"]["properties"]["require-phase"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-phase")
         );
-        let workflow_variants = schema["$defs"]["workflow"]["oneOf"]
-            .as_sequence()
-            .expect("workflow adoption variants");
-        assert_eq!(workflow_variants.len(), 2);
-        assert!(workflow_variants[1]["required"]
-            .as_sequence()
-            .expect("adopted workflow fields")
-            .iter()
-            .any(|value| value.as_str() == Some("security-posture")));
     }
 }
 

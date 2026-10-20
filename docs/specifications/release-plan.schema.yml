@@ -12,10 +12,7 @@ required:
   - digest
   - generator
   - source
-  - workflow
   - release-units
-  - packages
-  - custom-release-gates
   - tags
   - tag-order
 properties:
@@ -29,24 +26,12 @@ properties:
     $ref: "#/$defs/source"
   channel:
     $ref: "#/$defs/channel"
-  workflow:
-    $ref: "#/$defs/workflow"
   release-units:
     type: array
     minItems: 1
     uniqueItems: true
     items:
       $ref: "#/$defs/release-unit"
-  packages:
-    type: array
-    uniqueItems: true
-    items:
-      $ref: "#/$defs/package"
-  custom-release-gates:
-    type: array
-    uniqueItems: true
-    items:
-      $ref: "#/$defs/custom-release-gate"
   tags:
     type: array
     minItems: 1
@@ -59,60 +44,9 @@ properties:
     uniqueItems: true
     items:
       $ref: "#/$defs/tag-id"
-allOf:
-  - if:
-      properties:
-        workflow:
-          properties:
-            adoption:
-              const: adopted
-          required: [ adoption ]
-    then:
-      properties:
-        release-units:
-          items:
-            allOf:
-              - $ref: "#/$defs/release-unit"
-              - required: [ release-record ]
-        packages:
-          items:
-            allOf:
-              - $ref: "#/$defs/package"
-              - required: [ artifact-expectations, distribution-targets ]
-    else:
-      properties:
-        release-units:
-          items:
-            allOf:
-              - $ref: "#/$defs/release-unit"
-              - not:
-                  required: [ release-record ]
-        custom-release-gates:
-          maxItems: 0
-        packages:
-          items:
-            allOf:
-              - $ref: "#/$defs/package"
-              - not:
-                  anyOf:
-                    - required: [ artifact-expectations ]
-                    - required: [ distribution-targets ]
 $defs:
   stable-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
-  exact-path:
-    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
-  relative-root-path:
-    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/relative-root-path"
-  resolved-recipe:
-    type: object
-    additionalProperties: false
-    required: [ id, configuration ]
-    properties:
-      id:
-        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/recipe-selector"
-      configuration:
-        type: object
   digest:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
@@ -143,59 +77,6 @@ $defs:
         $ref: "#/$defs/git-object"
       tree:
         $ref: "#/$defs/git-object"
-  setting-requirement:
-    type: object
-    additionalProperties: false
-    required: [ id, scope, configuration ]
-    properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      scope:
-        $ref: "#/$defs/stable-id"
-      configuration:
-        type: object
-  workflow:
-    oneOf:
-      - type: object
-        additionalProperties: false
-        required: [ adoption ]
-        properties:
-          adoption:
-            const: declined
-      - type: object
-        additionalProperties: false
-        required:
-          - adoption
-          - provider
-          - global-tag
-          - security-posture
-          - required-settings
-          - removed-controls
-          - guarantees
-        properties:
-          adoption:
-            const: adopted
-          provider:
-            const: github
-          global-tag:
-            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workspace-tag-id"
-          security-posture:
-            $ref: "#/$defs/stable-id"
-          required-settings:
-            type: array
-            uniqueItems: true
-            items:
-              $ref: "#/$defs/setting-requirement"
-          removed-controls:
-            type: array
-            uniqueItems: true
-            items:
-              $ref: "#/$defs/stable-id"
-          guarantees:
-            type: array
-            uniqueItems: true
-            items:
-              $ref: "#/$defs/stable-id"
   release-unit:
     type: object
     additionalProperties: false
@@ -230,164 +111,6 @@ $defs:
       release-notes:
         type: string
         minLength: 1
-      release-record:
-        $ref: "#/$defs/release-record-expectation"
-  release-record-expectation:
-    type: object
-    additionalProperties: false
-    required: [ tag-id, tag-name, version, prerelease ]
-    properties:
-      tag-id:
-        $ref: "#/$defs/tag-id"
-      tag-name:
-        type: string
-        minLength: 1
-      version:
-        $ref: "#/$defs/semver"
-      prerelease:
-        type: boolean
-  artifact-expectation:
-    type: object
-    additionalProperties: false
-    required: [ id, kind, identity ]
-    properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      kind:
-        $ref: "#/$defs/stable-id"
-      identity:
-        type: object
-      variant:
-        type: object
-      prerequisite-artifacts:
-        type: array
-        minItems: 1
-        uniqueItems: true
-        items:
-          {
-            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/artifact-reference",
-          }
-      signing:
-        $ref: "#/$defs/signing-resolution"
-  signing-resolution:
-    type: object
-    additionalProperties: false
-    required: [ input-artifact, recipe ]
-    properties:
-      input-artifact:
-        $ref: "#/$defs/stable-id"
-      recipe:
-        $ref: "#/$defs/resolved-recipe"
-  distribution-id:
-    type: string
-    pattern: "^distribution/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$"
-  distribution-target:
-    type: object
-    additionalProperties: false
-    required:
-      - distribution-id
-      - id
-      - source
-      - recipe
-      - destination
-      - prerequisite-distribution-ids
-    properties:
-      distribution-id:
-        $ref: "#/$defs/distribution-id"
-      id:
-        $ref: "#/$defs/stable-id"
-      source:
-        $ref: "#/$defs/distribution-source"
-      recipe:
-        $ref: "#/$defs/resolved-recipe"
-      destination:
-        type: object
-      prerequisite-distribution-ids:
-        type: array
-        uniqueItems: true
-        items:
-          $ref: "#/$defs/distribution-id"
-  distribution-source:
-    oneOf:
-      - type: object
-        additionalProperties: false
-        required: [ kind, artifact-ids ]
-        properties:
-          kind:
-            const: release-artifacts
-          artifact-ids:
-            type: array
-            minItems: 1
-            uniqueItems: true
-            items:
-              $ref: "#/$defs/stable-id"
-      - type: object
-        additionalProperties: false
-        required: [ kind, tag-id ]
-        properties:
-          kind:
-            const: source-tag
-          tag-id:
-            $ref: "#/$defs/tag-id"
-  package:
-    type: object
-    additionalProperties: false
-    required:
-      - id
-      - release-unit
-      - path
-      - version
-      - recipe
-    properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      release-unit:
-        $ref: "#/$defs/stable-id"
-      path:
-        $ref: "#/$defs/relative-root-path"
-      version:
-        $ref: "#/$defs/semver"
-      recipe:
-        $ref: "#/$defs/resolved-recipe"
-      artifact-expectations:
-        type: array
-        minItems: 1
-        uniqueItems: true
-        items:
-          $ref: "#/$defs/artifact-expectation"
-      distribution-targets:
-        type: array
-        uniqueItems: true
-        items:
-          $ref: "#/$defs/distribution-target"
-  custom-release-gate:
-    type: object
-    additionalProperties: false
-    required: [ id, gate, workflow ]
-    allOf:
-      - if:
-          properties:
-            gate: { const: candidate-release }
-          required: [ gate ]
-        then:
-          properties:
-            workflow:
-              const: .github/workflows/intentional-custom-candidate-release-gate.yml
-      - if:
-          properties:
-            gate: { const: release-unit-record }
-          required: [ gate ]
-        then:
-          properties:
-            workflow:
-              const: .github/workflows/intentional-custom-release-unit-record-gate.yml
-    properties:
-      id:
-        $ref: "#/$defs/stable-id"
-      gate:
-        enum: [ candidate-release, release-unit-record ]
-      workflow:
-        $ref: "#/$defs/exact-path"
   tag-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-id"
   tag:
@@ -408,6 +131,8 @@ $defs:
         $ref: "#/$defs/stable-id"
       role:
         enum: [ primary, projection ]
+      require-phase:
+        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-phase"
       tag-after:
         type: array
         uniqueItems: true

@@ -2,23 +2,17 @@ $schema: https://refinery.systems/ontology/specification
 relationships:
   realizes:
     - release-planning-and-records
-    - managed-workflow
-    - ecosystem-recipes
   models:
     - intentional
 description: >-
   Defines the canonical Release Plan emitted by `intentional plan` and consumed
-  by materialization, portable release establishment, managed release workflow,
-  Release Record assembly, Distribution, and verification. A Release Plan freezes the
-  accepted source, exact Intentional generator, channel, Release Unit
-  versions, contributing Change Intents, release notes, Packages, Release
-  Artifact expectations, qualified artifact derivation prerequisites, resolved
-  Signing recipes and their input artifacts, Distribution Targets, per-unit
-  Release Record expectations, Custom Release Gates,
-  workflow security posture, and complete tag graph. Security posture identity
-  resolves through the maintained catalog compiled into the producing
-  Intentional version. It is a digest-bound candidate until the
-  verified materialized commit and annotated identity tags establish the Release.
+  by materialization, tag-backed release establishment, and verification. A
+  Release Plan freezes the accepted source, the producing Intentional version,
+  channel, Release Unit versions, contributing Change Intents, release notes,
+  and the complete tag graph with each tag's required phase. It is a
+  digest-bound candidate until the verified materialized commit and annotated
+  identity tags establish the Release. A release process reads Release Unit
+  release-record policy from the Release Model, not from the plan.
   `docs/specifications/release-plan.schema.yml` is the machine-readable
   definition.
 format: json-schema
@@ -29,36 +23,14 @@ validation-criteria: >-
   complete canonical object with only `digest` omitted. Object keys sort
   lexically. Canonical record fields use kebab-case; authored configuration and
   canonical records therefore share one field-naming convention. Release Units
-  sort by ID; Packages by Release Unit and ID;
-  Custom Release Gates and posture inventories by ID; tags by canonical tag ID;
-  and each Distribution Target by qualified Distribution ID and Release Artifact
-  inventory by ID. Every Distribution ID has the exact form
-  `distribution/<release-unit-id>/<package-id>/<target-id>` and agrees with its
-  containing Release Unit, Package, and target mapping key. Distribution
-  prerequisite identities sort lexically. A Distribution prerequisite names
-  consumer-visible state that the dependent target verifies for itself; it does
-  not name another workflow run. `tag-order` is the
-  deterministic topological order of the complete tag graph with lexical tie
-  breaking. Semantic validation proves the source objects, generator, versions,
-  intent membership, Package ownership,
-  recipe-specific payloads, signing-input and target-to-artifact references,
-  acyclic signing and artifact-derivation dependencies, qualified Distribution
-  identity, Distribution prerequisite references and acyclicity, workflow
-  adoption, security posture, Custom Release Gate contracts,
-  global-tag designation, tag
-  prerequisites, and exact agreement with Release Workspace configuration. A
-  declined plan contains no managed posture, Custom Release Gate, Release Artifact
-  expectation, Distribution Target, or Release Record expectation. An adopted
-  plan carries the exact selected posture and managed inventory. Every adopted
-  Package carries at least one artifact expectation. Its `distribution-targets`
-  array is present even when empty, so a Package represented only in its Release
-  Unit record has an explicit complete target inventory. Every releasing Release
-  Unit carries one Release Record expectation whose tag and version equal its
-  consumer-facing identity. Every releasing Release Unit also carries a
-  non-empty generated changelog section, including a group-driven Release with no
-  direct Change Intent. Establishment additionally proves that the
-  materialized commit is the plan's expected tree transition and that every core
-  identity tag records the same plan digest. Every robust managed Windows
-  executable expectation resolves an Azure Artifact Signing transformation whose
-  configuration carries the workspace's durable Public Trust subscriber identity
-  and fixed organization-variable contract.
+  sort by ID and tags by canonical tag ID. `generator` names the producing
+  Intentional version. `tag-order` is the deterministic topological order of
+  the complete tag graph with lexical tie breaking. A tag carries
+  `require-phase` exactly when its configuration declares one. Semantic
+  validation proves the source objects, producing version, versions, intent
+  membership, tag prerequisites, and exact agreement with Release Workspace
+  configuration. Every releasing Release Unit carries a non-empty generated
+  changelog section, including a group-driven Release with no direct Change
+  Intent. Establishment additionally proves that the materialized commit is the
+  plan's expected tree transition and that every core identity tag records the
+  same plan digest.
