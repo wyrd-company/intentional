@@ -339,6 +339,33 @@ fn tags_recovered_after_later_commits_record_the_emitted_plan_digest() {
 }
 
 #[test]
+fn sealed_plan_after_later_commits_is_accepted() {
+    for args in [&[][..], &["--channel", "rc"][..]] {
+        let repo = release_repo("");
+        let plan = repo.apply_release(args);
+        repo.write("release-notes.md", "Release executor notes.\n");
+        repo.commit("record executor notes");
+        fs::write(
+            repo.root.join(".git/release-plan.json"),
+            serde_json::to_string(&plan).expect("plan JSON"),
+        )
+        .expect("write plan");
+
+        repo.cli()
+            .args(["tag", "--plan", ".git/release-plan.json"])
+            .args(args)
+            .assert()
+            .success();
+        let primary = plan["tags"][1]["name"].as_str().expect("primary tag name");
+        assert_eq!(
+            repo.record_field(primary, "plan-digest"),
+            plan["digest"].as_str().expect("digest"),
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
 fn rerun_after_partial_tag_creation_creates_only_the_remaining_tags() {
     let repo = release_repo("");
     let plan = repo.apply_release(&[]);
