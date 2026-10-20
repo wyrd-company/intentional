@@ -13,3 +13,5 @@ GitHub Release. The release-record policy is `required` or `none`; a unit with
 The process owns every push, build, release record, and publication.
 Intentional records this file as evidence without interpreting its contents.
 `verify` reports a baseline tag as `baseline-record`.
+A release record is the GitHub Release for one Release Unit. The tag message
+of each annotated Git tag is its tag record.
