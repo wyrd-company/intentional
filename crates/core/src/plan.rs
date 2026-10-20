@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Bump, TagPhase, TagRole};
+use crate::schema::{self, SchemaRecord};
 use crate::version::{
     aggregate_bumps, bump_version_with_mapping, resolve_versions, VersionRepository,
 };
@@ -361,9 +362,26 @@ impl ReleasePlan {
         Ok(sha256_digest(canonical_json(&payload)?.as_bytes()))
     }
 
-    /// Serialize this plan as compact canonical JSON with sorted object keys.
-    pub fn to_canonical_json(&self) -> Result<String> {
-        canonical_json(self)
+    /// Encode this plan as its canonical document: compact JSON with object
+    /// keys sorted at every depth. The document must satisfy the published
+    /// Release Plan schema.
+    pub fn encode(&self) -> Result<String> {
+        let document = serde_json::to_value(self)
+            .map_err(|error| Error::Validation(format!("JSON serialization failed: {error}")))?;
+        schema::validate(SchemaRecord::ReleasePlan, &document)?;
+        canonical_json(&document)
+    }
+
+    /// Decode a Release Plan document. The document must satisfy the published
+    /// Release Plan schema, and its digest must seal its payload.
+    pub fn decode(text: &str) -> Result<Self> {
+        let document: Value = serde_json::from_str(text)
+            .map_err(|error| Error::Validation(format!("release plan is not JSON: {error}")))?;
+        schema::validate(SchemaRecord::ReleasePlan, &document)?;
+        let plan: Self = serde_json::from_value(document)
+            .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
+        plan.verify_digest()?;
+        Ok(plan)
     }
 
     /// Verify that the embedded digest seals the complete plan payload.

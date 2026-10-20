@@ -30,3 +30,18 @@ All fixtures come from a fresh Git repository whose only file is a
   committed `release-config.yml` with no tags.
 - `released-0.2.0/baseline-digest-payload.json`: the canonical baseline digest
   payload whose SHA-256 digest is that baseline tag record's `plan-digest`.
+
+# Record codec fixtures
+
+`release-plan/` and `tag-record/` hold hand-built documents that the record
+codecs decode. Each valid document is canonical: decoding then encoding it
+gives its bytes. A Release Plan document ends with the one newline that
+`intentional plan` prints after the encoded plan.
+
+- `release-plan/canonical.json`: a channel plan that carries every optional
+  member. Its `digest` is the SHA-256 digest of its canonical payload without
+  `digest`.
+- `release-plan/reordered.json`: the same plan with its keys in reverse order
+  and indented. It decodes to the same plan and digest.
+- `release-plan/invalid/`: `canonical.json` with one schema violation each,
+  named for the violation.

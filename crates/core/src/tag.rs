@@ -610,9 +610,8 @@ fn supplied_release_plan(
     path: &Path,
 ) -> Result<ReleasePlan> {
     let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    let plan: ReleasePlan = serde_json::from_str(&text)
-        .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
-    plan.verify_digest()?;
+    let plan = ReleasePlan::decode(&text)
+        .map_err(|error| error.in_document(path.display().to_string()))?;
     if plan.contract != config.contract {
         return Err(Error::Validation(format!(
             "release plan contract {} does not match workspace {}",

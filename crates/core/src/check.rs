@@ -30,8 +30,8 @@ pub fn check_workspace(root: &Path) -> Result<()> {
             status.tag_record_issues.join("; ")
         )));
     }
-    let first = ReleasePlan::build(root, None)?.to_canonical_json()?;
-    let second = ReleasePlan::build(root, None)?.to_canonical_json()?;
+    let first = ReleasePlan::build(root, None)?.encode()?;
+    let second = ReleasePlan::build(root, None)?.encode()?;
     if first != second {
         return Err(Error::Validation(
             "release plan generation is not deterministic".to_owned(),

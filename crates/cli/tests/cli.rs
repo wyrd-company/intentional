@@ -1487,7 +1487,7 @@ fn prepare_applied_release_with_plan(
     let plan = reshape(plan);
     fs::write(
         repo.root.join("release-plan.json"),
-        plan.to_canonical_json().expect("plan JSON"),
+        canonical_json(&plan).expect("plan JSON"),
     )
     .expect("write plan");
     repo.cli().arg("apply").assert().success();
@@ -1547,9 +1547,10 @@ fn rejects_supplied_plan_with_another_schema_identity() {
     repo.cli()
         .args(["tag", "--plan", "release-plan.json", "--dry-run"])
         .assert()
-        .failure()
+        .code(1)
+        .stderr(predicate::str::starts_with("Release Plan "))
         .stderr(predicate::str::contains(
-            "does not match the release recovered from intents",
+            "release-plan.json violates its published schema at #/$schema: keyword `const`",
         ));
 }
 
@@ -1569,9 +1570,11 @@ fn rejects_future_plan_generator_version() {
 fn rejects_supplied_plan_digest_mismatch() {
     let repo = TestRepo::new();
     prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
-    let mut plan_text = fs::read_to_string(repo.root.join("release-plan.json")).unwrap();
-    plan_text = plan_text.replace("sha256:", "sha256:deadbeef");
-    fs::write(repo.root.join("release-plan.json"), plan_text).unwrap();
+    let mut plan: Value =
+        serde_json::from_str(&fs::read_to_string(repo.root.join("release-plan.json")).unwrap())
+            .unwrap();
+    plan["digest"] = Value::String(format!("sha256:{}", "0".repeat(64)));
+    fs::write(repo.root.join("release-plan.json"), plan.to_string()).unwrap();
     repo.cli()
         .args(["tag", "--plan", "release-plan.json", "--dry-run"])
         .assert()

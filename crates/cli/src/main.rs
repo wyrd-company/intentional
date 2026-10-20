@@ -244,7 +244,7 @@ fn apply(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result
 
 fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
     let plan = ReleasePlan::build(root, channel)?;
-    println!("{}", plan.to_canonical_json()?);
+    println!("{}", plan.encode()?);
     Ok(())
 }
 

@@ -14,6 +14,7 @@ pub mod init;
 pub mod intent;
 pub mod model;
 pub mod plan;
+pub mod schema;
 pub mod stamp;
 pub mod status;
 pub mod tag;

@@ -370,7 +370,7 @@ fn release_plan_written_by_released_0_2_0_validates_and_keeps_its_digest() {
     );
     plan.verify_digest()
         .expect("released plan keeps its digest");
-    assert_eq!(plan.to_canonical_json().expect("canonical plan"), bytes);
+    assert_eq!(plan.encode().expect("canonical plan"), bytes);
 }
 
 #[test]

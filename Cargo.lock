@@ -1687,6 +1687,7 @@ version = "0.2.0"
 dependencies = [
  "gix",
  "glob",
+ "jsonschema",
  "node-semver",
  "rand",
  "semver",
