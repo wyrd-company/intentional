@@ -15,10 +15,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-const RELEASED_0_2_0_RECORDS: [&str; 3] = [
+const RELEASED_0_2_0_RECORDS: [&str; 4] = [
     "released-0.2.0/release-unit-tag-record.txt",
     "released-0.2.0/workspace-tag-record.txt",
     "released-0.2.0/baseline-tag-record.txt",
+    "released-0.2.0/baseline-workspace-tag-record.txt",
 ];
 const COMPLETE_RECORD: &str = "tag-record/complete.txt";
 const RELEASED_BASELINE_DIGEST: &str =

@@ -298,6 +298,7 @@ fn tag_records_written_by_released_0_2_0_validate() {
         "release-unit-tag-record.txt",
         "workspace-tag-record.txt",
         "baseline-tag-record.txt",
+        "baseline-workspace-tag-record.txt",
     ] {
         let message = read_repository_file(&format!(
             "docs/specifications/fixtures/released-0.2.0/{fixture}"

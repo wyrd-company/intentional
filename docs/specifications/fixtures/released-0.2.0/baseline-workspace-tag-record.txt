@@ -1,0 +1,8 @@
+intentional release record
+
+contract: contract-1
+generator: intentional 0.2.0
+plan-digest: sha256:f4cd063069d178dbd03fce40c1f38c190a29aab6359aa0eb0991ec3f54451f07
+tag-id: workspace/release
+version: 0.1.0
+baseline: true
