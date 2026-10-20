@@ -232,11 +232,13 @@ proposed-design:
     `ModelPaths`, `ReleaseUnitEntry`, `ProjectionEntry`, `SourceEntry`,
     `ReleaseUnitTagEntry`, `WorkspaceTagEntry`, `ReleaseGroups`,
     `ReleaseGroupMembership`, `ReleaseRecordPolicy`, and `Disposition`, and the
-    schema identity `RELEASE_MODEL_SCHEMA_ID`. `ReleaseModel::encode` writes the
-    canonical bytes `serialization-and-ordering` defines, and
-    `ReleaseModel::decode` reads a document and rejects one that is not the
-    current Release Model contract, as the tag record and Release Plan codecs
-    do. `intentional model` writes with `encode`; `intentional check` compares
+    schema identity `RELEASE_MODEL_SCHEMA_ID`, and a codec shaped like the tag
+    record and Release Plan codecs. `ReleaseModel::encode` validates the
+    document against the embedded Release Model schema and writes the canonical
+    bytes `serialization-and-ordering` defines. `ReleaseModel::decode` parses a
+    document and validates it against the same schema, so it rejects a document
+    that is not the current Release Model contract. `intentional model` writes
+    with `encode`; `intentional check` compares
     the committed bytes with `encode` of a fresh projection and uses `decode`
     only to report a file that is not the current contract. No other tool links
     these types. The schema is the only contract between Intentional and the
