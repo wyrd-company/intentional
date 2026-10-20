@@ -130,4 +130,12 @@ proposed-design:
     advisory, because
     the running binary does not carry earlier versions' planning semantics; a
     difference under the running version fails. A baseline tag establishes
-    authority without a Release, and verify reports it as such.
+    authority without a Release. For a baseline tag record, verify recomputes
+    the complete baseline set at the tagged commit from configuration and the
+    tags that commit reaches, computes the baseline digest payload under the
+    tag record's generator version, and compares its digest with the
+    recorded `plan-digest` under the same advisory rule. It then checks that
+    every tag that baseline establishment creates for the set carries a
+    baseline tag record for the same digest at that commit under the fixed
+    tagger. A tag without a tag record on an earlier commit is pre-Intentional
+    history that supplies its version and is not checked as a baseline tag.

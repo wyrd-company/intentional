@@ -372,20 +372,333 @@ fn verify_fails_for_a_tagger_other_than_intentional() {
     assert_fails_with(&repo, "mirror@1.3.0", "tagger-mismatch");
 }
 
-#[test]
-fn verify_refuses_a_baseline_tag_as_a_release() {
+/// The tags `tag --baseline` creates on the `CONFIG` workspace at 1.2.3 with
+/// workspace tag stream `release` at 0.1.0, in tag ID order.
+const BASELINE_TAGS: [&str; 3] = ["mirror@1.2.3", "sample-library@1.2.3", "0.1.0"];
+
+/// The `CONFIG` workspace at 1.2.3, committed, with a baseline established.
+fn baseline_repo() -> TestRepo {
     let repo = TestRepo::new();
     repo.write(
         "package.json",
         "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
     );
     repo.write(".intentional/config.yml", CONFIG);
+    repo.write(".intentional/intents/.gitkeep", "");
     repo.commit("add fixture");
     repo.cli()
         .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
         .assert()
         .success();
-    assert_fails_with(&repo, "sample-library@1.2.3", "baseline-record");
+    repo
+}
+
+fn assert_baseline_verified(repo: &TestRepo, tag: &str, identities: &[&str]) -> Value {
+    let (code, report) = repo.verify(tag);
+    assert_eq!(code, 0, "{report:#}");
+    assert_eq!(report["verified"], true);
+    assert_eq!(report["baseline"], true);
+    assert_eq!(
+        report["guarantees"],
+        serde_json::json!(["tag-record", "baseline-reconstruction", "identity-tags"])
+    );
+    assert_eq!(report["identity_tags"], serde_json::json!(identities));
+    assert!(codes(&report, "error").is_empty(), "{report:#}");
+    report
+}
+
+fn plan_digest(message: &str) -> String {
+    message
+        .lines()
+        .find_map(|line| line.strip_prefix("plan-digest: "))
+        .expect("plan digest")
+        .to_owned()
+}
+
+#[test]
+fn verify_passes_for_every_tag_of_a_baseline() {
+    let repo = baseline_repo();
+    let head = git(&repo.root, &["rev-parse", "HEAD"]);
+    for tag in BASELINE_TAGS {
+        let report = assert_baseline_verified(&repo, tag, &BASELINE_TAGS);
+        assert_eq!(report["target"], head);
+        assert_eq!(
+            report["plan_digest"],
+            plan_digest(&repo.message("sample-library@1.2.3"))
+        );
+    }
+    repo.cli()
+        .args(["verify", "0.1.0"])
+        .assert()
+        .success()
+        .stdout(predicates::str::starts_with(format!(
+            "verified 0.1.0 at {head}\nguarantee: tag-record\nguarantee: baseline-reconstruction\n"
+        )));
+}
+
+#[test]
+fn verify_reads_a_baseline_from_history_after_a_release() {
+    let repo = baseline_repo();
+    repo.intent("sample-otter-0001", "Add a sample capability.");
+    repo.release(&[]);
+    assert_baseline_verified(&repo, "sample-library@1.2.3", &BASELINE_TAGS);
+    assert_verified(
+        &repo,
+        "sample-library@1.3.0",
+        &["mirror@1.3.0", "sample-library@1.3.0", "0.1.1"],
+    );
+}
+
+/// A workspace whose `sample-library@1.2.3` tag predates Intentional: `tag
+/// --baseline` takes the version from it and does not retag it.
+fn baseline_repo_with_history(history: &[&str]) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.commit("release 1.2.3");
+    git(&repo.root, history);
+    repo.write(".intentional/config.yml", CONFIG);
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("adopt intentional");
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+        .assert()
+        .success();
+    repo
+}
+
+#[test]
+fn verify_passes_for_a_baseline_whose_version_a_tag_without_a_record_supplies() {
+    for history in [
+        &["tag", "sample-library@1.2.3"][..],
+        &["tag", "-a", "sample-library@1.2.3", "-m", "Release 1.2.3"][..],
+    ] {
+        let repo = baseline_repo_with_history(history);
+        assert_ne!(
+            git(&repo.root, &["rev-list", "-n", "1", "sample-library@1.2.3"]),
+            git(&repo.root, &["rev-parse", "HEAD"])
+        );
+        for tag in ["mirror@1.2.3", "0.1.0"] {
+            assert_baseline_verified(&repo, tag, &["mirror@1.2.3", "0.1.0"]);
+        }
+    }
+}
+
+#[test]
+fn verify_fails_for_a_baseline_tag_without_a_record_at_the_baseline_commit() {
+    let repo = baseline_repo();
+    git(&repo.root, &["tag", "-d", "mirror@1.2.3"]);
+    git(&repo.root, &["tag", "mirror@1.2.3"]);
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.2.3", "0.1.0"])
+    );
+}
+
+#[test]
+fn verify_fails_for_a_baseline_tag_that_only_later_history_holds() {
+    let repo = baseline_repo();
+    let message = repo.message("mirror@1.2.3");
+    git(&repo.root, &["tag", "-d", "mirror@1.2.3"]);
+    repo.write("release-notes.md", "Release executor notes.\n");
+    repo.commit("record executor notes");
+    for history in [&["tag", "mirror@1.2.3"][..], &[][..]] {
+        if history.is_empty() {
+            repo.forge("mirror@1.2.3", "HEAD", &message);
+        } else {
+            git(&repo.root, history);
+        }
+        let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-missing");
+        assert_eq!(
+            report["identity_tags"],
+            serde_json::json!(["sample-library@1.2.3", "0.1.0"])
+        );
+    }
+}
+
+#[test]
+fn verify_fails_for_an_altered_baseline_plan_digest() {
+    let repo = baseline_repo();
+    let digest = plan_digest(&repo.message("sample-library@1.2.3"));
+    let altered = format!("sha256:{}", "d".repeat(64));
+    for name in BASELINE_TAGS {
+        let message = repo.message(name).replace(&digest, &altered);
+        repo.forge(name, "HEAD", &message);
+    }
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "baseline-digest-mismatch");
+    assert_eq!(report["identity_tags"], serde_json::json!(BASELINE_TAGS));
+    assert_eq!(
+        report["guarantees"],
+        serde_json::json!(["tag-record", "identity-tags"])
+    );
+}
+
+#[test]
+fn verify_reports_a_baseline_from_another_producing_version_as_an_advisory() {
+    let repo = baseline_repo();
+    let digest = plan_digest(&repo.message("sample-library@1.2.3"));
+    let altered = format!("sha256:{}", "d".repeat(64));
+    let current = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
+    for name in BASELINE_TAGS {
+        let message = repo
+            .message(name)
+            .replace(&digest, &altered)
+            .replace(&current, "generator: intentional 0.0.1");
+        repo.forge(name, "HEAD", &message);
+    }
+    let (code, report) = repo.verify("sample-library@1.2.3");
+    assert_eq!(code, 0, "{report:#}");
+    assert_eq!(
+        codes(&report, "advisory"),
+        ["producing-version-differs".to_owned()]
+    );
+    assert!(codes(&report, "error").is_empty(), "{report:#}");
+    assert_eq!(
+        report["guarantees"],
+        serde_json::json!(["tag-record", "identity-tags"])
+    );
+}
+
+#[test]
+fn verify_recomputes_a_baseline_digest_under_the_recorded_generator() {
+    let repo = baseline_repo();
+    let digest = plan_digest(&repo.message("sample-library@1.2.3"));
+    let versions = [("sample-library", "1.2.3"), ("workspace/release", "0.1.0")]
+        .into_iter()
+        .map(|(id, version)| (id.to_owned(), version.to_owned()))
+        .collect();
+    let earlier = intentional_core::baseline_digest("contract-1", "0.0.1", &versions)
+        .expect("baseline digest");
+    assert_ne!(earlier, digest);
+    let current = format!("generator: intentional {}", env!("CARGO_PKG_VERSION"));
+    for name in BASELINE_TAGS {
+        let message = repo
+            .message(name)
+            .replace(&digest, &earlier)
+            .replace(&current, "generator: intentional 0.0.1");
+        repo.forge(name, "HEAD", &message);
+    }
+    let report = assert_baseline_verified(&repo, "sample-library@1.2.3", &BASELINE_TAGS);
+    assert!(codes(&report, "advisory").is_empty(), "{report:#}");
+    assert_eq!(report["generator"], "intentional 0.0.1");
+}
+
+#[test]
+fn verify_fails_for_a_missing_baseline_identity_tag() {
+    let repo = baseline_repo();
+    git(&repo.root, &["tag", "-d", "mirror@1.2.3"]);
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-missing");
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.2.3", "0.1.0"])
+    );
+    assert_eq!(
+        report["guarantees"],
+        serde_json::json!(["tag-record", "baseline-reconstruction"])
+    );
+}
+
+#[test]
+fn verify_fails_for_a_missing_baseline_tag_that_alone_supplies_a_version() {
+    let repo = baseline_repo();
+    git(&repo.root, &["tag", "-d", "0.1.0"]);
+    assert_fails_with(&repo, "sample-library@1.2.3", "reconstruction-failed");
+}
+
+#[test]
+fn verify_fails_through_a_peer_baseline_tag_with_another_tagger() {
+    let repo = baseline_repo();
+    let message = repo.message("mirror@1.2.3");
+    git(&repo.root, &["tag", "-d", "mirror@1.2.3"]);
+    git(&repo.root, &["tag", "-a", "mirror@1.2.3", "-m", &message]);
+    let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
+    assert!(
+        report["diagnostics"]
+            .to_string()
+            .contains("mirror@1.2.3 has unexpected tagger"),
+        "{report:#}"
+    );
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.2.3", "0.1.0"])
+    );
+    repo.strip_tagger("mirror@1.2.3");
+    assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
+}
+
+#[test]
+fn verify_fails_for_a_peer_baseline_record_that_disagrees_on_any_identity_field() {
+    let digest = plan_digest(&baseline_repo().message("mirror@1.2.3"));
+    for (field, from, to) in [
+        (
+            "tag-id",
+            "tag-id: release-unit/sample-library/mirror",
+            "tag-id: release-unit/sample-library/primary",
+        ),
+        ("version", "version: 1.2.3", "version: 1.2.4"),
+        (
+            "plan-digest",
+            digest.as_str(),
+            &*format!("sha256:{}", "e".repeat(64)),
+        ),
+        ("baseline", "baseline: true", "baseline: false"),
+    ] {
+        let repo = baseline_repo();
+        let message = repo.message("mirror@1.2.3");
+        assert!(message.contains(from), "{field}: {message}");
+        repo.forge("mirror@1.2.3", "HEAD", &message.replace(from, to));
+        let report = assert_fails_with(&repo, "sample-library@1.2.3", "identity-tag-mismatch");
+        assert!(
+            report["diagnostics"]
+                .to_string()
+                .contains(&format!("mirror@1.2.3 has unexpected {field}")),
+            "{field}: {report:#}"
+        );
+    }
+}
+
+#[test]
+fn verify_fails_for_a_baseline_record_outside_the_baseline_set() {
+    let repo = baseline_repo();
+    let message = repo.message("sample-library@1.2.3").replace(
+        "tag-id: release-unit/sample-library/primary",
+        "tag-id: release-unit/unknown/primary",
+    );
+    repo.forge("extra", "HEAD", &message);
+    let report = assert_fails_with(&repo, "extra", "identity-tag-mismatch");
+    assert_eq!(report["identity_tags"], serde_json::json!(BASELINE_TAGS));
+}
+
+/// The baseline tags written by released `0.2.0` on the workspace the fixture
+/// README describes.
+#[test]
+fn a_baseline_created_by_released_0_2_0_verifies() {
+    let fixtures = "docs/specifications/fixtures/released-0.2.0";
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.write(
+        ".intentional/config.yml",
+        &repository_file(&format!("{fixtures}/release-config.yml")),
+    );
+    repo.commit("add fixture");
+    let primary = repository_file(&format!("{fixtures}/baseline-tag-record.txt"));
+    repo.forge("sample-library@1.2.3", "HEAD", &primary);
+    repo.forge(
+        "0.1.0",
+        "HEAD",
+        &repository_file(&format!("{fixtures}/baseline-workspace-tag-record.txt")),
+    );
+    for tag in ["sample-library@1.2.3", "0.1.0"] {
+        let report = assert_baseline_verified(&repo, tag, &["sample-library@1.2.3", "0.1.0"]);
+        assert_eq!(report["plan_digest"], plan_digest(&primary));
+        assert_eq!(report["generator"], "intentional 0.2.0");
+    }
 }
 
 #[test]
@@ -475,6 +788,19 @@ fn verify_fails_for_a_missing_identity_tag() {
     assert_eq!(
         report["identity_tags"],
         serde_json::json!(["mirror@1.3.0", "sample-library@1.3.0"])
+    );
+}
+
+#[test]
+fn verify_fails_for_a_release_identity_tag_without_a_record_on_an_earlier_commit() {
+    let repo = release_repo();
+    repo.release(&[]);
+    git(&repo.root, &["tag", "-d", "mirror@1.3.0"]);
+    git(&repo.root, &["tag", "mirror@1.3.0", "HEAD~1"]);
+    let report = assert_fails_with(&repo, "sample-library@1.3.0", "identity-tag-mismatch");
+    assert_eq!(
+        report["identity_tags"],
+        serde_json::json!(["sample-library@1.3.0", "0.0.1"])
     );
 }
 

@@ -10,12 +10,20 @@
 //! finds the commit the release was planned from, recomputes the plan and the
 //! materialization there, and checks the digest, the materialized files of the
 //! release commit, and the tag records of every identity tag in the plan.
+//!
+//! A baseline tag record names the commit the baseline was established at.
+//! Verification recomputes the baseline set there and checks its digest and
+//! the tag records of every tag that establishing the baseline creates.
 
 use crate::apply::ApplyResult;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
-use crate::tag::{materialized_release_parent, recover_deleted_intents, render_tag};
+use crate::tag::{
+    baseline_versions, materialized_release_parent, recover_deleted_intents, render_tag,
+    tag_candidates,
+};
+use crate::tag_record::baseline_digest;
 use crate::tag_record::TagRecord;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -57,6 +65,8 @@ pub struct Verification {
     pub tag: String,
     /// Whether every verification passed.
     pub verified: bool,
+    /// Whether the tag record establishes a baseline instead of a Release.
+    pub baseline: bool,
     /// Release commit the tag names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
@@ -66,10 +76,12 @@ pub struct Verification {
     /// Producing Intentional the tag record names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generator: Option<String>,
-    /// Identity tags of the Release whose tag records verified.
+    /// Identity tags of the Release or baseline whose tag records verified.
     pub identity_tags: Vec<String>,
     /// Checks that passed: `tag-record`, `plan-reconstruction`,
-    /// `materialized-source`, `identity-tags`.
+    /// `materialized-source`, and `identity-tags` for a Release;
+    /// `tag-record`, `baseline-reconstruction`, and `identity-tags` for a
+    /// baseline.
     pub guarantees: Vec<&'static str>,
     /// Findings in the order they were made.
     pub diagnostics: Vec<VerifyDiagnostic>,
@@ -80,6 +92,7 @@ impl Verification {
         Self {
             tag: tag.to_owned(),
             verified: false,
+            baseline: false,
             target: None,
             plan_digest: None,
             generator: None,
@@ -105,22 +118,27 @@ impl Verification {
         });
     }
 
-    /// Verified only when no finding is an error and every check reported its
-    /// own pass. A plan reconstruction that differs under another producing
-    /// version passes as an advisory.
+    /// Verified only when no finding is an error and every check of its kind
+    /// reported its own pass. A reconstruction that differs under another
+    /// producing version passes as an advisory.
     fn finish(mut self) -> Self {
         let has = |code: &str| self.guarantees.contains(&code);
         let advised = self
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "producing-version-differs");
+        let reconstruction = if self.baseline {
+            "baseline-reconstruction"
+        } else {
+            "plan-reconstruction"
+        };
         self.verified = !self
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.severity == Severity::Error)
             && has("tag-record")
-            && (has("plan-reconstruction") || advised)
-            && has("materialized-source")
+            && (has(reconstruction) || advised)
+            && (self.baseline || has("materialized-source"))
             && has("identity-tags");
         self
     }
@@ -132,8 +150,9 @@ impl Verification {
     }
 }
 
-/// Verify the Release that annotated tag `tag` identifies. Findings are
-/// diagnostics; an error means the repository itself could not be read.
+/// Verify the Release or baseline that annotated tag `tag` identifies.
+/// Findings are diagnostics; an error means the repository itself could not be
+/// read.
 pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
@@ -144,14 +163,12 @@ pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
     verification.target = Some(target.to_string());
     verification.plan_digest = Some(record.plan_digest.clone());
     verification.generator = Some(record.generator.clone());
+    verification.baseline = record.baseline;
+    verification.guarantees.push("tag-record");
     if record.baseline {
-        verification.error(
-            "baseline-record",
-            format!("{tag} establishes a baseline, not a Release; verify takes a release tag"),
-        );
+        verify_baseline(&repository, tag, target, &record, &mut verification)?;
         return Ok(verification.finish());
     }
-    verification.guarantees.push("tag-record");
 
     let release = match reconstruct(&repository, target, &record) {
         Ok(release) => release,
@@ -165,15 +182,105 @@ pub fn verify_release(root: &Path, tag: &str) -> Result<Verification> {
     };
     check_plan_digest(&release, &record, &mut verification)?;
     check_materialized_tree(&repository, target, &release, &mut verification)?;
+    let identities = release
+        .apply
+        .plan
+        .tags
+        .iter()
+        .map(|planned| Identity {
+            id: &planned.id,
+            name: &planned.name,
+            version: &planned.version,
+        })
+        .collect::<Vec<_>>();
     check_identity_tags(
         &repository,
         tag,
         target,
         &record,
-        &release,
+        &identities,
         &mut verification,
     )?;
     Ok(verification.finish())
+}
+
+/// Verify a baseline tag record: recompute the baseline set at the commit it
+/// tags, check the digest of its payload, and check the tag record of every
+/// tag that establishing that set creates.
+fn verify_baseline(
+    repository: &gix::Repository,
+    tag: &str,
+    target: gix::ObjectId,
+    record: &TagRecord,
+    verification: &mut Verification,
+) -> Result<()> {
+    let checkout = match Checkout::of(repository, target) {
+        Ok(checkout) => checkout,
+        Err(error) => {
+            verification.error(
+                "reconstruction-failed",
+                format!("the baseline of {tag} cannot be reconstructed: {error}"),
+            );
+            return Ok(());
+        }
+    };
+    let reconstructed = Config::load(checkout.root()).and_then(|config| {
+        let versions = baseline_versions(checkout.root(), &config, &BTreeMap::new())?;
+        Ok((config, versions))
+    });
+    let (config, versions) = match reconstructed {
+        Ok(reconstructed) => reconstructed,
+        Err(error) => {
+            verification.error(
+                "reconstruction-failed",
+                format!("the baseline of {tag} cannot be reconstructed: {error}"),
+            );
+            return Ok(());
+        }
+    };
+    let producing = record
+        .generator
+        .strip_prefix("intentional ")
+        .unwrap_or(&record.generator);
+    match baseline_digest(&config.contract, producing, &versions) {
+        Ok(digest) if digest == record.plan_digest => {
+            verification.guarantees.push("baseline-reconstruction");
+        }
+        Ok(_) if producing == crate::VERSION => verification.error(
+            "baseline-digest-mismatch",
+            format!(
+                "the baseline set recomputed at {target} does not have the recorded digest {}",
+                record.plan_digest
+            ),
+        ),
+        Ok(_) => verification.advisory(
+            "producing-version-differs",
+            format!(
+                "produced by intentional {producing}; the baseline set recomputed with intentional {} differs from the recorded digest {}",
+                crate::VERSION,
+                record.plan_digest
+            ),
+        ),
+        Err(error) => verification.error(
+            "reconstruction-failed",
+            format!("the baseline digest of {tag} cannot be recomputed: {error}"),
+        ),
+    }
+    let candidates = tag_candidates(&config, &versions);
+    let identities = candidates
+        .iter()
+        .map(|(id, candidate)| Identity {
+            id,
+            name: &candidate.name,
+            version: &candidate.version,
+        })
+        .collect::<Vec<_>>();
+    // Tags are read in the checkout, which holds only the tags whose target
+    // the baseline commit reaches: a tag that marks later history cannot
+    // stand in for one the baseline established.
+    let history = gix::discover(checkout.root())
+        .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
+    check_identity_tags(&history, tag, target, record, &identities, verification)
 }
 
 /// Whether a tag object is tagged the way Intentional tags.
@@ -191,10 +298,14 @@ enum Tagger {
 enum TagState {
     /// No such tag.
     Missing,
-    /// Symbolic or lightweight; the detail says which.
-    NotAnnotated(&'static str),
-    /// Annotated without a tag record.
-    Unclaimed,
+    /// Symbolic or lightweight; the detail says which. A lightweight tag
+    /// names the commit it tags.
+    NotAnnotated {
+        kind: &'static str,
+        target: Option<gix::ObjectId>,
+    },
+    /// Annotated without a tag record, and the commit it tags.
+    Unclaimed { target: gix::ObjectId },
     /// A tag record that the codec or its target refuses.
     Invalid(String),
     /// A decoded tag record, the commit it tags, and how it is tagged.
@@ -213,7 +324,10 @@ fn read_tag(repository: &gix::Repository, name: &str) -> Result<TagState> {
         return Ok(TagState::Missing);
     };
     let Some(object_id) = reference.try_id().map(|id| id.detach()) else {
-        return Ok(TagState::NotAnnotated("symbolic"));
+        return Ok(TagState::NotAnnotated {
+            kind: "symbolic",
+            target: None,
+        });
     };
     let target = reference
         .peel_to_id()
@@ -223,14 +337,17 @@ fn read_tag(repository: &gix::Repository, name: &str) -> Result<TagState> {
         .find_object(object_id)
         .map_err(|error| Error::Git(format!("failed to read tag {name}: {error}")))?;
     let Ok(tag_object) = object.try_into_tag() else {
-        return Ok(TagState::NotAnnotated("lightweight"));
+        return Ok(TagState::NotAnnotated {
+            kind: "lightweight",
+            target: Some(target),
+        });
     };
     let decoded = tag_object
         .decode()
         .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
     let message = decoded.message.to_string();
     if !TagRecord::is_claimed_by(&message) {
-        return Ok(TagState::Unclaimed);
+        return Ok(TagState::Unclaimed { target });
     }
     let record = match TagRecord::decode(&message) {
         Ok(record) => record,
@@ -287,11 +404,11 @@ fn selected_record(
 ) -> Result<Option<(TagRecord, gix::ObjectId)>> {
     match read_tag(repository, tag)? {
         TagState::Missing => verification.error("tag-missing", format!("tag {tag} does not exist")),
-        TagState::NotAnnotated(kind) => verification.error(
+        TagState::NotAnnotated { kind, .. } => verification.error(
             "tag-not-annotated",
             format!("tag {tag} is {kind}; a Release tag is an annotated tag"),
         ),
-        TagState::Unclaimed => verification.error(
+        TagState::Unclaimed { .. } => verification.error(
             "tag-record-missing",
             format!("annotated tag {tag} carries no tag record"),
         ),
@@ -502,31 +619,47 @@ fn blob_at(tree: &gix::Tree<'_>, path: &Path) -> Result<Option<Vec<u8>>> {
     Ok(Some(object.data.clone()))
 }
 
+/// One tag that the verified Release or baseline names.
+struct Identity<'a> {
+    id: &'a str,
+    name: &'a str,
+    version: &'a str,
+}
+
+/// Check that `tag` is one of `identities` and that every identity tag carries
+/// a tag record that agrees with `record`, at `target`, under the fixed
+/// tagger. For a baseline, a tag without a tag record on an earlier commit is
+/// pre-Intentional history that supplies its version, which establishing the
+/// baseline leaves in place.
 fn check_identity_tags(
     repository: &gix::Repository,
     tag: &str,
     target: gix::ObjectId,
     record: &TagRecord,
-    release: &Reconstruction,
+    identities: &[Identity<'_>],
     verification: &mut Verification,
 ) -> Result<()> {
-    let tags = &release.apply.plan.tags;
+    let kind = if record.baseline {
+        "baseline"
+    } else {
+        "Release"
+    };
     let mut failed = false;
-    if !tags
+    if !identities
         .iter()
-        .any(|planned| planned.name == tag && planned.id == record.tag_id)
+        .any(|identity| identity.name == tag && identity.id == record.tag_id)
     {
         failed = true;
         verification.error(
             "identity-tag-mismatch",
             format!(
-                "{tag} is not tag {} of the reconstructed Release",
+                "{tag} is not tag {} of the reconstructed {kind}",
                 record.tag_id
             ),
         );
     }
-    for planned in tags {
-        let (identity, identity_target, tagger) = match read_tag(repository, &planned.name)? {
+    for expected in identities {
+        let (identity, identity_target, tagger) = match read_tag(repository, expected.name)? {
             TagState::Recorded {
                 record,
                 target,
@@ -536,15 +669,31 @@ fn check_identity_tags(
                 failed = true;
                 verification.error(
                     "identity-tag-missing",
-                    format!("identity tag {} does not exist", planned.name),
+                    if record.baseline {
+                        format!(
+                            "identity tag {} does not exist at {target} or in its history",
+                            expected.name
+                        )
+                    } else {
+                        format!("identity tag {} does not exist", expected.name)
+                    },
                 );
                 continue;
             }
-            TagState::NotAnnotated(_) | TagState::Unclaimed => {
+            TagState::NotAnnotated {
+                target: Some(history),
+                ..
+            }
+            | TagState::Unclaimed { target: history }
+                if record.baseline && history != target =>
+            {
+                continue;
+            }
+            TagState::NotAnnotated { .. } | TagState::Unclaimed { .. } => {
                 failed = true;
                 verification.error(
                     "identity-tag-mismatch",
-                    format!("identity tag {} carries no tag record", planned.name),
+                    format!("identity tag {} carries no tag record", expected.name),
                 );
                 continue;
             }
@@ -557,25 +706,25 @@ fn check_identity_tags(
         let disagreements = [
             ("target", identity_target == target),
             ("tagger", tagger == Tagger::Fixed),
-            ("tag-id", identity.tag_id == planned.id),
-            ("version", identity.version == planned.version),
+            ("tag-id", identity.tag_id == expected.id),
+            ("version", identity.version == expected.version),
             ("contract", identity.contract == record.contract),
             ("plan-digest", identity.plan_digest == record.plan_digest),
-            ("baseline", !identity.baseline),
+            ("baseline", identity.baseline == record.baseline),
         ]
         .into_iter()
         .filter(|(_, agrees)| !agrees)
         .map(|(field, _)| field)
         .collect::<Vec<_>>();
         if disagreements.is_empty() {
-            verification.identity_tags.push(planned.name.clone());
+            verification.identity_tags.push(expected.name.to_owned());
         } else {
             failed = true;
             verification.error(
                 "identity-tag-mismatch",
                 format!(
                     "identity tag {} has unexpected {}",
-                    planned.name,
+                    expected.name,
                     disagreements.join(", ")
                 ),
             );
@@ -614,6 +763,27 @@ mod tests {
             .into_iter()
             .filter(|check| *check != "plan-reconstruction")
             .collect();
+        advised.advisory("producing-version-differs", "sample");
+        assert!(advised.finish().verified);
+    }
+
+    #[test]
+    fn a_baseline_verification_without_every_baseline_check_passed_is_not_verified() {
+        const ALL: [&str; 3] = ["tag-record", "baseline-reconstruction", "identity-tags"];
+        let baseline = |guarantees: Vec<&'static str>| {
+            let mut verification = Verification::new("sample");
+            verification.baseline = true;
+            verification.guarantees = guarantees;
+            verification
+        };
+        assert!(baseline(ALL.to_vec()).finish().verified);
+        for missing in ALL {
+            let partial = baseline(ALL.into_iter().filter(|check| *check != missing).collect());
+            assert!(!partial.finish().verified, "{missing}");
+        }
+        let release = baseline(vec!["tag-record", "plan-reconstruction", "identity-tags"]);
+        assert!(!release.finish().verified);
+        let mut advised = baseline(vec!["tag-record", "identity-tags"]);
         advised.advisory("producing-version-differs", "sample");
         assert!(advised.finish().verified);
     }

@@ -177,10 +177,39 @@ diagnostic with a stable code, such as `tag-not-annotated`,
 `plan-digest-mismatch`, `materialized-tree-mismatch`, or
 `identity-tag-missing`. A tag that another Intentional version produced can
 recompute to a different digest under this version. That difference is the
-advisory `producing-version-differs` and does not fail verification. A
-baseline tag is not a Release; `verify` reports it as `baseline-record`. Tags
+advisory `producing-version-differs` and does not fail verification. Tags
 that Intentional wrote before 0.1.6 have no tagger and fail with
 `tagger-mismatch`.
+
+### Verify a baseline
+
+`verify` takes a baseline tag the same way:
+
+```bash
+intentional verify sample-library@1.2.3
+```
+
+For a baseline it checks three things:
+
+- The tag is annotated, carries a valid baseline tag record, and has the fixed
+  tagger.
+- The baseline set recomputed at the commit the tag marks, from the
+  configuration and the tags in its history, has the baseline digest the tag
+  record carries. The digest is computed under the generator version the tag
+  record names.
+- Every tag that `tag --baseline` creates for that set exists at that commit,
+  carries a baseline tag record for the same digest, and has the same fixed
+  tagger.
+
+A tag without a tag record on an earlier commit is pre-Intentional history: it
+supplies its version, and `tag --baseline` leaves it in place, so `verify` does
+not check it as a baseline tag. A tag without a tag record at the baseline
+commit itself fails with `identity-tag-mismatch`, and a tag that only later
+history holds counts as missing. A recomputed baseline digest that differs
+fails with `baseline-digest-mismatch`, or is the advisory
+`producing-version-differs` when the tag record names another Intentional
+version. A baseline whose only source for a version is a deleted tag cannot be
+recomputed and fails with `reconstruction-failed`.
 
 ## Stamp build versions
 

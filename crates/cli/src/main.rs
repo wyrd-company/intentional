@@ -50,7 +50,7 @@ enum Command {
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,
-    /// Verify one established Release from its annotated tag.
+    /// Verify one established Release or baseline from its annotated tag.
     Verify(VerifyArgs),
     /// Print the agent-facing Intentional workflow skill.
     Skill,

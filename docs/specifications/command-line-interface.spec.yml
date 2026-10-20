@@ -388,11 +388,11 @@ commands:
         differs from a fresh projection is the `release-model-stale` error. An
         absent model is not a diagnostic.
   - name: verify
-    summary: Verify one established Release from its annotated tag.
+    summary: Verify one established Release or baseline from its annotated tag.
     mode: non-interactive
     positional-arguments:
       - name: tag
-        description: Exact annotated tag that identifies the Release or Release Unit.
+        description: Exact annotated tag that identifies the Release, Release Unit, or baseline.
         position: 0
         required: true
         repeatable: false
@@ -424,7 +424,7 @@ commands:
         - code: 0
           meaning: Every verification requested by the invocation passed.
         - code: 1
-          meaning: Tag, plan, or materialized source verification failed.
+          meaning: Tag, plan, baseline, or materialized source verification failed.
     examples:
       - intentional verify example-unit@1.2.3
       - intentional verify example-unit@1.2.3 --json
@@ -434,13 +434,20 @@ commands:
         It reconstructs the canonical plan and materialized source from the
         selected tag and verifies the complete core identity-tag set.
       - >-
+        For a baseline tag record, it recomputes the baseline set at the
+        tagged commit and verifies the baseline digest and every tag that
+        establishing the baseline creates. A tag without a tag record on an
+        earlier commit supplies its version and is not verified as a
+        baseline tag.
+      - >-
         Error diagnostic codes are `tag-missing`, `tag-not-annotated`,
         `tag-record-missing`, `tag-record-invalid`, `tagger-mismatch`,
-        `baseline-record`, `reconstruction-failed`, `plan-digest-mismatch`,
-        `materialized-tree-mismatch`, `identity-tag-missing`, and
-        `identity-tag-mismatch`. A recomputed digest that differs for a tag
-        record naming another producing version is the advisory
-        `producing-version-differs`, which does not fail verification.
+        `reconstruction-failed`, `plan-digest-mismatch`,
+        `baseline-digest-mismatch`, `materialized-tree-mismatch`,
+        `identity-tag-missing`, and `identity-tag-mismatch`. A recomputed
+        digest that differs for a tag record naming another producing version
+        is the advisory `producing-version-differs`, which does not fail
+        verification.
   - name: model
     summary: Write the Release Model that release process templates read.
     mode: non-interactive

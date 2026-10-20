@@ -348,8 +348,9 @@ an override cannot hide drift.
 Baselines create local annotated tags at the current commit, not at an earlier
 release commit. Inspect dry-run targets and consider the repository's
 publication triggers before the surrounding workflow pushes tags. A baseline
-does not itself publish a release. Finish with `status` and `check`.
-Do not combine `--baseline` with `--channel` or `--plan`.
+does not itself publish a release. Finish with `status` and `check`, then
+verify the baseline from any tag it created with `intentional verify <tag>
+--json`. Do not combine `--baseline` with `--channel` or `--plan`.
 
 ## Stamp injected build versions
 
