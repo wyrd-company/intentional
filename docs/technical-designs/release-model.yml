@@ -138,14 +138,14 @@ proposed-design:
 
   excluded-content: >-
     The model never contains secrets, credentials, token or environment names,
-    or registry or Distribution Target settings. It holds no tag-derived current
+    or registry or publication-target settings. It holds no tag-derived current
     version, next version, pending intent, or Release Plan, because those change
     with every intent and tag; a process obtains them at run time from
     `intentional status` and `intentional plan`. It holds no Git remote, forge
     owner, default branch, or hosting provider, because those differ between
-    clones and forks of one commit. It holds no generator version, timestamp, or
-    digest of itself, because upgrading Intentional must not make a committed
-    model stale. It holds no custom gate locations, workflow file names, job
+    clones and forks of one commit. It holds no producing Intentional version,
+    timestamp, or digest of itself, because upgrading Intentional must not make
+    a committed model stale. It holds no custom gate locations, workflow file names, job
     names, or publication targets: a release process defines them, its template
     records them as Toha answers in the project snapshot, and conformance
     tooling reads them from that snapshot.
@@ -218,13 +218,12 @@ proposed-design:
     place of the file for that run. When the file is missing and the run
     submits no model, the question is unanswered: Toha asks a person for the
     file and returns the question to a script or agent, and renders nothing
-    until it is answered. A file that is not a Release Model document the
-    question accepts is refused like any invalid answer. `intentional model` is
-    the repair for both. The snapshot records the model the process was
-    rendered from, so a comparison of the recorded and committed models shows a
-    process that needs an update. The Toha template composition design defines
-    the document question's default-file field and its resolution order.
-    Intentional never runs Toha, and Toha never runs Intentional.
+    until it is answered. `intentional model` is the repair. The snapshot
+    records the model the process was rendered from, so a comparison of the
+    recorded and committed models shows a process that needs an update. The
+    Toha template composition design defines the document question's
+    default-file field and its resolution order. Intentional never runs Toha,
+    and Toha never runs Intentional.
 
   shared-document-crate: >-
     Intentional publishes `intentional-release-model`, an IO-free crate with no
@@ -262,6 +261,6 @@ proposed-design:
 
   out-of-scope: >-
     Rendering, reconciling, or validating workflow files; custom gate and
-    workflow naming; publication and Distribution configuration; Toha document
+    workflow naming; publication configuration; Toha document
     questions and snapshot formats; and emission of earlier Release Model
     lines.
