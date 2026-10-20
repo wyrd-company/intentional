@@ -196,9 +196,14 @@ proposed-design:
     anything it already describes. Within a line, Intentional only adds optional
     members, and each addition is a minor Intentional change. Every object in
     the schema admits members it does not define, and readers ignore them.
-    Removing, renaming, retyping, or tightening a member, or changing its
-    meaning, mints the next line, `release-model/2`, and is a major Intentional
-    change. Intentional emits only the current line. Authoritative YAML is
+    A projection's `adapter` and each `ecosystems` item are open string values:
+    the schema documents the known adapters and accepts any other, so a new
+    ecosystem adapter stays within the line and readers accept adapter values
+    they do not know. `mode` and `require_phase` are closed enumerations, and a
+    new value for either mints the next line. Removing, renaming, retyping, or
+    tightening a member, or changing its meaning, mints the next line,
+    `release-model/2`, and is a major Intentional change. Intentional emits
+    only the current line. Authoritative YAML is
     `docs/specifications/release-model.schema.yml`; publication serves its JSON
     representation at the identity, following schema-and-binary-publication,
     and until hosting exists readers vendor a copy.
