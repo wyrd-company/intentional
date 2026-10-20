@@ -4299,7 +4299,7 @@ fn annotate_choice_lines(yaml: &str) -> String {
         ),
         (
             "external",
-            "Distribution sequencing remains with the external workflow or harness",
+            "publication sequencing remains with the external executor",
         ),
         ("intentional", "Intentional's contract owns this behavior"),
     ]);
