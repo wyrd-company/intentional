@@ -19,6 +19,46 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+/// Release Plan schema identifier written into every plan.
+pub const RELEASE_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.2/release-plan";
+
+/// The commit and tree a release plan was computed from.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PlanSource {
+    /// Source commit object id.
+    pub commit: String,
+    /// Tree object id of the source commit.
+    pub tree: String,
+}
+
+impl PlanSource {
+    /// Read the source identity of `commit` in `repository`.
+    pub(crate) fn of_commit(repository: &gix::Repository, commit: gix::ObjectId) -> Result<Self> {
+        let tree = repository
+            .find_commit(commit)
+            .map_err(|error| Error::Git(format!("failed to read source commit: {error}")))?
+            .tree_id()
+            .map_err(|error| Error::Git(format!("failed to read source tree: {error}")))?;
+        Ok(Self {
+            commit: commit.to_string(),
+            tree: tree.to_string(),
+        })
+    }
+
+    /// Source identity of HEAD, or `None` when the repository has no commit.
+    pub(crate) fn at_head(root: &Path) -> Result<Option<Self>> {
+        let repository = gix::discover(root)
+            .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+        let head = repository
+            .head()
+            .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+            .id()
+            .map(|id| id.detach());
+        head.map(|commit| Self::of_commit(&repository, commit))
+            .transpose()
+    }
+}
+
 /// One release unit in a canonical release plan.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PlanReleaseUnit {
@@ -73,12 +113,19 @@ pub struct PlanTag {
 /// Canonical digest-bound release plan.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ReleasePlan {
+    /// Release Plan schema identity. Plans written before this member existed omit it.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// SHA-256 digest of the canonical plan payload excluding this seal.
     pub digest: String,
     /// Interpretation contract used to compute the plan.
     pub contract: String,
     /// Generator identity included in the digest.
     pub generator: Generator,
+    /// Commit and tree the plan was computed from. Absent without a commit and
+    /// in plans written before this member existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PlanSource>,
     /// Optional release channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
@@ -92,8 +139,12 @@ pub struct ReleasePlan {
 
 #[derive(Serialize)]
 struct PlanPayload<'a> {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    schema: &'a Option<String>,
     contract: &'a str,
     generator: &'a Generator,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: &'a Option<PlanSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
     release_units: &'a [PlanReleaseUnit],
@@ -125,7 +176,8 @@ impl ReleasePlan {
         intents: &[Intent],
         channel: Option<&str>,
     ) -> Result<Self> {
-        Self::from_inputs_before(root, config, intents, channel, None, None)
+        let source = PlanSource::at_head(root)?;
+        Self::from_inputs_before(root, config, intents, channel, None, None, source)
     }
 
     pub(crate) fn from_inputs_before(
@@ -135,6 +187,7 @@ impl ReleasePlan {
         channel: Option<&str>,
         excluded_target: Option<gix::ObjectId>,
         generator_version: Option<&str>,
+        source: Option<PlanSource>,
     ) -> Result<Self> {
         if channel.is_some_and(str::is_empty) {
             return Err(Error::Validation("channel must not be empty".to_owned()));
@@ -267,25 +320,45 @@ impl ReleasePlan {
             tool: "intentional".to_owned(),
             version: generator_version.unwrap_or(crate::VERSION).to_owned(),
         };
-        let payload = PlanPayload {
-            contract: &config.contract,
-            generator: &generator,
-            channel: &channel,
-            release_units: &release_units,
-            tags: &tags,
-            tag_order: &tag_order,
-        };
-        let payload_json = canonical_json(&payload)?;
-        let digest = sha256_digest(payload_json.as_bytes());
-        Ok(Self {
-            digest,
+        let mut plan = Self {
+            schema: Some(RELEASE_PLAN_SCHEMA.to_owned()),
+            digest: String::new(),
             contract: config.contract.clone(),
             generator,
+            source,
             channel,
             release_units,
             tags,
             tag_order,
-        })
+        };
+        plan.digest = plan.payload_digest()?;
+        Ok(plan)
+    }
+
+    /// Carry over the optional members as `supplied` records them and reseal.
+    /// A plan written before `$schema` and `source` existed then compares
+    /// equal to a reconstruction exactly when every other member agrees.
+    pub(crate) fn with_optional_members_of(mut self, supplied: &Self) -> Result<Self> {
+        if supplied.schema.is_none() {
+            self.schema = None;
+        }
+        self.source = supplied.source.clone();
+        self.digest = self.payload_digest()?;
+        Ok(self)
+    }
+
+    fn payload_digest(&self) -> Result<String> {
+        let payload = PlanPayload {
+            schema: &self.schema,
+            contract: &self.contract,
+            generator: &self.generator,
+            source: &self.source,
+            channel: &self.channel,
+            release_units: &self.release_units,
+            tags: &self.tags,
+            tag_order: &self.tag_order,
+        };
+        Ok(sha256_digest(canonical_json(&payload)?.as_bytes()))
     }
 
     /// Serialize this plan as compact canonical JSON with sorted object keys.
@@ -295,15 +368,7 @@ impl ReleasePlan {
 
     /// Verify that the embedded digest seals the complete plan payload.
     pub fn verify_digest(&self) -> Result<()> {
-        let payload = PlanPayload {
-            contract: &self.contract,
-            generator: &self.generator,
-            channel: &self.channel,
-            release_units: &self.release_units,
-            tags: &self.tags,
-            tag_order: &self.tag_order,
-        };
-        let actual = sha256_digest(canonical_json(&payload)?.as_bytes());
+        let actual = self.payload_digest()?;
         if actual != self.digest {
             return Err(Error::Validation(format!(
                 "release plan digest mismatch: expected {}, computed {actual}",
@@ -619,6 +684,8 @@ mod tests {
         let tags = Vec::new();
         let order = Vec::new();
         let payload = PlanPayload {
+            schema: &None,
+            source: &None,
             contract: "contract-1",
             generator: &generator,
             channel: &None,

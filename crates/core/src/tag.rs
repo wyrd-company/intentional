@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
-use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
+use crate::plan::{canonical_json, sha256_digest, Generator, PlanSource, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
 use semver::Version;
@@ -641,7 +641,7 @@ fn supplied_release_plan(
         None => {
             let intents = match channel {
                 Some(_) => Intent::load_all(root, config)?,
-                None => recover_deleted_intents(root, config)?,
+                None => recover_deleted_intents(root, config)?.0,
             };
             let generator_version = Some(plan.generator.version.as_str());
             let expected = match partial_digest {
@@ -659,6 +659,7 @@ fn supplied_release_plan(
                             .detach(),
                     ),
                     generator_version,
+                    None,
                 )?,
                 None => ReleasePlan::from_inputs_before(
                     root,
@@ -667,8 +668,10 @@ fn supplied_release_plan(
                     channel,
                     None,
                     generator_version,
+                    None,
                 )?,
-            };
+            }
+            .with_optional_members_of(&plan)?;
             if expected != plan {
                 return Err(Error::Validation(
                     "supplied release plan does not match the release recovered from intents"
@@ -731,29 +734,43 @@ fn recovered_release_plan(
     versions: &BTreeMap<String, String>,
     channel: Option<&str>,
 ) -> Result<ReleasePlan> {
-    let intents = match channel {
-        Some(_) => Intent::load_all(root, config)?,
-        None => recover_deleted_intents(root, config)?,
-    };
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-    let partial_digest = existing_head_release_digest(&repository, config)?;
-    let plan = match &partial_digest {
-        Some(_) => ReleasePlan::from_inputs_before(
-            root,
-            config,
-            &intents,
-            channel,
-            Some(
-                repository
-                    .head_id()
-                    .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
-                    .detach(),
-            ),
-            None,
-        )?,
-        None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
+    // The release commit materializes a plan computed from its parent: the
+    // commit before the one that deleted the intents, or HEAD's first parent
+    // for a channel release, which keeps its intents.
+    let (intents, source_commit) = match channel {
+        Some(_) => (
+            Intent::load_all(root, config)?,
+            head_first_parent(&repository)?,
+        ),
+        None => {
+            let (intents, parent) = recover_deleted_intents(root, config)?;
+            (intents, Some(parent))
+        }
     };
+    let source = source_commit
+        .map(|commit| PlanSource::of_commit(&repository, commit))
+        .transpose()?;
+    let partial_digest = existing_head_release_digest(&repository, config)?;
+    let excluded_target = match &partial_digest {
+        Some(_) => Some(
+            repository
+                .head_id()
+                .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+                .detach(),
+        ),
+        None => None,
+    };
+    let plan = ReleasePlan::from_inputs_before(
+        root,
+        config,
+        &intents,
+        channel,
+        excluded_target,
+        None,
+        source,
+    )?;
     if partial_digest
         .as_ref()
         .is_some_and(|digest| digest != &plan.digest)
@@ -836,7 +853,17 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
     Ok(())
 }
 
-fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> {
+fn head_first_parent(repository: &gix::Repository) -> Result<Option<gix::ObjectId>> {
+    let head = repository
+        .head_commit()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD commit: {error}")))?;
+    let parent = head.parent_ids().next().map(|id| id.detach());
+    Ok(parent)
+}
+
+/// Intents deleted by the latest first-parent commit that deleted any, with
+/// the id of that commit's parent, from which the release was planned.
+fn recover_deleted_intents(root: &Path, config: &Config) -> Result<(Vec<Intent>, gix::ObjectId)> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let mut boundaries = release_tag_targets(root, config, &repository)?;
@@ -864,11 +891,12 @@ fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> 
             .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
         let deleted = deleted_intents_between(&parent, &release)?;
         if !deleted.is_empty() {
-            break deleted;
+            break (deleted, parent.id);
         }
         release = parent;
     };
-    deleted
+    let (deleted, source) = deleted;
+    let intents = deleted
         .into_iter()
         .map(|(path, bytes)| {
             let text = std::str::from_utf8(&bytes).map_err(|error| {
@@ -879,7 +907,8 @@ fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> 
             })?;
             Intent::parse(&path, text, config)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((intents, source))
 }
 
 fn release_tag_targets(

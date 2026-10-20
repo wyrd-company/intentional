@@ -38,7 +38,7 @@ pub use model::{
 };
 pub use plan::{
     canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,
-    PlanReleaseUnit, PlanTag, ReleasePlan,
+    PlanReleaseUnit, PlanSource, PlanTag, ReleasePlan, RELEASE_PLAN_SCHEMA,
 };
 pub use stamp::StampResult;
 pub use status::{

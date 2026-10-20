@@ -394,3 +394,67 @@ fn release_plan_schema_rejects_drift_from_the_released_shape() {
     workspace["role"] = json!("primary");
     assert_invalid(RELEASE_PLAN_ID, &workspace_with_role);
 }
+
+#[test]
+fn emitted_plan_carries_its_schema_identity_and_the_source_of_head() {
+    let repo = release_fixture_repo();
+    let plan = emitted_plan(&repo, &[]);
+    assert_eq!(plan["$schema"], RELEASE_PLAN_ID);
+    assert_eq!(
+        plan["source"],
+        json!({
+            "commit": git(&repo.root, &["rev-parse", "HEAD"]),
+            "tree": git(&repo.root, &["rev-parse", "HEAD^{tree}"]),
+        })
+    );
+    let decoded: ReleasePlan = serde_json::from_value(plan).expect("plan decodes");
+    decoded
+        .verify_digest()
+        .expect("digest covers the new members");
+
+    let unborn = TestRepo::new();
+    unborn.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    unborn.write(
+        ".intentional/config.yml",
+        &read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml"),
+    );
+    unborn.write(
+        ".intentional/intents/sample-otter-0001.md",
+        "---\nsample-library: minor\n---\n\nAdd a sample capability.\n",
+    );
+    let without_commit = emitted_plan(&unborn, &[]);
+    assert_eq!(without_commit["$schema"], RELEASE_PLAN_ID);
+    assert!(without_commit.get("source").is_none());
+    assert_valid(RELEASE_PLAN_ID, &without_commit);
+}
+
+#[test]
+fn tags_recovered_without_the_plan_record_the_digest_of_the_emitted_plan() {
+    for (args, primary) in [
+        (&[][..], "sample-library@1.3.0"),
+        (&["--channel", "rc"][..], "sample-library@1.3.0-rc.1"),
+    ] {
+        let repo = release_fixture_repo();
+        let plan = emitted_plan(&repo, args);
+        repo.cli().arg("apply").args(args).assert().success();
+        repo.commit("apply release");
+        repo.cli().arg("tag").args(args).assert().success();
+
+        for name in [
+            primary.to_owned(),
+            primary.replace("sample-library", "mirror"),
+        ] {
+            let object = git(&repo.root, &["cat-file", "tag", &name]);
+            let message = object
+                .split_once("\n\n")
+                .map(|(_, message)| format!("{message}\n"))
+                .expect("tag message");
+            let fields = tag_record_fields(&message);
+            assert_eq!(fields["plan-digest"], plan["digest"], "{name} {args:?}");
+            assert_valid(TAG_RECORD_ID, &fields);
+        }
+    }
+}

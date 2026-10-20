@@ -91,10 +91,12 @@ intents, release notes, expected tags, required phases, and tag order:
 intentional plan > release-plan.json
 ```
 
-The sealed payload contains the interpretation contract, generator identity,
-old and new versions, contributing intent ids, rendered release notes,
-release-unit and workspace tags, phase declarations, `tag-after` prerequisites,
-and tag order. It contains no publication graph. Preserve the exact output;
+The sealed payload contains the Release Plan schema identity (`$schema`), the
+interpretation contract, generator identity, the source commit and tree the
+plan was computed from (`source`), old and new versions, contributing intent
+ids, rendered release notes, release-unit and workspace tags, phase
+declarations, `tag_after` prerequisites, and tag order. It contains no
+publication graph. Preserve the exact output;
 do not hand-edit or reformat the sealed plan.
 
 ## Project the versions

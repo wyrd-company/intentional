@@ -6,7 +6,7 @@
 use assert_cmd::Command;
 use intentional_core::{
     canonical_json, initialize, sha256_digest, Adapter, CandidateResolution, Generator, InitPlan,
-    InitState, PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
+    InitState, PlanReleaseUnit, PlanSource, PlanTag, ProjectionMode, ReleasePlan,
 };
 use predicates::prelude::*;
 use serde::Serialize;
@@ -1417,8 +1417,12 @@ fn legacy_taggerless_release_records_remain_valid_authority() {
 
 #[derive(Serialize)]
 struct PlanDigestPayload<'a> {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    schema: &'a Option<String>,
     contract: &'a str,
     generator: &'a Generator,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: &'a Option<PlanSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
     release_units: &'a [PlanReleaseUnit],
@@ -1429,6 +1433,8 @@ struct PlanDigestPayload<'a> {
 fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) -> ReleasePlan {
     plan.generator.version = generator_version.to_owned();
     let payload = PlanDigestPayload {
+        schema: &plan.schema,
+        source: &plan.source,
         contract: &plan.contract,
         generator: &plan.generator,
         channel: &plan.channel,
@@ -1443,6 +1449,15 @@ fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) ->
 fn prepare_applied_release_with_prior_plan_generator(
     repo: &TestRepo,
     prior_generator: &str,
+) -> ReleasePlan {
+    prepare_applied_release_with_plan(repo, |plan| {
+        reseal_plan_with_generator(plan, prior_generator)
+    })
+}
+
+fn prepare_applied_release_with_plan(
+    repo: &TestRepo,
+    reshape: impl FnOnce(ReleasePlan) -> ReleasePlan,
 ) -> ReleasePlan {
     repo.write("package.json", &npm_manifest("0.0.0"));
     repo.commit("add fixture");
@@ -1469,7 +1484,7 @@ fn prepare_applied_release_with_prior_plan_generator(
     let output = repo.cli().arg("plan").output().expect("plan command");
     assert!(output.status.success());
     let plan: ReleasePlan = serde_json::from_slice(&output.stdout).expect("plan JSON from CLI");
-    let plan = reseal_plan_with_generator(plan, prior_generator);
+    let plan = reshape(plan);
     fs::write(
         repo.root.join("release-plan.json"),
         plan.to_canonical_json().expect("plan JSON"),
@@ -1501,6 +1516,41 @@ fn accepts_prior_version_sealed_plan_for_self_hosted_release() {
     assert_tagger_header(&repo.root, "0.0.1");
     assert_tagger_header(&repo.root, "sample-library@0.0.1");
     git_fsck_strict(&repo.root);
+}
+
+#[test]
+fn accepts_sealed_plan_written_without_schema_and_source_members() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release_with_plan(&repo, |mut plan| {
+        assert!(plan.schema.is_some() && plan.source.is_some());
+        plan.schema = None;
+        plan.source = None;
+        reseal_plan_with_generator(plan, "0.2.0")
+    });
+    let text = fs::read_to_string(repo.root.join("release-plan.json")).unwrap();
+    assert!(!text.contains("$schema") && !text.contains("\"source\""));
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    assert!(release_record.contains(&format!("plan-digest: {}", plan.digest)));
+}
+
+#[test]
+fn rejects_supplied_plan_with_another_schema_identity() {
+    let repo = TestRepo::new();
+    prepare_applied_release_with_plan(&repo, |mut plan| {
+        plan.schema = Some("https://intentional.foo/schemas/0.3/release-plan".to_owned());
+        reseal_plan_with_generator(plan, "0.2.0")
+    });
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not match the release recovered from intents",
+        ));
 }
 
 #[test]
