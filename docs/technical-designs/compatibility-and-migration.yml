@@ -106,8 +106,8 @@ proposed-design:
     Release automation publishes each compatibility-line schema to its permanent
     representation-neutral `intentional.foo` identifier and validates served JSON
     against authoritative repository YAML. It also preserves every released
-    binary, source identity, digest, and attestation in an immutable Intentional
-    Release Record. Publication tests prove that existing schema identifiers and
+    binary, source identity, digest, and attestation in Intentional's own
+    immutable release record. Publication tests prove that existing schema identifiers and
     binary assets remain retrievable before another compatibility line closes.
 
   deprecation-and-removal: >-

@@ -93,7 +93,7 @@ requirements:
       pol-backward-compatibility: [ 4, 9 ]
     statement: >-
       Every released Intentional binary and its integrity information MUST remain
-      available from an immutable Release Record.
+      available from Intentional's own immutable release record.
     substatements:
       A: >-
         Current Intentional MUST direct historical Release Plan execution to the
