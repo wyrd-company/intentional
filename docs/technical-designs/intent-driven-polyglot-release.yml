@@ -3,94 +3,78 @@ relationships:
   realizes: intentional
 objective: >-
   Define Intentional as one coherent release protocol that turns change intent
-  into authoritative versions and, when managed workflow is adopted, preserves
-  one immutable GitHub Release record per affected Release Unit before
-  distributing its released content through maintained ecosystem integrations.
+  into authoritative versions and annotated tag records, and that exposes the
+  Release Workspace to release processes without choosing one.
 proposed-design:
   architecture: >-
     Intentional consists of a native command-line interface, deterministic
-    release-domain mechanisms, optional generated GitHub Actions workflows,
-    maintained ecosystem recipes, and typed repository extension points. The
-    command-line interface provides the portable protocol. Managed workflow
-    coordinates GitHub authority, per-Release Unit records, destination
-    credentials, Distribution, and verification around the same release rules.
+    release-domain mechanisms, ecosystem adapters, and the Release Model
+    document. The command-line interface provides the portable protocol. A
+    release process, such as one rendered by a Toha template, drives that
+    protocol and owns commits, pushes, builds, release records, and
+    publication. Intentional holds no workflow opinion.
 
   core-protocol: >-
-    Intentional's core protocol requires Git and no hosting platform. It owns
-    Release Workspace initialization, Change Intents, status, semantic-version
-    computation, Release Plans, materialization, changelogs, and annotated tag
-    records. The surrounding harness creates the materialized commit.
-    `intentional tag --plan` verifies that commit and creates the authoritative
-    tags that establish the Release. This tag-backed Release is complete without
-    generated workflow, managed Release Record, or external Distribution.
+    Intentional's protocol requires Git and no hosting platform. It owns Release
+    Workspace initialization, Change Intents, status, semantic-version
+    computation, Release Plans, materialization, changelogs, annotated tag
+    records, verification, and the Release Model. The surrounding process
+    creates the materialized commit. `intentional tag --plan` verifies that
+    commit and creates the authoritative tags that establish the Release. This
+    tag-backed Release is complete without any release record or publication.
 
   domain-state: >-
-    Release Workspace, Change Intent, Release, and Distribution are the domain
-    aggregates. Release Workspace owns configuration. Change Intent owns pending
-    release input. Release owns established source identity, its sealed global
-    plan, and the managed Release Records created for affected Release Units.
-    Distribution owns one released artifact or logical content graph's delivery
-    and current consumer-path verification at one destination.
+    Release Workspace, Change Intent, and Release are the domain aggregates.
+    Release Workspace owns configuration. Change Intent owns pending release
+    input. Release owns established source identity and its sealed global plan.
+    Release records and published packages belong to the surrounding process.
 
   release-authority: >-
     Annotated Git tags are version authority. A computed Release Plan and its
     materialized tree are candidates. Making the verified release commit and
     annotated identity tags authoritative repository objects establishes the
     Release and seals the plan as durable identity. A channel-less Release
-    consumes its Change Intents. The portable command-line protocol prepares and
-    verifies these objects for an operator or another automation system. Managed
-    GitHub workflow performs the same transition through repository-owner App
-    authority and continues into per-Release Unit records and Distribution.
+    consumes its Change Intents. The command-line protocol prepares and verifies
+    these objects for an operator or any automation that drives it.
 
   versioned-semantics: >-
-    Intentional's semantic version owns bump aggregation, dependency propagation,
-    release-group behavior, pre-1.0 semantic-version mapping, changelog
-    construction, canonical serialization, tag records, recipes, postures, and
-    recovery. Release Plans and tags carry the exact producing Intentional
-    version so the same semantics can be selected for execution and verification.
+    Intentional's semantic version owns bump aggregation, dependency
+    propagation, release-group behavior, pre-1.0 semantic-version mapping,
+    changelog construction, canonical serialization, tag records, and recovery.
+    Release Plans and tags carry the exact producing Intentional version so the
+    same semantics can be selected for execution and verification. The Release
+    Model carries its own contract line instead.
 
   initialization: >-
-    `intentional init` always configures the core protocol. The same
-    Initialization Plan separately resolves managed GitHub workflow adoption.
-    GitHub origin detection supplies a recommendation. `--workflow` opts in and
-    `--no-workflow` opts out. Declining workflow generation preserves every core
-    release capability.
+    `intentional init` configures the Release Workspace from repository
+    evidence and explicit owner decisions. It configures no release process and
+    runs no template tool.
 
   change-intent-and-planning: >-
     Change Intents, semantic-version computation, dependencies, release groups,
     projections, changelogs, channels, and status form one portable versioning
     design. Release Plans and tag records bind those calculations to authority.
 
-  managed-workflow: >-
-    Managed GitHub workflow is an optional layer projected from Release Workspace
-    state into two protocol entrypoints, independently triggered Distribution
-    Target workflows, and owned support files. Release workflow
-    automates the core establishment protocol through remote repository authority.
-    Release Record workflow builds and signs Release Artifacts and closes each
-    affected Release Unit's immutable GitHub Release record independently.
-    Each Distribution Target workflow consumes the applicable immutable record
-    independently. Managed workflow does not redefine
-    version computation, Release Plans, materialization, or tag identity.
-    Protected managed tag namespaces are the trust root for tag-triggered
-    workflow execution.
-
-  security-posture: >-
-    Managed workflow supports explicit named security postures derived by
-    subtracting controls from its canonical robust posture.
+  release-process-boundary: >-
+    A release process reads Release Workspace facts from the committed Release
+    Model and dynamic release facts from `intentional status` and
+    `intentional plan`. It runs the protocol commands, creates the release
+    commit, declares tag phases, pushes tags, creates each release record that a
+    Release Unit's policy requires, and publishes packages. Gate locations,
+    workflow names, credentials, and publication targets are process facts that
+    the process template records; Intentional configuration holds none of them.
 
   ecosystem-integrations: >-
-    Per-ecosystem designs specialize the shared protocol with complete discovery,
-    projection, build, packaging, Distribution, retrieval, verification, and
-    credential recipes.
+    Ecosystem adapters read and write native version fields and internal
+    dependency requirements, and detectors propose Release Units from native
+    manifest evidence. Generic JSON, TOML, and YAML adapters project versions
+    through explicit pointers.
 
   implementation-topology: >-
     A Rust core library implements the domain model, deterministic computation,
     adapters, canonical records, and validation. A thin Rust command-line binary
-    exposes those operations and embeds its agent-facing usage skill. Published
-    schemas define configuration, plans, records, evidence, and extension
-    contracts. Generated repository scripts call the binary and project the
-    required GitHub step outputs. The setup Action installs an exact released
-    binary; the contribution Action carries typed Evidence Contributions;
-    Intentional-owned delivery Actions and repository-owned pinned delivery
-    Actions admitted by a maintained recipe implement bounded destination steps
-    inside generated jobs.
+    exposes those operations and embeds its agent-facing usage skill. The
+    IO-free `intentional-release-model` crate holds the Release Model types for
+    Intentional and its readers. Published schemas define configuration, Change
+    Intents, Initialization Plans, Release Plans, tag records, and the Release
+    Model. The setup Action installs an exact released binary.
