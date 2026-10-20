@@ -130,14 +130,6 @@ commands:
   - name: status
     summary: Show pending intent and computed Release Unit versions.
     mode: non-interactive
-    options:
-      - name: json
-        flags:
-          - --json
-        kind: flag
-        description: Emit stable structured workspace status.
-        required: false
-        repeatable: false
     output:
       modes:
         - name: human-readable
@@ -145,11 +137,6 @@ commands:
             Prints pending Change Intents, missing baselines, tag-record issues,
             computed versions, projection drift, and a stale Release Model.
           machine-readable: false
-        - name: json
-          description: >-
-            Prints the same status as structured JSON with stable diagnostic,
-            Release Unit, version, baseline, and drift identities.
-          machine-readable: true
       exit-codes:
         - code: 0
           meaning: Workspace status was computed and printed.
@@ -157,7 +144,6 @@ commands:
           meaning: Workspace state was invalid or could not be read.
     examples:
       - intentional status
-      - intentional status --json
   - name: plan
     summary: Emit the canonical digest-bound Release Plan.
     mode: non-interactive
@@ -382,24 +368,11 @@ commands:
   - name: check
     summary: Validate the Release Workspace and its committed Release Model.
     mode: non-interactive
-    options:
-      - name: json
-        flags:
-          - --json
-        kind: flag
-        description: Emit stable structured conformance results.
-        required: false
-        repeatable: false
     output:
       modes:
         - name: human-readable
           description: Prints conformance diagnostics or a successful check result.
           machine-readable: false
-        - name: json
-          description: >-
-            Prints structured conformance status and stable diagnostics with
-            affected protocol identities.
-          machine-readable: true
       exit-codes:
         - code: 0
           meaning: Release Workspace conformance passed.
@@ -409,7 +382,6 @@ commands:
             failed.
     examples:
       - intentional check
-      - intentional check --json
     notes:
       - >-
         When `.intentional/release-model.json` exists, a committed model that

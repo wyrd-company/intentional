@@ -408,9 +408,6 @@ mod tests {
     /// Commands the specification states ahead of their implementation.
     const SPECIFIED_AHEAD: [&str; 1] = ["model"];
 
-    /// Flags the specification states ahead of their implementation.
-    const FLAGS_SPECIFIED_AHEAD: [(&str, &str); 2] = [("status", "--json"), ("check", "--json")];
-
     fn long_flags(command: &clap::Command) -> BTreeSet<String> {
         command
             .get_arguments()
@@ -459,11 +456,11 @@ mod tests {
             let Some(subcommand) = cli.find_subcommand(name) else {
                 continue;
             };
-            let specified = specified_flags(&command["options"])
-                .into_iter()
-                .filter(|flag| !FLAGS_SPECIFIED_AHEAD.contains(&(name, flag.as_str())))
-                .collect::<BTreeSet<_>>();
-            assert_eq!(long_flags(subcommand), specified, "{name}");
+            assert_eq!(
+                long_flags(subcommand),
+                specified_flags(&command["options"]),
+                "{name}"
+            );
         }
         assert_eq!(
             specified_flags(&specification["global-options"]),
