@@ -44,7 +44,9 @@ harness decides when publication and other external effects occur.
 
 Intentional never creates commits, pushes branches or tags, publishes to a
 registry, opens pull requests, or operates a forge. `tag` is its only
-Git-writing command. Tag templates do not add a `v` prefix.
+Git-writing command. Primary and workspace tag templates do not add a `v`
+prefix. A projection tag may use one where its ecosystem requires it, such as a
+Go module tag.
 
 ## Supported ecosystems
 
