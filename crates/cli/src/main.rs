@@ -318,8 +318,12 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
         for operation in &result.operations {
             println!("{operation}");
         }
-        if result.plan.is_some() && !args.take_over {
+        if result.path == std::path::Path::new(intentional_core::INIT_PLAN_PATH) && !args.take_over
+        {
             println!("plan: {}", result.path.display());
+        }
+        for action in result.next_actions(root) {
+            println!("next: {action}");
         }
     }
     result.apply(root, args.dry_run)?;

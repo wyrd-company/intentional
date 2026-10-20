@@ -54,7 +54,15 @@ settings. Do not hand-edit it or use it as Intentional configuration.
 prints an operation result with `operation`, `path`, and `dry_run`; it conflicts
 with `--stdout`. Invalid input returns exit `1` and leaves the old model untouched.
 Initialization writes the model whenever it writes configuration. Intentional
-never runs Toha.
+never runs Toha. A ready init result names applying a release process template.
+If the model remains absent after planned writes (for example, a no-op rerun),
+run the named `intentional model` action first. Commit the configuration and
+model before applying your chosen template. Follow the post-commit baseline
+command before this handoff on takeover. Needs-input results name no handoff.
+`init --json` always emits an Initialization Plan: ordinary success uses `ready`
+and carries configuration in `inferred-config`; optional `next-actions` contains
+the ordered handoff. Init creates units with the default `required` release-record
+policy and omits that key from configuration. See the `init_handoff_*` CLI tests.
 
 ## Orient before changing state
 

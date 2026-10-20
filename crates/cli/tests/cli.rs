@@ -365,7 +365,7 @@ fn configured_repository_without_detectable_manifests_is_a_no_op() {
     let result = initialize(&repo.root, false).expect("repeatable configured init");
     assert_eq!(result.state, InitState::Success);
     assert!(result.operations.is_empty());
-    assert!(result.plan.is_none());
+    assert_eq!(result.plan.as_ref().unwrap().state, InitState::Ready);
 }
 
 #[test]
@@ -1837,4 +1837,140 @@ fn release_tagging_still_refuses_a_recordless_tag_at_the_release_version() {
         .stderr(predicate::str::contains(
             "existing tag mirror@1.0.1 carries no annotated tag record",
         ));
+}
+
+#[test]
+fn init_handoff_ready_without_model_and_no_op_rerun() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.commit("configure fixture without manifests");
+    for _ in 0..2 {
+        repo.cli()
+            .arg("init")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "next: intentional model\nnext: apply a release process template\n",
+            ));
+        let output = repo
+            .cli()
+            .args(["init", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+        assert_eq!(plan.state, InitState::Ready);
+        assert_eq!(plan.source_kind, "intentional");
+        assert_eq!(
+            plan.next_actions,
+            ["intentional model", "apply a release process template"]
+        );
+        assert!(plan.planned_operations.is_empty());
+        assert!(plan.inferred_config.release_units.contains_key("sample"));
+        assert!(!repo.root.join(".intentional/release-model.json").exists());
+    }
+}
+
+#[test]
+fn init_handoff_ready_with_committed_model_names_only_template() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    initialize_independent(&repo);
+    repo.commit("commit initialized fixture and model");
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: apply a release process template\n",
+        ))
+        .stdout(predicate::str::contains("next: intentional model").not());
+    let output = repo
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan.next_actions, ["apply a release process template"]);
+}
+
+#[test]
+fn init_handoff_needs_input_and_invalid_repository_name_no_actions() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.cli()
+        .arg("init")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("next:").not());
+    let output = repo
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert!(json.get("next-actions").is_none());
+    let invalid = tempfile::tempdir().unwrap();
+    for args in [vec!["init"], vec!["init", "--json"]] {
+        Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+            .arg("-C")
+            .arg(invalid.path())
+            .args(args)
+            .assert()
+            .code(1)
+            .stdout("");
+    }
+}
+
+#[test]
+fn init_handoff_config_write_includes_model_and_feature_policy_required() {
+    let repo = TestRepo::new();
+    repo.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-feature", "1.0.0"),
+    );
+    repo.cli().arg("init").assert().code(2);
+    resolve_plan(&repo, |_| CandidateResolution::Independent {
+        release_unit: "sample-feature".to_owned(),
+    });
+    // A preview describes the post-operation state without creating the model yet.
+    let output = repo
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan.source_kind, "workspace");
+    assert_eq!(plan.next_actions, ["apply a release process template"]);
+    assert!(!repo.root.join(".intentional/release-model.json").exists());
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: apply a release process template\n",
+        ))
+        .stdout(predicate::str::contains("next: intentional model").not());
+    let config = intentional_core::Config::load(&repo.root).unwrap();
+    assert_eq!(
+        config.release_units["sample-feature"].release_record,
+        intentional_core::ReleaseRecordPolicy::Required
+    );
+    assert!(
+        !fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("release-record:")
+    );
+    assert!(repo.root.join(".intentional/release-model.json").is_file());
 }

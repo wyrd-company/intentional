@@ -2078,3 +2078,75 @@ release-units:
     );
     repository.cli().arg("check").assert().success();
 }
+
+#[test]
+fn init_handoff_takeover_orders_baseline_model_and_template() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        r#"{"name":"sample-root","private":true,"workspaces":["packages/*"]}"#,
+    );
+    repository.write(
+        "packages/library/package.json",
+        r#"{"name":"sample-library","version":"1.0.0"}"#,
+    );
+    repository.write(".changeset/config.json", r#"{"changelog":false,"commit":false,"fixed":[],"linked":[],"access":"public","baseBranch":"main","updateInternalDependencies":"patch","ignore":[]}"#);
+    git(&repository.root, &["add", "-A"]);
+    git(&repository.root, &["commit", "-qm", "add fixture"]);
+    repository.cli().arg("init").assert().code(2);
+    let path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    resolve_discovery_candidates(&mut plan);
+    for diagnostic in &mut plan.diagnostics {
+        diagnostic.resolution = diagnostic.recommended.clone();
+    }
+    repository.write(".intentional/init-plan.yml", &plan.to_yaml().unwrap());
+    // A ready imported plan writes no model until explicit takeover.
+    let output = repository
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let ready: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(ready.state, InitState::Ready);
+    assert_eq!(
+        ready.next_actions,
+        ["intentional model", "apply a release process template"]
+    );
+    assert_eq!(ready.post_commit_action, "intentional tag --baseline");
+    repository
+        .cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: intentional model\nnext: apply a release process template\n",
+        ));
+    // Takeover writes the model, so its handoff omits the model command.
+    let output = repository
+        .cli()
+        .args(["init", "--take-over", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let takeover: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(takeover.next_actions, ["apply a release process template"]);
+    assert_eq!(takeover.post_commit_action, "intentional tag --baseline");
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "after commit: intentional tag --baseline\nnext: apply a release process template\n",
+        ));
+    assert!(repository
+        .root
+        .join(intentional_core::RELEASE_MODEL_PATH)
+        .is_file());
+}

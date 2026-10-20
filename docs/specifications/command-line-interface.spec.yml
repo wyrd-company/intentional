@@ -51,7 +51,7 @@ commands:
         - name: human-readable
           description: >-
             Prints discovery evidence, recommendations, resolutions, diagnostics,
-            planned operations, and any unresolved plan path.
+            planned operations, ordered next actions, and any unresolved plan path.
           machine-readable: false
         - name: initialization-plan
           description: Prints the schema-backed Initialization Plan selected by --json.
@@ -70,8 +70,13 @@ commands:
     notes:
       - >-
         Initialization configures no release process and does not run a
-        template tool. Reconciliation rewrites an existing Release Model in
-        the same operation set as configuration.
+        template tool. Initialization writes the Release Model whenever it writes
+        configuration. Every ready result names applying a release process template;
+        if the model remains absent after planned operations, it first names
+        intentional model. Needs-input results name no handoff. Ordinary success
+        with --json emits a ready Initialization Plan with inferred-config and
+        optional ordered next-actions. Takeover prints its post-commit baseline
+        command before the handoff.
   - name: add
     summary: Author a pending Change Intent.
     mode: interactive

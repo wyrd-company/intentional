@@ -36,7 +36,7 @@ use walkdir::WalkDir;
 pub const INIT_PLAN_PATH: &str = ".intentional/init-plan.yml";
 
 /// Published initialization-plan schema identifier.
-pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/init-plan.yml";
+pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.2/init-plan";
 
 const CHANGESETS_CONFIG: &str = ".changeset/config.json";
 const TRANSACTION_PATH: &str = ".intentional/.takeover-transaction";
@@ -561,6 +561,9 @@ pub struct InitPlan {
     pub planned_operations: Vec<String>,
     /// Required command after the takeover changes are committed.
     pub post_commit_action: String,
+    /// Ordered release process handoff after the planned operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<String>,
 }
 
 impl InitPlan {
@@ -843,6 +846,24 @@ impl InitResult {
         Ok(())
     }
 
+    /// Ordered actions after initialization, accounting for the planned model write.
+    pub fn next_actions(&self, root: &Path) -> Vec<String> {
+        if self.state == InitState::NeedsInput {
+            return Vec::new();
+        }
+        let mut actions = Vec::new();
+        if !root.join(crate::RELEASE_MODEL_PATH).is_file()
+            && !self
+                .writes
+                .iter()
+                .any(|(path, _)| path == Path::new(crate::RELEASE_MODEL_PATH))
+        {
+            actions.push("intentional model".to_owned());
+        }
+        actions.push("apply a release process template".to_owned());
+        actions
+    }
+
     /// Structured output matching the written configuration or initialization plan.
     pub fn to_json(&self) -> Result<String> {
         match &self.plan {
@@ -890,6 +911,49 @@ fn with_release_model(root: &Path, mut result: InitResult) -> Result<InitResult>
         let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
         if !result.operations.contains(&operation) {
             result.operations.insert(1, operation);
+        }
+    }
+    with_release_process_handoff(root, result)
+}
+
+fn with_release_process_handoff(root: &Path, mut result: InitResult) -> Result<InitResult> {
+    let next_actions = result.next_actions(root);
+    // Ordinary success uses the same schema-backed result as imported initialization.
+    if result.plan.is_none() {
+        result.plan = Some(InitPlan {
+            schema: INIT_PLAN_SCHEMA.to_owned(),
+            state: InitState::Ready,
+            source_kind: if root.join(CONFIG_PATH).is_file() {
+                "intentional".to_owned()
+            } else {
+                "workspace".to_owned()
+            },
+            source_fingerprint: fingerprint(root, &BTreeSet::from([PathBuf::from(CONFIG_PATH)]))?,
+            inferred_config: Config::from_yaml(&result.contents)?,
+            discovery_candidates: Vec::new(),
+            diagnostics: Vec::new(),
+            converted_intents: Vec::new(),
+            parity: ParityResult {
+                status: "equivalent".to_owned(),
+                release_units: Vec::new(),
+            },
+            planned_operations: result.operations.clone(),
+            post_commit_action: String::new(),
+            next_actions: Vec::new(),
+        });
+    }
+    if let Some(plan) = &mut result.plan {
+        plan.next_actions = next_actions;
+        if result.takeover {
+            plan.planned_operations = result.operations.clone();
+        }
+        if result.path == Path::new(INIT_PLAN_PATH) {
+            result.contents = plan.to_yaml()?;
+            for (path, contents) in &mut result.writes {
+                if path == Path::new(INIT_PLAN_PATH) {
+                    *contents = result.contents.clone();
+                }
+            }
         }
     }
     Ok(result)
@@ -1041,6 +1105,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
             format!("delete {INIT_PLAN_PATH}"),
         ],
         post_commit_action: String::new(),
+        next_actions: Vec::new(),
     };
     let contents = plan.to_yaml()?;
     Ok(InitResult {
@@ -1139,6 +1204,7 @@ fn apply_candidate_resolutions(
         },
         planned_operations: Vec::new(),
         post_commit_action: String::new(),
+        next_actions: Vec::new(),
     };
     validation_plan.validate()?;
 
@@ -2032,6 +2098,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         parity: parity.result,
         planned_operations: planned_operations.clone(),
         post_commit_action: "intentional tag --baseline".to_owned(),
+        next_actions: Vec::new(),
     };
     // The state is always recomputed after reading editable resolutions.
     plan.state = state;
@@ -4394,6 +4461,7 @@ mod tests {
             },
             planned_operations: Vec::new(),
             post_commit_action: "intentional tag --baseline".to_owned(),
+            next_actions: Vec::new(),
         }
     }
 
@@ -4962,6 +5030,15 @@ release-units:
             .expect("required plan fields")
             .iter()
             .any(|field| field.as_str() == Some("discovery-candidates")));
+        assert_eq!(
+            schema["properties"]["next-actions"]["type"].as_str(),
+            Some("array")
+        );
+        assert!(!schema["required"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|field| field.as_str() == Some("next-actions")));
         let variants = schema["$defs"]["candidate-resolution"]["oneOf"]
             .as_sequence()
             .expect("candidate resolution variants");

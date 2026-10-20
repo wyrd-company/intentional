@@ -135,6 +135,30 @@ normal repository workflow. Init does not commit, publish, or create tags.
 A later `init` scans configured repositories too. Matching receipts make it a
 no-op; new candidates or changed excluded evidence require explicit input.
 
+## Continue to a release process
+
+A ready result ends with `next: apply a release process template`. Commit the
+configuration and `.intentional/release-model.json` before applying your chosen
+template. Initialization configures no release process and never runs a template
+tool. Every Release Unit it creates uses the default `required` release-record
+policy; configuration omits `release-record` for this default.
+
+A no-op rerun does not write an absent model. In that case the output first names
+`next: intentional model`, then `next: apply a release process template`. A plan
+that needs input and an invalid repository name no handoff. A dry run describes
+the actions after its planned writes.
+
+`init --json` returns an Initialization Plan, including on ordinary success:
+`state` is `ready`, `inferred-config` carries the configuration, and optional
+`next-actions` carries the ordered handoff. After takeover, the existing
+`post-commit-action` baseline command comes before the release process handoff.
+
+These paths are covered by `init_handoff_ready_without_model_and_no_op_rerun`,
+`init_handoff_ready_with_committed_model_names_only_template`,
+`init_handoff_needs_input_and_invalid_repository_name_no_actions`,
+`init_handoff_config_write_includes_model_and_feature_policy_required`, and
+`init_handoff_takeover_orders_baseline_model_and_template`.
+
 ## Bootstrap an already released repository
 
 Suppose the repository has already released `0.1.0`. Resolve its candidates and

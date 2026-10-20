@@ -80,6 +80,12 @@ properties:
   planned-operations:
     type: array
     items: { type: string }
+  next-actions:
+    type: array
+    items:
+      type: string
+    description: >-
+      Ordered release process handoff after planned operations; absent when input is needed.
   post-commit-action:
     enum: [ "", intentional tag --baseline ]
 $defs:

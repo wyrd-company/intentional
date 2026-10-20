@@ -78,7 +78,11 @@ proposed-design:
     release-record policy; initialization never proposes `none`. Whenever
     initialization writes `.intentional/config.yml`, it writes the Release Model
     in the same operation set, as the Release Model design's command surface
-    requires. A ready plan names a release process template as the next action.
+    requires. A ready result names applying a release process template as the next
+    action. If no Release Model exists after the planned operations, it first
+    names `intentional model`. A no-op reconciliation leaves an absent model
+    absent and names both actions in that order. A plan that needs input names
+    no release process handoff.
     The core release protocol needs no release process: planning,
     materialization, versioning, changelog production, and verified
     establishment from a harness-created commit and Intentional-created tags

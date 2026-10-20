@@ -45,7 +45,12 @@ fn published_schema(name: &str) -> Value {
 /// registered under its `$id`, so cross-schema references resolve locally.
 fn validator(reference: &str) -> Validator {
     let mut registry = Registry::new();
-    for name in ["release-workspace", "release-plan", "tag-record"] {
+    for name in [
+        "release-workspace",
+        "release-plan",
+        "tag-record",
+        "initialization-plan",
+    ] {
         let schema = published_schema(name);
         let id = schema["$id"].as_str().expect("schema $id").to_owned();
         registry = registry.add(id, schema).expect("schema registers");
@@ -506,4 +511,25 @@ fn tags_recovered_without_the_plan_record_the_digest_of_the_emitted_plan() {
             assert_valid(TAG_RECORD_ID, &fields);
         }
     }
+}
+
+#[test]
+fn initialization_ready_json_validates_next_actions_against_published_schema() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", "contract: contract-1\nrelease-units:\n  sample:\n    path: .\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n");
+    let output = repo
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let mut result: Value = serde_json::from_slice(&output).unwrap();
+    let schema = "https://intentional.foo/schemas/0.2/init-plan";
+    assert_valid(schema, &result);
+    result.as_object_mut().unwrap().remove("next-actions");
+    assert_valid(schema, &result);
+    result["next-actions"] = json!([42]);
+    assert_invalid(schema, &result);
 }
