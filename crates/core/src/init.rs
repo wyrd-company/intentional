@@ -865,14 +865,34 @@ pub fn initialize(root: &Path, take_over: bool) -> Result<InitResult> {
         .map_err(|_| Error::Validation("intentional init requires a Git repository".to_owned()))?;
     recover_interrupted_takeover(root)?;
     if root.join(CHANGESETS_CONFIG).exists() {
-        return changesets_plan(root, take_over);
+        return with_release_model(root, changesets_plan(root, take_over)?);
     }
     if take_over {
         return Err(Error::Validation(
             "--take-over requires an existing .changeset/config.json".to_owned(),
         ));
     }
-    ordinary_plan(root)
+    with_release_model(root, ordinary_plan(root)?)
+}
+
+// Derive before any write so invalid projections leave the entire operation set untouched.
+fn with_release_model(root: &Path, mut result: InitResult) -> Result<InitResult> {
+    if let Some((_, contents)) = result
+        .writes
+        .iter()
+        .find(|(path, _)| path == Path::new(CONFIG_PATH))
+    {
+        let config = Config::from_yaml(contents)?;
+        let model = crate::ReleaseModel::from_config(root, &config)?.encode()?;
+        result
+            .writes
+            .push((PathBuf::from(crate::RELEASE_MODEL_PATH), model));
+        let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
+        if !result.operations.contains(&operation) {
+            result.operations.insert(1, operation);
+        }
+    }
+    Ok(result)
 }
 
 /// Compatibility wrapper for callers performing ordinary initialization.
@@ -4042,7 +4062,7 @@ fn verify_takeover_preconditions(
         ));
     }
     for (relative, _) in writes {
-        if root.join(relative).exists() {
+        if relative != Path::new(crate::RELEASE_MODEL_PATH) && root.join(relative).exists() {
             return Err(Error::Validation(format!(
                 "takeover target {} already exists; resolve the competing Intentional state first",
                 relative.display()
@@ -4057,7 +4077,10 @@ fn takeover_operations(
     intents: &[ConvertedIntent],
     proxy_removals: &[ProxyRemoval],
 ) -> Vec<String> {
-    let mut operations = vec![format!("write {CONFIG_PATH}")];
+    let mut operations = vec![
+        format!("write {CONFIG_PATH}"),
+        format!("write {}", crate::RELEASE_MODEL_PATH),
+    ];
     operations.extend(intents.iter().map(|intent| {
         format!(
             "write {} from {}",

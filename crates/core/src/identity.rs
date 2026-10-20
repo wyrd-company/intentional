@@ -41,7 +41,8 @@ pub fn native_identity(adapter: Adapter, path: &Path, text: &str) -> Result<Opti
             .find_map(|line| line.trim().strip_prefix("module "))
             .map(str::to_owned),
         Adapter::Msbuild => xml_element(text, "PackageId")
-            .or_else(|| xml_element(text, "AssemblyName"))
+            .filter(|value| !value.is_empty())
+            .or_else(|| xml_element(text, "AssemblyName").filter(|value| !value.is_empty()))
             .or_else(|| {
                 path.file_stem()
                     .and_then(|value| value.to_str())

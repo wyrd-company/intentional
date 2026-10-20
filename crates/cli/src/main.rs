@@ -36,6 +36,8 @@ struct Cli {
 enum Command {
     /// Scan supported manifests and create the release-unit inventory.
     Init(InitArgs),
+    /// Write the template-facing Release Model.
+    Model(ModelArgs),
     /// Author a pending change intent.
     Add(AddArgs),
     /// Show pending intents and computed release-unit versions.
@@ -76,6 +78,19 @@ struct InitArgs {
     /// Print mutations without changing the workspace.
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelArgs {
+    /// Report the operation without writing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Print canonical model JSON without changing the tree.
+    #[arg(long)]
+    stdout: bool,
+    /// Emit structured operation results.
+    #[arg(long, conflicts_with = "stdout")]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -176,6 +191,7 @@ fn run() -> Result<u8> {
         Command::Verify(args) => return verify(&cli.directory, args),
         Command::Add(args) => add(&cli.directory, args),
         Command::Status => status(&cli.directory),
+        Command::Model(args) => model(&cli.directory, args),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
@@ -467,4 +483,32 @@ mod tests {
             BTreeSet::from(["--directory".to_owned()])
         );
     }
+}
+
+fn model(root: &std::path::Path, args: ModelArgs) -> Result<()> {
+    if args.stdout {
+        print!("{}", intentional_core::ReleaseModel::build(root)?.encode()?);
+        return Ok(());
+    }
+    let written = intentional_core::write_release_model(root, args.dry_run)?;
+    let operation = if written { "written" } else { "unchanged" };
+    if args.json {
+        println!(
+            "{}",
+            format_args!(
+                r#"{{"dry_run":{},"operation":"{}","path":"{}"}}"#,
+                args.dry_run,
+                operation,
+                intentional_core::RELEASE_MODEL_PATH
+            )
+        );
+    } else {
+        println!(
+            "{}{} {}",
+            if args.dry_run { "dry-run: " } else { "" },
+            operation,
+            intentional_core::RELEASE_MODEL_PATH
+        );
+    }
+    Ok(())
 }

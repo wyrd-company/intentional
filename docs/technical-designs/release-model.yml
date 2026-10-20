@@ -197,14 +197,15 @@ proposed-design:
     The Release Model is a cross-tool contract with its own line. Its schema
     identity is `https://intentional.foo/schemas/release-model/<line>`, and the
     first line is `1`. A line never changes the meaning or acceptance of
-    anything it already describes. Within a line, Intentional only adds optional
-    members, and each addition is a minor Intentional change. Every object in
-    the schema admits members it does not define, and readers ignore them.
+    anything it already describes. A change to the schema mints the next line.
+    Every object in the schema admits members it does not define, and readers
+    ignore them.
     A projection's `adapter` and each `ecosystems` item are open string values:
     the schema documents the known adapters and accepts any other, so a new
     ecosystem adapter stays within the line and readers accept adapter values
-    they do not know. `mode` and `require_phase` are closed enumerations, and a
-    new value for either mints the next line. Removing, renaming, retyping, or
+    they do not know. Every other enumerated member, `mode`, `require_phase`,
+    `disposition`, `release_record`, `role`, and `kind`, is closed, and a new
+    value for any of them mints the next line. Removing, renaming, retyping, or
     tightening a member, or changing its meaning, mints the next line,
     `release-model/2`, and is a major Intentional change. Intentional emits
     only the current line. Authoritative YAML is
@@ -221,10 +222,8 @@ proposed-design:
     resolves a URI from that directory first and by a hosted fetch otherwise.
     Hosted Release Model URIs do not resolve until hosting exists, so a template
     vendors every Release Model schema it names. A template reads only the
-    members it knows, and a line only gains optional members, so a template
-    written against an earlier copy of line `1` accepts a later line `1`
-    document. A template that supports two lines names both URIs, vendors both
-    schemas, and branches on `$schema`.
+    members it knows. A template that supports two lines names both URIs, vendors
+    both schemas, and branches on `$schema`.
 
   toha-handoff: >-
     The release process template's document question names

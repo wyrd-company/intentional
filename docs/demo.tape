@@ -37,6 +37,11 @@ Type 'clear' Enter
 Show
 
 Sleep 500ms
+Type 'intentional model' Enter
+Sleep 2s
+Type 'intentional model' Enter
+Sleep 2s
+
 Type 'intentional status' Enter
 Sleep 3s
 

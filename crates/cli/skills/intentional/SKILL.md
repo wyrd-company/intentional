@@ -1,6 +1,6 @@
 ---
 name: intentional
-description: Operate Intentional's intent-driven polyglot versioning and release workflow safely. Use when an agent needs to initialize or adopt Intentional in a Git repository, resolve release-unit discovery, author change intents, inspect version state or drift, prepare and apply a digest-bound release plan, stamp injected build versions, create baseline or release tags, run prerelease channels, or diagnose Intentional configuration and release failures.
+description: Operate Intentional's intent-driven polyglot versioning and release workflow safely. Use when an agent needs to initialize or adopt Intentional in a Git repository, resolve release-unit discovery, author change intents, inspect version state or drift, prepare and apply a digest-bound release plan, stamp injected build versions, create baseline or release tags, write the committed Release Model for process templates, run prerelease channels, or diagnose Intentional configuration and release failures.
 metadata:
   relationships:
     implements: intent-driven-polyglot-release
@@ -39,6 +39,22 @@ Do not add a `v` prefix to primary or workspace tag versions. Use one on a
 projection tag only when an ecosystem contract requires it. Do not infer
 registries, publication order, privacy, or deployment behavior from discovered
 manifests.
+
+## Keep the Release Model current
+
+Run `intentional model` after changing Release Workspace configuration or manifest
+identities. Commit `.intentional/release-model.json` with those changes. Templates
+read this file, which contains inventory, projections, native identities,
+discovery sources, tag templates, dependency edges, groups, and release-record
+policy. It contains no versions, pending intents, remote, clock, or process
+settings. Do not hand-edit it or use it as Intentional configuration.
+
+`intentional model --dry-run` previews `written` or `unchanged` without writing.
+`--stdout` prints only canonical model JSON without changing the tree. `--json`
+prints an operation result with `operation`, `path`, and `dry_run`; it conflicts
+with `--stdout`. Invalid input returns exit `1` and leaves the old model untouched.
+Initialization writes the model whenever it writes configuration. Intentional
+never runs Toha.
 
 ## Orient before changing state
 

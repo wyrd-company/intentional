@@ -36,6 +36,32 @@ candidate resolutions, already released repositories, Go modules, baseline
 versions, and Changesets adoption. Once configuration and version authority are
 established, use the release workflow below.
 
+## Write the Release Model
+
+Release process templates read `.intentional/release-model.json` for the workspace
+inventory, projections, native identities, discovery sources, tag templates,
+dependencies, release groups, and release-record policy:
+
+```bash
+intentional model
+intentional model --dry-run
+intentional model --stdout
+intentional model --json
+```
+
+Commit the generated file with its source changes. The command reports `written`
+or `unchanged`; an unchanged file is left untouched. `--dry-run` reports the
+operation without writing. `--stdout` prints only the canonical JSON document and
+leaves the tree unchanged. `--json` reports `operation`, `path`, and `dry_run` as
+JSON and cannot be combined with `--stdout`. Invalid configuration or an unreadable
+projection exits with code `1` and leaves the existing model untouched.
+
+The model contains no versions, pending intents, Git remote, branch, clock,
+publication settings, or process settings. It has its own schema identity,
+`https://intentional.foo/schemas/release-model/1`. Initialization writes it in the
+same operation set whenever it writes configuration. Intentional never runs the
+release process template tool.
+
 ## Declare an intent
 
 `add` records the intended bump for one or more release units. Repeat
@@ -290,6 +316,7 @@ Every mutating command supports `--dry-run` and prints the same operation set as
 the real invocation:
 
 ```console
+intentional model --dry-run
 intentional init --dry-run
 intentional init --take-over --dry-run
 intentional add --release-unit library:patch --message "Correct a defect." --dry-run

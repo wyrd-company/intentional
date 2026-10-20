@@ -16,6 +16,7 @@ pub mod intent;
 mod materialize;
 pub mod model;
 pub mod plan;
+pub mod release_model;
 pub mod schema;
 pub mod stamp;
 pub mod status;
@@ -46,6 +47,11 @@ pub use model::{
 pub use plan::{
     canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,
     PlanReleaseUnit, PlanSource, PlanTag, ReleasePlan, RELEASE_PLAN_SCHEMA,
+};
+pub use release_model::{
+    write_release_model, ModelPaths, ProjectionEntry, ReleaseGroupMembership, ReleaseGroups,
+    ReleaseModel, ReleaseUnitEntry, ReleaseUnitTagEntry, SourceEntry, WorkspaceTagEntry,
+    RELEASE_MODEL_PATH, RELEASE_MODEL_SCHEMA_ID,
 };
 pub use stamp::StampResult;
 pub use status::{

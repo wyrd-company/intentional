@@ -15,9 +15,10 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-const SCHEMAS: [&str; 3] = [
+const SCHEMAS: [&str; 4] = [
     "release-workspace.schema.yml",
     "release-plan.schema.yml",
+    "release-model.schema.yml",
     "tag-record.schema.yml",
 ];
 

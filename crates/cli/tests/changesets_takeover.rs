@@ -747,12 +747,22 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     assert!(added.to_string().contains("source evidence became stale"));
     fs::remove_file(repository.root.join(".changeset/added-after-planning.md")).unwrap();
 
+    repository.write(intentional_core::RELEASE_MODEL_PATH, "old derived model\n");
     repository
         .cli()
         .args(["init", "--take-over"])
         .assert()
         .success();
     assert!(repository.root.join(".intentional/config.yml").is_file());
+    let model = fs::read(repository.root.join(intentional_core::RELEASE_MODEL_PATH)).unwrap();
+    assert_eq!(
+        model,
+        intentional_core::ReleaseModel::build(&repository.root)
+            .unwrap()
+            .encode()
+            .unwrap()
+            .into_bytes()
+    );
     assert!(!plan_path.exists());
     assert!(!repository.root.join(".changeset").exists());
     let converted = fs::read_to_string(

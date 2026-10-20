@@ -473,6 +473,15 @@ commands:
         description: Write the Release Model to standard output and nothing to the tree.
         required: false
         repeatable: false
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit structured operation, path, and dry_run results.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - stdout
     output:
       modes:
         - name: operation
@@ -483,6 +492,9 @@ commands:
         - name: release-model
           description: Prints the canonical Release Model document selected by --stdout.
           machine-readable: true
+        - name: json
+          description: Prints operation, path, and dry_run as JSON.
+          machine-readable: true
       exit-codes:
         - code: 0
           meaning: The Release Model was written, already current, previewed, or printed.
@@ -492,6 +504,7 @@ commands:
       - intentional model
       - intentional model --dry-run
       - intentional model --stdout
+      - intentional model --json
     notes:
       - >-
         The command validates the Release Workspace first and writes nothing

@@ -125,7 +125,8 @@ intentional init --dry-run
 intentional init
 ```
 
-Ordinary initialization writes `.intentional/config.yml`, creates
+Ordinary initialization writes `.intentional/config.yml` and
+`.intentional/release-model.json`, creates
 `.intentional/intents/`, and removes `.intentional/init-plan.yml` when the
 complete candidate graph validates. Review the generated configuration,
 including release-unit ids and tag templates, then commit it through your

@@ -36,3 +36,6 @@ validation-criteria: >-
   Model. `verify` reconstructs core Release identity from an exact annotated
   tag. `model` writes the canonical Release Model to
   `.intentional/release-model.json`, or to standard output under `--stdout`.
+  It reports `written` or `unchanged`; `--json` emits `operation`, `path`, and
+  `dry_run`, and conflicts with `--stdout`. Initialization writes the model
+  whenever it writes configuration.

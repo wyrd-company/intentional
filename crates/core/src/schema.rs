@@ -22,10 +22,15 @@ const RELEASE_PLAN_SCHEMA: &str =
     include_str!(concat!(env!("OUT_DIR"), "/release-plan.schema.yml"));
 const TAG_RECORD_SCHEMA: &str = include_str!(concat!(env!("OUT_DIR"), "/tag-record.schema.yml"));
 
+const RELEASE_MODEL_SCHEMA: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/release-model.schema.yml"));
+
 /// A durable record kind with a published schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SchemaRecord {
+    /// A template-facing Release Model.
+    ReleaseModel,
     /// A sealed Release Plan.
     ReleasePlan,
     /// The protocol fields of an annotated tag message.
@@ -37,6 +42,7 @@ pub enum SchemaRecord {
 impl fmt::Display for SchemaRecord {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::ReleaseModel => "Release Model",
             Self::ReleasePlan => "Release Plan",
             Self::TagRecord => "Tag Record",
             Self::BaselineDigestPayload => "baseline digest payload",
@@ -45,6 +51,7 @@ impl fmt::Display for SchemaRecord {
 }
 
 struct Validators {
+    release_model: Validator,
     release_plan: Validator,
     tag_record: Validator,
     baseline_digest_payload: Validator,
@@ -68,9 +75,11 @@ fn compile_validators() -> std::result::Result<Validators, String> {
     let workspace = published(RELEASE_WORKSPACE_SCHEMA)?;
     let plan = published(RELEASE_PLAN_SCHEMA)?;
     let tag = published(TAG_RECORD_SCHEMA)?;
+    let model = published(RELEASE_MODEL_SCHEMA)?;
+    let model_id = model.0.clone();
     let (plan_id, tag_id) = (plan.0.clone(), tag.0.clone());
     let mut registry = Registry::new();
-    for (id, schema) in [workspace, plan, tag] {
+    for (id, schema) in [workspace, plan, tag, model] {
         registry = registry
             .add(id, schema)
             .map_err(|error| format!("schema does not register: {error}"))?;
@@ -86,6 +95,7 @@ fn compile_validators() -> std::result::Result<Validators, String> {
             .map_err(|error| format!("schema {reference} does not compile: {error}"))
     };
     Ok(Validators {
+        release_model: build(model_id)?,
         release_plan: build(plan_id)?,
         tag_record: build(tag_id.clone())?,
         baseline_digest_payload: build(format!("{tag_id}#/$defs/baseline-digest-payload"))?,
@@ -101,6 +111,7 @@ pub fn validate(record: SchemaRecord, instance: &Value) -> Result<()> {
         .as_ref()
         .map_err(|reason| Error::Validation(format!("published schemas are unusable: {reason}")))?;
     let validator = match record {
+        SchemaRecord::ReleaseModel => &validators.release_model,
         SchemaRecord::ReleasePlan => &validators.release_plan,
         SchemaRecord::TagRecord => &validators.tag_record,
         SchemaRecord::BaselineDigestPayload => &validators.baseline_digest_payload,
@@ -130,6 +141,10 @@ mod tests {
     fn embedded_schemas_are_the_published_files() {
         for (embedded, published) in [
             (
+                RELEASE_MODEL_SCHEMA,
+                include_str!("../../../docs/specifications/release-model.schema.yml"),
+            ),
+            (
                 RELEASE_WORKSPACE_SCHEMA,
                 include_str!("../../../docs/specifications/release-workspace.schema.yml"),
             ),
@@ -155,6 +170,7 @@ mod tests {
         for name in [
             "release-workspace.schema.yml",
             "release-plan.schema.yml",
+            "release-model.schema.yml",
             "tag-record.schema.yml",
         ] {
             let link = manifest.join("schemas").join(name);
