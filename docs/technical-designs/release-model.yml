@@ -1,0 +1,255 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: intent-driven-polyglot-release
+  realizes: intentional
+  related-to:
+    - repository-initialization
+    - release-planning-and-records
+    - semantic-versioning
+objective: >-
+  Give release process templates every Release Workspace fact they need as one
+  committed, schema-identified Release Model document, so that a template can
+  render and update a release process without reading Intentional
+  configuration, manifests, or Git state, and without Intentional holding any
+  workflow opinion.
+background:
+  current-design: >-
+    Intentional resolves Release Units, projections, tag streams, dependency
+    edges, and release groups from `.intentional/config.yml` and the manifests
+    it projects into. Release processes are rendered by Toha templates. A Toha
+    template receives values through interview answers, which the snapshot
+    records and an update replays, and through static `data` inside the
+    template. The Toha template composition design adds contract documents: a
+    `type: document` question accepts a JSON value whose `$schema` member names
+    a schema the question declares, and `apply --input FILE` submits such a
+    document to every question that accepts its schema.
+  problems:
+    - >-
+      A template that reads `.intentional/config.yml` couples itself to the
+      configuration grammar, its defaults, and its validation rules.
+    - >-
+      A Toha answers document names one template and only that template's
+      question ids, and question answers are strings, booleans, and string
+      lists. The release model is a structured graph that several templates
+      read, so it cannot be an answers document.
+    - >-
+      Some Release Units need a release record on every release and some are
+      released by tag alone. No configuration states which.
+design-challenges:
+  determinism: >-
+    The document must be byte-identical in every clone of one commit, so that
+    `intentional check` can detect staleness with no network, remote, clock, or
+    binary-version input.
+  opinion-boundary: >-
+    The document must expose facts a process needs while Intentional chooses no
+    process. Facts that only a process defines, such as gate paths and workflow
+    names, must not enter it.
+  independent-evolution: >-
+    Templates live outside Intentional and are applied across many
+    repositories. An Intentional compatibility-line change that leaves the
+    model unchanged must not invalidate those templates.
+  template-ergonomics: >-
+    The primary reader is Jinja inside a Toha template, where member access by
+    attribute requires identifier-shaped names.
+proposed-design:
+  high-level-overview: >-
+    `intentional model` writes `.intentional/release-model.json`, a canonical
+    JSON projection of the Release Workspace. It holds Release Units with their
+    paths, projections, native identities, discovery sources, tag streams,
+    dependency edges, release-group membership, disposition, and release-record
+    policy, plus workspace tag streams and the fixed Intentional paths. It is a
+    pure function of tracked files at one commit. The document is committed,
+    and `intentional check` fails when it differs from a fresh in-memory
+    projection. A release process template declares a document question that
+    accepts the Release Model schema identity, and the operator supplies the
+    committed file with `toha apply --input .intentional/release-model.json`.
+    The Release Model has its own contract line,
+    `https://intentional.foo/schemas/release-model/1`, independent of the
+    Intentional compatibility line.
+
+  document-role: >-
+    The Release Model is a derived document, like a lockfile. Release Workspace
+    configuration stays the single source of truth; the model is its
+    template-facing projection. No command reads the model back as input, and
+    hand edits are overwritten by the next `intentional model`. Toha, Airlock,
+    and documentation publishers read the model; none of them reads
+    `.intentional/config.yml`.
+
+  top-level-members: >-
+    `$schema` is the Release Model schema identity. `paths` holds the fixed
+    workspace-relative Intentional locations: `config`
+    (`.intentional/config.yml`), `intents` (`.intentional/intents`), and
+    `model` (`.intentional/release-model.json`), so a process can declare path
+    triggers without hard-coding them. `release_units` maps each Release Unit id
+    to its entry. `workspace_tags` maps each workspace tag id to its entry.
+    `release_groups` holds `fixed` and `linked`, each a list of member-id
+    lists.
+
+  release-unit-entry: >-
+    Each `release_units` entry has `path`, the workspace-relative unit
+    directory; `changelog`, the workspace-relative changelog file that
+    Intentional maintains; `disposition`, `managed` or `suspended`;
+    `release_record`, the release-record policy; `depends_on`, the configured
+    dependency edges; `release_group`, absent or an object with `kind` (`fixed`
+    or `linked`) and `members`; `ecosystems`, the distinct ecosystem adapters
+    among the unit's projections; `projections`; `sources`; and `tags`. An
+    empty `projections` list marks a unit whose version exists only in its
+    tags.
+
+  projection-entry: >-
+    Each `projections` item has `adapter`, `file` relative to the unit path,
+    `workspace_file` relative to the workspace root, `mode`, and `pointer` for
+    generic format adapters. `native_identity` holds the name the manifest
+    declares when the adapter defines one: the npm `name`, the Cargo package
+    `name`, the Pub `name`, the PEP 621 `project.name`, the MSBuild
+    `PackageId`, and the Go `module` path. Generic format adapters carry no
+    native identity. A manifest whose name cannot be read fails the projection;
+    Intentional never writes a partial model.
+
+  source-entry: >-
+    Each `sources` item copies one discovery receipt that names the unit:
+    `detector` and workspace-relative `path`. This exposes facts such as
+    `devcontainer-feature` without a declared unit kind. Excluded receipts do
+    not appear.
+
+  tag-entries: >-
+    Each Release Unit `tags` entry, keyed by tag id, has `role` (`primary` or
+    `projection`), `template`, `require_phase` when configured, and `tag_after`
+    as canonical tag ids. Each `workspace_tags` entry has `template`,
+    `require_phase` when configured, and `tag_after`. Templates are copied
+    verbatim, including `{id}` and `{version}`. The model never renders a tag
+    name, because rendering needs a version.
+
+  release-record-policy: >-
+    `release-units.<id>.release-record` in `.intentional/config.yml` takes
+    `required` or `none`, and omission means `required`. `required` states that
+    every release of the unit has a release record on its primary tag, such as
+    a GitHub Release, created by the surrounding process. `none` states that the
+    annotated tags are the unit's complete release record; documentation units
+    and Dev Container Feature and Template units use it. Intentional core
+    creates no release record under either value. The model copies the policy
+    to `release_record`, where process templates and conformance checks read it
+    from one source.
+
+  excluded-content: >-
+    The model never contains secrets, credentials, token or environment names,
+    or registry or Distribution Target settings. It holds no tag-derived current
+    version, next version, pending intent, or Release Plan, because those change
+    with every intent and tag; a process obtains them at run time from
+    `intentional status` and `intentional plan`. It holds no Git remote, forge
+    owner, default branch, or hosting provider, because those differ between
+    clones and forks of one commit. It holds no generator version, timestamp, or
+    digest of itself, because upgrading Intentional must not make a committed
+    model stale. It holds no custom gate locations, workflow file names, job
+    names, or publication targets: a release process defines them, its template
+    records them as Toha answers in the project snapshot, and conformance
+    tooling reads them from that snapshot.
+
+  member-naming: >-
+    Release Model member names use snake_case, the identifier form of Toha
+    answers and Jinja attribute access, so a template reads
+    `release_model.release_units` and `unit.release_record` by attribute.
+    Configured identifiers such as Release Unit ids, tag ids, and workspace tag
+    ids keep their configured spelling as map keys.
+
+  serialization-and-ordering: >-
+    The document is UTF-8 JSON with object members sorted by code point,
+    two-space indentation, `\n` line endings, and one trailing newline. Maps
+    keyed by identifiers are JSON objects, so the sort fixes their order.
+    `projections` keeps configuration order. `depends_on`, `ecosystems`,
+    `release_group.members`, `tag_after`, each `release_groups` member list, and
+    the lists of member lists are sorted. `sources` sorts by `path`, then
+    `detector`. Optional members are omitted rather than written as `null`, and
+    every list member is written even when empty.
+
+  command-surface: >-
+    `intentional model` writes the Release Model to
+    `.intentional/release-model.json` and reports `written` or `unchanged`.
+    `--dry-run` reports the operation without writing. `--stdout` writes the
+    document to standard output and nothing to the tree. The command validates
+    the Release Workspace first and writes nothing when validation fails. It
+    exits `0` on success and `1` on invalid input or operational failure.
+    Every Intentional command that rewrites `.intentional/config.yml` also
+    rewrites an existing Release Model in the same operation set.
+
+  staleness-check: >-
+    When `.intentional/release-model.json` exists, `intentional check` builds the
+    model in memory and compares bytes. A difference is the
+    `release-model-stale` diagnostic, an error that names
+    `intentional model` as the repair. An absent file is not a diagnostic,
+    because a workspace without a rendered release process needs no model. A
+    file that does not parse as the current Release Model contract is the same
+    stale diagnostic. `intentional status` reports the same condition.
+
+  schema-identity-and-versioning: >-
+    The Release Model is a cross-tool contract with its own line. Its schema
+    identity is `https://intentional.foo/schemas/release-model/<major>`, and the
+    first line is `1`. Within a line, Intentional only adds optional members and
+    never changes the meaning, type, or presence rules of an existing member.
+    Every object in the schema admits members it does not define, and readers
+    ignore them. Removing, renaming, retyping, or redefining a member starts the
+    next line and is a major Intentional change. Intentional emits only the
+    current line. Authoritative YAML is
+    `docs/specifications/release-model.schema.yml`; publication serves its JSON
+    representation at the identity, following schema-and-binary-publication.
+
+  template-acceptance: >-
+    A template accepts the model through a Toha document question whose schema
+    list contains a vendored copy of each Release Model schema it supports. The
+    copy's `$id` is the published identity, so the accepted major is explicit in
+    the template. Because each line is open to added members, a template written
+    against an earlier copy of line `1` accepts a later line `1` document. A
+    template that supports two lines lists both schemas and branches on
+    `$schema`.
+
+  toha-handoff: >-
+    The operator applies and updates a release process with the committed model
+    as input: `toha apply <template> . --input .intentional/release-model.json`.
+    The snapshot records the model the process was rendered from, so a later
+    comparison of the recorded and committed models shows a process that needs
+    an update. An update that omits `--input` replays the recorded model, so
+    the proposal to the Toha composition design is a document question that
+    names a default target-relative path, `.intentional/release-model.json`,
+    read on every apply when no input is supplied. Intentional never runs
+    Toha, and Toha never runs Intentional.
+
+  shared-document-crate: >-
+    Proposal for reconciliation with the Toha template composition design.
+    Intentional publishes `intentional-release-model`, an IO-free crate with no
+    Gitoxide, file-system, process, or network dependency. It holds
+    `RELEASE_MODEL_SCHEMA_ID`, `ReleaseModel`, `ModelPaths`, `ReleaseUnitEntry`,
+    `ProjectionEntry`, `SourceEntry`, `ReleaseUnitTagEntry`, `WorkspaceTagEntry`,
+    `ReleaseGroups`, `ReleaseGroupMembership`, `ReleaseRecordPolicy`,
+    `Disposition`, `parse_release_model(&[u8])`, and
+    `to_canonical_json(&ReleaseModel)`, plus the embedded schema. Intentional
+    core builds the model with these types. Airlock parses the model with them.
+    The Toha shared document crate holds the snapshot and answers-envelope
+    types and the contract-document `$schema` reader, and no Release Model
+    type; the two crates agree only on the top-level `$schema` member, compared
+    by exact string equality.
+
+  conformance-consumers: >-
+    Airlock reads the committed model over the forge API to learn the Release
+    Units and their release-record policy, and reads template identities and
+    process answers from Toha snapshots. Documentation publishers read primary
+    tag templates from the model; `release-units.<id>.tags.primary.template`
+    in configuration keeps its spelling and meaning.
+
+  alternatives-considered: >-
+    Emitting a Toha answers document binds Intentional to one template's formal
+    name and question ids and flattens the graph into strings, so it is
+    rejected. Emitting the model only on standard output avoids staleness but
+    forces every update and every conformance reader to run Intentional, so it
+    is rejected; `--stdout` remains for harnesses. Naming the schema on the
+    Intentional compatibility line, such as `schemas/0.3/release-model`, would
+    break every applied template on each Intentional line change, so the model
+    takes its own line. A declared unit `kind` would make Intentional classify
+    processes, so the model exposes ecosystems and discovery sources instead.
+    Kebab-case member names match configuration but force subscript access in
+    every template expression, so the model uses snake_case.
+
+  out-of-scope: >-
+    Rendering, reconciling, or validating workflow files; custom gate and
+    workflow naming; publication and Distribution configuration; Toha document
+    questions and snapshot formats; and emission of earlier Release Model
+    lines.

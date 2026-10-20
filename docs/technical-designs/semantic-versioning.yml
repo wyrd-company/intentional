@@ -125,7 +125,11 @@ proposed-design:
     or JSON suffix. Repository YAML is authoritative; schema publication serves
     a semantically equivalent JSON representation. Minor and patch changes can
     extend a compatibility-line schema only according to their classification.
-    A major change creates another compatibility-line path.
+    A major change creates another compatibility-line path. The Release Model
+    is the one exception: release process templates outside Intentional read
+    it, so its identifier names its own contract line, such as
+    `https://intentional.foo/schemas/release-model/1`, and only a change to the
+    Release Model contract starts its next line.
 
   recipe-and-posture-selection: >-
     Release Workspace configuration selects a maintained recipe with its stable
