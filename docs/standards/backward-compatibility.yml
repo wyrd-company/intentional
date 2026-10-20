@@ -1,7 +1,7 @@
 $schema: https://refinery.systems/ontology/standard
 title: Intentional Backward Compatibility Standard
 description: >-
-  Defines measurable requirements for preserving Intentional records, migrating
+  Defines measurable requirements for preserving durable records, migrating
   workspace state, changing public surfaces, and maintaining released lines.
 purpose:
   - >-
