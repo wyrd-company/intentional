@@ -515,7 +515,34 @@ fn check_identity_tags(
 
 #[cfg(test)]
 mod tests {
+    use super::Verification;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn a_verification_without_every_check_passed_is_not_verified() {
+        const ALL: [&str; 4] = [
+            "tag-record",
+            "plan-reconstruction",
+            "materialized-source",
+            "identity-tags",
+        ];
+        assert!(!Verification::new("sample").finish().verified);
+        let mut complete = Verification::new("sample");
+        complete.guarantees = ALL.to_vec();
+        assert!(complete.finish().verified);
+        for missing in ALL {
+            let mut partial = Verification::new("sample");
+            partial.guarantees = ALL.into_iter().filter(|check| *check != missing).collect();
+            assert!(!partial.finish().verified, "{missing}");
+        }
+        let mut advised = Verification::new("sample");
+        advised.guarantees = ALL
+            .into_iter()
+            .filter(|check| *check != "plan-reconstruction")
+            .collect();
+        advised.advisory("producing-version-differs", "sample");
+        assert!(advised.finish().verified);
+    }
 
     /// Diagnostic codes this module passes to `error` or `advisory`.
     fn emitted_codes() -> BTreeSet<String> {

@@ -594,3 +594,12 @@ fn verify_reads_an_earlier_channel_iteration() {
         ],
     );
 }
+
+#[test]
+fn verify_fails_for_a_tag_outside_the_release() {
+    let repo = release_repo();
+    repo.release(&[]);
+    let message = repo.message("sample-library@1.3.0");
+    repo.forge("copy@1.3.0", "HEAD", &message);
+    assert_fails_with(&repo, "copy@1.3.0", "identity-tag-mismatch");
+}
