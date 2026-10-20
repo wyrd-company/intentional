@@ -99,12 +99,16 @@ proposed-design:
   projection-entry: >-
     Each `projections` item has `adapter`, `file` relative to the unit path,
     `workspace_file` relative to the workspace root, `mode`, and `pointer` for
-    generic format adapters. `native_identity` holds the name the manifest
-    declares when the adapter defines one: the npm `name`, the Cargo package
-    `name`, the Pub `name`, the PEP 621 `project.name`, the MSBuild
-    `PackageId`, and the Go `module` path. Generic format adapters carry no
-    native identity. A manifest whose name cannot be read fails the projection;
-    Intentional never writes a partial model.
+    generic format adapters. `native_identity` holds the package identity that
+    Release Workspace initialization resolves for the manifest: the npm `name`,
+    the Cargo `package.name`, the Pub `name`, the PEP 621 `project.name`, the
+    Go `module` path, and for MSBuild the `PackageId`, else the `AssemblyName`,
+    else the project file name without its extension. When the adapter's rule
+    finds no identity in a manifest it can read, `native_identity` is omitted
+    and the projection is still written; the MSBuild rule always finds one.
+    Generic format adapters carry no native identity. A manifest that the
+    projection's adapter cannot read fails the model, as it fails
+    `intentional status`; Intentional never writes a partial model.
 
   source-entry: >-
     Each `sources` item copies one discovery receipt that names the unit:
