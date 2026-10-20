@@ -96,6 +96,14 @@ ecosystem package name.
 | `tags` | Yes | Exactly one primary tag and optional projection tags. |
 | `depends-on` | No | Internal release-unit dependencies. |
 | `disposition` | No | `managed` by default; `suspended` keeps identity while blocking a required release. |
+| `release-record` | No | `required` by default: every release has a release record, such as a GitHub Release, on its primary tag. `none`: the unit has no release record and its tag records are its complete record. |
+
+`release-record` states a policy for the surrounding release process.
+Intentional creates no release record under either value, and `plan`, `apply`,
+and `tag` behave the same for both. The release process creates the record when
+the policy is `required`. Documentation units and Dev Container Feature and
+Template units use `none`. `init` writes no `release-record`, so new units take
+`required`.
 
 Each projection has an adapter, relative file path, and mode. Generic `json`,
 `toml`, and `yaml` projections also require a pointer to the version field.

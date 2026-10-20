@@ -29,6 +29,12 @@ tags. It does not commit, push, publish packages, create forge releases, or open
 pull requests. Perform those surrounding actions only when the user has granted
 that authority and the repository's release procedure defines them.
 
+A Release Unit's `release-record` (`required` by default, or `none`) states
+whether the surrounding release process creates a release record, such as a
+GitHub Release, for each release. Intentional creates none under either value,
+and its commands behave the same for both. Do not create a release record for a
+unit set to `none`.
+
 Do not add a `v` prefix to primary or workspace tag versions. Use one on a
 projection tag only when an ecosystem contract requires it. Do not infer
 registries, publication order, privacy, or deployment behavior from discovered
