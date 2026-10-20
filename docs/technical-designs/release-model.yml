@@ -103,6 +103,7 @@ proposed-design:
     `workspace_file` relative to the workspace root, `mode`, and a required
     boolean `generic`. `generic` is true for a generic format adapter and false
     for an ecosystem adapter. `json`, `toml`, and `yaml` require `generic: true`.
+    `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go` require `generic: false`.
     Every projection with `generic: true`, including an adapter outside the
     known values, requires `pointer` and forbids `native_identity`. `native_identity` holds the
     package identity that

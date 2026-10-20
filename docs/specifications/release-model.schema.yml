@@ -166,6 +166,21 @@ $defs:
               const: true
       - if:
           properties:
+            adapter:
+              anyOf:
+                - const: npm
+                - const: cargo
+                - const: pub
+                - const: python
+                - const: msbuild
+                - const: go
+          required: [ adapter ]
+        then:
+          properties:
+            generic:
+              const: false
+      - if:
+          properties:
             generic:
               const: true
           required: [ generic ]

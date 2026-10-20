@@ -15,8 +15,13 @@ const RELEASE_MODEL_ID: &str = "https://intentional.foo/schemas/release-model/1"
 
 /// Each invalid fixture with the instance location and keyword of the one
 /// violation it carries.
-const INVALID: [(&str, &str, &str); 15] = [
+const INVALID: [(&str, &str, &str); 16] = [
     ("wrong-schema", "/$schema", "const"),
+    (
+        "known-ecosystem-marked-generic",
+        "/release_units/atlas-cli/projections/1/generic",
+        "const",
+    ),
     (
         "unlisted-generic-without-pointer",
         "/release_units/atlas-cli/projections/1",
@@ -516,5 +521,42 @@ fn known_generic_adapters_require_generic_true() {
             )],
             "{adapter}"
         );
+    }
+}
+
+/// A pointer and absent native identity leave classification as the sole
+/// violation. Ecosystem projections need neither pointer nor native identity.
+#[test]
+fn known_ecosystem_adapters_require_generic_false() {
+    let validator = validator();
+    for adapter in ["npm", "cargo", "pub", "python", "msbuild", "go"] {
+        let mut model = document(&fixtures().join("complete.json"));
+        let projection = &mut model["release_units"]["atlas-cli"]["projections"][1];
+        projection["adapter"] = adapter.into();
+        assert_eq!(projection["generic"], true);
+        assert!(projection["pointer"].is_string());
+        assert!(projection.get("native_identity").is_none());
+        if adapter == "npm" {
+            assert_eq!(
+                model,
+                document(&fixtures().join("invalid/known-ecosystem-marked-generic.json"))
+            );
+        }
+        assert_eq!(
+            violations(&validator, &model),
+            vec![(
+                "/release_units/atlas-cli/projections/1/generic".to_owned(),
+                "const".to_owned()
+            )],
+            "{adapter}"
+        );
+        let projection = &mut model["release_units"]["atlas-cli"]["projections"][1];
+        projection["generic"] = false.into();
+        assert!(violations(&validator, &model).is_empty(), "{adapter}");
+        model["release_units"]["atlas-cli"]["projections"][1]
+            .as_object_mut()
+            .expect("projection")
+            .remove("pointer");
+        assert!(violations(&validator, &model).is_empty(), "{adapter}");
     }
 }

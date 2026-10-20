@@ -42,6 +42,7 @@ validation-criteria: >-
   workspace root, `mode` (`committed`, `injected`, or `none`), and the boolean
   `generic`. `generic` is true for a generic format adapter and false for an
   ecosystem adapter. `json`, `toml`, and `yaml` require `generic: true`.
+  `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go` require `generic: false`.
   `adapter` and each `ecosystems` item are open string values. The known ecosystem
   adapters are `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go`; the known
   generic format adapters are `json`, `toml`, and `yaml`. A projection with a
