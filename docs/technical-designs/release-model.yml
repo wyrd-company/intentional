@@ -19,11 +19,12 @@ background:
     it projects into. Release processes are rendered by Toha templates. A Toha
     template receives values through interview answers, which Toha records in
     the committed applied record `.toha.json` and an update replays, and
-    through static `data` inside the template. The Toha template composition design adds contract documents: a
-    `type: document` question accepts a JSON value whose `$schema` member names
-    a schema the question declares, `apply --input FILE` submits such a
-    document to every question that accepts its schema, and a question can name
-    a target-relative default file that Toha reads on every apply.
+    through static `data` inside the template. The Toha template composition
+    design adds contract documents: a `type: document` question accepts a JSON
+    value whose `$schema` member names a schema the question declares,
+    `apply --input FILE` submits such a document to every question that accepts
+    its schema, and a question's `input` names a target-relative default file
+    that Toha reads on every apply.
   problems:
     - >-
       A template that reads `.intentional/config.yml` couples itself to the
@@ -211,8 +212,9 @@ proposed-design:
     `$schema`.
 
   toha-handoff: >-
-    The release process template's document question names the target-relative
-    default file `.intentional/release-model.json`. Toha reads that file from
+    The release process template's document question names
+    `.intentional/release-model.json` as its `input`, the question's
+    target-relative default file. Toha reads that file from
     the working tree on every apply, update, stage, and preview, so
     `toha apply <template> .` and every later update render from the committed
     model and never replay the model recorded in `.toha.json`. A Release Model
@@ -221,11 +223,12 @@ proposed-design:
     submits no model, the question is unanswered: Toha asks a person for the
     file and returns the question to a script or agent, and renders nothing
     until it is answered. `intentional model` is the repair. `.toha.json`
-    records the model the process was rendered from, so a comparison of the
-    recorded and committed models shows a process that needs an update. The
-    Toha template composition design defines the document question's
-    default-file field and its resolution order. Intentional never runs Toha,
-    and Toha never runs Intentional.
+    records the model the process was rendered from as that question's answer,
+    at `answers.<question id>`, which is `answers.release_model` in the release
+    process template, so a comparison of that value with the committed model
+    shows a process that needs an update. The Toha template composition design
+    defines the document question's `input` field and its resolution order.
+    Intentional never runs Toha, and Toha never runs Intentional.
 
   model-codec: >-
     `intentional-core` holds the Release Model types, `ReleaseModel`,
