@@ -548,11 +548,17 @@ fn forge_record_field(repo: &TestRepo, tag: &str, field: &str, value: &str) {
 
 #[test]
 fn baseline_refuses_an_established_record_with_a_foreign_identity() {
-    for (field, value) in [
-        ("tag-id", "release-unit/other/primary"),
-        ("version", "8.8.8"),
-        ("contract", "contract-other"),
-        ("baseline", "maybe"),
+    let unexpected = |field: &str| format!("release tag alpha@0.1.1 has unexpected {field}");
+    let schema = |field: &str| {
+        format!(
+            "Tag Record of annotated tag alpha@0.1.1 violates its published schema at #/{field}"
+        )
+    };
+    for (field, value, failure) in [
+        ("tag-id", "release-unit/other/primary", unexpected("tag-id")),
+        ("version", "8.8.8", unexpected("version")),
+        ("contract", "contract-other", schema("contract")),
+        ("baseline", "maybe", schema("baseline")),
     ] {
         let repo = shared_yaml_repository();
         forge_record_field(&repo, "alpha@0.1.1", field, value);
@@ -562,9 +568,7 @@ fn baseline_refuses_an_established_record_with_a_foreign_identity() {
             .args(["tag", "--baseline"])
             .assert()
             .failure()
-            .stderr(predicate::str::contains(format!(
-                "release tag alpha@0.1.1 has unexpected {field}"
-            )));
+            .stderr(predicate::str::contains(failure));
         assert_eq!(repo.tags(), before, "{field} forgery created tags");
     }
 }

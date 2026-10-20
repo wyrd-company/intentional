@@ -45,3 +45,11 @@ gives its bytes. A Release Plan document ends with the one newline that
   and indented. It decodes to the same plan and digest.
 - `release-plan/invalid/`: `canonical.json` with one schema violation each,
   named for the violation.
+- `tag-record/complete.txt`: a workspace tag record that carries every
+  optional member, with two `prerequisite` lines in tag ID order.
+- `tag-record/baseline-digest-payload-reordered.json`: the released `0.2.0`
+  baseline digest payload with its keys in reverse order and indented. Its
+  canonical bytes, and so its digest, are those of the released payload.
+- `tag-record/invalid/`: `complete.txt` with one schema violation each, named
+  for the violation. A tag record carries no `$schema` member;
+  `schema-member.txt` shows that such a line is an undeclared member.

@@ -1819,7 +1819,7 @@ release-units:
             "-a",
             "witness@1.0.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
         ],
     );
     let tags_before = git(
@@ -1980,7 +1980,7 @@ release-units:
             "-a",
             "witness@1.1.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
         ],
     );
     repository

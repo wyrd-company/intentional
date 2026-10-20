@@ -18,6 +18,7 @@ pub mod schema;
 pub mod stamp;
 pub mod status;
 pub mod tag;
+pub mod tag_record;
 pub mod version;
 
 pub use apply::{ApplyResult, FileWrite};
@@ -46,6 +47,9 @@ pub use status::{
     Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 pub use tag::{tag_record_issues, PlannedTag, TagResult};
+pub use tag_record::{
+    baseline_digest, TagPrerequisite, TagRecord, TagRecordRole, TAG_RECORD_HEADER,
+};
 pub use version::{
     aggregate_bumps, bump_version, bump_version_with_mapping, effective_bumps, resolve_versions,
     ReleaseUnitVersion, VersionRepository,

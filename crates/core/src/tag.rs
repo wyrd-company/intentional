@@ -9,11 +9,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
-use crate::plan::{canonical_json, sha256_digest, Generator, PlanSource, ReleasePlan};
+use crate::plan::{Generator, PlanSource, ReleasePlan};
 use crate::status::read_projection_version;
+use crate::tag_record::{baseline_digest, TagRecord};
 use crate::version::VersionRepository;
 use semver::Version;
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -33,14 +33,6 @@ pub struct PlannedTag {
 pub struct TagResult {
     /// Tags in prerequisite-safe order.
     pub tags: Vec<PlannedTag>,
-}
-
-#[derive(Serialize)]
-struct TagDigestPayload<'a> {
-    contract: &'a str,
-    generator: &'a str,
-    versions: &'a BTreeMap<String, String>,
-    baseline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +117,7 @@ impl TagResult {
             }
             _ => {}
         }
-        Self::from_versions(root, &config, &versions, phase, false, Some(&plan.digest))
+        Self::from_versions(root, &config, &versions, phase, false, &plan.digest)
     }
 
     /// Infer and plan initial annotated baseline tags.
@@ -222,8 +214,11 @@ impl TagResult {
                     .to_owned(),
             ));
         }
-        let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
-        Self::from_versions(root, &config, &versions, None, true, digest.as_deref())
+        let digest = match existing_tag_set_digest(&git, &config, &versions, true)? {
+            Some(existing) => existing,
+            None => baseline_digest(&config.contract, crate::VERSION, &versions)?,
+        };
+        Self::from_versions(root, &config, &versions, None, true, &digest)
     }
 
     fn from_versions(
@@ -232,16 +227,8 @@ impl TagResult {
         versions: &BTreeMap<String, String>,
         phase: Option<TagPhase>,
         baseline: bool,
-        release_digest: Option<&str>,
+        digest: &str,
     ) -> Result<Self> {
-        let payload = TagDigestPayload {
-            contract: &config.contract,
-            generator: crate::VERSION,
-            versions,
-            baseline,
-        };
-        let baseline_digest = sha256_digest(canonical_json(&payload)?.as_bytes());
-        let digest = release_digest.unwrap_or(&baseline_digest);
         let mut candidates = BTreeMap::<String, TagCandidate>::new();
         for (release_unit_id, version) in versions {
             let Some(release_unit) = config.release_units.get(release_unit_id) else {
@@ -355,7 +342,15 @@ impl TagResult {
             tags.push(PlannedTag {
                 id: id.clone(),
                 name: candidate.name.clone(),
-                message: tag_message(&config.contract, digest, &id, &candidate.version, baseline),
+                message: TagRecord::new(
+                    &config.contract,
+                    crate::VERSION,
+                    digest,
+                    &id,
+                    &candidate.version,
+                    baseline,
+                )
+                .encode()?,
             });
         }
         Ok(Self { tags })
@@ -423,15 +418,15 @@ fn validate_existing_candidate(
             "existing tag {name} targets a different commit"
         )));
     }
-    let baseline = baseline.to_string();
-    for (field, expected) in [
-        ("tag-id", id),
-        ("version", version),
-        ("contract", contract),
-        ("plan-digest", digest),
-        ("baseline", baseline.as_str()),
+    let record = &record.record;
+    for (field, matches) in [
+        ("tag-id", record.tag_id == id),
+        ("version", record.version == version),
+        ("contract", record.contract == contract),
+        ("plan-digest", record.plan_digest == digest),
+        ("baseline", record.baseline == baseline),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "existing tag {name} has unexpected {field}"
             )));
@@ -547,24 +542,27 @@ fn existing_head_release_digest(
         .tags()
         .map_err(|error| Error::Git(format!("failed to read tags: {error}")))?;
     let mut digest = None;
-    for reference in tags.flatten() {
+    for mut reference in tags.flatten() {
         let name = reference.name().shorten().to_string();
+        let target = reference
+            .peel_to_id()
+            .map_err(|error| Error::Git(format!("failed to peel tag {name}: {error}")))?
+            .detach();
+        // Only tags at HEAD can belong to this release; a tag elsewhere is not
+        // decoded, so its message cannot stop this release.
+        if target != head {
+            continue;
+        }
         let Some(record) = read_tag_record(repository, &name)? else {
             continue;
         };
-        let relevant = record.target == head
-            && record.fields.get("contract") == Some(&config.contract)
-            && record.fields.get("baseline").map(String::as_str) == Some("false")
-            && record
-                .fields
-                .get("tag-id")
-                .is_some_and(|id| canonical_ids.contains(id));
+        let relevant = record.record.contract == config.contract
+            && !record.record.baseline
+            && canonical_ids.contains(&record.record.tag_id);
         if !relevant {
             continue;
         }
-        let record_digest = record.fields.get("plan-digest").cloned().ok_or_else(|| {
-            Error::Validation(format!("existing release tag {name} has no plan-digest"))
-        })?;
+        let record_digest = record.record.plan_digest;
         if digest
             .as_ref()
             .is_some_and(|existing| existing != &record_digest)
@@ -696,14 +694,13 @@ fn collect_existing_digest(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(());
     };
-    let expected_baseline = expected_baseline.to_string();
-    for (field, expected) in [
-        ("tag-id", expected_id),
-        ("version", expected_version),
-        ("contract", expected_contract),
-        ("baseline", expected_baseline.as_str()),
+    for (field, matches) in [
+        ("tag-id", record.record.tag_id == expected_id),
+        ("version", record.record.version == expected_version),
+        ("contract", record.record.contract == expected_contract),
+        ("baseline", record.record.baseline == expected_baseline),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "release tag {name} has unexpected {field}"
             )));
@@ -714,7 +711,7 @@ fn collect_existing_digest(
             "release tag {name} targets a different commit"
         )));
     }
-    let record_digest = record.fields["plan-digest"].clone();
+    let record_digest = record.record.plan_digest;
     if digest
         .as_ref()
         .is_some_and(|digest| digest != &record_digest)
@@ -1002,15 +999,16 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
             // Lightweight history predating contract-aware records remains readable.
             continue;
         };
-        for (field, expected) in [
+        let primary = &primary_record.record;
+        for (field, matches) in [
             (
                 "tag-id",
-                Config::release_unit_tag_id(release_unit_id, primary_id),
+                primary.tag_id == Config::release_unit_tag_id(release_unit_id, primary_id),
             ),
-            ("version", version.to_string()),
-            ("contract", config.contract.clone()),
+            ("version", primary.version == version.to_string()),
+            ("contract", primary.contract == config.contract),
         ] {
-            if primary_record.fields.get(field) != Some(&expected) {
+            if !matches {
                 issues.push(format!(
                     "release unit {release_unit_id} primary tag {primary_name} has unexpected {field}"
                 ));
@@ -1024,14 +1022,21 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
                 ));
                 continue;
             };
-            let expected_tag_id = Config::release_unit_tag_id(release_unit_id, tag_id);
-            if record.fields.get("tag-id") != Some(&expected_tag_id) {
+            if record.record.tag_id != Config::release_unit_tag_id(release_unit_id, tag_id) {
                 issues.push(format!(
                     "release unit {release_unit_id} tag {name} has unexpected tag-id"
                 ));
             }
-            for field in ["contract", "generator", "plan-digest", "version"] {
-                if record.fields.get(field) != primary_record.fields.get(field) {
+            for (field, matches) in [
+                ("contract", record.record.contract == primary.contract),
+                ("generator", record.record.generator == primary.generator),
+                (
+                    "plan-digest",
+                    record.record.plan_digest == primary.plan_digest,
+                ),
+                ("version", record.record.version == primary.version),
+            ] {
+                if !matches {
                     issues.push(format!(
                         "release unit {release_unit_id} tag {name} disagrees with primary tag {primary_name} on {field}"
                     ));
@@ -1047,35 +1052,10 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-/// Fields every Intentional tag record carries.
-const RECORD_FIELDS: [&str; 6] = [
-    "contract",
-    "generator",
-    "plan-digest",
-    "tag-id",
-    "version",
-    "baseline",
-];
-
-/// First required record field absent from `fields`, or `None` when the record
-/// is complete.
-fn missing_record_field(fields: &BTreeMap<String, String>) -> Option<&'static str> {
-    RECORD_FIELDS
-        .into_iter()
-        .find(|required| !fields.contains_key(*required))
-}
-
-/// Whether `fields` carries any tag record field, i.e. whether the tag claims
-/// to carry a tag record at all.
-fn carries_record_field(fields: &BTreeMap<String, String>) -> bool {
-    RECORD_FIELDS
-        .into_iter()
-        .any(|required| fields.contains_key(required))
-}
-
 struct ParsedTagRecord {
+    /// Commit the tag peels to.
     target: gix::ObjectId,
-    fields: BTreeMap<String, String>,
+    record: TagRecord,
 }
 
 fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<ParsedTagRecord>> {
@@ -1102,24 +1082,26 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
     let decoded = tag
         .decode()
         .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
-    let fields = decoded
-        .message
-        .to_string()
-        .lines()
-        .filter_map(|line| line.split_once(": "))
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect::<BTreeMap<_, _>>();
-    let Some(missing) = missing_record_field(&fields) else {
-        return Ok(Some(ParsedTagRecord { target, fields }));
-    };
-    if !carries_record_field(&fields) {
+    let message = decoded.message.to_string();
+    if !TagRecord::is_claimed_by(&message) {
         // Pre-Intentional history: an annotated tag with no tag record field
         // at all is tolerated exactly like a lightweight tag.
         return Ok(None);
     }
-    Err(Error::Validation(format!(
-        "annotated tag {name} is missing tag record field {missing}"
-    )))
+    let record = TagRecord::decode(&message).map_err(|error| match error {
+        Error::Validation(reason) => Error::Validation(format!("annotated tag {name}: {reason}")),
+        other => other.in_document(format!("of annotated tag {name}")),
+    })?;
+    if record
+        .target
+        .as_ref()
+        .is_some_and(|recorded| gix::ObjectId::from_hex(recorded.as_bytes()).ok() != Some(target))
+    {
+        return Err(Error::Validation(format!(
+            "annotated tag {name} records a target other than the commit it tags"
+        )));
+    }
+    Ok(Some(ParsedTagRecord { target, record }))
 }
 
 /// Whether tag `name` carries a tag record that a baseline must leave alone:
@@ -1137,26 +1119,18 @@ fn is_established(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(false);
     };
-    for (field, expected) in [
-        ("tag-id", expected_id),
-        ("version", expected_version),
-        ("contract", expected_contract),
+    for (field, matches) in [
+        ("tag-id", record.record.tag_id == expected_id),
+        ("version", record.record.version == expected_version),
+        ("contract", record.record.contract == expected_contract),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "release tag {name} has unexpected {field}"
             )));
         }
     }
-    let baseline = match record.fields.get("baseline").map(String::as_str) {
-        Some("true") => true,
-        Some("false") => false,
-        _ => {
-            return Err(Error::Validation(format!(
-                "release tag {name} has unexpected baseline"
-            )))
-        }
-    };
+    let baseline = record.record.baseline;
     let head = repository
         .head_id()
         .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
@@ -1202,13 +1176,13 @@ fn verify_existing_prerequisite(
             "prerequisite tag {prerequisite} targets a different commit"
         )));
     }
-    for (field, expected) in [
-        ("contract", contract),
-        ("plan-digest", digest),
-        ("tag-id", prerequisite),
-        ("version", version),
+    for (field, matches) in [
+        ("contract", record.record.contract == contract),
+        ("plan-digest", record.record.plan_digest == digest),
+        ("tag-id", record.record.tag_id == prerequisite),
+        ("version", record.record.version == version),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "prerequisite tag {prerequisite} has unexpected {field}"
             )));
@@ -1261,13 +1235,6 @@ fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::Signa
     })
 }
 
-fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: bool) -> String {
-    format!(
-        "intentional release record\n\ncontract: {contract}\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {id}\nversion: {version}\nbaseline: {baseline}\n",
-        crate::VERSION
-    )
-}
-
 fn render_tag(template: &str, id: &str, version: &str) -> String {
     template.replace("{id}", id).replace("{version}", version)
 }
@@ -1291,57 +1258,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn published_tag_record_schema_requires_the_fields_every_tag_record_carries() {
-        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
-            "../../../docs/specifications/tag-record.schema.yml"
-        ))
-        .expect("Tag Record schema parses");
-        assert_eq!(
-            schema["$id"].as_str(),
-            Some("https://intentional.foo/schemas/0.2/tag-record")
-        );
-        let required: Vec<&str> = schema["required"]
-            .as_sequence()
-            .expect("required Tag Record fields")
-            .iter()
-            .filter_map(serde_yaml::Value::as_str)
-            .collect();
-        assert_eq!(required, RECORD_FIELDS);
-        for field in ["target", "tag-role", "prerequisites"] {
-            assert!(schema["properties"].get(field).is_some(), "{field}");
-        }
-        assert_eq!(
-            schema["properties"]["contract"]["const"].as_str(),
-            Some(crate::config::CURRENT_CONTRACT)
-        );
-        assert_eq!(
-            schema["properties"]["tag-id"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-id")
-        );
-    }
-
-    #[test]
     fn reads_leading_release_section() {
         let changelog = "# Changelog\n\n## 2.1.0\n\nNotes.\n\n## 2.0.0\n";
         assert_eq!(
             leading_changelog_version(changelog).expect("valid changelog"),
             Some(Version::new(2, 1, 0))
         );
-    }
-
-    #[test]
-    fn canonical_message_contains_release_evidence() {
-        let message = tag_message(
-            "contract-1",
-            "sha256:abc",
-            "release-unit/sample/primary",
-            "1.2.0",
-            false,
-        );
-        assert!(message.contains("contract: contract-1"));
-        assert!(message.contains("plan-digest: sha256:abc"));
-        assert!(message.contains("version: 1.2.0"));
-        assert!(message.contains(&format!("generator: intentional {}", crate::VERSION)));
     }
 
     #[test]
@@ -1380,41 +1302,6 @@ mod tests {
         };
         let error = verify_plan_generator(&generator).expect_err("malformed version");
         assert!(error.to_string().contains("not valid SemVer"));
-    }
-
-    fn record_fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
-    }
-
-    #[test]
-    fn fieldless_tag_carries_no_record() {
-        let fields = record_fields(&[("Release", "1.0.0")]);
-        assert!(!carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), Some("contract"));
-    }
-
-    #[test]
-    fn partial_record_still_carries_a_record_field() {
-        let fields = record_fields(&[("contract", "contract-1"), ("version", "1.0.0")]);
-        assert!(carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), Some("generator"));
-    }
-
-    #[test]
-    fn complete_record_is_missing_nothing() {
-        let fields = record_fields(&[
-            ("contract", "contract-1"),
-            ("generator", "intentional 0.1.0"),
-            ("plan-digest", "sha256:abc"),
-            ("tag-id", "release-unit/sample/primary"),
-            ("version", "1.0.0"),
-            ("baseline", "true"),
-        ]);
-        assert!(carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), None);
     }
 
     #[test]

@@ -1555,6 +1555,46 @@ fn rejects_supplied_plan_with_another_schema_identity() {
 }
 
 #[test]
+fn a_malformed_tag_record_away_from_head_does_not_stop_tagging() {
+    let repo = TestRepo::new();
+    prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "unrelated-note",
+            "HEAD~1",
+            "-m",
+            "intentional release record\n\nnot a field\n",
+        ],
+    );
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .success();
+
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-f",
+            "-a",
+            "unrelated-note",
+            "-m",
+            "intentional release record\n\nnot a field\n",
+        ],
+    );
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "annotated tag unrelated-note: tag record line `not a field` is not a `key: value` field",
+        ));
+}
+
+#[test]
 fn rejects_future_plan_generator_version() {
     let repo = TestRepo::new();
     let plan = prepare_applied_release_with_prior_plan_generator(&repo, "99.0.0");
@@ -1665,7 +1705,71 @@ fn annotated_tag_with_partial_intentional_record_is_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "annotated tag sample@1.0.0 is missing tag record field",
+            "annotated tag sample@1.0.0: tag record does not begin with the protocol header",
+        ));
+}
+
+#[test]
+fn a_recorded_tag_record_target_must_be_the_tagged_commit() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    let earlier = git(&repo.root, &["rev-parse", "HEAD"]);
+    repo.write("README.md", "Sample.\n");
+    repo.commit("add readme");
+    let tagged = git(&repo.root, &["rev-parse", "HEAD"]);
+    let record = |target: &str| {
+        format!(
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.2.0\nplan-digest: sha256:{}\ntag-id: release-unit/sample/primary\nversion: 1.0.0\ntarget: {target}\nbaseline: true\n",
+            "0".repeat(64)
+        )
+    };
+
+    git(
+        &repo.root,
+        &["tag", "-a", "sample@1.0.0", "-m", &record(&tagged)],
+    );
+    repo.cli().arg("status").assert().success();
+
+    git(
+        &repo.root,
+        &["tag", "-f", "-a", "sample@1.0.0", "-m", &record(&earlier)],
+    );
+    repo.cli()
+        .arg("status")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "annotated tag sample@1.0.0 records a target other than the commit it tags",
+        ));
+}
+
+#[test]
+fn annotated_tag_whose_tag_record_breaks_its_schema_fails_with_code_1() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "sample@1.0.0",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\nversion: 1.0.0\n",
+        ],
+    );
+
+    repo.cli()
+        .arg("status")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::starts_with(
+            "Tag Record of annotated tag sample@1.0.0 violates its published schema at #: keyword `required`",
         ));
 }
 
