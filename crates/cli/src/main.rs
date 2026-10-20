@@ -398,3 +398,76 @@ fn prompt(label: &str) -> Result<String> {
     io::stdin().read_line(&mut value)?;
     Ok(value.trim().to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+
+    /// Commands the specification states ahead of their implementation.
+    const SPECIFIED_AHEAD: [&str; 1] = ["model"];
+
+    /// Flags the specification states ahead of their implementation.
+    const FLAGS_SPECIFIED_AHEAD: [(&str, &str); 2] = [("status", "--json"), ("check", "--json")];
+
+    fn long_flags(command: &clap::Command) -> BTreeSet<String> {
+        command
+            .get_arguments()
+            .filter(|argument| !argument.is_global_set())
+            .filter(|argument| !matches!(argument.get_id().as_str(), "help" | "version"))
+            .filter_map(|argument| argument.get_long())
+            .map(|long| format!("--{long}"))
+            .collect()
+    }
+
+    fn specified_flags(options: &serde_yaml::Value) -> BTreeSet<String> {
+        options
+            .as_sequence()
+            .map(|options| {
+                options
+                    .iter()
+                    .flat_map(|option| option["flags"].as_sequence().cloned().unwrap_or_default())
+                    .filter_map(|flag| flag.as_str().map(str::to_owned))
+                    .filter(|flag| flag.starts_with("--"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn commands_and_flags_match_the_cli_specification() {
+        let specification: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/command-line-interface.spec.yml"
+        ))
+        .expect("CLI specification parses");
+        let cli = Cli::command();
+        let shipped = cli
+            .get_subcommands()
+            .map(|command| command.get_name().to_owned())
+            .collect::<BTreeSet<_>>();
+        let specified = specification["commands"]
+            .as_sequence()
+            .expect("commands")
+            .iter()
+            .filter_map(|command| command["name"].as_str().map(str::to_owned))
+            .filter(|name| !SPECIFIED_AHEAD.contains(&name.as_str()))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(shipped, specified);
+        for command in specification["commands"].as_sequence().expect("commands") {
+            let name = command["name"].as_str().expect("command name");
+            let Some(subcommand) = cli.find_subcommand(name) else {
+                continue;
+            };
+            let specified = specified_flags(&command["options"])
+                .into_iter()
+                .filter(|flag| !FLAGS_SPECIFIED_AHEAD.contains(&(name, flag.as_str())))
+                .collect::<BTreeSet<_>>();
+            assert_eq!(long_flags(subcommand), specified, "{name}");
+        }
+        assert_eq!(
+            specified_flags(&specification["global-options"]),
+            BTreeSet::from(["--directory".to_owned()])
+        );
+    }
+}

@@ -267,6 +267,22 @@ commands:
     summary: Establish or extend annotated tag-backed Release authority.
     mode: non-interactive
     options:
+      - name: channel
+        flags:
+          - --channel
+        kind: option
+        description: Release channel of the applied Release, such as beta.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - baseline
+        examples:
+          - beta
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
       - name: baseline
         flags:
           - --baseline
