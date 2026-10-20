@@ -1695,6 +1695,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "syn 2.0.119",
  "tagver",
  "thiserror 2.0.21",
  "toml_edit",

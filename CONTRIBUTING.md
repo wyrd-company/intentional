@@ -32,3 +32,9 @@ Backward compatibility is a separate acceptance gate. Review against
 `docs/policies/backward-compatibility.yml` and
 `docs/standards/backward-compatibility.yml`. A SemVer major identifies impact;
 it does not permit breaking Intentional's permanent compatibility promises.
+
+## Public types in `intentional-core`
+
+Close each new public struct or enum with `#[non_exhaustive]`, so that an added
+member is a minor change. A test enforces this and holds the list of types that
+are open on purpose; see `crates/core/tests/closed_public_types/README.md`.

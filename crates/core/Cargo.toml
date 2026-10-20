@@ -27,3 +27,6 @@ tagver.workspace = true
 thiserror.workspace = true
 toml_edit.workspace = true
 walkdir.workspace = true
+
+[dev-dependencies]
+syn = { workspace = true, features = ["full", "parsing"] }
