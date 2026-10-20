@@ -4,8 +4,8 @@ relationships:
   realizes: intentional
 objective: >-
   Reconcile repository evidence and explicit owner decisions into one complete
-  Release Workspace configuration, including optional managed-workflow adoption
-  and authority transfer from recognized release tools.
+  Release Workspace configuration, including authority transfer from
+  recognized release tools, and hand the result to a release process.
 proposed-design:
   reconciliation-model: >-
     `intentional init` implements the `Reconcile Release Workspace` command. It
@@ -27,11 +27,10 @@ proposed-design:
     Every detector emits the same artifact-neutral candidate shape: a stable
     detector identifier, exact workspace-relative path, evidence locations and
     digests, optional native identity, raw version evidence, one optional
-    projection suggestion, one optional tag suggestion, one optional Package
-    suggestion, diagnostics, and the narrow facts used to derive each suggestion.
-    Detectors extract only facts native to their format.
-    Maintained ecosystem designs define detector-specific evidence and never
-    infer repository policy from prose, directory proximity, or naming style.
+    projection suggestion, one optional tag suggestion, diagnostics, and the
+    narrow facts used to derive each suggestion. Detectors extract only facts
+    native to their format and never infer repository policy from prose,
+    directory proximity, or naming style.
 
   candidate-identity: >-
     Discovery retains candidates by detector and exact path before constructing
@@ -69,33 +68,21 @@ proposed-design:
 
   release-workspace-materialization: >-
     Accepted candidate ownership creates or updates Release Units, projections,
-    Packages, dependencies, tag streams, and discovery receipts. Package
-    discovery proves native packaging capability. Distribution Target selection
-    remains explicit unless a maintained recipe defines one unambiguous
-    repository-local destination identity. Accepted selection writes the target's
-    stable instance key, compact recipe identifier, and only the
-    combined `with` values that native evidence cannot supply at runtime.
-    Reconciliation validates the complete resulting Release Workspace rather than
-    applying candidates one at a time.
+    dependencies, tag streams, and discovery receipts. Reconciliation validates
+    the complete resulting Release Workspace rather than applying candidates one
+    at a time.
 
-  workflow-adoption: >-
-    Core Release Workspace initialization does not depend on workflow adoption.
-    Discovery reads `remote.origin.url`. A GitHub origin recommends managed
-    GitHub workflow adoption; another or missing origin recommends decline.
-    `--workflow` and `--no-workflow` are mutually exclusive explicit resolutions.
-    The accepted choice is durable Release Workspace state and therefore
-    outranks later origin detection. Adoption includes detected Custom Release Gate
-    extension files and every configured Package and Distribution Target in the
-    same Initialization Plan. The plan resolves one supported security-posture
-    identifier; the robust posture is recommended rather than
-    inferred from observed settings. Adoption also requires one workspace tag
-    stream with template `{version}` designated as the global release stream and
-    resolves any missing baseline for that stream. Decline generates no managed workflow and removes
-    no core capability. The portable command-line release protocol remains
-    available for planning, materialization, versioning, changelog production,
-    and verified establishment from a harness-created commit and
-    Intentional-created tags. Maintained Distribution requires managed GitHub
-    workflow adoption and consumes immutable Release Unit records.
+  release-process-handoff: >-
+    Initialization configures no release process and never runs a template
+    tool. Each Release Unit it creates takes the default `required`
+    release-record policy; initialization never proposes `none`. Reconciliation
+    keeps an existing Release Model current, as the Release Model design's
+    command surface requires. A ready plan for a workspace with no committed Release Model
+    names `intentional model` and a release process template as the next
+    actions. The core release protocol needs no release process: planning,
+    materialization, versioning, changelog production, and verified
+    establishment from a harness-created commit and Intentional-created tags
+    remain available without one.
 
   imported-authority: >-
     A recognized release tool activates an importer that reads its configuration,
@@ -147,7 +134,7 @@ proposed-design:
 
   diagnostics: >-
     Stable diagnostic codes describe contract conditions. Diagnostic identity
-    adds the affected Release Unit, candidate, tag, Package, Distribution Target,
-    or repository path. Needs-input, successful reconciliation, and invalid
-    repository state are distinct process outcomes. Dry-run renders the complete
-    planned operation set without changing repository state.
+    adds the affected Release Unit, candidate, tag, or repository path.
+    Needs-input, successful reconciliation, and invalid repository state are
+    distinct process outcomes. Dry-run renders the complete planned operation
+    set without changing repository state.
