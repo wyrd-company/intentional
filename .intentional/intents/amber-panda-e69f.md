@@ -1,7 +1,7 @@
 ---
-intentional: major
+intentional: minor
 ---
 
-Define the managed release protocol, compact Release Workspace configuration,
-subtractive security postures, canonical records, command surface, maintained
-ecosystem recipes, and permanent compatibility model.
+Accept a `v` version prefix in Release Unit projection tag templates where the
+ecosystem requires it, such as Go module tags. Primary and workspace tag
+templates still reject the prefix.
