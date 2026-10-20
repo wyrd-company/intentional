@@ -1097,6 +1097,60 @@ fn verify_skips_the_projections_of_a_unit_whose_version_a_recordless_tag_supplie
     assert_baseline_verified(&repo, "0.1.0", &["mirror@1.2.3", "0.1.0"]);
 }
 
+/// A baseline peer rewritten as a tag of the Release at its commit, with that
+/// Release's plan digest, is not a tag the Release plans, so its stream stays
+/// in the baseline set even when the selected tag names another generator.
+#[test]
+fn verify_fails_for_a_baseline_peer_disguised_as_a_tag_of_the_release_at_its_commit() {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    let config = unordered_workspace_config().replace(
+        "workspace-tags:\n",
+        "workspace-tags:\n  docs:\n    template: 'docs-{version}'\n    require-phase: after-publication\n",
+    );
+    repo.write(".intentional/config.yml", &config);
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("add fixture");
+    git(&repo.root, &["tag", "sample-library@1.2.3"]);
+    repo.intent("sample-otter-0001", "Add a sample capability.");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo.cli().arg("tag").assert().success();
+    repo.cli()
+        .args([
+            "tag",
+            "--baseline",
+            "--version",
+            "workspace/release=0.1.0",
+            "--version",
+            "workspace/docs=1.0.0",
+        ])
+        .assert()
+        .success()
+        .stdout("create annotated tag docs-1.0.0\ncreate annotated tag 0.1.0\n");
+    assert_baseline_verified(&repo, "0.1.0", &["docs-1.0.0", "0.1.0"]);
+    let release = plan_digest(&repo.message("sample-library@1.3.0"));
+    let peer = repo.message("docs-1.0.0");
+    repo.forge(
+        "docs-1.0.0",
+        "HEAD",
+        &peer
+            .replace(&plan_digest(&peer), &release)
+            .replace("baseline: true", "baseline: false"),
+    );
+    from_another_generator(&repo, "0.1.0");
+    let report = assert_fails_with(&repo, "0.1.0", "identity-tag-mismatch");
+    assert!(
+        report["diagnostics"]
+            .to_string()
+            .contains("identity tag docs-1.0.0 has unexpected plan-digest, baseline"),
+        "{report:#}"
+    );
+}
+
 /// The baseline tags written by released `0.2.0` on the workspace the fixture
 /// README describes.
 #[test]
