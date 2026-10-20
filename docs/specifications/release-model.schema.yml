@@ -135,7 +135,7 @@ $defs:
         $ref: "#/$defs/stable-id-list"
   projection:
     type: object
-    required: [ adapter, file, workspace_file, mode ]
+    required: [ adapter, file, workspace_file, mode, generic ]
     properties:
       adapter:
         $ref: "#/$defs/adapter"
@@ -145,6 +145,9 @@ $defs:
         $ref: "#/$defs/relative-path"
       mode:
         enum: [ committed, injected, none ]
+      generic:
+        description: True for a generic format adapter; false for an ecosystem adapter.
+        type: boolean
       pointer:
         type: string
         minLength: 1
@@ -157,6 +160,15 @@ $defs:
             adapter:
               $ref: "#/$defs/generic-adapter"
           required: [ adapter ]
+        then:
+          properties:
+            generic:
+              const: true
+      - if:
+          properties:
+            generic:
+              const: true
+          required: [ generic ]
         then:
           required: [ pointer ]
           not:

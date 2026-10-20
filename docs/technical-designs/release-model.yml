@@ -100,8 +100,12 @@ proposed-design:
 
   projection-entry: >-
     Each `projections` item has `adapter`, `file` relative to the unit path,
-    `workspace_file` relative to the workspace root, `mode`, and `pointer` for
-    generic format adapters. `native_identity` holds the package identity that
+    `workspace_file` relative to the workspace root, `mode`, and a required
+    boolean `generic`. `generic` is true for a generic format adapter and false
+    for an ecosystem adapter. `json`, `toml`, and `yaml` require `generic: true`.
+    Every projection with `generic: true`, including an adapter outside the
+    known values, requires `pointer` and forbids `native_identity`. `native_identity` holds the
+    package identity that
     Release Workspace initialization resolves for the manifest: the npm `name`,
     the Cargo `package.name`, the Pub `name`, the PEP 621 `project.name`, the
     Go `module` path, and for MSBuild the `PackageId`, else the `AssemblyName`,

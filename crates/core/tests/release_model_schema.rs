@@ -15,8 +15,33 @@ const RELEASE_MODEL_ID: &str = "https://intentional.foo/schemas/release-model/1"
 
 /// Each invalid fixture with the instance location and keyword of the one
 /// violation it carries.
-const INVALID: [(&str, &str, &str); 10] = [
+const INVALID: [(&str, &str, &str); 15] = [
     ("wrong-schema", "/$schema", "const"),
+    (
+        "unlisted-generic-without-pointer",
+        "/release_units/atlas-cli/projections/1",
+        "required",
+    ),
+    (
+        "unlisted-generic-native-identity",
+        "/release_units/atlas-cli/projections/1",
+        "not",
+    ),
+    (
+        "known-generic-marked-ecosystem",
+        "/release_units/atlas-cli/projections/1/generic",
+        "const",
+    ),
+    (
+        "missing-generic",
+        "/release_units/atlas-cli/projections/1",
+        "required",
+    ),
+    (
+        "generic-not-boolean",
+        "/release_units/atlas-cli/projections/1/generic",
+        "type",
+    ),
     (
         "release-record-value",
         "/release_units/atlas/release_record",
@@ -166,7 +191,12 @@ fn collect_references(value: &Value, references: &mut Vec<String>) {
 fn valid_fixtures_validate_and_are_canonical() {
     let validator = validator();
     let names = fixture_names(&fixtures());
-    for required in ["complete", "unknown-members", "unlisted-adapter"] {
+    for required in [
+        "complete",
+        "unknown-members",
+        "unlisted-adapter",
+        "unlisted-generic-adapter",
+    ] {
         assert!(names.contains(required), "missing valid fixture {required}");
     }
     for name in &names {
@@ -317,7 +347,7 @@ fn required_members_match_the_design() {
         (definition("release-group-membership"), &["kind", "members"]),
         (
             definition("projection"),
-            &["adapter", "file", "workspace_file", "mode"],
+            &["adapter", "file", "workspace_file", "mode", "generic"],
         ),
         (definition("source"), &["detector", "path"]),
         (
@@ -349,6 +379,8 @@ fn unlisted_adapter_fixture_names_an_adapter_outside_the_known_values() {
         .expect("adapter");
     assert!(!known.contains(&adapter), "{adapter} is a known adapter");
     assert_eq!(delta["ecosystems"], serde_json::json!([adapter]));
+    assert_eq!(delta["projections"][0]["generic"], false);
+    assert!(delta["projections"][0].get("pointer").is_none());
 }
 
 fn collect_enums(value: &Value, location: &str, enums: &mut BTreeSet<String>) {
@@ -373,7 +405,7 @@ fn collect_enums(value: &Value, location: &str, enums: &mut BTreeSet<String>) {
 }
 
 /// Every enumerated member is closed except `adapter` and each `ecosystems`
-/// item; `generic-adapter` is the closed list the pointer rule applies to.
+/// item; `generic-adapter` identifies known adapters that must declare generic.
 #[test]
 fn closed_value_sets_are_exactly_the_ruled_ones() {
     let schema = schema();
@@ -433,6 +465,56 @@ fn open_and_closed_value_rule_reads_the_same_everywhere() {
         assert!(
             normalize(text).contains(rule),
             "{source} does not state the rule"
+        );
+    }
+}
+
+/// A new generic adapter uses the same discriminator as a known one. Its
+/// missing-pointer fixture differs only by the absent pointer.
+#[test]
+fn unlisted_generic_adapter_requires_pointer() {
+    let mut valid = document(&fixtures().join("unlisted-generic-adapter.json"));
+    let projection = &mut valid["release_units"]["atlas-cli"]["projections"][1];
+    let adapter = projection["adapter"].as_str().expect("adapter");
+    assert!(!schema()["$defs"]["adapter"]["examples"]
+        .as_array()
+        .expect("known adapters")
+        .iter()
+        .any(|known| known == adapter));
+    assert_eq!(projection["generic"], true);
+    assert!(projection
+        .as_object_mut()
+        .expect("projection")
+        .remove("pointer")
+        .is_some());
+    assert_eq!(
+        valid,
+        document(&fixtures().join("invalid/unlisted-generic-without-pointer.json"))
+    );
+    assert_eq!(
+        violations(&validator(), &valid),
+        vec![(
+            "/release_units/atlas-cli/projections/1".to_owned(),
+            "required".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn known_generic_adapters_require_generic_true() {
+    let validator = validator();
+    for adapter in ["json", "toml", "yaml"] {
+        let mut model = document(&fixtures().join("complete.json"));
+        model["release_units"]["atlas-cli"]["projections"][1]["adapter"] = adapter.into();
+        assert!(violations(&validator, &model).is_empty(), "{adapter}");
+        model["release_units"]["atlas-cli"]["projections"][1]["generic"] = false.into();
+        assert_eq!(
+            violations(&validator, &model),
+            vec![(
+                "/release_units/atlas-cli/projections/1/generic".to_owned(),
+                "const".to_owned()
+            )],
+            "{adapter}"
         );
     }
 }

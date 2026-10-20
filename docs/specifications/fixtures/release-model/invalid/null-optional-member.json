@@ -32,6 +32,7 @@
         {
           "adapter": "npm",
           "file": "package.json",
+          "generic": false,
           "mode": "committed",
           "native_identity": "atlas",
           "workspace_file": "packages/atlas/package.json"
@@ -82,6 +83,7 @@
         {
           "adapter": "cargo",
           "file": "Cargo.toml",
+          "generic": false,
           "mode": "committed",
           "native_identity": "atlas-cli",
           "workspace_file": "crates/atlas-cli/Cargo.toml"
@@ -89,6 +91,7 @@
         {
           "adapter": "yaml",
           "file": "settings/version.yml",
+          "generic": true,
           "mode": "committed",
           "pointer": "/version",
           "workspace_file": "crates/atlas-cli/settings/version.yml"
@@ -147,6 +150,7 @@
         {
           "adapter": "python",
           "file": "pyproject.toml",
+          "generic": false,
           "mode": "committed",
           "native_identity": "beacon",
           "workspace_file": "tools/beacon/pyproject.toml"
@@ -188,6 +192,7 @@
         {
           "adapter": "go",
           "file": "go.mod",
+          "generic": false,
           "mode": "none",
           "native_identity": "example.invalid/compass",
           "workspace_file": "services/compass/go.mod"
