@@ -21,12 +21,12 @@ anyhow.workspace = true
 clap.workspace = true
 intentional-core = { path = "../core", version = "0.2.0" }
 semver.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2.0"
 jsonschema.workspace = true
 predicates = "3.1"
 serde.workspace = true
-serde_json.workspace = true
 serde_yaml.workspace = true
 tempfile = "3.8"

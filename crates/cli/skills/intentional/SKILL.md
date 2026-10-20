@@ -78,6 +78,14 @@ Treat `status` as the human-readable view of pending intents, current and next
 versions, missing baselines, manifest drift, and tag-record issues. Treat
 `check` as the continuous-integration validation gate.
 
+When `.intentional/release-model.json` exists, `check` compares its bytes with
+an in-memory model built from the working-tree inputs. A difference, invalid
+JSON, or another schema reports the error `release-model-stale`; run
+`intentional model` to repair it. An absent model produces no diagnostic.
+`status` reports the same condition without repairing the file. Use
+`intentional status --json` for structured output; `release_model_stale` is a
+boolean. A dirty working tree does not itself make a model stale.
+
 ## Choose the workflow
 
 - No configuration: initialize the repository.

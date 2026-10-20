@@ -41,7 +41,11 @@ enum Command {
     /// Author a pending change intent.
     Add(AddArgs),
     /// Show pending intents and computed release-unit versions.
-    Status,
+    Status {
+        /// Emit machine-readable workspace status.
+        #[arg(long)]
+        json: bool,
+    },
     /// Emit canonical digest-bound release-plan JSON.
     Plan(ChannelArgs),
     /// Materialize versions, changelogs, dependencies, and intent consumption.
@@ -190,7 +194,7 @@ fn run() -> Result<u8> {
         Command::Init(args) => return init(&cli.directory, args),
         Command::Verify(args) => return verify(&cli.directory, args),
         Command::Add(args) => add(&cli.directory, args),
-        Command::Status => status(&cli.directory),
+        Command::Status { json } => status(&cli.directory, json),
         Command::Model(args) => model(&cli.directory, args),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
@@ -360,8 +364,19 @@ fn add(root: &std::path::Path, args: AddArgs) -> Result<()> {
     Ok(())
 }
 
-fn status(root: &std::path::Path) -> Result<()> {
+fn status(root: &std::path::Path, json: bool) -> Result<()> {
     let status = WorkspaceStatus::load(root)?;
+    if json {
+        println!("{}", serde_json::to_string(&status)?);
+        return Ok(());
+    }
+    if status.release_model_stale {
+        println!(
+            "[{}] .intentional/release-model.json differs from workspace inputs; run {}",
+            intentional_core::RELEASE_MODEL_STALE_CODE,
+            intentional_core::RELEASE_MODEL_STALE_NEXT_ACTION
+        );
+    }
     if status.intents.is_empty() {
         println!("Pending intents: none");
     } else {

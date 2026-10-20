@@ -16,6 +16,13 @@ pub fn check_workspace(root: &Path) -> Result<()> {
     let config = Config::load(root)?;
     Intent::load_all(root, &config)?;
     let status = crate::status::WorkspaceStatus::load(root)?;
+    if status.release_model_stale {
+        return Err(Error::Validation(format!(
+            "[{}] .intentional/release-model.json differs from workspace inputs; run {}",
+            crate::status::RELEASE_MODEL_STALE_CODE,
+            crate::status::RELEASE_MODEL_STALE_NEXT_ACTION
+        )));
+    }
     if !status.missing_baselines.is_empty() {
         return Err(Error::Validation(format!(
             "[{}] missing baseline tags for {}; run {}",

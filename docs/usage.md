@@ -100,6 +100,14 @@ missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
+When `.intentional/release-model.json` exists, `check` compares its bytes with
+an in-memory model built from the working-tree inputs. A difference, invalid
+JSON, or another schema reports the error `release-model-stale`; run
+`intentional model` to repair it. An absent model produces no diagnostic.
+`status` reports the same condition without repairing the file. Use
+`intentional status --json` for structured output; `release_model_stale` is a
+boolean. A dirty working tree does not itself make a model stale.
+
 Tags created before Intentional carry no tag record. Both lightweight tags and
 annotated tags without any tag record field are tolerated as
 pre-Intentional history: they supply the current version and raise no issue.

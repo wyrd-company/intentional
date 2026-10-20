@@ -193,6 +193,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",
@@ -1315,6 +1316,7 @@ fn prepare_applied_release(repo: &TestRepo) -> Value {
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",
@@ -1470,6 +1472,7 @@ fn prepare_applied_release_with_plan(
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",

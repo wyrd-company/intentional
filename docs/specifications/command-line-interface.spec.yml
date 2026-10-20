@@ -130,6 +130,14 @@ commands:
   - name: status
     summary: Show pending intent and computed Release Unit versions.
     mode: non-interactive
+    options:
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit structured workspace status including release_model_stale.
+        required: false
+        repeatable: false
     output:
       modes:
         - name: human-readable
@@ -137,6 +145,12 @@ commands:
             Prints pending Change Intents, missing baselines, tag-record issues,
             computed versions, projection drift, and a stale Release Model.
           machine-readable: false
+        - name: json
+          description: >-
+            With --json, prints pending intents, release-unit versions, drift,
+            missing baselines, tag-record issues, and the boolean
+            release_model_stale as one JSON object.
+          machine-readable: true
       exit-codes:
         - code: 0
           meaning: Workspace status was computed and printed.
@@ -144,6 +158,7 @@ commands:
           meaning: Workspace state was invalid or could not be read.
     examples:
       - intentional status
+      - intentional status --json
   - name: plan
     summary: Emit the canonical digest-bound Release Plan.
     mode: non-interactive
@@ -366,7 +381,7 @@ commands:
         A phase declaration states what the surrounding process has completed;
         Intentional does not observe publication.
   - name: check
-    summary: Validate the Release Workspace and its committed Release Model.
+    summary: Validate the Release Workspace and its working-tree Release Model.
     mode: non-interactive
     output:
       modes:
@@ -384,9 +399,11 @@ commands:
       - intentional check
     notes:
       - >-
-        When `.intentional/release-model.json` exists, a committed model that
-        differs from a fresh projection is the `release-model-stale` error. An
-        absent model is not a diagnostic.
+        When `.intentional/release-model.json` exists, check compares its bytes
+        with a fresh projection of working-tree inputs. A difference, invalid
+        JSON, or a file outside the current contract is the `release-model-stale`
+        error; run `intentional model` to repair it. An absent model is not a
+        diagnostic. A dirty working tree is not itself a diagnostic.
   - name: verify
     summary: Verify one established Release or baseline from its annotated tag.
     mode: non-interactive

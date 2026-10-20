@@ -453,3 +453,175 @@ fn unreadable_generic_manifest_in_none_mode_preserves_old_model() {
         assert_eq!(repo.read_model(), b"old model\n");
     }
 }
+
+fn checked_repo() -> Repo {
+    let repo = Repo::new();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "fixture"]);
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo
+}
+
+fn assert_stale(repo: &Repo) {
+    let before = repo.read_model();
+    repo.cli().arg("check").assert().code(1).stderr(
+        predicate::str::contains("[release-model-stale]")
+            .and(predicate::str::contains("intentional model")),
+    );
+    repo.cli().arg("status").assert().success().stdout(
+        predicate::str::contains("[release-model-stale]")
+            .and(predicate::str::contains("intentional model")),
+    );
+    let output = repo
+        .cli()
+        .args(["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(status["release_model_stale"], true);
+    assert_eq!(
+        repo.read_model(),
+        before,
+        "read-only commands must not repair"
+    );
+}
+
+#[test]
+fn check_and_status_accept_absent_and_fresh_models_in_dirty_working_tree() {
+    let repo = checked_repo();
+    for present in [false, true] {
+        if present {
+            repo.cli().arg("model").assert().success();
+        }
+        repo.cli().arg("check").assert().success();
+        repo.cli()
+            .arg("status")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("release-model-stale").not());
+        let output = repo
+            .cli()
+            .args(["status", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let status: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(status["release_model_stale"], false);
+        assert_eq!(repo.path().join(RELEASE_MODEL_PATH).exists(), present);
+    }
+    // A config edit and a freshly regenerated model are both uncommitted.
+    let config = fs::read_to_string(repo.path().join(".intentional/config.yml")).unwrap();
+    repo.write(
+        ".intentional/config.yml",
+        &config.replace("sample@", "library@"),
+    );
+    repo.cli().arg("model").assert().success();
+    git(repo.path(), &["tag", "library@1.0.0"]);
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_and_status_report_model_stale_after_working_tree_config_edit() {
+    let repo = checked_repo();
+    repo.cli().arg("model").assert().success();
+    let config = fs::read_to_string(repo.path().join(".intentional/config.yml")).unwrap();
+    repo.write(
+        ".intentional/config.yml",
+        &format!("{config}workspace-tags:\n  snapshot:\n    template: 'snapshot@{{version}}'\n"),
+    );
+    assert_stale(&repo);
+    repo.cli().arg("model").assert().success();
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_and_status_report_hand_edited_malformed_and_wrong_schema_models() {
+    let repo = checked_repo();
+    repo.cli().arg("model").assert().success();
+    let fresh = String::from_utf8(repo.read_model()).unwrap();
+    for content in [
+        fresh.replace("sample-library", "edited-library"),
+        "not JSON".to_owned(),
+        fresh.replace("schemas/release-model/1", "schemas/release-model/999"),
+        // Semantic JSON equality is insufficient: the contract compares bytes.
+        format!("{fresh} "),
+        fresh.replace("\"paths\": {", "\"paths\": {\"model\": 123,"),
+    ] {
+        repo.write(RELEASE_MODEL_PATH, &content);
+        assert_stale(&repo);
+    }
+}
+
+#[test]
+fn check_accepts_fresh_model_in_second_clone_with_different_remote_and_default_branch() {
+    let repo = checked_repo();
+    repo.cli().arg("model").assert().success();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "-qm", "model"]);
+    git(repo.path(), &["branch", "-M", "first"]);
+    let clone_dir = tempfile::tempdir().unwrap();
+    git(
+        clone_dir.path(),
+        &["clone", "-q", repo.path().to_str().unwrap(), "second"],
+    );
+    let clone = clone_dir.path().join("second");
+    git(&clone, &["branch", "-M", "second"]);
+    git(
+        &clone,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://example.invalid/other",
+        ],
+    );
+    git(
+        &clone,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/second",
+        ],
+    );
+    git(&clone, &["config", "init.defaultBranch", "second"]);
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
+    command
+        .arg("-C")
+        .arg(&clone)
+        .arg("check")
+        .assert()
+        .success();
+    assert_eq!(
+        repo.read_model(),
+        fs::read(clone.join(RELEASE_MODEL_PATH)).unwrap()
+    );
+}
+
+#[test]
+fn check_and_status_report_stale_model_after_native_identity_edit() {
+    let repo = checked_repo();
+    repo.cli().arg("model").assert().success();
+    repo.write(
+        "package.json",
+        r#"{"name":"renamed-library","version":"1.0.0"}"#,
+    );
+    assert_stale(&repo);
+}
+
+#[test]
+fn check_and_status_preserve_model_read_errors() {
+    let repo = checked_repo();
+    fs::create_dir(repo.path().join(RELEASE_MODEL_PATH)).unwrap();
+    for command in ["check", "status"] {
+        repo.cli().arg(command).assert().code(1).stderr(
+            predicate::str::contains("release-model.json")
+                .and(predicate::str::contains("release-model-stale").not()),
+        );
+    }
+    assert!(repo.path().join(RELEASE_MODEL_PATH).is_dir());
+}
