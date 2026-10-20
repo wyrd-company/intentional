@@ -13,8 +13,9 @@ proposed-design:
     their exact historical models. Workspace migrations transform committed
     mutable state into the current model through an explicit plan. Durable-record
     verification retains historical semantics permanently. Current runtime
-    operations consume only the current normalized model, while historical plan
-    execution uses the exact producing Intentional binary.
+    operations consume only the current normalized model, while a plan under a
+    contract the current runtime does not implement executes in its exact
+    producing Intentional binary.
 
   compatibility-floor: >-
     Compatibility registries begin with Intentional `0.2.0`. Earlier
@@ -86,9 +87,15 @@ proposed-design:
     historical record proved when produced.
 
   historical-execution: >-
-    A sealed Release Plan names its exact producing Intentional version. Current
-    Intentional verifies that plan but directs materialization, tagging, or
-    other historical execution to that recorded binary. Released Intentional
+    A sealed Release Plan names its exact producing Intentional version. Its
+    contract, not that version, defines the format of its tag records and
+    digest. Current
+    Intentional therefore verifies and tags a sealed plan whose contract it
+    implements and whose producing version is not newer than its own, so that a
+    self-hosted release tags the preceding binary's plan with the materialized
+    binary. Historical execution is the execution of a plan under a contract
+    the running binary does not implement; current Intentional directs it to
+    the recorded binary. Released Intentional
     binaries and integrity information remain immutable assets of Intentional's
     own release records.
     Retention does not claim that a future host can execute the binary or that
