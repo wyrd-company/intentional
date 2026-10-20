@@ -23,8 +23,6 @@ produces explicit candidates before it writes canonical configuration.
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
-workflow:
-  adoption: declined
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: compatibility
@@ -67,7 +65,6 @@ release-units:
 | --- | --- |
 | `$schema` | Schema URL for editor validation. |
 | `contract` | Versioned interpretation semantics used by plans and tags. |
-| `workflow` | Explicit adoption or decline of generated managed workflow. |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
 | `workspace-tags` | Repository-level release records and triggers. |

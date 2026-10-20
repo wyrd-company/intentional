@@ -31,8 +31,6 @@ pub struct Config {
     pub schema: Option<String>,
     /// Versioned release-semantics contract.
     pub contract: String,
-    /// Whether this workspace adopts the generated managed workflow.
-    pub workflow: WorkflowConfig,
     /// Workspace-wide release settings.
     #[serde(default)]
     pub settings: Settings,
@@ -57,7 +55,6 @@ impl Default for Config {
         Self {
             schema: Some(CONFIG_SCHEMA.to_owned()),
             contract: CURRENT_CONTRACT.to_owned(),
-            workflow: WorkflowConfig::default(),
             settings: Settings::default(),
             fixed: Vec::new(),
             linked: Vec::new(),
@@ -66,47 +63,6 @@ impl Default for Config {
             release_units: BTreeMap::new(),
         }
     }
-}
-
-/// Durable managed-workflow adoption choice.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "adoption",
-    rename_all = "kebab-case",
-    rename_all_fields = "kebab-case",
-    deny_unknown_fields
-)]
-pub enum WorkflowConfig {
-    /// Keep core Intentional versioning and release records without generated GitHub workflow.
-    #[default]
-    Declined,
-    /// Generate and validate the selected managed GitHub workflow posture.
-    Adopted {
-        /// Hosting provider used by the managed workflow.
-        provider: WorkflowProvider,
-        /// Qualified workspace tag that triggers managed release processing.
-        global_tag: String,
-        /// Maintained security posture identity and version.
-        security_posture: VersionedRef,
-    },
-}
-
-/// Hosting provider supported by generated workflow.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum WorkflowProvider {
-    /// GitHub Actions and immutable GitHub Releases.
-    Github,
-}
-
-/// Reference to one maintained, versioned contract.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub struct VersionedRef {
-    /// Stable contract identity.
-    pub id: String,
-    /// Positive contract version.
-    pub version: u64,
 }
 
 /// Durable receipts for resolved discovery candidates.
@@ -309,35 +265,6 @@ impl Config {
                 "internal-dependency-bump must be major, minor, or patch".to_owned(),
             ));
         }
-        if let WorkflowConfig::Adopted {
-            global_tag,
-            security_posture,
-            ..
-        } = &self.workflow
-        {
-            validate_id(&security_posture.id, "security posture")?;
-            if security_posture.version == 0 {
-                return Err(Error::Validation(
-                    "security posture version must be positive".to_owned(),
-                ));
-            }
-            let workspace_tag_id = global_tag.strip_prefix("workspace/").ok_or_else(|| {
-                Error::Validation(
-                    "managed workflow global-tag must be a qualified workspace tag".to_owned(),
-                )
-            })?;
-            let workspace_tag = self.workspace_tags.get(workspace_tag_id).ok_or_else(|| {
-                Error::Validation(format!(
-                    "managed workflow global-tag references unknown workspace tag {global_tag}"
-                ))
-            })?;
-            if workspace_tag.template != "{version}" {
-                return Err(Error::Validation(format!(
-                    "managed workflow global-tag {global_tag} must render plain semantic-version text"
-                )));
-            }
-        }
-
         let mut canonical_tags = BTreeSet::new();
         let mut resolved_templates = BTreeMap::new();
         for (id, release_unit) in &self.release_units {
@@ -725,8 +652,6 @@ mod tests {
     const VALID: &str = r#"
 $schema: https://intentional.foo/schemas/config.yml
 contract: contract-1
-workflow:
-  adoption: declined
 settings:
   internal-dependency-bump: patch
   pre-1-0-bump-mapping: component
@@ -764,18 +689,20 @@ release-units:
     }
 
     #[test]
-    fn validates_managed_workflow_adoption_references() {
-        let adopted = VALID.replace(
-            "workflow:\n  adoption: declined",
-            "workflow:\n  adoption: adopted\n  provider: github\n  global-tag: workspace/release\n  security-posture: { id: robust, version: 1 }",
-        );
-        Config::from_yaml(&adopted).expect("managed workflow adoption accepted");
-
-        let unknown = adopted.replace("workspace/release", "workspace/missing");
-        assert!(Config::from_yaml(&unknown)
-            .expect_err("unknown managed global tag rejected")
-            .to_string()
-            .contains("unknown workspace tag"));
+    fn rejects_a_workflow_key_like_any_unknown_field() {
+        for key in ["workflow", "sample-unknown"] {
+            let config = VALID.replace(
+                "contract: contract-1\n",
+                &format!("contract: contract-1\n{key}:\n  adoption: declined\n"),
+            );
+            let error = Config::from_yaml(&config).expect_err("unknown top-level key rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{key}`")),
+                "{error}"
+            );
+        }
     }
 
     #[test]

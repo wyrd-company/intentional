@@ -1696,7 +1696,6 @@ fn baseline_requires_agreeing_projection_evidence_and_explicit_tag_only_versions
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -1790,7 +1789,6 @@ fn baseline_retry_rejects_conflicting_existing_records_without_creating_tags() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -1860,7 +1858,6 @@ fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   package-a:
     path: .
@@ -2006,7 +2003,6 @@ fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
     repository.write(
         ".intentional/config.yml",
         r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   package-a:
     path: packages/package-a

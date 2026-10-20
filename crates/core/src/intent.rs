@@ -193,7 +193,6 @@ mod tests {
         Config::from_yaml(
             r#"
 contract: contract-1
-workflow: { adoption: declined }
 release-units:
   library:
     path: .

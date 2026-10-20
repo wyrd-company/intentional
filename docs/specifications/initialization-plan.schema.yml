@@ -12,7 +12,6 @@ required:
   - state
   - source-kind
   - source-fingerprint
-  - workflow-adoption
   - inferred-config
   - discovery-candidates
   - diagnostics
@@ -30,8 +29,6 @@ properties:
   source-fingerprint:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
-  workflow-adoption:
-    $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/workflow-adoption"
   inferred-config:
     oneOf:
       - $ref: https://intentional.foo/schemas/0.2/config
@@ -89,12 +86,10 @@ $defs:
   empty-inferred-config:
     type: object
     additionalProperties: false
-    required: [ $schema, workflow, release-units ]
+    required: [ $schema, release-units ]
     properties:
       $schema:
         const: https://intentional.foo/schemas/0.2/config
-      workflow:
-        $ref: https://intentional.foo/schemas/0.2/config#/$defs/workflow
       settings:
         type: object
         additionalProperties: false
@@ -112,44 +107,6 @@ $defs:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   stable-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
-  security-posture:
-    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
-  workspace-tag-reference:
-    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
-  workflow-adoption:
-    type: object
-    additionalProperties: false
-    required:
-      - origin
-      - recommended-adoption
-      - recommended-posture
-      - recommended-global-tag
-      - supported-postures
-    properties:
-      origin:
-        type: object
-        additionalProperties: false
-        required: [ kind ]
-        properties:
-          kind:
-            enum: [ github, other, missing ]
-          url:
-            type: string
-            minLength: 1
-      recommended-adoption:
-        enum: [ adopted, declined ]
-      recommended-posture:
-        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/security-posture"
-      recommended-global-tag:
-        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/workspace-tag-reference"
-      supported-postures:
-        type: array
-        minItems: 1
-        uniqueItems: true
-        items:
-          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/security-posture"
-      resolution:
-        $ref: "https://intentional.foo/schemas/0.2/config#/$defs/workflow"
   release-unit-id:
     $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:

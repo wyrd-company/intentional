@@ -487,7 +487,6 @@ mod tests {
         let config = Config::from_yaml(
             r#"
 contract: contract-1
-workflow: { adoption: declined }
 release-units:
   library:
     path: library
@@ -550,7 +549,6 @@ release-units:
         Config::from_yaml(&format!(
             r#"
 contract: contract-1
-workflow: {{ adoption: declined }}
 settings:
   pre-1-0-bump-mapping: {mapping}
   internal-dependency-bump: patch

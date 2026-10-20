@@ -677,7 +677,7 @@ fn validate_empty_inferred_config(config: &Config) -> Result<()> {
         || !config.discovery.excluded_paths.is_empty()
     {
         return Err(Error::Validation(
-            "empty inferred config may only contain schema, contract, workflow, settings, and release-units"
+            "empty inferred config may only contain schema, contract, settings, and release-units"
                 .to_owned(),
         ));
     }
@@ -4378,7 +4378,7 @@ mod tests {
 
     fn candidate_plan(candidates: Vec<DiscoveryCandidate>) -> InitPlan {
         let config = Config::from_yaml(
-            "contract: contract-1\nworkflow: { adoption: declined }\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "contract: contract-1\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         )
         .expect("candidate test config");
         InitPlan {
@@ -4529,7 +4529,6 @@ mod tests {
         .expect("write second duplicate");
         let mut config = Config::from_yaml(
             r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   sample-base:
     path: base
@@ -4722,7 +4721,6 @@ release-units:
     fn changesets_projection_rejects_an_unrelated_existing_owner() {
         let config = Config::from_yaml(
             r#"contract: contract-1
-workflow: { adoption: declined }
 release-units:
   alpha:
     path: examples
@@ -4802,7 +4800,7 @@ release-units:
             .validate()
             .expect_err("discovery is forbidden on an empty inferred config")
             .to_string()
-            .contains("may only contain schema, contract, workflow, settings, and release-units"));
+            .contains("may only contain schema, contract, settings, and release-units"));
 
         plan.inferred_config.discovery.excluded_paths.clear();
         plan.inferred_config.schema = Some("https://example.invalid/config.yml".to_owned());
@@ -4870,10 +4868,6 @@ release-units:
         assert_eq!(
             schema["$defs"]["release-unit-id"]["$ref"].as_str(),
             Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
-        );
-        assert_eq!(
-            schema["$defs"]["workflow-adoption"]["properties"]["resolution"]["$ref"].as_str(),
-            Some("https://intentional.foo/schemas/0.2/config#/$defs/workflow")
         );
         assert_eq!(
             schema["properties"]["converted-intents"]["items"]["properties"]["id"]["$ref"].as_str(),
