@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    # GitHub-hosted label (actions/runner-images README) not yet known to
+    # actionlint 1.7.12. Drop this entry once the actionlint release after
+    # 1.7.12 that adds it is in use.
+    - ubuntu-26.04-arm
