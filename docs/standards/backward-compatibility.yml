@@ -14,8 +14,8 @@ relationships:
 scope:
   - Intentional releases at version 0.2.0 and later.
   - >-
-    Intentional code, schemas, recipes, workflows, records, integrations,
-    release artifacts, and review processes.
+    Intentional code, schemas, records, integrations, release artifacts, and
+    review processes.
 requirements:
   1:
     mandates:
@@ -36,8 +36,8 @@ requirements:
       pol-backward-compatibility: [ 3 ]
     statement: >-
       Current Intentional MUST parse every published Release Workspace
-      configuration, Change Intent, and workflow ownership manifest from version
-      0.2.0 or later and produce a migration plan to current state.
+      configuration and Change Intent from version 0.2.0 or later and produce a
+      migration plan to current state.
     substatements:
       A: >-
         A migration plan MUST preserve unsupported selections as explicit user
@@ -108,8 +108,8 @@ requirements:
     mandates:
       pol-backward-compatibility: [ 5 ]
     statement: >-
-      Removal of a public command, crate API, automation integration, recipe,
-      operating system, architecture, or installation channel MUST be announced
+      Removal of a public command, crate API, automation integration, operating
+      system, architecture, or installation channel MUST be announced
       by deprecation in a minor release of the preceding compatibility line and
       removed only in a release classified as major by the Intentional semantic
       versioning design.
@@ -125,7 +125,7 @@ requirements:
     mandates:
       pol-backward-compatibility: [ 7 ]
     statement: >-
-      Recipe or supported-platform removal MUST identify the removed capability
+      Supported-platform removal MUST identify the removed capability
       without requiring Intentional to provide a replacement.
     compliance:
       review: [ 8 ]
@@ -145,8 +145,8 @@ requirements:
     mandates:
       pol-backward-compatibility: [ 8 ]
     statement: >-
-      Initialization Plans, unsealed candidate Release Plans, local build
-      results, and conformance reports from another Intentional version MUST be
-      rejected with an instruction to regenerate them.
+      Initialization Plans, unsealed candidate Release Plans, and conformance
+      reports from another Intentional version MUST be rejected with an
+      instruction to regenerate them.
     compliance:
       review: [ 10 ]

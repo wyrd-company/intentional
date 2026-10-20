@@ -25,17 +25,17 @@ proposed-design:
 
   state-classes: >-
     Committed mutable workspace state consists of Release Workspace
-    configuration, pending Change Intents, and workflow ownership manifests.
-    Sealed durable state consists of annotated tag records, sealed Release Plans,
-    Release Artifact records, Release Evidence, and other accepted evidence
-    records. Unsealed generated state consists of Initialization Plans, candidate
-    Release Plans, local build results, and conformance reports. Mutable state is
-    migrated, sealed state is historically verified, and unsealed generated
-    state is regenerated.
+    configuration and pending Change Intents. Sealed durable state consists of
+    annotated tag records and sealed Release Plans. Unsealed generated state
+    consists of Initialization Plans, candidate Release Plans, and conformance
+    reports. Mutable state is migrated, sealed state is historically verified,
+    and unsealed generated state is regenerated. The committed Release Model is
+    derived state outside these classes: it names its own contract line and no
+    producing version, and `intentional model` rewrites it from configuration.
 
   version-specific-models: >-
     Each published compatibility line owns immutable data-transfer models for
-    its configuration, Change Intents, and ownership manifests. Each published
+    its configuration and Change Intents. Each published
     durable-record schema owns an immutable record model and historical
     verifier. These models contain no current runtime behavior. Current domain
     and execution code accepts only the current normalized model, so a field
@@ -46,8 +46,8 @@ proposed-design:
     One compiled registry maps schema identity and record identity to the exact
     parser, validator, migrator, and verifier that own that representation.
     Configuration schema identity selects the workspace compatibility line and
-    therefore the applicable Change Intent format. Ownership manifests and
-    durable records carry their own schema or generator identity. Unknown
+    therefore the applicable Change Intent format. Durable records carry their
+    own schema or producing-version identity. Unknown
     identities fail with a diagnostic that distinguishes unpublished,
     unsupported pre-0.2.0, and malformed inputs.
 
@@ -57,17 +57,16 @@ proposed-design:
     model. An edge preserves stable identities and authored values, creates
     explicit operations for mechanical transformations, and creates decisions
     or blockers for information that current configuration cannot infer. A
-    removed recipe or capability becomes an unresolved selection; migration does
-    not invent a replacement or discard it.
+    removed capability becomes an unresolved selection; migration does not
+    invent a replacement or discard it.
 
   migration-plan: >-
     Migration planning is read-only. Its structured result records source and
     target compatibility lines, source file paths and digests, ordered file
-    operations, retained and removed fields, ownership transitions, required
-    user decisions, blockers, and resulting validation expectations. Human and
-    machine-readable projections represent the same plan. No normal command
-    interprets historical workspace state as current state without this
-    conversion boundary.
+    operations, retained and removed fields, required user decisions, blockers,
+    and resulting validation expectations. Human and machine-readable
+    projections represent the same plan. No normal command interprets historical
+    workspace state as current state without this conversion boundary.
 
   migration-application: >-
     Migration application requires an explicit plan selection. It re-reads and
@@ -75,17 +74,7 @@ proposed-design:
     the complete output set before writing, and stops without mutation on drift
     or conflict. It then applies the file set as one workspace operation. The
     surrounding repository workflow owns review and commit; Intentional does not
-    silently migrate during status, planning, build, release, or verification.
-
-  ownership-reconciliation: >-
-    Every historical ownership-manifest reader reconstructs exact generated path,
-    role, and content-digest ownership. An owned file whose digest still matches
-    can be replaced or removed according to the current generated graph. An
-    owned file whose digest differs is a user-edit conflict and remains
-    unchanged. A path absent from the historical manifest is user-owned and
-    remains unchanged. Current Intentional retains recognition and migration of
-    historical manifests without retaining the workflow generator that produced
-    their contents.
+    silently migrate during status, planning, release, or verification.
 
   historical-verification: >-
     Historical verification parses an immutable record with its owning reader
@@ -98,9 +87,10 @@ proposed-design:
 
   historical-execution: >-
     A sealed Release Plan names its exact producing Intentional version. Current
-    Intentional verifies that plan but directs build, signing, distribution, or
+    Intentional verifies that plan but directs materialization, tagging, or
     other historical execution to that recorded binary. Released Intentional
-    binaries and integrity information remain immutable Release Record assets.
+    binaries and integrity information remain immutable assets of Intentional's
+    own release records.
     Retention does not claim that a future host can execute the binary or that
     its external toolchains, dependencies, services, and network inputs remain
     available.
@@ -122,13 +112,13 @@ proposed-design:
 
   deprecation-and-removal: >-
     A compatibility inventory names public commands, crate API, machine output,
-    action and workflow inputs, callback events, environment and credential
-    variables, maintained recipes, supported operating systems and architectures,
-    and installation channels. Removal requires a deprecation marker in a
-    compatible release of the preceding line and an incompatible Intentional
-    release. Deprecation records the affected identity and replacement when one
-    exists; recipes and platforms can be removed without a replacement. Release
-    ordering supplies notice, and no elapsed-time support window exists.
+    Action inputs, environment variables, the Release Model contract line,
+    supported operating systems and architectures, and installation channels.
+    Removal requires a deprecation marker in a compatible release of the
+    preceding line and an incompatible Intentional release. Deprecation records
+    the affected identity and replacement when one exists; platforms can be
+    removed without a replacement. Release ordering supplies notice, and no
+    elapsed-time support window exists.
 
   maintenance-lines: >-
     The latest published compatibility line is the sole active maintenance
@@ -140,8 +130,7 @@ proposed-design:
   compatibility-fixtures: >-
     Every published mutable format contributes valid, invalid, and migration
     fixtures. Every published durable format contributes historical-conformance,
-    tamper, malformed-input, and current-trust fixtures. Ownership fixtures cover
-    unchanged owned, edited owned, removed owned, and user-owned paths. Release
+    tamper, malformed-input, and current-trust fixtures. Release
     gates run all historical fixtures against the current binary and compare
     migration plans and historical results with committed canonical
     expectations.

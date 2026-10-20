@@ -2,36 +2,31 @@ $schema: https://refinery.systems/ontology/technical-design
 relationships:
   realizes: intentional
   related-to:
-    - ecosystem-recipes
     - intent-and-versioning
+    - release-model
 objective: >-
-  Define how changes to the Intentional crate API, configuration, maintained
-  recipes, commands, generated workflows, security postures, and durable records
-  contribute to one Intentional semantic version.
+  Define how changes to the Intentional crate API, configuration, commands,
+  the Release Model, and durable records contribute to one Intentional
+  semantic version.
 proposed-design:
   high-level-overview: >-
     Intentional has one public version axis. The binary, published crate API,
-    configuration schemas, Change Intent format, maintained recipe catalog,
-    command behavior, generated workflow behavior, built-in security postures,
-    durable record formats, and record verifiers form one released product
-    contract. A release uses the highest semantic impact contributed by any
+    configuration schemas, Change Intent format, command behavior, Release Model
+    document, durable record formats, and record verifiers form one released
+    product contract. A release uses the highest semantic impact contributed by any
     changed layer. Semantic versioning communicates that impact;
     backward-compatibility policy separately determines which impacts the
     project permits.
 
   owned-version-surfaces: >-
     The Intentional semantic version owns every behavior shipped in the binary.
-    Recipe identifiers, recipe configuration fragments, recipe primitives, and
-    built-in security posture identifiers do not carry independent versions.
-    External tools selected by a recipe retain exact tool versions because they
-    are build inputs rather than public Intentional contract versions. A sealed
-    Release Plan records the exact Intentional version, resolved recipe
-    identities and inputs, posture identity, tool versions, and release-specific
-    outputs needed to interpret the release.
+    The Release Model document also carries its own contract line, defined
+    under schema identity. A sealed Release Plan records the exact Intentional
+    version and the release-specific outputs needed to interpret the release.
 
   compatibility-impact: >-
     A major change requires an existing adopter, configuration, invocation,
-    workflow installation, or durable-record consumer to change. A minor change
+    Release Model reader, or durable-record consumer to change. A minor change
     adds an optional capability. Optional means that omission preserves existing
     behavior and the adopter explicitly selects the capability. A capability
     that activates for an existing selection is not optional. A patch corrects
@@ -61,17 +56,6 @@ proposed-design:
     or its meaning. The Release Workspace schema compatibility line identifies
     the Change Intent format used by that workspace.
 
-  recipe-classification: >-
-    Recipe changes are major when they require new input or change an existing
-    selection's artifact identity, artifact naming, format, defaults, required
-    tools, authority, operation contract, or verification meaning. Recipe
-    changes are minor when they add an optional target, artifact kind,
-    destination, operation, or control that requires explicit selection and
-    leaves existing selections unchanged. Recipe changes are patch when they
-    correct behavior to satisfy the existing recipe contract. Exact artifact
-    bytes can change under a correction; artifact identity, format, provenance,
-    and verification meaning remain stable.
-
   command-classification: >-
     Command changes are major when they remove or rename a public command or
     option, change accepted arguments incompatibly, change documented exit
@@ -94,16 +78,6 @@ proposed-design:
     and behavior contract. Automated Rust API comparison checks the prior
     release, while review remains responsible for behavioral and ecosystem
     compatibility that structural comparison cannot prove.
-
-  workflow-and-posture-classification: >-
-    Managed workflow changes are major when an existing adopter must change
-    repository configuration, workflow-owned inputs, credentials, or settings,
-    or when an existing security guarantee changes incompatibly. Weakening a
-    built-in posture is major. Workflow changes are minor when they add an
-    optional job, Distribution Target, callback, posture, or control that
-    requires explicit adoption. Workflow changes are patch when they correct the
-    generated graph or enforcement while preserving its authored inputs,
-    authority boundaries, and guarantees.
 
   durable-record-classification: >-
     Durable-record changes are major when an existing record can no longer be
@@ -131,16 +105,6 @@ proposed-design:
     `https://intentional.foo/schemas/release-model/1`, and only a change to the
     Release Model contract starts its next line.
 
-  recipe-and-posture-selection: >-
-    Release Workspace configuration selects a maintained recipe with its stable
-    identity, such as `uses: rust-package`, and selects a built-in posture with
-    its stable identity, such as `security-posture: robust`. Recipe catalog and
-    configuration assets use role-named fragments instead of version-numbered
-    entries. The exact Intentional binary determines the meaning of each shipped
-    identity. Supporting an older configuration or record uses an
-    Intentional-version compatibility reader rather than parallel recipe or
-    posture version axes.
-
   pre-one-release-mapping: >-
     Intentional uses compatibility-significance mapping for its own releases
     before `1.0.0`. A classified major change advances `0.x.y` to
@@ -154,7 +118,7 @@ proposed-design:
   change-intents: >-
     Every Intentional Change Intent states the highest semantic impact of its
     change. Its author evaluates published crate API, configuration, Change
-    Intent format, recipes, commands, workflows, postures, durable records, and
+    Intent format, commands, the Release Model, durable records, and
     verification behavior. An intent covering several changes or Release Units
     records the highest resulting claim and describes adopter-visible behavior
     in its changelog prose. Generated or derived files inherit the impact of
