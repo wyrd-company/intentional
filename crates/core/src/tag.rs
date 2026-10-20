@@ -464,7 +464,9 @@ fn validate_existing_candidate(
     Ok(())
 }
 
-fn verify_version_projections(
+/// Require every version-bearing projection of each Release Unit in
+/// `versions` to read that unit's version.
+pub(crate) fn verify_version_projections(
     root: &Path,
     config: &Config,
     versions: &BTreeMap<String, String>,

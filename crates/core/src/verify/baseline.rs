@@ -12,7 +12,7 @@ use super::{
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::materialize::Checkout;
-use crate::tag::{baseline_versions, tag_candidates};
+use crate::tag::{baseline_versions, render_tag, tag_candidates, verify_version_projections};
 use crate::tag_record::{baseline_digest, TagRecord};
 use std::collections::BTreeMap;
 
@@ -97,6 +97,14 @@ pub(super) fn verify(
             format!("the baseline digest of {tag} cannot be recomputed: {error}"),
         ),
     }
+    check_projections(
+        &history,
+        checkout.root(),
+        target,
+        &config,
+        &versions,
+        verification,
+    )?;
     let candidates = tag_candidates(&config, &versions);
     let identities = candidates
         .iter()
@@ -146,4 +154,39 @@ fn established_before(
     Ok(agrees
         && (target != baseline_commit
             || (!record.baseline && is_release_tag(repository, target, &record, name))))
+}
+
+/// Apply the projection rule of `tag --baseline` at the baseline commit: a
+/// Release Unit whose primary tag there carries a baseline tag record has
+/// every version-bearing projection at its baseline version. A unit whose
+/// version a tag without a tag record supplies is skipped, as baseline
+/// creation does not read its projections.
+fn check_projections(
+    history: &gix::Repository,
+    root: &std::path::Path,
+    baseline_commit: gix::ObjectId,
+    config: &Config,
+    versions: &BTreeMap<String, String>,
+    verification: &mut Verification,
+) -> Result<()> {
+    let mut created = BTreeMap::new();
+    for (id, version) in versions {
+        let Ok((_, primary)) = config.primary_tag(id) else {
+            continue;
+        };
+        if let TagState::Recorded { record, target, .. } =
+            read_tag(history, &render_tag(&primary.template, id, version))?
+        {
+            if record.baseline && target == baseline_commit {
+                created.insert(id.clone(), version.clone());
+            }
+        }
+    }
+    if let Err(error) = verify_version_projections(root, config, &created) {
+        verification.error(
+            "baseline-projection-mismatch",
+            format!("the baseline commit {baseline_commit} disagrees with its baseline version: {error}"),
+        );
+    }
+    Ok(())
 }

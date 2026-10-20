@@ -440,14 +440,17 @@ commands:
         through a tag record under the fixed tagger that agrees with its tag
         and sits on an earlier commit or is a tag of a Release reconstructed
         at the baseline commit. A tag without a tag record supplies its
-        version and is not verified as a baseline tag. Verification reads Git
-        history only, so a baseline created from uncommitted configuration
-        fails.
+        version and is not verified as a baseline tag. Each Release Unit whose
+        primary tag at the baseline commit carries a baseline tag record must
+        have every version-bearing projection there at its baseline version.
+        Verification reads Git history only, so a baseline created from
+        uncommitted configuration or projection versions fails.
       - >-
         Error diagnostic codes are `tag-missing`, `tag-not-annotated`,
         `tag-record-missing`, `tag-record-invalid`, `tagger-mismatch`,
         `reconstruction-failed`, `plan-digest-mismatch`,
-        `baseline-digest-mismatch`, `materialized-tree-mismatch`,
+        `baseline-digest-mismatch`, `baseline-projection-mismatch`,
+        `materialized-tree-mismatch`,
         `identity-tag-missing`, and `identity-tag-mismatch`. A recomputed
         digest that differs for a tag record naming another producing version
         is the advisory `producing-version-differs`, which does not fail

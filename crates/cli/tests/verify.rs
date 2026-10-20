@@ -1037,6 +1037,66 @@ fn verify_fails_for_a_baseline_created_from_uncommitted_configuration() {
     );
 }
 
+/// A baseline created from a projection version that the baseline commit
+/// does not hold breaks the projection rule of `tag --baseline` there.
+#[test]
+fn verify_fails_for_a_baseline_created_from_an_uncommitted_projection_version() {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.write(".intentional/config.yml", CONFIG);
+    repo.commit("add fixture");
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.4\"\n}\n",
+    );
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+        .assert()
+        .success();
+    for tag in ["0.1.0", "sample-library@1.2.4"] {
+        let report = assert_fails_with(&repo, tag, "baseline-projection-mismatch");
+        assert!(
+            report["diagnostics"]
+                .to_string()
+                .contains("package.json is 1.2.3"),
+            "{report:#}"
+        );
+        assert_eq!(
+            report["guarantees"],
+            serde_json::json!(["tag-record", "baseline-reconstruction", "identity-tags"])
+        );
+    }
+}
+
+/// `tag --baseline` does not read the projections of a unit whose version a
+/// tag without a tag record supplies, so verify does not either.
+#[test]
+fn verify_skips_the_projections_of_a_unit_whose_version_a_recordless_tag_supplies() {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    repo.commit("release 1.2.3");
+    git(&repo.root, &["tag", "sample-library@1.2.3"]);
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.3.0-dev\"\n}\n",
+    );
+    repo.write(".intentional/config.yml", CONFIG);
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("adopt intentional during development");
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "workspace/release=0.1.0"])
+        .assert()
+        .success()
+        .stdout("create annotated tag mirror@1.2.3\ncreate annotated tag 0.1.0\n");
+    assert_baseline_verified(&repo, "0.1.0", &["mirror@1.2.3", "0.1.0"]);
+}
+
 /// The baseline tags written by released `0.2.0` on the workspace the fixture
 /// README describes.
 #[test]

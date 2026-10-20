@@ -143,6 +143,9 @@ proposed-design:
     every tag that baseline establishment creates for the set carries a
     baseline tag record for the same digest at that commit under the fixed
     tagger. A tag without a tag record is pre-Intentional history that
-    supplies its version and is not checked as a baseline tag. A baseline
-    created from configuration that the baseline commit does not hold cannot
-    be recomputed from history and fails.
+    supplies its version and is not checked as a baseline tag. Each Release
+    Unit whose primary tag at the baseline commit carries a baseline tag
+    record must have every version-bearing projection there at its baseline
+    version, the projection rule of baseline establishment. A baseline
+    created from configuration or projection versions that the baseline
+    commit does not hold fails.

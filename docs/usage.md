@@ -189,7 +189,7 @@ that Intentional wrote before 0.1.6 have no tagger and fail with
 intentional verify sample-library@1.2.3
 ```
 
-For a baseline it checks three things:
+For a baseline it checks four things:
 
 - The tag is annotated, carries a valid baseline tag record, and has the fixed
   tagger.
@@ -200,6 +200,9 @@ For a baseline it checks three things:
 - Every tag that `tag --baseline` creates for that set exists at that commit,
   carries a baseline tag record for the same digest, and has the same fixed
   tagger.
+- Each Release Unit whose primary tag the baseline created has every
+  version-bearing projection at that commit at its baseline version, as
+  `tag --baseline` requires.
 
 `verify` accepts what `tag --baseline` leaves out of the set and in place:
 
@@ -219,9 +222,11 @@ when the tag record names another Intentional version. A baseline whose only
 source for a version is a deleted tag cannot be recomputed and fails with
 `reconstruction-failed`.
 
-`verify` reads Git history only. Commit the configuration before
-`tag --baseline`: a baseline created from uncommitted configuration fails with
-`reconstruction-failed`.
+`verify` reads Git history only. Commit the configuration and every
+version-bearing projection before `tag --baseline`: a baseline created from
+uncommitted configuration fails with `reconstruction-failed`, and one created
+from an uncommitted projection version fails with
+`baseline-projection-mismatch`.
 
 ## Stamp build versions
 
