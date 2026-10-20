@@ -338,24 +338,40 @@ mod schema_tests {
             "../../../docs/specifications/release-plan.schema.yml"
         ))
         .expect("release-plan schema parses");
-        let required = schema["required"]
+        let required: Vec<&str> = schema["required"]
             .as_sequence()
-            .expect("required release-plan fields");
-        for field in ["$schema", "source", "release-units", "tags", "tag-order"] {
-            assert!(required.iter().any(|value| value.as_str() == Some(field)));
-        }
-        for field in ["workflow", "packages", "custom-release-gates"] {
+            .expect("required release-plan fields")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        assert_eq!(
+            required,
+            [
+                "digest",
+                "contract",
+                "generator",
+                "release_units",
+                "tags",
+                "tag_order"
+            ]
+        );
+        for field in [
+            "workflow",
+            "packages",
+            "custom-release-gates",
+            "release-units",
+        ] {
             assert!(schema["properties"].get(field).is_none(), "{field}");
         }
-        assert!(schema["properties"].get("release_units").is_none());
         let release_unit = &schema["$defs"]["release-unit"];
         assert_eq!(
             release_unit["properties"]["id"]["$ref"].as_str(),
             Some("#/$defs/stable-id")
         );
         assert!(release_unit["properties"].get("release-record").is_none());
+        assert!(release_unit["properties"].get("release_record").is_none());
         assert_eq!(
-            schema["$defs"]["tag"]["properties"]["require-phase"]["$ref"].as_str(),
+            schema["$defs"]["tag"]["properties"]["require_phase"]["$ref"].as_str(),
             Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-phase")
         );
     }

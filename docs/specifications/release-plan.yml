@@ -7,12 +7,13 @@ relationships:
 description: >-
   Defines the canonical Release Plan emitted by `intentional plan` and consumed
   by materialization, tag-backed release establishment, and verification. A
-  Release Plan freezes the accepted source, the producing Intentional version,
-  channel, Release Unit versions, contributing Change Intents, release notes,
-  and the complete tag graph with each tag's required phase. It is a
-  digest-bound candidate until the verified materialized commit and annotated
-  identity tags establish the Release. A release process reads Release Unit
-  release-record policy from the Release Model, not from the plan.
+  Release Plan freezes its schema identity, the interpretation contract, the
+  accepted source, the producing Intentional version, channel, Release Unit
+  versions, contributing Change Intents, release notes, and the complete tag
+  graph with each tag's required phase. It is a digest-bound candidate until
+  the verified materialized commit and annotated identity tags establish the
+  Release. A release process reads Release Unit release-record policy from the
+  Release Model, not from the plan.
   `docs/specifications/release-plan.schema.yml` is the machine-readable
   definition.
 format: json-schema
@@ -20,17 +21,25 @@ validation-criteria: >-
   A conforming plan validates against
   `docs/specifications/release-plan.schema.yml` as canonical JSON interpreted by
   JSON Schema Draft 2020-12. Its `digest` is the lowercase SHA-256 digest of the
-  complete canonical object with only `digest` omitted. Object keys sort
-  lexically. Canonical record fields use kebab-case; authored configuration and
-  canonical records therefore share one field-naming convention. Release Units
-  sort by ID and tags by canonical tag ID. `generator` names the producing
-  Intentional version. `tag-order` is the deterministic topological order of
-  the complete tag graph with lexical tie breaking. A tag carries
-  `require-phase` exactly when its configuration declares one. Semantic
-  validation proves the source objects, producing version, versions, intent
-  membership, tag prerequisites, and exact agreement with Release Workspace
-  configuration. Every releasing Release Unit carries a non-empty generated
-  changelog section, including a group-driven Release with no direct Change
-  Intent. Establishment additionally proves that the materialized commit is the
-  plan's expected tree transition and that every core identity tag records the
-  same plan digest.
+  complete canonical object with only `digest` omitted, so every other member
+  present, including `$schema` and `source`, is inside the digest. Object keys
+  sort lexically. Plan members use snake_case. `$schema` is
+  `https://intentional.foo/schemas/0.2/release-plan`. `contract` is the
+  interpretation contract of the Release Workspace configuration. `source`
+  names the commit and tree the plan was computed from; a plan computed in a
+  repository with no commit carries no `source`. `$schema` and `source` are
+  optional members: a plan without them keeps the digest its producer
+  recorded. Release Units sort by ID and tags by canonical tag ID.
+  `generator` names the producing Intentional version. `tag_order` is the
+  deterministic topological order of the complete tag graph with lexical tie
+  breaking. A tag carries `release_unit` and `role` exactly when it is a
+  Release Unit tag, `require_phase` exactly when its configuration declares
+  one, and `tag_after` exactly when its configuration declares prerequisites. A
+  plan with no releasing Release Unit carries empty `release_units`, `tags`,
+  and `tag_order`. Semantic validation proves the source objects, producing
+  version, versions, intent membership, tag prerequisites, and exact agreement
+  with Release Workspace configuration. Every releasing Release Unit carries a
+  non-empty generated changelog section, including a group-driven Release with
+  no direct Change Intent. Establishment additionally proves that the
+  materialized commit is the plan's expected tree transition and that every
+  core identity tag records the same plan digest.

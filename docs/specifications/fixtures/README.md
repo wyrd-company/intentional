@@ -16,6 +16,9 @@ All fixtures come from a fresh Git repository whose only file is a
   tag stream added (`require-phase: after-publication`, `tag-after` the
   primary tag), committed with the tag `sample-library@1.2.3`. Version 0.2.0
   loads it.
+- `released-0.2.0/release-plan.json`: `intentional plan` on the committed
+  `release-config.yml`, the tag `sample-library@1.2.3`, and one committed minor
+  intent for `sample-library`.
 - `released-0.2.0/release-unit-tag-record.txt` and `workspace-tag-record.txt`:
   the messages of `sample-library@1.3.0` and `0.0.1`, created by
   `intentional tag --plan release-plan.json` and

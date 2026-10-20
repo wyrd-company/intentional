@@ -8,39 +8,37 @@ title: Intentional Release Plan
 type: object
 additionalProperties: false
 required:
-  - $schema
   - digest
+  - contract
   - generator
-  - source
-  - release-units
+  - release_units
   - tags
-  - tag-order
+  - tag_order
 properties:
   $schema:
     const: https://intentional.foo/schemas/0.2/release-plan
   digest:
     $ref: "#/$defs/digest"
+  contract:
+    const: contract-1
   generator:
     $ref: "#/$defs/generator"
   source:
     $ref: "#/$defs/source"
   channel:
     $ref: "#/$defs/channel"
-  release-units:
+  release_units:
     type: array
-    minItems: 1
     uniqueItems: true
     items:
       $ref: "#/$defs/release-unit"
   tags:
     type: array
-    minItems: 1
     uniqueItems: true
     items:
       $ref: "#/$defs/tag"
-  tag-order:
+  tag_order:
     type: array
-    minItems: 1
     uniqueItems: true
     items:
       $ref: "#/$defs/tag-id"
@@ -82,33 +80,33 @@ $defs:
     additionalProperties: false
     required:
       - id
-      - old-version
-      - new-version
+      - old_version
+      - new_version
       - bump
-      - contributing-intent-ids
-      - tag-ids
-      - release-notes
+      - contributing_intent_ids
+      - tag_ids
+      - release_notes
     properties:
       id:
         $ref: "#/$defs/stable-id"
-      old-version:
+      old_version:
         $ref: "#/$defs/semver"
-      new-version:
+      new_version:
         $ref: "#/$defs/semver"
       bump:
         enum: [ major, minor, patch ]
-      contributing-intent-ids:
+      contributing_intent_ids:
         type: array
         uniqueItems: true
         items:
           $ref: "#/$defs/stable-id"
-      tag-ids:
+      tag_ids:
         type: array
         minItems: 1
         uniqueItems: true
         items:
           $ref: "#/$defs/tag-id"
-      release-notes:
+      release_notes:
         type: string
         minLength: 1
   tag-id:
@@ -116,41 +114,35 @@ $defs:
   tag:
     type: object
     additionalProperties: false
-    required: [ id, kind, name, version, tag-after ]
+    required: [ id, name, version ]
     properties:
       id:
         $ref: "#/$defs/tag-id"
-      kind:
-        enum: [ release-unit, workspace ]
       name:
         type: string
         minLength: 1
       version:
         $ref: "#/$defs/semver"
-      release-unit:
+      release_unit:
         $ref: "#/$defs/stable-id"
       role:
         enum: [ primary, projection ]
-      require-phase:
+      require_phase:
         $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-phase"
-      tag-after:
+      tag_after:
         type: array
+        minItems: 1
         uniqueItems: true
         items:
           $ref: "#/$defs/tag-id"
-    allOf:
-      - if:
-          properties:
-            kind:
-              const: release-unit
-        then:
-          required: [ release-unit, role ]
-      - if:
-          properties:
-            kind:
-              const: workspace
-        then:
-          not:
-            anyOf:
-              - required: [ release-unit ]
-              - required: [ role ]
+    if:
+      properties:
+        id:
+          pattern: "^workspace/"
+    then:
+      not:
+        anyOf:
+          - required: [ release_unit ]
+          - required: [ role ]
+    else:
+      required: [ release_unit, role ]

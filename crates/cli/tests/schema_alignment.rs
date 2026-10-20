@@ -2,13 +2,14 @@
 // relationships:
 //   tests:
 //     - release-workspace
+//     - release-plan
 //     - tag-record
 // ---
 
 //! Validates what Intentional reads and writes against the published schemas.
 
 use assert_cmd::Command;
-use intentional_core::{canonical_json, sha256_digest, Config};
+use intentional_core::{canonical_json, sha256_digest, Config, ReleasePlan};
 use jsonschema::{Registry, Validator};
 use serde_json::{json, Value};
 use std::fs;
@@ -17,6 +18,7 @@ use std::process::Command as ProcessCommand;
 use tempfile::TempDir;
 
 const CONFIG_ID: &str = "https://intentional.foo/schemas/0.2/config";
+const RELEASE_PLAN_ID: &str = "https://intentional.foo/schemas/0.2/release-plan";
 const TAG_RECORD_ID: &str = "https://intentional.foo/schemas/0.2/tag-record";
 const BASELINE_PAYLOAD_ID: &str =
     "https://intentional.foo/schemas/0.2/tag-record#/$defs/baseline-digest-payload";
@@ -143,6 +145,52 @@ impl TestRepo {
         command.arg("-C").arg(&self.root);
         command
     }
+}
+
+/// A workspace like the one the released 0.2.0 plan fixture came from, plus a
+/// projection tag with a prerequisite, with one pending minor intent.
+fn release_fixture_repo() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
+    );
+    let config = read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/release-config.yml",
+    )
+    .replace(
+        "        template: '{id}@{version}'\n",
+        "        template: '{id}@{version}'\n      mirror:\n        role: projection\n        template: 'mirror@{version}'\n        tag-after:\n          - release-unit/sample-library/primary\n",
+    );
+    assert!(
+        config.contains("mirror@{version}"),
+        "fixture adds a projection tag"
+    );
+    repo.write(".intentional/config.yml", &config);
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("add fixture");
+    git(&repo.root, &["tag", "sample-library@1.2.3"]);
+    repo.write(
+        ".intentional/intents/sample-otter-0001.md",
+        "---\nsample-library: minor\n---\n\nAdd a sample capability.\n",
+    );
+    repo.commit("add intent");
+    repo
+}
+
+fn emitted_plan(repo: &TestRepo, args: &[&str]) -> Value {
+    let output = repo
+        .cli()
+        .arg("plan")
+        .args(args)
+        .output()
+        .expect("plan command");
+    assert!(
+        output.status.success(),
+        "plan failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("plan JSON")
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
@@ -279,4 +327,70 @@ fn tag_record_schema_rejects_a_record_without_contract() {
     let mut workspace_as_primary = tag_record_fields(&message);
     workspace_as_primary["tag-role"] = json!("primary");
     assert_invalid(TAG_RECORD_ID, &workspace_as_primary);
+}
+
+#[test]
+fn emitted_release_plans_validate_against_release_plan_schema() {
+    let repo = release_fixture_repo();
+    let plan = emitted_plan(&repo, &[]);
+    assert_eq!(plan["tags"].as_array().expect("tags").len(), 3);
+    assert_valid(RELEASE_PLAN_ID, &plan);
+    let channel = emitted_plan(&repo, &["--channel", "rc"]);
+    assert_eq!(channel["channel"], "rc");
+    assert_valid(RELEASE_PLAN_ID, &channel);
+
+    fs::remove_file(repo.root.join(".intentional/intents/sample-otter-0001.md"))
+        .expect("remove intent");
+    let empty = emitted_plan(&repo, &[]);
+    assert_eq!(empty["release_units"], json!([]));
+    assert_valid(RELEASE_PLAN_ID, &empty);
+}
+
+#[test]
+fn release_plan_written_by_released_0_2_0_validates_and_keeps_its_digest() {
+    let text =
+        read_repository_file("docs/specifications/fixtures/released-0.2.0/release-plan.json");
+    let bytes = text.trim_end();
+    assert_valid(
+        RELEASE_PLAN_ID,
+        &serde_json::from_str(bytes).expect("plan JSON"),
+    );
+    let plan: ReleasePlan = serde_json::from_str(bytes).expect("released plan decodes");
+    assert_eq!(
+        plan.digest,
+        "sha256:cd4f1ebfe3db2b887ecfd646383c5887e48b261a4e7512efb02289ee867120e2"
+    );
+    plan.verify_digest()
+        .expect("released plan keeps its digest");
+    assert_eq!(plan.to_canonical_json().expect("canonical plan"), bytes);
+}
+
+#[test]
+fn release_plan_schema_rejects_drift_from_the_released_shape() {
+    let plan = emitted_plan(&release_fixture_repo(), &[]);
+    let mut kebab = plan.clone();
+    let units = kebab
+        .as_object_mut()
+        .expect("plan object")
+        .remove("release_units")
+        .expect("release units");
+    kebab["release-units"] = units;
+    assert_invalid(RELEASE_PLAN_ID, &kebab);
+
+    let mut without_contract = plan.clone();
+    without_contract
+        .as_object_mut()
+        .expect("plan object")
+        .remove("contract");
+    assert_invalid(RELEASE_PLAN_ID, &without_contract);
+
+    let mut workspace_with_role = plan.clone();
+    let workspace = workspace_with_role["tags"]
+        .as_array_mut()
+        .expect("tags")
+        .iter_mut()
+        .find(|tag| tag["id"] == "workspace/release")
+        .expect("workspace tag");
+    workspace["role"] = json!("primary");
+    assert_invalid(RELEASE_PLAN_ID, &workspace_with_role);
 }
