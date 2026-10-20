@@ -401,3 +401,38 @@ fn closed_value_sets_are_exactly_the_ruled_ones() {
         "#/$defs/adapter"
     );
 }
+
+/// The specification, the schema, and the semantic-versioning design state the
+/// open and closed value rule in the same words.
+#[test]
+fn open_and_closed_value_rule_reads_the_same_everywhere() {
+    let rule = "`adapter` and each `ecosystems` item are the only open values in the \
+                Release Model: a new adapter stays within the line. Every other \
+                enumerated member, `mode`, `require_phase`, `disposition`, \
+                `release_record`, `role`, and `kind`, is closed, and a new value for \
+                any of them mints the next line.";
+    let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let specification: Value =
+        serde_yaml::from_str(&read(&specifications().join("release-model.yml"))).expect("spec");
+    let design: Value = serde_yaml::from_str(&read(
+        &specifications().join("../technical-designs/semantic-versioning.yml"),
+    ))
+    .expect("design");
+    for (source, text) in [
+        ("schema description", schema()["description"].clone()),
+        (
+            "specification",
+            specification["validation-criteria"].clone(),
+        ),
+        (
+            "semantic-versioning design",
+            design["proposed-design"]["published-schema-stability"].clone(),
+        ),
+    ] {
+        let text = text.as_str().unwrap_or_else(|| panic!("{source} text"));
+        assert!(
+            normalize(text).contains(rule),
+            "{source} does not state the rule"
+        );
+    }
+}

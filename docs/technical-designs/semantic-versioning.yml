@@ -97,13 +97,27 @@ proposed-design:
     is the semantic-version major, such as
     `https://intentional.foo/schemas/1/config`. Public identifiers have no YAML
     or JSON suffix. Repository YAML is authoritative; schema publication serves
-    a semantically equivalent JSON representation. Minor and patch changes can
-    extend a compatibility-line schema only according to their classification.
-    A major change creates another compatibility-line path. The Release Model
-    is the one exception: release process templates outside Intentional read
-    it, so its identifier names its own contract line, such as
+    a semantically equivalent JSON representation. A consumer validates against
+    a vendored copy of each schema it accepts, whose `$id` is the identifier,
+    and does not fetch the identifier. The Release Model is the one exception
+    to compatibility-line naming: release process templates outside Intentional
+    read it, so its identifier names its own contract line, such as
     `https://intentional.foo/schemas/release-model/1`, and only a change to the
     Release Model contract starts its next line.
+
+  published-schema-stability: >-
+    A schema identifier is published when a released Intentional first names
+    it. A published identifier never changes the meaning or acceptance of
+    anything its schema already describes. Adding an optional member stays
+    within the line and is a minor change. Removing, renaming, retyping, or
+    tightening a described member, value, or rule starts the next line and is a
+    major change. Intentional keeps every published line indefinitely. This
+    binds the Release Workspace configuration, Release Plan, Tag Record, and
+    Release Model schemas. `adapter` and each `ecosystems` item are the only
+    open values in the Release Model: a new adapter stays within the line. Every
+    other enumerated member, `mode`, `require_phase`, `disposition`,
+    `release_record`, `role`, and `kind`, is closed, and a new value for any of
+    them mints the next line.
 
   pre-one-release-mapping: >-
     Intentional uses compatibility-significance mapping for its own releases
