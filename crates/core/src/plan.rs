@@ -348,6 +348,25 @@ impl ReleasePlan {
         Ok(self)
     }
 
+    /// Digests this plan would carry under `generator_version` in each shape a
+    /// producer writes: with `$schema` and `source`, with neither (released
+    /// `0.2.0`), and with `$schema` only (no commit to name).
+    pub(crate) fn candidate_digests(&self, generator_version: &str) -> Result<Vec<String>> {
+        let mut plan = self.clone();
+        plan.generator.version = generator_version.to_owned();
+        let mut digests = vec![plan.payload_digest()?];
+        let schema = plan.schema.take();
+        let source = plan.source.take();
+        if schema.is_some() || source.is_some() {
+            digests.push(plan.payload_digest()?);
+        }
+        if schema.is_some() && source.is_some() {
+            plan.schema = schema;
+            digests.push(plan.payload_digest()?);
+        }
+        Ok(digests)
+    }
+
     fn payload_digest(&self) -> Result<String> {
         let payload = PlanPayload {
             schema: &self.schema,

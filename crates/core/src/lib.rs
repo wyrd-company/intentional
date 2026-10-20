@@ -12,6 +12,7 @@ pub mod config;
 pub mod error;
 pub mod init;
 pub mod intent;
+mod materialize;
 pub mod model;
 pub mod plan;
 pub mod schema;
@@ -19,6 +20,7 @@ pub mod stamp;
 pub mod status;
 pub mod tag;
 pub mod tag_record;
+pub mod verify;
 pub mod version;
 
 pub use apply::{ApplyResult, FileWrite};
@@ -50,6 +52,7 @@ pub use tag::{tag_record_issues, PlannedTag, TagResult};
 pub use tag_record::{
     baseline_digest, TagPrerequisite, TagRecord, TagRecordRole, TAG_RECORD_HEADER,
 };
+pub use verify::{verify_release, Severity, Verification, VerifyDiagnostic};
 pub use version::{
     aggregate_bumps, bump_version, bump_version_with_mapping, effective_bumps, resolve_versions,
     ReleaseUnitVersion, VersionRepository,

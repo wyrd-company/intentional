@@ -866,7 +866,7 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
 /// back from HEAD, the first commit whose parent does not lead a releasing
 /// unit's changelog with that unit's release version. `None` when the
 /// materializing commit has no parent.
-fn materialized_release_parent(
+pub(crate) fn materialized_release_parent(
     repository: &gix::Repository,
     config: &Config,
     versions: &BTreeMap<String, String>,
@@ -926,7 +926,10 @@ fn changelog_version_at(commit: &gix::Commit<'_>, path: &Path) -> Result<Option<
 
 /// Intents deleted by the latest first-parent commit that deleted any, with
 /// the id of that commit's parent, from which the release was planned.
-fn recover_deleted_intents(root: &Path, config: &Config) -> Result<(Vec<Intent>, gix::ObjectId)> {
+pub(crate) fn recover_deleted_intents(
+    root: &Path,
+    config: &Config,
+) -> Result<(Vec<Intent>, gix::ObjectId)> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let mut boundaries = release_tag_targets(root, config, &repository)?;
@@ -1119,13 +1122,16 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-struct ParsedTagRecord {
+pub(crate) struct ParsedTagRecord {
     /// Commit the tag peels to.
-    target: gix::ObjectId,
-    record: TagRecord,
+    pub(crate) target: gix::ObjectId,
+    pub(crate) record: TagRecord,
 }
 
-fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<ParsedTagRecord>> {
+pub(crate) fn read_tag_record(
+    repository: &gix::Repository,
+    name: &str,
+) -> Result<Option<ParsedTagRecord>> {
     let Some(mut reference) = repository
         .try_find_reference(format!("refs/tags/{name}").as_str())
         .map_err(|error| Error::Git(format!("failed to inspect tag {name}: {error}")))?

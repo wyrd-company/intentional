@@ -7,8 +7,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     check_workspace, initialize, ApplyResult, Bump, Config, InitState, IntentDraft, ReleasePlan,
-    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE,
-    MISSING_BASELINE_NEXT_ACTION,
+    Severity, StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH,
+    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -50,6 +50,8 @@ enum Command {
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,
+    /// Verify one established Release from its annotated tag.
+    Verify(VerifyArgs),
     /// Print the agent-facing Intentional workflow skill.
     Skill,
 }
@@ -137,6 +139,16 @@ struct TagArgs {
 }
 
 #[derive(Debug, Args)]
+struct VerifyArgs {
+    /// Exact annotated tag that identifies the Release or Release Unit.
+    tag: String,
+
+    /// Emit stable structured verification results.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
 struct StampArgs {
     /// Prerelease identifier composed with first-parent tag height.
     #[arg(long)]
@@ -161,6 +173,7 @@ fn run() -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init(args) => return init(&cli.directory, args),
+        Command::Verify(args) => return verify(&cli.directory, args),
         Command::Add(args) => add(&cli.directory, args),
         Command::Status => status(&cli.directory),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
@@ -171,6 +184,34 @@ fn run() -> Result<u8> {
         Command::Skill => skill(),
     }?;
     Ok(0)
+}
+
+fn verify(root: &std::path::Path, args: VerifyArgs) -> Result<u8> {
+    let verification = intentional_core::verify_release(root, &args.tag)?;
+    if args.json {
+        println!("{}", verification.to_json()?);
+    } else {
+        match &verification.target {
+            Some(target) if verification.verified => {
+                println!("verified {} at {target}", verification.tag)
+            }
+            _ => println!("verification failed for {}", verification.tag),
+        }
+        for guarantee in &verification.guarantees {
+            println!("guarantee: {guarantee}");
+        }
+        for tag in &verification.identity_tags {
+            println!("identity tag: {tag}");
+        }
+        for diagnostic in &verification.diagnostics {
+            let severity = match diagnostic.severity {
+                Severity::Error => "error",
+                Severity::Advisory => "advisory",
+            };
+            println!("{severity} [{}] {}", diagnostic.code, diagnostic.message);
+        }
+    }
+    Ok(if verification.verified { 0 } else { 1 })
 }
 
 fn skill() -> Result<()> {
