@@ -388,7 +388,87 @@ fn unlisted_adapter_fixture_names_an_adapter_outside_the_known_values() {
     assert!(delta["projections"][0].get("pointer").is_none());
 }
 
+const GENERIC_CLASSIFIER: &str = "/$defs/generic-adapter";
+const ECOSYSTEM_CLASSIFIER: &str = "/$defs/projection/allOf/1/if/properties/adapter";
+
+/// Only the two string-membership spellings used by the known classifiers.
+fn classifier_members(classifier: &Value) -> BTreeSet<String> {
+    let values: Vec<&Value> = if let Some(values) = classifier.get("enum") {
+        values.as_array().expect("classifier enum").iter().collect()
+    } else {
+        classifier["anyOf"]
+            .as_array()
+            .expect("classifier anyOf")
+            .iter()
+            .map(|branch| {
+                assert_eq!(branch.as_object().expect("const branch").len(), 1);
+                branch.get("const").expect("classifier const")
+            })
+            .collect()
+    };
+    values
+        .into_iter()
+        .map(|value| value.as_str().expect("string classifier member").to_owned())
+        .collect()
+}
+
+fn assert_classifier_members(schema: &Value, location: &str, expected: &[&str]) {
+    assert_eq!(
+        classifier_members(schema.pointer(location).expect("classifier location")),
+        expected.iter().map(|member| (*member).to_owned()).collect(),
+        "known adapter classifier membership at {location}"
+    );
+}
+
+#[test]
+fn known_generic_classifier_membership_matches_the_contract() {
+    assert_classifier_members(&schema(), GENERIC_CLASSIFIER, &["json", "toml", "yaml"]);
+}
+
+#[test]
+fn known_ecosystem_classifier_membership_matches_the_contract() {
+    assert_classifier_members(
+        &schema(),
+        ECOSYSTEM_CLASSIFIER,
+        &["npm", "cargo", "pub", "python", "msbuild", "go"],
+    );
+}
+
+fn assert_classifier_forms_audit_equally(location: &str, expected: &[&str]) {
+    let original = schema();
+    let members = classifier_members(original.pointer(location).expect("classifier"));
+    let forms = [
+        serde_json::json!({ "enum": members }),
+        serde_json::json!({ "anyOf": members.iter().map(|member| {
+            serde_json::json!({ "const": member })
+        }).collect::<Vec<_>>() }),
+    ];
+    for form in forms {
+        let mut schema = original.clone();
+        *schema.pointer_mut(location).expect("classifier") = form;
+        assert_classifier_members(&schema, location, expected);
+        assert_closed_value_sets(&schema);
+    }
+}
+
+#[test]
+fn generic_classifier_enum_and_any_of_const_audit_equally() {
+    assert_classifier_forms_audit_equally(GENERIC_CLASSIFIER, &["json", "toml", "yaml"]);
+}
+
+#[test]
+fn ecosystem_classifier_enum_and_any_of_const_audit_equally() {
+    assert_classifier_forms_audit_equally(
+        ECOSYSTEM_CLASSIFIER,
+        &["npm", "cargo", "pub", "python", "msbuild", "go"],
+    );
+}
+
 fn collect_enums(value: &Value, location: &str, enums: &mut BTreeSet<String>) {
+    // Conditional classifier membership does not close the adapter domain.
+    if [GENERIC_CLASSIFIER, ECOSYSTEM_CLASSIFIER].contains(&location) {
+        return;
+    }
     match value {
         Value::Object(members) => {
             for (name, member) in members {
@@ -409,15 +489,16 @@ fn collect_enums(value: &Value, location: &str, enums: &mut BTreeSet<String>) {
     }
 }
 
-/// Every enumerated member is closed except `adapter` and each `ecosystems`
-/// item; `generic-adapter` identifies known adapters that must declare generic.
+/// Closed user-value sets exclude both conditional adapter classifiers.
 #[test]
 fn closed_value_sets_are_exactly_the_ruled_ones() {
-    let schema = schema();
+    assert_closed_value_sets(&schema());
+}
+
+fn assert_closed_value_sets(schema: &Value) {
     let mut enums = BTreeSet::new();
-    collect_enums(&schema, "", &mut enums);
+    collect_enums(schema, "", &mut enums);
     let expected: BTreeSet<String> = [
-        "/$defs/generic-adapter/enum",
         "/$defs/projection/properties/mode/enum",
         "/$defs/release-group-membership/properties/kind/enum",
         "/$defs/release-unit-tag/properties/role/enum",
