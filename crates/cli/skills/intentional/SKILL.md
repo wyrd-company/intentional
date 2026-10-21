@@ -1,6 +1,6 @@
 ---
 name: intentional
-description: Operate Intentional's intent-driven polyglot versioning and release workflow safely. Use when an agent needs to initialize or adopt Intentional in a Git repository, resolve release-unit discovery, author change intents, inspect version state or drift, prepare and apply a digest-bound release plan, stamp injected build versions, create baseline or release tags, run prerelease channels, or diagnose Intentional configuration and release failures.
+description: Operate Intentional's intent-driven polyglot versioning and release workflow safely. Use when an agent needs to initialize or adopt Intentional in a Git repository, resolve release-unit discovery, author change intents, inspect version state or drift, prepare and apply a digest-bound release plan, stamp injected build versions, create baseline or release tags, write the committed Release Model for process templates, run prerelease channels, or diagnose Intentional configuration and release failures.
 metadata:
   relationships:
     implements: intent-driven-polyglot-release
@@ -29,9 +29,50 @@ tags. It does not commit, push, publish packages, create forge releases, or open
 pull requests. Perform those surrounding actions only when the user has granted
 that authority and the repository's release procedure defines them.
 
-Do not add a `v` prefix to tag versions unless an existing repository contract
-explicitly requires it. Do not infer registries, publication order, privacy, or
-deployment behavior from discovered manifests.
+A Release Unit's `release-record` (`required` by default, or `none`) states
+whether the surrounding release process creates a release record, such as a
+GitHub Release, for each release. Intentional creates none under either value,
+and its commands behave the same for both. Do not create a release record for a
+unit set to `none`.
+
+Do not add a `v` prefix to primary or workspace tag versions. Use one on a
+projection tag only when an ecosystem contract requires it. Do not infer
+registries, publication order, privacy, or deployment behavior from discovered
+manifests.
+
+## Keep the Release Model current
+
+Run `intentional model` after changing Release Workspace configuration or manifest
+identities. Commit `.intentional/release-model.json` and root `.gitattributes`
+with those changes. `model` and initialization ensure the rule
+`.intentional/release-model.json text eol=lf` so that Git checks out canonical LF
+bytes even with `core.autocrlf=true`. They create `.gitattributes` if absent or
+append/amend only the model rule, preserving unrelated bytes. `written` means
+either file needs a change; `unchanged` leaves both untouched. Dry-run changes
+neither file. Check and status never repair either file. Templates
+read this file, which contains inventory, projections, native identities,
+discovery sources, tag templates, dependency edges, groups, and release-record
+policy. It contains no versions, pending intents, remote, clock, or process
+settings. Do not hand-edit it or use it as Intentional configuration.
+
+`intentional model --dry-run` previews `written` or `unchanged` without writing.
+`--stdout` prints only canonical model JSON without changing the tree. `--json`
+prints an operation result with `operation`, `path`, and `dry_run`; it conflicts
+with `--stdout`. Invalid input returns exit `1` and leaves the old model untouched.
+Initialization writes the model whenever it writes configuration. Intentional
+never runs Toha. A ready init result names applying a release process template.
+If the model remains absent after planned writes (for example, a no-op rerun),
+run the named `intentional model` action first. Commit the configuration,
+`.intentional/release-model.json`, and root `.gitattributes` before applying your
+chosen template. Follow the post-commit baseline command before this handoff on
+takeover. A ready imported plan already counts
+its planned takeover model and attributes writes and names only the template
+step; complete that takeover before following the handoff. Needs-input results
+name no handoff.
+`init --json` always emits an Initialization Plan: ordinary success uses `ready`
+and carries configuration in `inferred-config`; optional `next-actions` contains
+the ordered handoff. Init creates units with the default `required` release-record
+policy and omits that key from configuration. See the `init_handoff_*` CLI tests.
 
 ## Orient before changing state
 
@@ -54,6 +95,14 @@ deployment behavior from discovered manifests.
 Treat `status` as the human-readable view of pending intents, current and next
 versions, missing baselines, manifest drift, and tag-record issues. Treat
 `check` as the continuous-integration validation gate.
+
+When `.intentional/release-model.json` exists, `check` compares its bytes with
+an in-memory model built from the working-tree inputs. A difference, invalid
+JSON, or another schema reports the error `release-model-stale`; run
+`intentional model` to repair it. An absent model produces no diagnostic.
+`status` reports the same condition without repairing the file. Use
+`intentional status --json` for structured output; `release_model_stale` is a
+boolean. A dirty working tree does not itself make a model stale.
 
 ## Choose the workflow
 
@@ -203,13 +252,13 @@ configuration after init, not the generated candidate suggestion. Commit it
 once the template matches the existing stream. `{version}` matches `0.1.0`;
 `{id}@{version}` selects a different stream.
 
-Lightweight tags and annotated tags with no Intentional record fields are
+Lightweight tags and annotated tags with no tag record fields are
 accepted as pre-Intentional history. An existing matching `0.1.0` tag supplies
 current version `0.1.0`, including for a Go module. Do not recreate that tag,
 move it, create a replacement baseline, or author an intent to repeat the
 release. `tag --baseline` preserves it and ignores an explicit `--version` for
-that existing stream. Tags with any Intentional record fields
-must pass full record validation.
+that existing stream. Tags with any tag record fields
+must pass full tag record validation.
 
 Verify with `status` and `check`. If an expected baseline appears missing,
 inspect the template and locally available release history before creating a
@@ -284,7 +333,7 @@ versions, internal dependency ranges, changelogs, and consumed intents match
 the accepted release. The surrounding harness must then commit the applied
 tree.
 
-After that commit, create annotated release records against the same saved
+After that commit, create annotated tag records against the same saved
 plan:
 
 ```bash
@@ -301,9 +350,20 @@ intentional tag --plan release-plan.json --phase before-publication
 Never claim a publication phase speculatively. Intentional verifies phase and
 `tag-after` prerequisites and computes deterministic tag order. Tags remain
 local until the authorized harness pushes them. Repeating the same tag command
-validates exact existing records and creates only missing selected records, so
-dry-run verification and recovery after partial or complete tag creation are
-safe. Any record mismatch fails closed.
+validates exact existing tag records and creates only missing selected tag
+records, so dry-run verification and recovery after partial or complete tag
+creation are safe. Any tag record mismatch fails closed.
+
+After every planned tag exists, verify the Release from any of its tags:
+
+```bash
+intentional verify <tag> --json
+```
+
+`verify` needs Git history only. Exit `0` means every check passed; report any
+`producing-version-differs` advisory with the result. Exit `1` names the failed
+check in a diagnostic code; investigate it before any publication step relies
+on the Release.
 
 ## Establish baseline tags
 
@@ -336,8 +396,9 @@ an override cannot hide drift.
 Baselines create local annotated tags at the current commit, not at an earlier
 release commit. Inspect dry-run targets and consider the repository's
 publication triggers before the surrounding workflow pushes tags. A baseline
-does not itself publish a release. Finish with `status` and `check`.
-Do not combine `--baseline` with `--channel` or `--plan`.
+does not itself publish a release. Finish with `status` and `check`, then
+verify the baseline from any tag it created with `intentional verify <tag>
+--json`. Do not combine `--baseline` with `--channel` or `--plan`.
 
 ## Stamp injected build versions
 

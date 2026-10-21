@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: initialization-plan
 // ---
 
 //! Workspace-aware initialization and explicit Changesets takeover.
@@ -8,11 +8,13 @@
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
     Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
+    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT, LEGACY_CONFIG_SCHEMA,
 };
 use crate::error::{Error, Result};
+use crate::identity::{native_identity, xml_element};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
+    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition,
+    TagRole,
 };
 use crate::plan::{canonical_json, lower_hex, sha256_digest};
 use crate::version::{
@@ -34,7 +36,7 @@ use walkdir::WalkDir;
 pub const INIT_PLAN_PATH: &str = ".intentional/init-plan.yml";
 
 /// Published initialization-plan schema identifier.
-pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/init-plan.yml";
+pub const INIT_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.2/init-plan";
 
 const CHANGESETS_CONFIG: &str = ".changeset/config.json";
 const TRANSACTION_PATH: &str = ".intentional/.takeover-transaction";
@@ -57,6 +59,7 @@ pub enum InitState {
 /// One source artifact used as initialization evidence.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SourceEvidence {
     /// Workspace-relative source path.
     pub path: PathBuf,
@@ -70,6 +73,7 @@ pub struct SourceEvidence {
 /// Optional raw version text together with the evidence from which it was extracted.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct RawVersionEvidence {
     /// Uninterpreted version text supplied by the artifact.
     pub value: String,
@@ -80,6 +84,7 @@ pub struct RawVersionEvidence {
 /// A projection a detector can suggest when its required fields were extracted.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CandidateProjectionSuggestion {
     /// Adapter specialization.
     pub adapter: Adapter,
@@ -95,6 +100,7 @@ pub struct CandidateProjectionSuggestion {
 /// A tag a detector can suggest without granting it version authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CandidateTagSuggestion {
     /// Suggested tag id within the resolved release unit.
     pub id: String,
@@ -107,6 +113,7 @@ pub struct CandidateTagSuggestion {
 /// Evidence-backed extraction problem that does not assert artifact invalidity.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ExtractionDiagnostic {
     /// Stable diagnostic identity within the candidate.
     pub id: String,
@@ -147,6 +154,7 @@ pub enum CandidateResolution {
 /// Artifact-neutral evidence emitted by any release-unit detector.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DiscoveryCandidate {
     /// Stable hash of detector and exact path identity.
     pub id: String,
@@ -291,6 +299,7 @@ impl DiscoveryCandidate {
                 &format!("discovery candidate {} tag", self.id),
                 &tag.template,
                 true,
+                tag.role == TagRole::Projection,
             )?;
         }
         let mut diagnostic_ids = BTreeSet::new();
@@ -335,6 +344,7 @@ impl DiscoveryCandidate {
 /// One detector invocation before its candidates are flattened into an initialization plan.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DetectorResult {
     /// Stable detector id.
     pub detector: String,
@@ -421,6 +431,7 @@ fn validate_source_evidence(evidence: &[SourceEvidence], description: &str) -> R
 /// One finite initialization decision or warning.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct InitDiagnostic {
     /// Stable diagnostic identity.
     pub id: String,
@@ -459,6 +470,7 @@ pub struct InitDiagnostic {
 /// One side of a Changesets takeover parity comparison.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityRelease {
     /// Aggregate requested bump after dependency and group propagation.
     pub requested_bump: Bump,
@@ -469,6 +481,7 @@ pub struct ParityRelease {
 /// Changesets and proposed release results used for takeover parity.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityReleaseUnit {
     /// Release-unit id.
     pub release_unit: String,
@@ -485,6 +498,7 @@ pub struct ParityReleaseUnit {
 /// Deterministic parity comparison.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ParityResult {
     /// `equivalent` when all logical releases agree; otherwise `blocked`.
     pub status: String,
@@ -495,6 +509,7 @@ pub struct ParityResult {
 /// One pending Changesets file converted losslessly at takeover.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ConvertedIntent {
     /// Changeset filename stem retained as the Intentional intent id.
     pub id: String,
@@ -521,6 +536,7 @@ impl ConvertedIntent {
 /// Durable, editable handoff produced while Changesets still owns authority.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct InitPlan {
     /// Published schema location.
     #[serde(rename = "$schema")]
@@ -545,6 +561,9 @@ pub struct InitPlan {
     pub planned_operations: Vec<String>,
     /// Required command after the takeover changes are committed.
     pub post_commit_action: String,
+    /// Ordered release process handoff after the planned operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<String>,
 }
 
 impl InitPlan {
@@ -652,10 +671,10 @@ fn validate_empty_inferred_config(config: &Config) -> Result<()> {
     if config
         .schema
         .as_deref()
-        .is_some_and(|schema| schema != CONFIG_SCHEMA)
+        .is_some_and(|schema| schema != CONFIG_SCHEMA && schema != LEGACY_CONFIG_SCHEMA)
     {
         return Err(Error::Validation(format!(
-            "empty inferred config schema must be {CONFIG_SCHEMA}"
+            "empty inferred config schema must be {CONFIG_SCHEMA} or {LEGACY_CONFIG_SCHEMA}"
         )));
     }
     if config.contract != CURRENT_CONTRACT {
@@ -762,6 +781,7 @@ fn validate_projection_target(
 
 /// Planned initialization or takeover output.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct InitResult {
     /// Computed process outcome.
     pub state: InitState,
@@ -771,9 +791,9 @@ pub struct InitResult {
     pub contents: String,
     /// Exact operations.
     pub operations: Vec<String>,
-    /// Structured plan when adopting Changesets.
+    /// Schema-backed Initialization Plan for every successful or needs-input result.
     pub plan: Option<InitPlan>,
-    writes: Vec<(PathBuf, String)>,
+    writes: Vec<(PathBuf, Vec<u8>)>,
     deletes: Vec<PathBuf>,
     proxy_removals: Vec<ProxyRemoval>,
     takeover: bool,
@@ -811,7 +831,13 @@ impl InitResult {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
             }
-            std::fs::write(&path, contents).map_err(|error| Error::io(&path, error))?;
+            if relative == Path::new(".gitattributes")
+                || relative == Path::new(crate::RELEASE_MODEL_PATH)
+            {
+                crate::release_model::write_model_file(&path, contents)?;
+            } else {
+                std::fs::write(&path, contents).map_err(|error| Error::io(&path, error))?;
+            }
         }
         for relative in &self.deletes {
             let path = root.join(relative);
@@ -826,15 +852,34 @@ impl InitResult {
         Ok(())
     }
 
-    /// Structured output matching the written configuration or initialization plan.
-    pub fn to_json(&self) -> Result<String> {
-        match &self.plan {
-            Some(plan) => plan.to_json(),
-            None => {
-                let config = Config::from_yaml(&self.contents)?;
-                canonical_json(&config)
-            }
+    /// Ordered actions after initialization, accounting for the planned model write.
+    pub fn next_actions(&self, root: &Path) -> Vec<String> {
+        if self.state == InitState::NeedsInput {
+            return Vec::new();
         }
+        let mut actions = Vec::new();
+        if !root.join(crate::RELEASE_MODEL_PATH).is_file()
+            && !self
+                .writes
+                .iter()
+                .any(|(path, _)| path == Path::new(crate::RELEASE_MODEL_PATH))
+            && !self.plan.as_ref().is_some_and(|plan| {
+                plan.planned_operations
+                    .contains(&format!("write {}", crate::RELEASE_MODEL_PATH))
+            })
+        {
+            actions.push("intentional model".to_owned());
+        }
+        actions.push("apply a release process template".to_owned());
+        actions
+    }
+
+    /// Structured Initialization Plan output.
+    pub fn to_json(&self) -> Result<String> {
+        self.plan
+            .as_ref()
+            .expect("initialization always produces a schema-backed plan")
+            .to_json()
     }
 }
 
@@ -848,14 +893,87 @@ pub fn initialize(root: &Path, take_over: bool) -> Result<InitResult> {
         .map_err(|_| Error::Validation("intentional init requires a Git repository".to_owned()))?;
     recover_interrupted_takeover(root)?;
     if root.join(CHANGESETS_CONFIG).exists() {
-        return changesets_plan(root, take_over);
+        return with_release_model(root, changesets_plan(root, take_over)?);
     }
     if take_over {
         return Err(Error::Validation(
             "--take-over requires an existing .changeset/config.json".to_owned(),
         ));
     }
-    ordinary_plan(root)
+    with_release_model(root, ordinary_plan(root)?)
+}
+
+// Derive before any write so invalid projections leave the entire operation set untouched.
+fn with_release_model(root: &Path, mut result: InitResult) -> Result<InitResult> {
+    if let Some((_, contents)) = result
+        .writes
+        .iter()
+        .find(|(path, _)| path == Path::new(CONFIG_PATH))
+    {
+        let config =
+            Config::from_yaml(std::str::from_utf8(contents).expect("generated config is UTF-8"))?;
+        let model = crate::ReleaseModel::from_config(root, &config)?.encode()?;
+        result
+            .writes
+            .push((PathBuf::from(crate::RELEASE_MODEL_PATH), model.into_bytes()));
+        let operation = format!("write {}", crate::RELEASE_MODEL_PATH);
+        if !result.operations.contains(&operation) {
+            result.operations.insert(1, operation);
+        }
+        if let Some(attributes) = crate::release_model::model_attributes(root)? {
+            result
+                .writes
+                .push((PathBuf::from(".gitattributes"), attributes));
+            let operation = "write .gitattributes".to_owned();
+            if !result.operations.contains(&operation) {
+                result.operations.insert(2, operation);
+            }
+        }
+    }
+    with_release_process_handoff(root, result)
+}
+
+fn with_release_process_handoff(root: &Path, mut result: InitResult) -> Result<InitResult> {
+    let next_actions = result.next_actions(root);
+    // Ordinary success uses the same schema-backed result as imported initialization.
+    if result.plan.is_none() {
+        result.plan = Some(InitPlan {
+            schema: INIT_PLAN_SCHEMA.to_owned(),
+            state: InitState::Ready,
+            source_kind: if root.join(CONFIG_PATH).is_file() {
+                "intentional".to_owned()
+            } else {
+                "workspace".to_owned()
+            },
+            source_fingerprint: fingerprint(root, &BTreeSet::from([PathBuf::from(CONFIG_PATH)]))?,
+            inferred_config: Config::from_yaml(&result.contents)?,
+            discovery_candidates: Vec::new(),
+            diagnostics: Vec::new(),
+            converted_intents: Vec::new(),
+            parity: ParityResult {
+                status: "equivalent".to_owned(),
+                release_units: Vec::new(),
+            },
+            planned_operations: result.operations.clone(),
+            post_commit_action: String::new(),
+            next_actions: Vec::new(),
+        });
+    }
+    if let Some(plan) = &mut result.plan {
+        plan.next_actions = next_actions;
+        if result.takeover {
+            plan.planned_operations = result.operations.clone();
+        }
+        if result.path == Path::new(INIT_PLAN_PATH) {
+            result.contents = plan.to_yaml()?;
+            for (path, contents) in &mut result.writes {
+                if path == Path::new(INIT_PLAN_PATH) {
+                    *contents = result.contents.clone().into_bytes();
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Compatibility wrapper for callers performing ordinary initialization.
@@ -969,7 +1087,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
             ],
             contents: contents.clone(),
             plan: None,
-            writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
+            writes: vec![(PathBuf::from(CONFIG_PATH), contents.into_bytes())],
             deletes: vec![PathBuf::from(INIT_PLAN_PATH)],
             proxy_removals: Vec::new(),
             takeover: false,
@@ -1004,6 +1122,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
             format!("delete {INIT_PLAN_PATH}"),
         ],
         post_commit_action: String::new(),
+        next_actions: Vec::new(),
     };
     let contents = plan.to_yaml()?;
     Ok(InitResult {
@@ -1012,7 +1131,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
         operations: vec![format!("write {INIT_PLAN_PATH}")],
         contents: contents.clone(),
         plan: Some(plan),
-        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents.into_bytes())],
         deletes: Vec::new(),
         proxy_removals: Vec::new(),
         takeover: false,
@@ -1102,6 +1221,7 @@ fn apply_candidate_resolutions(
         },
         planned_operations: Vec::new(),
         post_commit_action: String::new(),
+        next_actions: Vec::new(),
     };
     validation_plan.validate()?;
 
@@ -1146,6 +1266,7 @@ fn apply_candidate_resolutions(
             ReleaseUnitConfig {
                 path,
                 disposition: ReleaseUnitDisposition::Managed,
+                release_record: ReleaseRecordPolicy::Required,
                 projections: projection.into_iter().collect(),
                 tags: BTreeMap::from([(
                     tag.id.clone(),
@@ -1639,7 +1760,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
             diagnostics.push(InitDiagnostic {
                 id: "private-package-tagging".to_owned(),
                 code: "private-package-tagging".to_owned(),
-                message: "Changesets suppresses private-package tags; Intentional creates annotated records for every managed release unit, independently from publication privacy.".to_owned(),
+                message: "Changesets suppresses private-package tags; Intentional creates annotated tag records for every managed release unit, independently from publication privacy.".to_owned(),
                 evidence: vec![config_evidence.clone()],
                 choices: vec!["intentional".to_owned()],
                 recommended: Some("intentional".to_owned()),
@@ -1981,7 +2102,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         }
     }
     let source_fingerprint = fingerprint(root, &evidence_paths)?;
-    let planned_operations = takeover_operations(root, &converted_intents, &proxy_removals);
+    let planned_operations = takeover_operations(root, &converted_intents, &proxy_removals)?;
     let mut plan = InitPlan {
         schema: INIT_PLAN_SCHEMA.to_owned(),
         state,
@@ -1994,6 +2115,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         parity: parity.result,
         planned_operations: planned_operations.clone(),
         post_commit_action: "intentional tag --baseline".to_owned(),
+        next_actions: Vec::new(),
     };
     // The state is always recomputed after reading editable resolutions.
     plan.state = state;
@@ -2006,9 +2128,12 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
                     .to_owned(),
             ));
         }
-        let mut writes = vec![(PathBuf::from(CONFIG_PATH), plan.inferred_config.to_yaml()?)];
+        let mut writes = vec![(
+            PathBuf::from(CONFIG_PATH),
+            plan.inferred_config.to_yaml()?.into_bytes(),
+        )];
         for intent in &plan.converted_intents {
-            writes.push((intent.target.clone(), intent.contents()?));
+            writes.push((intent.target.clone(), intent.contents()?.into_bytes()));
         }
         let deletes = takeover_deletes(root, &proxy_removals);
         verify_proxy_removal_preconditions(root, &proxy_removals)?;
@@ -2034,7 +2159,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         operations: vec![format!("write {INIT_PLAN_PATH}")],
         contents: contents.clone(),
         plan: Some(plan),
-        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents.into_bytes())],
         deletes: Vec::new(),
         proxy_removals,
         takeover: false,
@@ -2205,6 +2330,7 @@ fn materialize_discovery_inventory(
             ReleaseUnitConfig {
                 path,
                 disposition: ReleaseUnitDisposition::Managed,
+                release_record: ReleaseRecordPolicy::Required,
                 projections,
                 tags: BTreeMap::from([(
                     tag.id.clone(),
@@ -2655,89 +2781,62 @@ fn is_project_manifest(path: &Path, adapter: Adapter) -> Result<bool> {
 
 fn manifest_identity(path: &Path, adapter: Adapter) -> Result<(String, Option<String>)> {
     let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    match adapter {
-        Adapter::Npm => {
-            let value: JsonValue = serde_json::from_str(&text).map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            Ok((
-                required_string(&value["name"], path, "name")?,
-                value["version"].as_str().map(str::to_owned),
-            ))
-        }
-        Adapter::Cargo => {
-            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            let package = document.get("package").ok_or_else(|| {
-                Error::Validation(format!("{} has no package table", path.display()))
-            })?;
-            let name = package
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no package.name", path.display()))
-                })?;
-            let version = package
-                .get("version")
-                .and_then(toml_edit::Item::as_str)
-                .map(str::to_owned);
-            Ok((name.to_owned(), version))
-        }
-        Adapter::Pub => {
-            let value: serde_yaml::Value = serde_yaml::from_str(&text)?;
-            let name = value["name"]
-                .as_str()
-                .ok_or_else(|| Error::Validation(format!("{} has no name", path.display())))?;
-            Ok((
-                name.to_owned(),
-                value["version"].as_str().map(str::to_owned),
-            ))
-        }
-        Adapter::Python => {
-            let document = text.parse::<toml_edit::DocumentMut>().map_err(|error| {
-                Error::Validation(format!("invalid {}: {error}", path.display()))
-            })?;
-            let project = document.get("project").ok_or_else(|| {
-                Error::Validation(format!("{} has no project table", path.display()))
-            })?;
-            let name = project
-                .get("name")
-                .and_then(toml_edit::Item::as_str)
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no project.name", path.display()))
-                })?;
-            let version = project
-                .get("version")
-                .and_then(toml_edit::Item::as_str)
-                .map(str::to_owned);
-            Ok((name.to_owned(), version))
-        }
-        Adapter::Go => {
-            let name = text
-                .lines()
-                .find_map(|line| line.trim().strip_prefix("module "))
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no module directive", path.display()))
-                })?;
-            Ok((name.to_owned(), None))
-        }
-        Adapter::Msbuild => {
-            let name = xml_element(&text, "PackageId")
-                .or_else(|| xml_element(&text, "AssemblyName"))
-                .or_else(|| {
-                    path.file_stem()
-                        .and_then(|value| value.to_str())
-                        .map(str::to_owned)
-                })
-                .ok_or_else(|| {
-                    Error::Validation(format!("{} has no package identity", path.display()))
-                })?;
-            Ok((name, xml_element(&text, "Version")))
-        }
+    manifest_text_identity(path, adapter, &text)
+}
+
+fn manifest_text_identity(
+    path: &Path,
+    adapter: Adapter,
+    text: &str,
+) -> Result<(String, Option<String>)> {
+    let name = native_identity(adapter, path, text)?
+        .ok_or_else(|| missing_identity(path, adapter, text))?;
+    Ok((name, manifest_version(adapter, text)))
+}
+
+/// The initialization error for a readable manifest without a native identity.
+fn missing_identity(path: &Path, adapter: Adapter, text: &str) -> Error {
+    let has_table = |table: &str| {
+        text.parse::<toml_edit::DocumentMut>()
+            .is_ok_and(|document| document.get(table).is_some())
+    };
+    let missing = match adapter {
+        Adapter::Npm => "string name",
+        Adapter::Cargo if !has_table("package") => "package table",
+        Adapter::Cargo => "package.name",
+        Adapter::Pub => "name",
+        Adapter::Python if !has_table("project") => "project table",
+        Adapter::Python => "project.name",
+        Adapter::Go => "module directive",
+        Adapter::Msbuild => "package identity",
         Adapter::Json | Adapter::Toml | Adapter::Yaml => {
             unreachable!("generic adapters are not discovered")
         }
+    };
+    Error::Validation(format!("{} has no {missing}", path.display()))
+}
+
+/// The manifest version of a manifest that `native_identity` already read.
+fn manifest_version(adapter: Adapter, text: &str) -> Option<String> {
+    let toml_version = |table: &str| {
+        text.parse::<toml_edit::DocumentMut>()
+            .ok()?
+            .get(table)?
+            .get("version")?
+            .as_str()
+            .map(str::to_owned)
+    };
+    match adapter {
+        Adapter::Npm => serde_json::from_str::<JsonValue>(text).ok()?["version"]
+            .as_str()
+            .map(str::to_owned),
+        Adapter::Cargo => toml_version("package"),
+        Adapter::Pub => serde_yaml::from_str::<serde_yaml::Value>(text).ok()?["version"]
+            .as_str()
+            .map(str::to_owned),
+        Adapter::Python => toml_version("project"),
+        Adapter::Msbuild => xml_element(text, "Version"),
+        Adapter::Go | Adapter::Json | Adapter::Toml | Adapter::Yaml => None,
     }
 }
 
@@ -2746,22 +2845,6 @@ fn npm_manifest_is_private(path: &Path) -> Result<bool> {
     let value: JsonValue = serde_json::from_str(&text)
         .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
     Ok(value["private"].as_bool() == Some(true))
-}
-
-fn required_string(value: &JsonValue, path: &Path, field: &str) -> Result<String> {
-    value
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| Error::Validation(format!("{} has no string {field}", path.display())))
-}
-
-fn xml_element(text: &str, name: &str) -> Option<String> {
-    let start = format!("<{name}>");
-    let end = format!("</{name}>");
-    text.split_once(&start)?
-        .1
-        .split_once(&end)
-        .map(|(value, _)| value.trim().to_owned())
 }
 
 fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDependencyEdge>> {
@@ -4055,7 +4138,7 @@ fn fingerprint(root: &Path, paths: &BTreeSet<PathBuf>) -> Result<String> {
 
 fn verify_takeover_preconditions(
     root: &Path,
-    writes: &[(PathBuf, String)],
+    writes: &[(PathBuf, Vec<u8>)],
     expected_fingerprint: &str,
     evidence_paths: &BTreeSet<PathBuf>,
 ) -> Result<()> {
@@ -4066,7 +4149,10 @@ fn verify_takeover_preconditions(
         ));
     }
     for (relative, _) in writes {
-        if root.join(relative).exists() {
+        if relative != Path::new(crate::RELEASE_MODEL_PATH)
+            && relative != Path::new(".gitattributes")
+            && root.join(relative).exists()
+        {
             return Err(Error::Validation(format!(
                 "takeover target {} already exists; resolve the competing Intentional state first",
                 relative.display()
@@ -4080,8 +4166,14 @@ fn takeover_operations(
     root: &Path,
     intents: &[ConvertedIntent],
     proxy_removals: &[ProxyRemoval],
-) -> Vec<String> {
-    let mut operations = vec![format!("write {CONFIG_PATH}")];
+) -> Result<Vec<String>> {
+    let mut operations = vec![
+        format!("write {CONFIG_PATH}"),
+        format!("write {}", crate::RELEASE_MODEL_PATH),
+    ];
+    if crate::release_model::model_attributes(root)?.is_some() {
+        operations.push("write .gitattributes".to_owned());
+    }
     operations.extend(intents.iter().map(|intent| {
         format!(
             "write {} from {}",
@@ -4095,7 +4187,7 @@ fn takeover_operations(
             .map(|path| format!("delete {}", path.display())),
     );
     operations.push("after commit: intentional tag --baseline".to_owned());
-    operations
+    Ok(operations)
 }
 
 fn takeover_deletes(root: &Path, proxy_removals: &[ProxyRemoval]) -> Vec<PathBuf> {
@@ -4139,7 +4231,7 @@ fn verify_proxy_removal_preconditions(root: &Path, removals: &[ProxyRemoval]) ->
 
 fn apply_takeover_transaction(
     root: &Path,
-    writes: &[(PathBuf, String)],
+    writes: &[(PathBuf, Vec<u8>)],
     deletes: &[PathBuf],
 ) -> Result<()> {
     let transaction = root.join(TRANSACTION_PATH);
@@ -4395,6 +4487,7 @@ mod tests {
             },
             planned_operations: Vec::new(),
             post_commit_action: "intentional tag --baseline".to_owned(),
+            next_actions: Vec::new(),
         }
     }
 
@@ -4489,6 +4582,123 @@ mod tests {
             r#"const manifest = "examples/sample.json";"#,
             path
         ));
+    }
+
+    #[test]
+    fn manifest_identity_reads_identity_and_version_per_adapter() {
+        let cases = [
+            (
+                Adapter::Npm,
+                "package.json",
+                r#"{"name":"sample-library","version":"1.0.0"}"#,
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[package]\nname = \"sample-library\"\nversion = \"1.0.0\"\n",
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Pub,
+                "pubspec.yaml",
+                "name: sample-library\nversion: 1.0.0\n",
+                "sample-library",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[project]\nname = \"sample-library\"\n",
+                "sample-library",
+                None,
+            ),
+            (
+                Adapter::Go,
+                "go.mod",
+                "module sample-library\n",
+                "sample-library",
+                None,
+            ),
+            (
+                Adapter::Msbuild,
+                "src/Sample.csproj",
+                "<Project><PropertyGroup><AssemblyName>sample-assembly</AssemblyName><Version>1.0.0</Version></PropertyGroup></Project>",
+                "sample-assembly",
+                Some("1.0.0"),
+            ),
+            (
+                Adapter::Msbuild,
+                "src/Sample.csproj",
+                "<Project />",
+                "Sample",
+                None,
+            ),
+        ];
+        for (adapter, file, text, identity, version) in cases {
+            let (actual_identity, actual_version) =
+                manifest_text_identity(Path::new(file), adapter, text).expect("identity");
+            assert_eq!(actual_identity, identity, "{adapter:?}");
+            assert_eq!(actual_version.as_deref(), version, "{adapter:?}");
+        }
+    }
+
+    #[test]
+    fn manifest_identity_keeps_its_error_when_no_identity_is_found() {
+        let cases = [
+            (
+                Adapter::Npm,
+                "package.json",
+                r#"{"version":"1.0.0"}"#,
+                "has no string name",
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[workspace]\n",
+                "has no package table",
+            ),
+            (
+                Adapter::Cargo,
+                "Cargo.toml",
+                "[package]\n",
+                "has no package.name",
+            ),
+            (
+                Adapter::Pub,
+                "pubspec.yaml",
+                "version: 1.0.0\n",
+                "has no name",
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[tool]\n",
+                "has no project table",
+            ),
+            (
+                Adapter::Python,
+                "pyproject.toml",
+                "[project]\n",
+                "has no project.name",
+            ),
+            (
+                Adapter::Go,
+                "go.mod",
+                "go 1.22\n",
+                "has no module directive",
+            ),
+        ];
+        for (adapter, file, text, missing) in cases {
+            let error =
+                manifest_text_identity(Path::new(file), adapter, text).expect_err("no identity");
+            assert_eq!(
+                error.to_string(),
+                format!("validation failed: {file} {missing}")
+            );
+        }
     }
 
     #[test]
@@ -4802,6 +5012,10 @@ release-units:
             .contains("may only contain schema, contract, settings, and release-units"));
 
         plan.inferred_config.discovery.excluded_paths.clear();
+        plan.inferred_config.schema = Some(LEGACY_CONFIG_SCHEMA.to_owned());
+        plan.validate()
+            .expect("an initialization plan written with the released schema value stays valid");
+
         plan.inferred_config.schema = Some("https://example.invalid/config.yml".to_owned());
         assert!(plan
             .validate()
@@ -4821,18 +5035,36 @@ release-units:
                 .to_string()
                 .contains("tag template"));
         }
+
+        let mut go_projection = candidate("examples/go.mod", None);
+        let tag = go_projection.tag.as_mut().expect("tag suggestion");
+        tag.role = TagRole::Projection;
+        tag.template = "v{version}".to_owned();
+        candidate_plan(vec![go_projection])
+            .validate()
+            .expect("ecosystem-required projection prefix accepted");
     }
 
     #[test]
     fn published_init_schema_carries_candidate_resolution_variants() {
-        let schema: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../../schemas/init-plan.yml"))
-                .expect("initialization-plan schema parses");
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/initialization-plan.schema.yml"
+        ))
+        .expect("initialization-plan schema parses");
         assert!(schema["required"]
             .as_sequence()
             .expect("required plan fields")
             .iter()
             .any(|field| field.as_str() == Some("discovery-candidates")));
+        assert_eq!(
+            schema["properties"]["next-actions"]["type"].as_str(),
+            Some("array")
+        );
+        assert!(!schema["required"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|field| field.as_str() == Some("next-actions")));
         let variants = schema["$defs"]["candidate-resolution"]["oneOf"]
             .as_sequence()
             .expect("candidate resolution variants");
@@ -4849,13 +5081,26 @@ release-units:
             kinds,
             BTreeSet::from(["excluded", "independent", "projection"])
         );
+        for variant in variants {
+            assert!(variant["properties"].get("package").is_none());
+        }
+        assert!(schema["$defs"]["discovery-candidate"]["properties"]
+            .get("package")
+            .is_none());
+        assert!(schema["properties"].get("workflow-adoption").is_none());
         assert_eq!(
             schema["$defs"]["discovery-candidate"]["properties"]["tag"]["properties"]["template"]
-                ["pattern"]
+                ["$ref"]
                 .as_str(),
-            Some(
-                r"^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$"
-            )
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-template")
+        );
+        assert_eq!(
+            schema["$defs"]["release-unit-id"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
+        );
+        assert_eq!(
+            schema["properties"]["converted-intents"]["items"]["properties"]["id"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
         );
     }
 

@@ -1,24 +1,25 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: tag-record
 // ---
 
-//! Annotated release records and baseline establishment.
+//! Annotated tag records and baseline establishment.
 
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
-use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
+use crate::plan::{Generator, PlanSource, ReleasePlan};
 use crate::status::read_projection_version;
+use crate::tag_record::{baseline_digest, TagRecord};
 use crate::version::VersionRepository;
 use semver::Version;
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// One annotated Git tag to create.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlannedTag {
     /// Canonical configured tag id.
     pub id: String,
@@ -30,23 +31,20 @@ pub struct PlannedTag {
 
 /// Planned annotated tags for an applied release or baseline.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TagResult {
     /// Tags in prerequisite-safe order.
     pub tags: Vec<PlannedTag>,
 }
 
-#[derive(Serialize)]
-struct TagDigestPayload<'a> {
-    contract: &'a str,
-    generator: &'a str,
-    versions: &'a BTreeMap<String, String>,
-    baseline: bool,
-}
-
+/// One configured tag rendered at the version of its Release Unit or
+/// workspace tag.
 #[derive(Debug, Clone)]
-struct TagCandidate {
-    name: String,
-    version: String,
+pub(crate) struct TagCandidate {
+    /// Rendered Git tag name.
+    pub(crate) name: String,
+    /// Version the tag records.
+    pub(crate) version: String,
     required_phase: Option<TagPhase>,
     prerequisites: Vec<String>,
 }
@@ -120,110 +118,27 @@ impl TagResult {
         match existing_tag_set_digest(&git, &config, &versions, false)? {
             Some(existing) if existing != plan.digest => {
                 return Err(Error::Validation(
-                    "release plan disagrees with existing release records".to_owned(),
+                    "release plan disagrees with existing tag records".to_owned(),
                 ));
             }
             _ => {}
         }
-        Self::from_versions(root, &config, &versions, phase, false, Some(&plan.digest))
+        Self::from_versions(root, &config, &versions, phase, false, &plan.digest)
     }
 
     /// Infer and plan initial annotated baseline tags.
     pub fn build_baseline(root: &Path, explicit: &BTreeMap<String, Version>) -> Result<Self> {
         let config = Config::load(root)?;
-        let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
-        let mut versions = BTreeMap::new();
-        for (id, release_unit) in &config.release_units {
-            let (primary_id, primary) = config.primary_tag(id)?;
-            if repository.has_matching_tag(id, &primary.template)? {
-                let version = repository
-                    .current_version(id, &primary.template)?
-                    .to_string();
-                if !is_established(
-                    &git,
-                    &render_tag(&primary.template, id, &version),
-                    &Config::release_unit_tag_id(id, primary_id),
-                    &version,
-                    &config.contract,
-                )? {
-                    versions.insert(id.clone(), version);
-                }
-                continue;
-            }
-            let mut evidence = Vec::new();
-            for projection in &release_unit.projections {
-                if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
-                    continue;
-                }
-                let relative = release_unit.path.join(&projection.file);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| Error::io(root.join(&relative), error))?;
-                evidence.push((
-                    relative.clone(),
-                    read_projection_version(root, &relative, projection, &text)?,
-                ));
-            }
-            let version = match (evidence.first(), explicit.get(id)) {
-                (None, None) => {
-                    return Err(Error::Validation(format!(
-                        "tag-only release unit {id} requires --version {id}=X.Y.Z"
-                    )))
-                }
-                (None, Some(version)) => version.clone(),
-                (Some((_, first)), explicit_version) => {
-                    if evidence.iter().any(|(_, version)| version != first) {
-                        let detail = evidence
-                            .iter()
-                            .map(|(path, version)| format!("{}={version}", path.display()))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        return Err(Error::Validation(format!(
-                            "baseline projections disagree for {id}: {detail}"
-                        )));
-                    }
-                    let inferred = Version::parse(first)?;
-                    if explicit_version.is_some_and(|version| version != &inferred) {
-                        return Err(Error::Validation(format!(
-                            "explicit baseline for {id} disagrees with projection evidence {inferred}"
-                        )));
-                    }
-                    inferred
-                }
-            };
-            versions.insert(id.clone(), version.to_string());
-        }
-        for (id, tag) in &config.workspace_tags {
-            let canonical = Config::workspace_tag_id(id);
-            if repository.has_matching_tag(id, &tag.template)? {
-                let version = repository.current_version(id, &tag.template)?.to_string();
-                if !is_established(
-                    &git,
-                    &render_tag(&tag.template, id, &version),
-                    &canonical,
-                    &version,
-                    &config.contract,
-                )? {
-                    versions.insert(canonical, version);
-                }
-                continue;
-            }
-            let version = explicit.get(&canonical).ok_or_else(|| {
-                Error::Validation(format!(
-                    "workspace tag {id} requires --version {canonical}=X.Y.Z"
-                ))
-            })?;
-            versions.insert(canonical, version.to_string());
-        }
-        if versions.is_empty() {
-            return Err(Error::Validation(
-                "every release unit and workspace tag is already established by an Intentional record; nothing to baseline"
-                    .to_owned(),
-            ));
-        }
-        let digest = existing_tag_set_digest(&git, &config, &versions, true)?;
-        Self::from_versions(root, &config, &versions, None, true, digest.as_deref())
+        let versions = baseline_versions(root, &config, explicit, &|name, id, version| {
+            is_established(&git, name, id, version, &config.contract)
+        })?;
+        let digest = match existing_tag_set_digest(&git, &config, &versions, true)? {
+            Some(existing) => existing,
+            None => baseline_digest(&config.contract, crate::VERSION, &versions)?,
+        };
+        Self::from_versions(root, &config, &versions, None, true, &digest)
     }
 
     fn from_versions(
@@ -232,49 +147,9 @@ impl TagResult {
         versions: &BTreeMap<String, String>,
         phase: Option<TagPhase>,
         baseline: bool,
-        release_digest: Option<&str>,
+        digest: &str,
     ) -> Result<Self> {
-        let payload = TagDigestPayload {
-            contract: &config.contract,
-            generator: crate::VERSION,
-            versions,
-            baseline,
-        };
-        let baseline_digest = sha256_digest(canonical_json(&payload)?.as_bytes());
-        let digest = release_digest.unwrap_or(&baseline_digest);
-        let mut candidates = BTreeMap::<String, TagCandidate>::new();
-        for (release_unit_id, version) in versions {
-            let Some(release_unit) = config.release_units.get(release_unit_id) else {
-                continue;
-            };
-            for (tag_id, tag) in &release_unit.tags {
-                let canonical = Config::release_unit_tag_id(release_unit_id, tag_id);
-                candidates.insert(
-                    canonical,
-                    TagCandidate {
-                        name: render_tag(&tag.template, release_unit_id, version),
-                        version: version.clone(),
-                        required_phase: tag.require_phase,
-                        prerequisites: tag.tag_after.clone(),
-                    },
-                );
-            }
-        }
-        for (tag_id, tag) in &config.workspace_tags {
-            let canonical = Config::workspace_tag_id(tag_id);
-            let Some(version) = versions.get(&canonical) else {
-                continue;
-            };
-            candidates.insert(
-                canonical,
-                TagCandidate {
-                    name: render_tag(&tag.template, tag_id, version),
-                    version: version.clone(),
-                    required_phase: tag.require_phase,
-                    prerequisites: tag.tag_after.clone(),
-                },
-            );
-        }
+        let candidates = tag_candidates(config, versions);
         let selected = if baseline {
             candidates.clone()
         } else {
@@ -326,7 +201,7 @@ impl TagResult {
                     continue;
                 }
                 return Err(Error::Validation(format!(
-                    "existing tag {} is not an annotated Intentional record",
+                    "existing tag {} carries no annotated tag record",
                     candidate.name
                 )));
             }
@@ -355,7 +230,15 @@ impl TagResult {
             tags.push(PlannedTag {
                 id: id.clone(),
                 name: candidate.name.clone(),
-                message: tag_message(&config.contract, digest, &id, &candidate.version, baseline),
+                message: TagRecord::new(
+                    &config.contract,
+                    crate::VERSION,
+                    digest,
+                    &id,
+                    &candidate.version,
+                    baseline,
+                )
+                .encode()?,
             });
         }
         Ok(Self { tags })
@@ -407,6 +290,147 @@ impl TagResult {
     }
 }
 
+/// Every configured tag of the Release Units and workspace tags in `versions`,
+/// keyed by canonical tag ID, rendered at its version.
+pub(crate) fn tag_candidates(
+    config: &Config,
+    versions: &BTreeMap<String, String>,
+) -> BTreeMap<String, TagCandidate> {
+    let mut candidates = BTreeMap::<String, TagCandidate>::new();
+    for (release_unit_id, version) in versions {
+        let Some(release_unit) = config.release_units.get(release_unit_id) else {
+            continue;
+        };
+        for (tag_id, tag) in &release_unit.tags {
+            let canonical = Config::release_unit_tag_id(release_unit_id, tag_id);
+            candidates.insert(
+                canonical,
+                TagCandidate {
+                    name: render_tag(&tag.template, release_unit_id, version),
+                    version: version.clone(),
+                    required_phase: tag.require_phase,
+                    prerequisites: tag.tag_after.clone(),
+                },
+            );
+        }
+    }
+    for (tag_id, tag) in &config.workspace_tags {
+        let canonical = Config::workspace_tag_id(tag_id);
+        let Some(version) = versions.get(&canonical) else {
+            continue;
+        };
+        candidates.insert(
+            canonical,
+            TagCandidate {
+                name: render_tag(&tag.template, tag_id, version),
+                version: version.clone(),
+                required_phase: tag.require_phase,
+                prerequisites: tag.tag_after.clone(),
+            },
+        );
+    }
+    candidates
+}
+
+/// The complete baseline set at HEAD: every Release Unit and canonical
+/// workspace tag ID whose current tag `established` does not report as
+/// established by a tag record, at the version a matching tag, its
+/// projections, or `explicit` supplies. `established` receives the tag name,
+/// canonical tag ID, and version of each stream's current tag.
+pub(crate) fn baseline_versions(
+    root: &Path,
+    config: &Config,
+    explicit: &BTreeMap<String, Version>,
+    established: &dyn Fn(&str, &str, &str) -> Result<bool>,
+) -> Result<BTreeMap<String, String>> {
+    let repository = VersionRepository::discover(root)?;
+    let mut versions = BTreeMap::new();
+    for (id, release_unit) in &config.release_units {
+        let (primary_id, primary) = config.primary_tag(id)?;
+        if repository.has_matching_tag(id, &primary.template)? {
+            let version = repository
+                .current_version(id, &primary.template)?
+                .to_string();
+            if !established(
+                &render_tag(&primary.template, id, &version),
+                &Config::release_unit_tag_id(id, primary_id),
+                &version,
+            )? {
+                versions.insert(id.clone(), version);
+            }
+            continue;
+        }
+        let mut evidence = Vec::new();
+        for projection in &release_unit.projections {
+            if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
+                continue;
+            }
+            let relative = release_unit.path.join(&projection.file);
+            let text = std::fs::read_to_string(root.join(&relative))
+                .map_err(|error| Error::io(root.join(&relative), error))?;
+            evidence.push((
+                relative.clone(),
+                read_projection_version(root, &relative, projection, &text)?,
+            ));
+        }
+        let version = match (evidence.first(), explicit.get(id)) {
+            (None, None) => {
+                return Err(Error::Validation(format!(
+                    "tag-only release unit {id} requires --version {id}=X.Y.Z"
+                )))
+            }
+            (None, Some(version)) => version.clone(),
+            (Some((_, first)), explicit_version) => {
+                if evidence.iter().any(|(_, version)| version != first) {
+                    let detail = evidence
+                        .iter()
+                        .map(|(path, version)| format!("{}={version}", path.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(Error::Validation(format!(
+                        "baseline projections disagree for {id}: {detail}"
+                    )));
+                }
+                let inferred = Version::parse(first)?;
+                if explicit_version.is_some_and(|version| version != &inferred) {
+                    return Err(Error::Validation(format!(
+                        "explicit baseline for {id} disagrees with projection evidence {inferred}"
+                    )));
+                }
+                inferred
+            }
+        };
+        versions.insert(id.clone(), version.to_string());
+    }
+    for (id, tag) in &config.workspace_tags {
+        let canonical = Config::workspace_tag_id(id);
+        if repository.has_matching_tag(id, &tag.template)? {
+            let version = repository.current_version(id, &tag.template)?.to_string();
+            if !established(
+                &render_tag(&tag.template, id, &version),
+                &canonical,
+                &version,
+            )? {
+                versions.insert(canonical, version);
+            }
+            continue;
+        }
+        let version = explicit.get(&canonical).ok_or_else(|| {
+            Error::Validation(format!(
+                "workspace tag {id} requires --version {canonical}=X.Y.Z"
+            ))
+        })?;
+        versions.insert(canonical, version.to_string());
+    }
+    if versions.is_empty() {
+        return Err(Error::Validation(
+            "every release unit and workspace tag is already established by a tag record; nothing to baseline"
+                .to_owned(),
+        ));
+    }
+    Ok(versions)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn validate_existing_candidate(
     name: &str,
@@ -423,15 +447,15 @@ fn validate_existing_candidate(
             "existing tag {name} targets a different commit"
         )));
     }
-    let baseline = baseline.to_string();
-    for (field, expected) in [
-        ("tag-id", id),
-        ("version", version),
-        ("contract", contract),
-        ("plan-digest", digest),
-        ("baseline", baseline.as_str()),
+    let record = &record.record;
+    for (field, matches) in [
+        ("tag-id", record.tag_id == id),
+        ("version", record.version == version),
+        ("contract", record.contract == contract),
+        ("plan-digest", record.plan_digest == digest),
+        ("baseline", record.baseline == baseline),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "existing tag {name} has unexpected {field}"
             )));
@@ -440,7 +464,9 @@ fn validate_existing_candidate(
     Ok(())
 }
 
-fn verify_version_projections(
+/// Require every version-bearing projection of each Release Unit in
+/// `versions` to read that unit's version.
+pub(crate) fn verify_version_projections(
     root: &Path,
     config: &Config,
     versions: &BTreeMap<String, String>,
@@ -547,24 +573,27 @@ fn existing_head_release_digest(
         .tags()
         .map_err(|error| Error::Git(format!("failed to read tags: {error}")))?;
     let mut digest = None;
-    for reference in tags.flatten() {
+    for mut reference in tags.flatten() {
         let name = reference.name().shorten().to_string();
+        let target = reference
+            .peel_to_id()
+            .map_err(|error| Error::Git(format!("failed to peel tag {name}: {error}")))?
+            .detach();
+        // Only tags at HEAD can belong to this release; a tag elsewhere is not
+        // decoded, so its message cannot stop this release.
+        if target != head {
+            continue;
+        }
         let Some(record) = read_tag_record(repository, &name)? else {
             continue;
         };
-        let relevant = record.target == head
-            && record.fields.get("contract") == Some(&config.contract)
-            && record.fields.get("baseline").map(String::as_str) == Some("false")
-            && record
-                .fields
-                .get("tag-id")
-                .is_some_and(|id| canonical_ids.contains(id));
+        let relevant = record.record.contract == config.contract
+            && !record.record.baseline
+            && canonical_ids.contains(&record.record.tag_id);
         if !relevant {
             continue;
         }
-        let record_digest = record.fields.get("plan-digest").cloned().ok_or_else(|| {
-            Error::Validation(format!("existing release tag {name} has no plan-digest"))
-        })?;
+        let record_digest = record.record.plan_digest;
         if digest
             .as_ref()
             .is_some_and(|existing| existing != &record_digest)
@@ -610,9 +639,8 @@ fn supplied_release_plan(
     path: &Path,
 ) -> Result<ReleasePlan> {
     let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
-    let plan: ReleasePlan = serde_json::from_str(&text)
-        .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
-    plan.verify_digest()?;
+    let plan = ReleasePlan::decode(&text)
+        .map_err(|error| error.in_document(path.display().to_string()))?;
     if plan.contract != config.contract {
         return Err(Error::Validation(format!(
             "release plan contract {} does not match workspace {}",
@@ -634,41 +662,45 @@ fn supplied_release_plan(
     match existing_tag_set_digest(&repository, config, &plan_versions, false)? {
         Some(existing) if existing != plan.digest => {
             return Err(Error::Validation(
-                "supplied release plan disagrees with existing release records".to_owned(),
+                "supplied release plan disagrees with existing tag records".to_owned(),
             ));
         }
         Some(_) => {}
         None => {
-            let intents = match channel {
-                Some(_) => Intent::load_all(root, config)?,
-                None => recover_deleted_intents(root, config)?,
+            let (intents, source) = release_inputs(root, config, &repository, versions, channel)?;
+            if let Some(supplied) = &plan.source {
+                if source.as_ref() != Some(supplied) {
+                    return Err(Error::Validation(match source {
+                        Some(source) => format!(
+                            "supplied release plan source {} is not {}, the commit the release was planned from",
+                            supplied.commit, source.commit
+                        ),
+                        None => format!(
+                            "supplied release plan source {} is not the commit the release was planned from; the release commit has no parent",
+                            supplied.commit
+                        ),
+                    }));
+                }
+            }
+            let excluded_target = match partial_digest {
+                Some(_) => Some(
+                    repository
+                        .head_id()
+                        .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+                        .detach(),
+                ),
+                None => None,
             };
-            let generator_version = Some(plan.generator.version.as_str());
-            let expected = match partial_digest {
-                Some(_) => ReleasePlan::from_inputs_before(
-                    root,
-                    config,
-                    &intents,
-                    channel,
-                    Some(
-                        repository
-                            .head_id()
-                            .map_err(|error| {
-                                Error::Git(format!("failed to resolve HEAD: {error}"))
-                            })?
-                            .detach(),
-                    ),
-                    generator_version,
-                )?,
-                None => ReleasePlan::from_inputs_before(
-                    root,
-                    config,
-                    &intents,
-                    channel,
-                    None,
-                    generator_version,
-                )?,
-            };
+            let expected = ReleasePlan::from_inputs_before(
+                root,
+                config,
+                &intents,
+                channel,
+                excluded_target,
+                Some(plan.generator.version.as_str()),
+                None,
+            )?
+            .with_optional_members_of(&plan)?;
             if expected != plan {
                 return Err(Error::Validation(
                     "supplied release plan does not match the release recovered from intents"
@@ -694,14 +726,13 @@ fn collect_existing_digest(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(());
     };
-    let expected_baseline = expected_baseline.to_string();
-    for (field, expected) in [
-        ("tag-id", expected_id),
-        ("version", expected_version),
-        ("contract", expected_contract),
-        ("baseline", expected_baseline.as_str()),
+    for (field, matches) in [
+        ("tag-id", record.record.tag_id == expected_id),
+        ("version", record.record.version == expected_version),
+        ("contract", record.record.contract == expected_contract),
+        ("baseline", record.record.baseline == expected_baseline),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "release tag {name} has unexpected {field}"
             )));
@@ -712,7 +743,7 @@ fn collect_existing_digest(
             "release tag {name} targets a different commit"
         )));
     }
-    let record_digest = record.fields["plan-digest"].clone();
+    let record_digest = record.record.plan_digest;
     if digest
         .as_ref()
         .is_some_and(|digest| digest != &record_digest)
@@ -731,40 +762,66 @@ fn recovered_release_plan(
     versions: &BTreeMap<String, String>,
     channel: Option<&str>,
 ) -> Result<ReleasePlan> {
-    let intents = match channel {
-        Some(_) => Intent::load_all(root, config)?,
-        None => recover_deleted_intents(root, config)?,
-    };
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+    let (intents, source) = release_inputs(root, config, &repository, versions, channel)?;
     let partial_digest = existing_head_release_digest(&repository, config)?;
-    let plan = match &partial_digest {
-        Some(_) => ReleasePlan::from_inputs_before(
-            root,
-            config,
-            &intents,
-            channel,
-            Some(
-                repository
-                    .head_id()
-                    .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
-                    .detach(),
-            ),
-            None,
-        )?,
-        None => ReleasePlan::from_inputs(root, config, &intents, channel)?,
+    let excluded_target = match &partial_digest {
+        Some(_) => Some(
+            repository
+                .head_id()
+                .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+                .detach(),
+        ),
+        None => None,
     };
+    let plan = ReleasePlan::from_inputs_before(
+        root,
+        config,
+        &intents,
+        channel,
+        excluded_target,
+        None,
+        source,
+    )?;
     if partial_digest
         .as_ref()
         .is_some_and(|digest| digest != &plan.digest)
     {
         return Err(Error::Validation(
-            "existing release records disagree with the recovered release plan".to_owned(),
+            "existing tag records disagree with the recovered release plan".to_owned(),
         ));
     }
     verify_plan_release_unit_versions(versions, &plan)?;
     verify_materialized_release(root, config, &plan)?;
     Ok(plan)
+}
+
+/// The intents and source a release commit was planned from. The release
+/// commit materializes a plan computed from its parent: the commit before the
+/// one that deleted the intents, or, for a channel release, which keeps its
+/// intents, the commit before the one that materialized the release versions.
+fn release_inputs(
+    root: &Path,
+    config: &Config,
+    repository: &gix::Repository,
+    versions: &BTreeMap<String, String>,
+    channel: Option<&str>,
+) -> Result<(Vec<Intent>, Option<PlanSource>)> {
+    let (intents, source_commit) = match channel {
+        Some(_) => (
+            Intent::load_all(root, config)?,
+            materialized_release_parent(repository, config, versions)?,
+        ),
+        None => {
+            let (intents, parent) = recover_deleted_intents(root, config)?;
+            (intents, Some(parent))
+        }
+    };
+    let source = source_commit
+        .map(|commit| PlanSource::of_commit(repository, commit))
+        .transpose()?;
+    Ok((intents, source))
 }
 
 fn plan_versions(plan: &ReleasePlan) -> Result<BTreeMap<String, String>> {
@@ -836,7 +893,77 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
     Ok(())
 }
 
-fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> {
+/// Parent of the first-parent commit that materialized the release: walking
+/// back from HEAD, the first commit whose parent does not lead a releasing
+/// unit's changelog with that unit's release version. `None` when the
+/// materializing commit has no parent.
+pub(crate) fn materialized_release_parent(
+    repository: &gix::Repository,
+    config: &Config,
+    versions: &BTreeMap<String, String>,
+) -> Result<Option<gix::ObjectId>> {
+    let (release_unit_id, version) = versions
+        .iter()
+        .next()
+        .ok_or_else(|| Error::Validation("no applied release is available to tag".to_owned()))?;
+    let changelog = config
+        .release_units
+        .get(release_unit_id)
+        .ok_or_else(|| Error::Validation(format!("unknown release unit {release_unit_id}")))?
+        .path
+        .components()
+        .filter(|component| matches!(component, std::path::Component::Normal(_)))
+        .collect::<std::path::PathBuf>()
+        .join("CHANGELOG.md");
+    let mut release = repository
+        .head_commit()
+        .map_err(|error| Error::Git(format!("failed to resolve HEAD commit: {error}")))?;
+    loop {
+        let Some(parent_id) = release.parent_ids().next() else {
+            return Ok(None);
+        };
+        let parent = parent_id
+            .object()
+            .map_err(|error| Error::Git(format!("failed to read release parent: {error}")))?
+            .try_into_commit()
+            .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
+        if changelog_version_at(&parent, &changelog)?.as_deref() != Some(version.as_str()) {
+            return Ok(Some(parent.id));
+        }
+        release = parent;
+    }
+}
+
+/// Leading changelog version of the file at `path` in `commit`, or `None` when
+/// the file is absent or leads with no version.
+fn changelog_version_at(commit: &gix::Commit<'_>, path: &Path) -> Result<Option<String>> {
+    let tree = commit
+        .tree()
+        .map_err(|error| Error::Git(format!("failed to read commit tree: {error}")))?;
+    let Some(entry) = tree
+        .lookup_entry_by_path(path)
+        .map_err(|error| Error::Git(format!("failed to look up {}: {error}", path.display())))?
+    else {
+        return Ok(None);
+    };
+    let object = entry
+        .object()
+        .map_err(|error| Error::Git(format!("failed to read {}: {error}", path.display())))?;
+    let Ok(text) = std::str::from_utf8(&object.data) else {
+        return Ok(None);
+    };
+    Ok(leading_changelog_version(text)
+        .ok()
+        .flatten()
+        .map(|version| version.to_string()))
+}
+
+/// Intents deleted by the latest first-parent commit that deleted any, with
+/// the id of that commit's parent, from which the release was planned.
+pub(crate) fn recover_deleted_intents(
+    root: &Path,
+    config: &Config,
+) -> Result<(Vec<Intent>, gix::ObjectId)> {
     let repository = gix::discover(root)
         .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
     let mut boundaries = release_tag_targets(root, config, &repository)?;
@@ -864,11 +991,12 @@ fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> 
             .map_err(|error| Error::Git(format!("release parent is not a commit: {error}")))?;
         let deleted = deleted_intents_between(&parent, &release)?;
         if !deleted.is_empty() {
-            break deleted;
+            break (deleted, parent.id);
         }
         release = parent;
     };
-    deleted
+    let (deleted, source) = deleted;
+    let intents = deleted
         .into_iter()
         .map(|(path, bytes)| {
             let text = std::str::from_utf8(&bytes).map_err(|error| {
@@ -879,7 +1007,8 @@ fn recover_deleted_intents(root: &Path, config: &Config) -> Result<Vec<Intent>> 
             })?;
             Intent::parse(&path, text, config)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((intents, source))
 }
 
 fn release_tag_targets(
@@ -974,15 +1103,16 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
             // Lightweight history predating contract-aware records remains readable.
             continue;
         };
-        for (field, expected) in [
+        let primary = &primary_record.record;
+        for (field, matches) in [
             (
                 "tag-id",
-                Config::release_unit_tag_id(release_unit_id, primary_id),
+                primary.tag_id == Config::release_unit_tag_id(release_unit_id, primary_id),
             ),
-            ("version", version.to_string()),
-            ("contract", config.contract.clone()),
+            ("version", primary.version == version.to_string()),
+            ("contract", primary.contract == config.contract),
         ] {
-            if primary_record.fields.get(field) != Some(&expected) {
+            if !matches {
                 issues.push(format!(
                     "release unit {release_unit_id} primary tag {primary_name} has unexpected {field}"
                 ));
@@ -996,14 +1126,21 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
                 ));
                 continue;
             };
-            let expected_tag_id = Config::release_unit_tag_id(release_unit_id, tag_id);
-            if record.fields.get("tag-id") != Some(&expected_tag_id) {
+            if record.record.tag_id != Config::release_unit_tag_id(release_unit_id, tag_id) {
                 issues.push(format!(
                     "release unit {release_unit_id} tag {name} has unexpected tag-id"
                 ));
             }
-            for field in ["contract", "generator", "plan-digest", "version"] {
-                if record.fields.get(field) != primary_record.fields.get(field) {
+            for (field, matches) in [
+                ("contract", record.record.contract == primary.contract),
+                ("generator", record.record.generator == primary.generator),
+                (
+                    "plan-digest",
+                    record.record.plan_digest == primary.plan_digest,
+                ),
+                ("version", record.record.version == primary.version),
+            ] {
+                if !matches {
                     issues.push(format!(
                         "release unit {release_unit_id} tag {name} disagrees with primary tag {primary_name} on {field}"
                     ));
@@ -1019,35 +1156,10 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(issues)
 }
 
-/// Fields every Intentional tag record carries.
-const RECORD_FIELDS: [&str; 6] = [
-    "contract",
-    "generator",
-    "plan-digest",
-    "tag-id",
-    "version",
-    "baseline",
-];
-
-/// First required record field absent from `fields`, or `None` when the record
-/// is complete.
-fn missing_record_field(fields: &BTreeMap<String, String>) -> Option<&'static str> {
-    RECORD_FIELDS
-        .into_iter()
-        .find(|required| !fields.contains_key(*required))
-}
-
-/// Whether `fields` carries any Intentional record field, i.e. whether the tag
-/// claims to be an Intentional record at all.
-fn carries_record_field(fields: &BTreeMap<String, String>) -> bool {
-    RECORD_FIELDS
-        .into_iter()
-        .any(|required| fields.contains_key(required))
-}
-
 struct ParsedTagRecord {
+    /// Commit the tag peels to.
     target: gix::ObjectId,
-    fields: BTreeMap<String, String>,
+    record: TagRecord,
 }
 
 fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<ParsedTagRecord>> {
@@ -1074,31 +1186,33 @@ fn read_tag_record(repository: &gix::Repository, name: &str) -> Result<Option<Pa
     let decoded = tag
         .decode()
         .map_err(|error| Error::Git(format!("failed to decode tag {name}: {error}")))?;
-    let fields = decoded
-        .message
-        .to_string()
-        .lines()
-        .filter_map(|line| line.split_once(": "))
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
-        .collect::<BTreeMap<_, _>>();
-    let Some(missing) = missing_record_field(&fields) else {
-        return Ok(Some(ParsedTagRecord { target, fields }));
-    };
-    if !carries_record_field(&fields) {
-        // Pre-Intentional history: an annotated tag with no Intentional record
-        // field at all is tolerated exactly like a lightweight tag.
+    let message = decoded.message.to_string();
+    if !TagRecord::is_claimed_by(&message) {
+        // Pre-Intentional history: an annotated tag with no tag record field
+        // at all is tolerated exactly like a lightweight tag.
         return Ok(None);
     }
-    Err(Error::Validation(format!(
-        "annotated tag {name} is missing Intentional record field {missing}"
-    )))
+    let record = TagRecord::decode(&message).map_err(|error| match error {
+        Error::Validation(reason) => Error::Validation(format!("annotated tag {name}: {reason}")),
+        other => other.in_document(format!("of annotated tag {name}")),
+    })?;
+    if record
+        .target
+        .as_ref()
+        .is_some_and(|recorded| gix::ObjectId::from_hex(recorded.as_bytes()).ok() != Some(target))
+    {
+        return Err(Error::Validation(format!(
+            "annotated tag {name} records a target other than the commit it tags"
+        )));
+    }
+    Ok(Some(ParsedTagRecord { target, record }))
 }
 
-/// Whether tag `name` is an Intentional record that a baseline must leave
-/// alone: a release record, or a baseline record on an earlier commit. A
-/// baseline record at HEAD is a retry and stays in the baseline set;
-/// pre-Intentional history carries no record and stays as well. A record
-/// whose identity does not match the tag it occupies is refused.
+/// Whether tag `name` carries a tag record that a baseline must leave alone:
+/// a non-baseline tag record, or a baseline tag record on an earlier commit. A
+/// baseline tag record at HEAD is a retry and stays in the baseline set;
+/// pre-Intentional history carries no tag record and stays as well. A tag
+/// record whose identity does not match the tag it occupies is refused.
 fn is_established(
     repository: &gix::Repository,
     name: &str,
@@ -1109,26 +1223,18 @@ fn is_established(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(false);
     };
-    for (field, expected) in [
-        ("tag-id", expected_id),
-        ("version", expected_version),
-        ("contract", expected_contract),
+    for (field, matches) in [
+        ("tag-id", record.record.tag_id == expected_id),
+        ("version", record.record.version == expected_version),
+        ("contract", record.record.contract == expected_contract),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "release tag {name} has unexpected {field}"
             )));
         }
     }
-    let baseline = match record.fields.get("baseline").map(String::as_str) {
-        Some("true") => true,
-        Some("false") => false,
-        _ => {
-            return Err(Error::Validation(format!(
-                "release tag {name} has unexpected baseline"
-            )))
-        }
-    };
+    let baseline = record.record.baseline;
     let head = repository
         .head_id()
         .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
@@ -1174,13 +1280,13 @@ fn verify_existing_prerequisite(
             "prerequisite tag {prerequisite} targets a different commit"
         )));
     }
-    for (field, expected) in [
-        ("contract", contract),
-        ("plan-digest", digest),
-        ("tag-id", prerequisite),
-        ("version", version),
+    for (field, matches) in [
+        ("contract", record.record.contract == contract),
+        ("plan-digest", record.record.plan_digest == digest),
+        ("tag-id", record.record.tag_id == prerequisite),
+        ("version", record.record.version == version),
     ] {
-        if record.fields.get(field).map(String::as_str) != Some(expected) {
+        if !matches {
             return Err(Error::Validation(format!(
                 "prerequisite tag {prerequisite} has unexpected {field}"
             )));
@@ -1233,14 +1339,7 @@ fn tagger_signature<'a>(commit: &'a gix::Commit<'_>) -> Result<gix::actor::Signa
     })
 }
 
-fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: bool) -> String {
-    format!(
-        "intentional release record\n\ncontract: {contract}\ngenerator: intentional {}\nplan-digest: {digest}\ntag-id: {id}\nversion: {version}\nbaseline: {baseline}\n",
-        crate::VERSION
-    )
-}
-
-fn render_tag(template: &str, id: &str, version: &str) -> String {
+pub(crate) fn render_tag(template: &str, id: &str, version: &str) -> String {
     template.replace("{id}", id).replace("{version}", version)
 }
 
@@ -1269,21 +1368,6 @@ mod tests {
             leading_changelog_version(changelog).expect("valid changelog"),
             Some(Version::new(2, 1, 0))
         );
-    }
-
-    #[test]
-    fn canonical_message_contains_release_evidence() {
-        let message = tag_message(
-            "contract-1",
-            "sha256:abc",
-            "release-unit/sample/primary",
-            "1.2.0",
-            false,
-        );
-        assert!(message.contains("contract: contract-1"));
-        assert!(message.contains("plan-digest: sha256:abc"));
-        assert!(message.contains("version: 1.2.0"));
-        assert!(message.contains(&format!("generator: intentional {}", crate::VERSION)));
     }
 
     #[test]
@@ -1322,41 +1406,6 @@ mod tests {
         };
         let error = verify_plan_generator(&generator).expect_err("malformed version");
         assert!(error.to_string().contains("not valid SemVer"));
-    }
-
-    fn record_fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
-    }
-
-    #[test]
-    fn fieldless_tag_carries_no_record() {
-        let fields = record_fields(&[("Release", "1.0.0")]);
-        assert!(!carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), Some("contract"));
-    }
-
-    #[test]
-    fn partial_record_still_carries_a_record_field() {
-        let fields = record_fields(&[("contract", "contract-1"), ("version", "1.0.0")]);
-        assert!(carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), Some("generator"));
-    }
-
-    #[test]
-    fn complete_record_is_missing_nothing() {
-        let fields = record_fields(&[
-            ("contract", "contract-1"),
-            ("generator", "intentional 0.1.0"),
-            ("plan-digest", "sha256:abc"),
-            ("tag-id", "release-unit/sample/primary"),
-            ("version", "1.0.0"),
-            ("baseline", "true"),
-        ]);
-        assert!(carries_record_field(&fields));
-        assert_eq!(missing_record_field(&fields), None);
     }
 
     #[test]

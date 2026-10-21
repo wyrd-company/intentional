@@ -1,0 +1,74 @@
+$schema: https://refinery.systems/ontology/decision-record
+name: Use Release Unit GitHub Releases as durable release records
+
+relationships:
+  contextualizes:
+    - intent-driven-polyglot-release
+    - release-planning-and-records
+    - release-model
+
+description: >-
+  Releases need a durable record that serves both as an artifact vault and as a
+  consumer-facing release page. One global Release Plan can change several
+  Release Units whose versions differ. Published packages reach consumers
+  through mutable and independently operated registries, where a version can
+  appear late and can later be hidden, unlisted, yanked, or removed. The
+  durable record must bind source, version, and released files without making
+  continued registry availability part of the Release claim. A release process
+  outside Intentional creates the record, so the decision fixes where a record
+  lives and what it represents, not how a process builds it.
+
+considered-options:
+  1: >-
+    Use one global GitHub Release for the global Release Plan. This gives one
+    record per release operation, but places files whose versions differ from
+    the global tag under one consumer-facing version page, and one Release Unit
+    cannot complete its record without the others.
+  2: >-
+    Use one GitHub Release for every published package. Each page carries the
+    package's exact identity and version, but this duplicates records for
+    packages that share one versioning boundary, fragments Release Unit notes
+    and subscriptions, and turns derived packaging forms into separate consumer
+    releases.
+  3: >-
+    Use one GitHub Release for every affected Release Unit, on the Release
+    Unit's primary tag, with that unit's version and release notes. A Release
+    Unit whose tag records are its complete record says so in configuration
+    and has no GitHub Release.
+
+decision-outcome:
+  chosen-option: 3
+  justification: >-
+    Release Unit is Intentional's versioning and consumer-release boundary. Its
+    primary tag, release page, release notes, files, and version therefore
+    describe the same identity, and the Release Plan supplies each of them. One
+    Release Unit can complete its record without waiting for or inheriting the
+    failure of another. The durable Release claim is that a consumer can
+    validate downloaded content against what was released; registry
+    availability stays outside that claim. Documentation units and Dev
+    Container units release by tag alone, so the per-unit release-record policy
+    states which units have a record.
+
+expected-outcomes:
+  positive:
+    - >-
+      Every GitHub Release tag, page, note set, and version agrees with one
+      Release Unit's consumer-facing identity.
+    - >-
+      Each affected Release Unit can complete its record without waiting for
+      unrelated Release Units or registries.
+    - >-
+      Registry failure, propagation delay, unlisting, or removal does not
+      invalidate or rewrite the durable record.
+    - >-
+      Process templates and conformance checks read which units need a record
+      from one place, the Release Model.
+  negative:
+    - >-
+      One global Release Plan can produce several GitHub Release pages.
+    - >-
+      Repositories and subscribers receive one GitHub Release event for each
+      affected Release Unit rather than one event for the global operation.
+    - >-
+      Recovery in a release process must track each Release Unit's record
+      separately.

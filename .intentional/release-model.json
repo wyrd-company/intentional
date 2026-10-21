@@ -1,0 +1,59 @@
+{
+  "$schema": "https://intentional.foo/schemas/release-model/1",
+  "paths": {
+    "config": ".intentional/config.yml",
+    "intents": ".intentional/intents",
+    "model": ".intentional/release-model.json"
+  },
+  "release_groups": {
+    "fixed": [],
+    "linked": []
+  },
+  "release_units": {
+    "intentional": {
+      "changelog": "CHANGELOG.md",
+      "depends_on": [],
+      "disposition": "managed",
+      "ecosystems": [
+        "npm"
+      ],
+      "path": ".",
+      "projections": [
+        {
+          "adapter": "toml",
+          "file": "Cargo.toml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/workspace/package/version",
+          "workspace_file": "Cargo.toml"
+        },
+        {
+          "adapter": "toml",
+          "file": "crates/cli/Cargo.toml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/dependencies/intentional-core/version",
+          "workspace_file": "crates/cli/Cargo.toml"
+        },
+        {
+          "adapter": "npm",
+          "file": "npm/package.json",
+          "generic": false,
+          "mode": "committed",
+          "native_identity": "@wyrd-company/intentional",
+          "workspace_file": "npm/package.json"
+        }
+      ],
+      "release_record": "required",
+      "sources": [],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{version}"
+        }
+      }
+    }
+  },
+  "workspace_tags": {}
+}

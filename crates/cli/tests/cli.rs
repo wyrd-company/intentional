@@ -6,7 +6,7 @@
 use assert_cmd::Command;
 use intentional_core::{
     canonical_json, initialize, sha256_digest, Adapter, CandidateResolution, Generator, InitPlan,
-    InitState, PlanReleaseUnit, PlanTag, ProjectionMode, ReleasePlan,
+    InitState, PlanReleaseUnit, PlanSource, PlanTag, ProjectionMode, ReleasePlan,
 };
 use predicates::prelude::*;
 use serde::Serialize;
@@ -193,6 +193,7 @@ fn init_add_status_plan_apply_tag_round_trip() {
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",
@@ -364,7 +365,7 @@ fn configured_repository_without_detectable_manifests_is_a_no_op() {
     let result = initialize(&repo.root, false).expect("repeatable configured init");
     assert_eq!(result.state, InitState::Success);
     assert!(result.operations.is_empty());
-    assert!(result.plan.is_none());
+    assert_eq!(result.plan.as_ref().unwrap().state, InitState::Ready);
 }
 
 #[test]
@@ -1315,6 +1316,7 @@ fn prepare_applied_release(repo: &TestRepo) -> Value {
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",
@@ -1417,8 +1419,12 @@ fn legacy_taggerless_release_records_remain_valid_authority() {
 
 #[derive(Serialize)]
 struct PlanDigestPayload<'a> {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    schema: &'a Option<String>,
     contract: &'a str,
     generator: &'a Generator,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: &'a Option<PlanSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
     release_units: &'a [PlanReleaseUnit],
@@ -1429,6 +1435,8 @@ struct PlanDigestPayload<'a> {
 fn reseal_plan_with_generator(mut plan: ReleasePlan, generator_version: &str) -> ReleasePlan {
     plan.generator.version = generator_version.to_owned();
     let payload = PlanDigestPayload {
+        schema: &plan.schema,
+        source: &plan.source,
         contract: &plan.contract,
         generator: &plan.generator,
         channel: &plan.channel,
@@ -1444,6 +1452,15 @@ fn prepare_applied_release_with_prior_plan_generator(
     repo: &TestRepo,
     prior_generator: &str,
 ) -> ReleasePlan {
+    prepare_applied_release_with_plan(repo, |plan| {
+        reseal_plan_with_generator(plan, prior_generator)
+    })
+}
+
+fn prepare_applied_release_with_plan(
+    repo: &TestRepo,
+    reshape: impl FnOnce(ReleasePlan) -> ReleasePlan,
+) -> ReleasePlan {
     repo.write("package.json", &npm_manifest("0.0.0"));
     repo.commit("add fixture");
     initialize_independent(repo);
@@ -1455,6 +1472,7 @@ fn prepare_applied_release_with_prior_plan_generator(
             "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
         ),
     );
+    repo.cli().arg("model").assert().success();
     repo.cli()
         .args([
             "add",
@@ -1469,10 +1487,10 @@ fn prepare_applied_release_with_prior_plan_generator(
     let output = repo.cli().arg("plan").output().expect("plan command");
     assert!(output.status.success());
     let plan: ReleasePlan = serde_json::from_slice(&output.stdout).expect("plan JSON from CLI");
-    let plan = reseal_plan_with_generator(plan, prior_generator);
+    let plan = reshape(plan);
     fs::write(
         repo.root.join("release-plan.json"),
-        plan.to_canonical_json().expect("plan JSON"),
+        canonical_json(&plan).expect("plan JSON"),
     )
     .expect("write plan");
     repo.cli().arg("apply").assert().success();
@@ -1504,6 +1522,105 @@ fn accepts_prior_version_sealed_plan_for_self_hosted_release() {
 }
 
 #[test]
+fn accepts_sealed_plan_written_without_schema_and_source_members() {
+    let repo = TestRepo::new();
+    let plan = prepare_applied_release_with_plan(&repo, |mut plan| {
+        assert!(plan.schema.is_some() && plan.source.is_some());
+        plan.schema = None;
+        plan.source = None;
+        reseal_plan_with_generator(plan, "0.2.0")
+    });
+    let text = fs::read_to_string(repo.root.join("release-plan.json")).unwrap();
+    assert!(!text.contains("$schema") && !text.contains("\"source\""));
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json"])
+        .assert()
+        .success();
+    let release_record = raw_tag_object(&repo.root, "sample-library@0.0.1");
+    assert!(release_record.contains(&format!("plan-digest: {}", plan.digest)));
+}
+
+#[test]
+fn rejects_supplied_plan_whose_source_is_not_the_planned_commit() {
+    for altered in ["commit", "tree"] {
+        let repo = TestRepo::new();
+        prepare_applied_release_with_plan(&repo, |mut plan| {
+            let source = plan.source.as_mut().expect("plan source");
+            match altered {
+                "commit" => source.commit = git(&repo.root, &["rev-parse", "HEAD~1"]),
+                _ => source.tree = git(&repo.root, &["rev-parse", "HEAD~1^{tree}"]),
+            }
+            reseal_plan_with_generator(plan, env!("CARGO_PKG_VERSION"))
+        });
+        repo.cli()
+            .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "the commit the release was planned from",
+            ));
+        assert!(git(&repo.root, &["tag", "--list"]).is_empty(), "{altered}");
+    }
+}
+
+#[test]
+fn rejects_supplied_plan_with_another_schema_identity() {
+    let repo = TestRepo::new();
+    prepare_applied_release_with_plan(&repo, |mut plan| {
+        plan.schema = Some("https://intentional.foo/schemas/0.2/release-plan".to_owned());
+        reseal_plan_with_generator(plan, "0.2.0")
+    });
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::starts_with("Release Plan "))
+        .stderr(predicate::str::contains(
+            "release-plan.json violates its published schema at #/$schema: keyword `const`",
+        ));
+}
+
+#[test]
+fn a_malformed_tag_record_away_from_head_does_not_stop_tagging() {
+    let repo = TestRepo::new();
+    prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "unrelated-note",
+            "HEAD~1",
+            "-m",
+            "intentional release record\n\nnot a field\n",
+        ],
+    );
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .success();
+
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-f",
+            "-a",
+            "unrelated-note",
+            "-m",
+            "intentional release record\n\nnot a field\n",
+        ],
+    );
+    repo.cli()
+        .args(["tag", "--plan", "release-plan.json", "--dry-run"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "annotated tag unrelated-note: tag record line `not a field` is not a `key: value` field",
+        ));
+}
+
+#[test]
 fn rejects_future_plan_generator_version() {
     let repo = TestRepo::new();
     let plan = prepare_applied_release_with_prior_plan_generator(&repo, "99.0.0");
@@ -1519,9 +1636,11 @@ fn rejects_future_plan_generator_version() {
 fn rejects_supplied_plan_digest_mismatch() {
     let repo = TestRepo::new();
     prepare_applied_release_with_prior_plan_generator(&repo, "0.1.0");
-    let mut plan_text = fs::read_to_string(repo.root.join("release-plan.json")).unwrap();
-    plan_text = plan_text.replace("sha256:", "sha256:deadbeef");
-    fs::write(repo.root.join("release-plan.json"), plan_text).unwrap();
+    let mut plan: Value =
+        serde_json::from_str(&fs::read_to_string(repo.root.join("release-plan.json")).unwrap())
+            .unwrap();
+    plan["digest"] = Value::String(format!("sha256:{}", "0".repeat(64)));
+    fs::write(repo.root.join("release-plan.json"), plan.to_string()).unwrap();
     repo.cli()
         .args(["tag", "--plan", "release-plan.json", "--dry-run"])
         .assert()
@@ -1587,6 +1706,13 @@ fn annotated_tag_with_complete_intentional_record_is_validated() {
 
     repo.cli().arg("status").assert().success();
     repo.cli().arg("check").assert().success();
+    repo.cli()
+        .args(["verify", "sample@1.0.0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "guarantee: baseline-reconstruction",
+        ));
 }
 
 #[test]
@@ -1612,7 +1738,71 @@ fn annotated_tag_with_partial_intentional_record_is_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "annotated tag sample@1.0.0 is missing Intentional record field",
+            "annotated tag sample@1.0.0: tag record does not begin with the protocol header",
+        ));
+}
+
+#[test]
+fn a_recorded_tag_record_target_must_be_the_tagged_commit() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    let earlier = git(&repo.root, &["rev-parse", "HEAD"]);
+    repo.write("README.md", "Sample.\n");
+    repo.commit("add readme");
+    let tagged = git(&repo.root, &["rev-parse", "HEAD"]);
+    let record = |target: &str| {
+        format!(
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.2.0\nplan-digest: sha256:{}\ntag-id: release-unit/sample/primary\nversion: 1.0.0\ntarget: {target}\nbaseline: true\n",
+            "0".repeat(64)
+        )
+    };
+
+    git(
+        &repo.root,
+        &["tag", "-a", "sample@1.0.0", "-m", &record(&tagged)],
+    );
+    repo.cli().arg("status").assert().success();
+
+    git(
+        &repo.root,
+        &["tag", "-f", "-a", "sample@1.0.0", "-m", &record(&earlier)],
+    );
+    repo.cli()
+        .arg("status")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "annotated tag sample@1.0.0 records a target other than the commit it tags",
+        ));
+}
+
+#[test]
+fn annotated_tag_whose_tag_record_breaks_its_schema_fails_with_code_1() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "sample@1.0.0",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\nversion: 1.0.0\n",
+        ],
+    );
+
+    repo.cli()
+        .arg("status")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::starts_with(
+            "Tag Record of annotated tag sample@1.0.0 violates its published schema at #: keyword `required`",
         ));
 }
 
@@ -1645,6 +1835,146 @@ fn release_tagging_still_refuses_a_recordless_tag_at_the_release_version() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "existing tag mirror@1.0.1 is not an annotated Intentional record",
+            "existing tag mirror@1.0.1 carries no annotated tag record",
         ));
+}
+
+#[test]
+fn init_handoff_ready_without_model_and_no_op_rerun() {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.commit("configure fixture without manifests");
+    for _ in 0..2 {
+        repo.cli()
+            .arg("init")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("initialization state: ready\n"))
+            .stdout(predicate::str::contains(
+                "next: intentional model\nnext: apply a release process template\n",
+            ));
+        let output = repo
+            .cli()
+            .args(["init", "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+        assert_eq!(plan.state, InitState::Ready);
+        assert_eq!(plan.source_kind, "intentional");
+        assert_eq!(
+            plan.next_actions,
+            ["intentional model", "apply a release process template"]
+        );
+        assert!(plan.planned_operations.is_empty());
+        assert!(plan.inferred_config.release_units.contains_key("sample"));
+        assert!(!repo.root.join(".intentional/release-model.json").exists());
+    }
+}
+
+#[test]
+fn init_handoff_ready_with_committed_model_names_only_template() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    initialize_independent(&repo);
+    repo.commit("commit initialized fixture and model");
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: apply a release process template\n",
+        ))
+        .stdout(predicate::str::contains("next: intentional model").not());
+    let output = repo
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan.next_actions, ["apply a release process template"]);
+}
+
+#[test]
+fn init_handoff_needs_input_and_invalid_repository_name_no_actions() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.cli()
+        .arg("init")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "initialization state: needs-input\n",
+        ))
+        .stdout(predicate::str::contains("next:").not());
+    let output = repo
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .code(2)
+        .get_output()
+        .stdout
+        .clone();
+    let json: Value = serde_json::from_slice(&output).unwrap();
+    assert!(json.get("next-actions").is_none());
+    let invalid = tempfile::tempdir().unwrap();
+    for args in [vec!["init"], vec!["init", "--json"]] {
+        Command::new(assert_cmd::cargo::cargo_bin!("intentional"))
+            .arg("-C")
+            .arg(invalid.path())
+            .args(args)
+            .assert()
+            .code(1)
+            .stdout("");
+    }
+}
+
+#[test]
+fn init_handoff_config_write_includes_model_and_feature_policy_required() {
+    let repo = TestRepo::new();
+    repo.write(
+        "devcontainer-feature.json",
+        &devcontainer_manifest("sample-feature", "1.0.0"),
+    );
+    repo.cli().arg("init").assert().code(2);
+    resolve_plan(&repo, |_| CandidateResolution::Independent {
+        release_unit: "sample-feature".to_owned(),
+    });
+    // A preview describes the post-operation state without creating the model yet.
+    let output = repo
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plan: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(plan.source_kind, "workspace");
+    assert_eq!(plan.next_actions, ["apply a release process template"]);
+    assert!(!repo.root.join(".intentional/release-model.json").exists());
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: apply a release process template\n",
+        ))
+        .stdout(predicate::str::contains("next: intentional model").not());
+    let config = intentional_core::Config::load(&repo.root).unwrap();
+    assert_eq!(
+        config.release_units["sample-feature"].release_record,
+        intentional_core::ReleaseRecordPolicy::Required
+    );
+    assert!(
+        !fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("release-record:")
+    );
+    assert!(repo.root.join(".intentional/release-model.json").is_file());
 }

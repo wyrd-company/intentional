@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// One planned file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FileWrite {
     /// Workspace-relative target.
     pub path: PathBuf,
@@ -28,6 +29,7 @@ pub struct FileWrite {
 
 /// Complete tree mutation produced by `apply`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ApplyResult {
     /// Changed or created files in path order.
     pub writes: Vec<FileWrite>,

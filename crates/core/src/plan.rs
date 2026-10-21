@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: release-plan
 // ---
 
 //! Deterministic release planning, changelog rendering, and digest sealing.
@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Bump, TagPhase, TagRole};
+use crate::schema::{self, SchemaRecord};
 use crate::version::{
     aggregate_bumps, bump_version_with_mapping, resolve_versions, VersionRepository,
 };
@@ -19,8 +20,81 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-/// One release unit in a canonical release plan.
+/// Release Plan schema identifier written into every plan.
+pub const RELEASE_PLAN_SCHEMA: &str = "https://intentional.foo/schemas/0.3/release-plan";
+
+/// The commit and tree a release plan was computed from.
+///
+/// Read it from [`ReleasePlan::source`]. Code outside this crate cannot build
+/// it with a struct literal, so that a later member is not a breaking change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::PlanSource;
+///
+/// fn source(commit: String, tree: String) -> PlanSource {
+///     PlanSource { commit, tree }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PlanSource {
+    /// Source commit object id.
+    pub commit: String,
+    /// Tree object id of the source commit.
+    pub tree: String,
+}
+
+impl PlanSource {
+    /// Read the source identity of `commit` in `repository`.
+    pub(crate) fn of_commit(repository: &gix::Repository, commit: gix::ObjectId) -> Result<Self> {
+        let tree = repository
+            .find_commit(commit)
+            .map_err(|error| Error::Git(format!("failed to read source commit: {error}")))?
+            .tree_id()
+            .map_err(|error| Error::Git(format!("failed to read source tree: {error}")))?;
+        Ok(Self {
+            commit: commit.to_string(),
+            tree: tree.to_string(),
+        })
+    }
+
+    /// Source identity of HEAD, or `None` when the repository has no commit.
+    pub(crate) fn at_head(root: &Path) -> Result<Option<Self>> {
+        let repository = gix::discover(root)
+            .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
+        let head = repository
+            .head()
+            .map_err(|error| Error::Git(format!("failed to resolve HEAD: {error}")))?
+            .id()
+            .map(|id| id.detach());
+        head.map(|commit| Self::of_commit(&repository, commit))
+            .transpose()
+    }
+}
+
+/// One release unit in a canonical release plan.
+///
+/// Read it from [`ReleasePlan::release_units`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::{Bump, PlanReleaseUnit};
+///
+/// fn unit(id: String, bump: Bump) -> PlanReleaseUnit {
+///     PlanReleaseUnit {
+///         id,
+///         old_version: String::new(),
+///         new_version: String::new(),
+///         bump,
+///         contributing_intent_ids: Vec::new(),
+///         tag_ids: Vec::new(),
+///         release_notes: String::new(),
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanReleaseUnit {
     /// Release-unit id.
     pub id: String,
@@ -39,7 +113,20 @@ pub struct PlanReleaseUnit {
 }
 
 /// Generator identity embedded inside the sealed payload.
+///
+/// Read it from [`ReleasePlan::generator`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::Generator;
+///
+/// fn generator(tool: String, version: String) -> Generator {
+///     Generator { tool, version }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Generator {
     /// Tool name.
     pub tool: String,
@@ -48,7 +135,27 @@ pub struct Generator {
 }
 
 /// One annotated tag record in creation order.
+///
+/// Read it from [`ReleasePlan::tags`]. Code outside this crate cannot build it
+/// with a struct literal, so that a later member is not a breaking change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::PlanTag;
+///
+/// fn tag(id: String, name: String, version: String) -> PlanTag {
+///     PlanTag {
+///         id,
+///         name,
+///         version,
+///         release_unit: None,
+///         role: None,
+///         require_phase: None,
+///         tag_after: Vec::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PlanTag {
     /// Canonical configuration tag id.
     pub id: String,
@@ -71,14 +178,45 @@ pub struct PlanTag {
 }
 
 /// Canonical digest-bound release plan.
+///
+/// Compute a plan with [`ReleasePlan::build`] or [`ReleasePlan::from_inputs`],
+/// or read one with [`ReleasePlan::decode`]. Code outside this crate cannot
+/// build it with a struct literal, so that a later member is not a breaking
+/// change:
+///
+/// ```compile_fail,E0639
+/// use intentional_core::{Generator, PlanReleaseUnit, PlanTag, ReleasePlan};
+///
+/// fn plan(generator: Generator, units: Vec<PlanReleaseUnit>, tags: Vec<PlanTag>) -> ReleasePlan {
+///     ReleasePlan {
+///         schema: None,
+///         digest: String::new(),
+///         contract: String::new(),
+///         generator,
+///         source: None,
+///         channel: None,
+///         release_units: units,
+///         tags,
+///         tag_order: Vec::new(),
+///     }
+/// }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReleasePlan {
+    /// Release Plan schema identity. Plans written before this member existed omit it.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// SHA-256 digest of the canonical plan payload excluding this seal.
     pub digest: String,
     /// Interpretation contract used to compute the plan.
     pub contract: String,
     /// Generator identity included in the digest.
     pub generator: Generator,
+    /// Commit and tree the plan was computed from. Absent without a commit and
+    /// in plans written before this member existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PlanSource>,
     /// Optional release channel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
@@ -92,8 +230,12 @@ pub struct ReleasePlan {
 
 #[derive(Serialize)]
 struct PlanPayload<'a> {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    schema: &'a Option<String>,
     contract: &'a str,
     generator: &'a Generator,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: &'a Option<PlanSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: &'a Option<String>,
     release_units: &'a [PlanReleaseUnit],
@@ -102,12 +244,25 @@ struct PlanPayload<'a> {
 }
 
 /// One release note assigned to a semantic bump group.
+///
+/// Build it with [`ChangelogEntry::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ChangelogEntry {
     /// Section group.
     pub bump: Bump,
     /// Markdown changelog prose.
     pub text: String,
+}
+
+impl ChangelogEntry {
+    /// An entry in the `bump` group with `text` as its prose.
+    pub fn new(bump: Bump, text: impl Into<String>) -> Self {
+        Self {
+            bump,
+            text: text.into(),
+        }
+    }
 }
 
 impl ReleasePlan {
@@ -125,7 +280,8 @@ impl ReleasePlan {
         intents: &[Intent],
         channel: Option<&str>,
     ) -> Result<Self> {
-        Self::from_inputs_before(root, config, intents, channel, None, None)
+        let source = PlanSource::at_head(root)?;
+        Self::from_inputs_before(root, config, intents, channel, None, None, source)
     }
 
     pub(crate) fn from_inputs_before(
@@ -135,6 +291,7 @@ impl ReleasePlan {
         channel: Option<&str>,
         excluded_target: Option<gix::ObjectId>,
         generator_version: Option<&str>,
+        source: Option<PlanSource>,
     ) -> Result<Self> {
         if channel.is_some_and(str::is_empty) {
             return Err(Error::Validation("channel must not be empty".to_owned()));
@@ -267,43 +424,91 @@ impl ReleasePlan {
             tool: "intentional".to_owned(),
             version: generator_version.unwrap_or(crate::VERSION).to_owned(),
         };
-        let payload = PlanPayload {
-            contract: &config.contract,
-            generator: &generator,
-            channel: &channel,
-            release_units: &release_units,
-            tags: &tags,
-            tag_order: &tag_order,
-        };
-        let payload_json = canonical_json(&payload)?;
-        let digest = sha256_digest(payload_json.as_bytes());
-        Ok(Self {
-            digest,
+        let mut plan = Self {
+            schema: Some(RELEASE_PLAN_SCHEMA.to_owned()),
+            digest: String::new(),
             contract: config.contract.clone(),
             generator,
+            source,
             channel,
             release_units,
             tags,
             tag_order,
-        })
+        };
+        plan.digest = plan.payload_digest()?;
+        Ok(plan)
     }
 
-    /// Serialize this plan as compact canonical JSON with sorted object keys.
-    pub fn to_canonical_json(&self) -> Result<String> {
-        canonical_json(self)
+    /// Carry over the optional members as `supplied` records them and reseal.
+    /// A plan written before `$schema` and `source` existed then compares
+    /// equal to a reconstruction exactly when every other member agrees.
+    pub(crate) fn with_optional_members_of(mut self, supplied: &Self) -> Result<Self> {
+        if supplied.schema.is_none() {
+            self.schema = None;
+        }
+        self.source = supplied.source.clone();
+        self.digest = self.payload_digest()?;
+        Ok(self)
     }
 
-    /// Verify that the embedded digest seals the complete plan payload.
-    pub fn verify_digest(&self) -> Result<()> {
+    /// Digests this plan would carry under `generator_version` in each shape a
+    /// producer writes: with `$schema` and `source`, with neither (released
+    /// `0.2.0`), and with `$schema` only (no commit to name).
+    pub(crate) fn candidate_digests(&self, generator_version: &str) -> Result<Vec<String>> {
+        let mut plan = self.clone();
+        plan.generator.version = generator_version.to_owned();
+        let mut digests = vec![plan.payload_digest()?];
+        let schema = plan.schema.take();
+        let source = plan.source.take();
+        if schema.is_some() || source.is_some() {
+            digests.push(plan.payload_digest()?);
+        }
+        if schema.is_some() && source.is_some() {
+            plan.schema = schema;
+            digests.push(plan.payload_digest()?);
+        }
+        Ok(digests)
+    }
+
+    fn payload_digest(&self) -> Result<String> {
         let payload = PlanPayload {
+            schema: &self.schema,
             contract: &self.contract,
             generator: &self.generator,
+            source: &self.source,
             channel: &self.channel,
             release_units: &self.release_units,
             tags: &self.tags,
             tag_order: &self.tag_order,
         };
-        let actual = sha256_digest(canonical_json(&payload)?.as_bytes());
+        Ok(sha256_digest(canonical_json(&payload)?.as_bytes()))
+    }
+
+    /// Encode this plan as its canonical document: compact JSON with object
+    /// keys sorted at every depth. The document must satisfy the published
+    /// Release Plan schema.
+    pub fn encode(&self) -> Result<String> {
+        let document = serde_json::to_value(self)
+            .map_err(|error| Error::Validation(format!("JSON serialization failed: {error}")))?;
+        schema::validate(SchemaRecord::ReleasePlan, &document)?;
+        canonical_json(&document)
+    }
+
+    /// Decode a Release Plan document. The document must satisfy the published
+    /// Release Plan schema, and its digest must seal its payload.
+    pub fn decode(text: &str) -> Result<Self> {
+        let document: Value = serde_json::from_str(text)
+            .map_err(|error| Error::Validation(format!("release plan is not JSON: {error}")))?;
+        schema::validate(SchemaRecord::ReleasePlan, &document)?;
+        let plan: Self = serde_json::from_value(document)
+            .map_err(|error| Error::Validation(format!("invalid release plan: {error}")))?;
+        plan.verify_digest()?;
+        Ok(plan)
+    }
+
+    /// Verify that the embedded digest seals the complete plan payload.
+    pub fn verify_digest(&self) -> Result<()> {
+        let actual = self.payload_digest()?;
         if actual != self.digest {
             return Err(Error::Validation(format!(
                 "release plan digest mismatch: expected {}, computed {actual}",
@@ -328,6 +533,53 @@ pub(crate) fn lower_hex(bytes: &[u8]) -> String {
             output
         },
     )
+}
+
+#[cfg(test)]
+mod schema_tests {
+    #[test]
+    fn published_release_plan_schema_carries_only_release_contracts() {
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/release-plan.schema.yml"
+        ))
+        .expect("release-plan schema parses");
+        let required: Vec<&str> = schema["required"]
+            .as_sequence()
+            .expect("required release-plan fields")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        assert_eq!(
+            required,
+            [
+                "digest",
+                "contract",
+                "generator",
+                "release_units",
+                "tags",
+                "tag_order"
+            ]
+        );
+        for field in [
+            "workflow",
+            "packages",
+            "custom-release-gates",
+            "release-units",
+        ] {
+            assert!(schema["properties"].get(field).is_none(), "{field}");
+        }
+        let release_unit = &schema["$defs"]["release-unit"];
+        assert_eq!(
+            release_unit["properties"]["id"]["$ref"].as_str(),
+            Some("#/$defs/stable-id")
+        );
+        assert!(release_unit["properties"].get("release-record").is_none());
+        assert!(release_unit["properties"].get("release_record").is_none());
+        assert_eq!(
+            schema["$defs"]["tag"]["properties"]["require_phase"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/tag-phase")
+        );
+    }
 }
 
 /// Serialize a value as compact JSON with recursively sorted object keys.
@@ -427,10 +679,7 @@ fn note_entries(
             intent
                 .release_units
                 .get(release_unit_id)
-                .map(|bump| ChangelogEntry {
-                    bump: *bump,
-                    text: intent.message.clone(),
-                })
+                .map(|bump| ChangelogEntry::new(*bump, intent.message.clone()))
         })
         .collect::<Vec<_>>();
     for dependency in &config.release_units[release_unit_id].depends_on {
@@ -572,6 +821,8 @@ mod tests {
         let tags = Vec::new();
         let order = Vec::new();
         let payload = PlanPayload {
+            schema: &None,
+            source: &None,
             contract: "contract-1",
             generator: &generator,
             channel: &None,

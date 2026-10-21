@@ -31,3 +31,5 @@ if rg -n '\]\((?!https?://|assets/demo\.gif)[^)]+\)' docs/*.md --pcre2; then
   echo "Unexpected local documentation link; add it to the validator." >&2
   exit 1
 fi
+
+bash scripts/check-retired-terms.sh

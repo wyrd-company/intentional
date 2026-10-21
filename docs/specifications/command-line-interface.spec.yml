@@ -1,0 +1,564 @@
+$schema: https://commonclischema.org/draft/2026-04/schema
+relationships:
+  realizes: command-line-interface
+tool:
+  name: intentional
+  mode: interactive
+  summary: Manage intent-driven polyglot releases.
+global-options:
+  - name: directory
+    flags:
+      - -C
+      - --directory
+    kind: option
+    description: Workspace directory used as the repository root for the command.
+    required: false
+    repeatable: false
+    default: .
+    value:
+      type: directory
+      arity:
+        min: 1
+        max: 1
+commands:
+  - name: init
+    summary: Discover and reconcile the complete Release Workspace.
+    mode: non-interactive
+    options:
+      - name: take-over
+        flags:
+          - --take-over
+        kind: flag
+        description: Apply the explicit authority handoff from a ready imported-tool plan.
+        required: false
+        repeatable: false
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit the structured Initialization Plan result.
+        required: false
+        repeatable: false
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Print planned mutations without changing the workspace.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: human-readable
+          description: >-
+            Prints discovery evidence, recommendations, resolutions, diagnostics,
+            planned operations, ordered next actions, and any unresolved plan path.
+          machine-readable: false
+        - name: initialization-plan
+          description: Prints the schema-backed Initialization Plan selected by --json.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: Reconciliation completed, produced no changes, or was previewed successfully.
+        - code: 1
+          meaning: Repository evidence, configuration, plan input, or mutation was invalid.
+        - code: 2
+          meaning: The Initialization Plan requires owner resolutions or verified repository edits.
+    examples:
+      - intentional init
+      - intentional init --json
+      - intentional init --take-over --dry-run
+    notes:
+      - >-
+        Initialization configures no release process and does not run a
+        template tool. Initialization writes the Release Model whenever it writes
+        configuration. Every ready result names applying a release process template;
+        if the model remains absent after planned operations, it first names
+        intentional model. Needs-input results name no handoff. Ordinary success
+        with --json emits a ready Initialization Plan with inferred-config and
+        optional ordered next-actions. A ready imported plan counts its planned
+        takeover model write before takeover is applied and names only the template.
+        Human and JSON state labels are ready or needs-input.
+        Takeover prints its post-commit baseline
+        command before the handoff.
+  - name: add
+    summary: Author a pending Change Intent.
+    mode: interactive
+    options:
+      - name: release-unit
+        flags:
+          - --release-unit
+        kind: option
+        description: Release Unit identifier and semantic-version bump separated by a colon.
+        required: false
+        repeatable: true
+        examples:
+          - example-unit:minor
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: message
+        flags:
+          - --message
+        kind: option
+        description: Changelog prose for the Change Intent.
+        required: false
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Print the planned Change Intent write without changing the workspace.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: human-readable
+          description: Prompts for omitted values and prints the resulting operation.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: The Change Intent was written or previewed.
+        - code: 1
+          meaning: Input, workspace state, or file mutation was invalid.
+    examples:
+      - intentional add
+      - >-
+        intentional add --release-unit example-unit:minor --message "Describe
+        the user-visible change."
+    notes:
+      - Omitted release-unit and message values are collected interactively.
+      - Duplicate Release Unit identifiers fail.
+  - name: status
+    summary: Show pending intent and computed Release Unit versions.
+    mode: non-interactive
+    options:
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit structured workspace status including release_model_stale.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: human-readable
+          description: >-
+            Prints pending Change Intents, missing baselines, tag-record issues,
+            computed versions, projection drift, and a stale Release Model.
+          machine-readable: false
+        - name: json
+          description: >-
+            With --json, prints pending intents, release-unit versions, drift,
+            missing baselines, tag-record issues, and the boolean
+            release_model_stale as one JSON object.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: Workspace status was computed and printed.
+        - code: 1
+          meaning: Workspace state was invalid or could not be read.
+    examples:
+      - intentional status
+      - intentional status --json
+  - name: plan
+    summary: Emit the canonical digest-bound Release Plan.
+    mode: non-interactive
+    options:
+      - name: channel
+        flags:
+          - --channel
+        kind: option
+        description: Release channel identifier.
+        required: false
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+    output:
+      modes:
+        - name: release-plan
+          description: Prints the compact canonical Release Plan as JSON.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: The Release Plan was computed and printed.
+        - code: 1
+          meaning: Planning input or workspace state was invalid.
+    examples:
+      - intentional plan
+      - intentional plan --channel preview
+  - name: apply
+    summary: Materialize a candidate Release tree.
+    mode: non-interactive
+    options:
+      - name: channel
+        flags:
+          - --channel
+        kind: option
+        description: Release channel identifier.
+        required: false
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Print materialization operations without changing the workspace.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: operations
+          description: Prints the ordered operations performed or previewed.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: Candidate Release materialization completed or was previewed.
+        - code: 1
+          meaning: Planning, materialization, or workspace validation failed.
+    examples:
+      - intentional apply
+      - intentional apply --channel preview --dry-run
+  - name: stamp
+    summary: Write computed versions into injected projections.
+    mode: non-interactive
+    options:
+      - name: prerelease
+        flags:
+          - --prerelease
+        kind: option
+        description: Prerelease identifier composed with first-parent commit height.
+        required: false
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Print projection writes without changing the workspace.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: operations
+          description: Prints the ordered projection writes performed or previewed.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: Injected projections were stamped or previewed.
+        - code: 1
+          meaning: Version calculation, projection validation, or mutation failed.
+    examples:
+      - intentional stamp
+      - intentional stamp --prerelease preview --dry-run
+    notes:
+      - >-
+        Without --prerelease, stamp writes the next intent-derived semantic
+        version without a prerelease identifier or commit-height component.
+  - name: tag
+    summary: Establish or extend annotated tag-backed Release authority.
+    mode: non-interactive
+    options:
+      - name: channel
+        flags:
+          - --channel
+        kind: option
+        description: Release channel of the applied Release, such as beta.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - baseline
+        examples:
+          - beta
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: baseline
+        flags:
+          - --baseline
+        kind: flag
+        description: Establish initial annotated tag authority from projections.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - plan
+        groups:
+          - tag-mode
+      - name: version
+        flags:
+          - --version
+        kind: option
+        description: Explicit baseline version assignment.
+        required: false
+        repeatable: true
+        requires:
+          - baseline
+        examples:
+          - example-unit=1.2.3
+          - workspace/release=1.2.3
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: phase
+        flags:
+          - --phase
+        kind: option
+        description: >-
+          Executor phase declaration that selects the tags configured with the
+          same `require-phase`.
+        required: false
+        repeatable: false
+        examples:
+          - before-publication
+          - after-publication
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: plan
+        flags:
+          - --plan
+        kind: option
+        description: Digest-bound Release Plan to verify before creating Release tags.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - baseline
+        groups:
+          - tag-mode
+        value:
+          type: file
+          arity:
+            min: 1
+            max: 1
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Print tag operations without changing Git state.
+        required: false
+        repeatable: false
+    groups:
+      - name: tag-mode
+        members:
+          - baseline
+          - plan
+        rule: exactly-one
+        description: Tag creation either establishes a baseline or verifies a Release Plan.
+    output:
+      modes:
+        - name: operations
+          description: Prints each annotated tag operation performed or previewed.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: Selected tag records were verified, created, or previewed.
+        - code: 1
+          meaning: Arguments, Release state, plan verification, or tag creation failed.
+    examples:
+      - intentional tag --plan release-plan.json
+      - intentional tag --plan release-plan.json --phase before-publication
+      - intentional tag --baseline --version example-unit=1.2.3
+    notes:
+      - Relative plan paths resolve from --directory.
+      - Repeating --version for the same identity fails.
+      - >-
+        Without --phase, the command creates only tags that require no phase.
+        A phase declaration states what the surrounding process has completed;
+        Intentional does not observe publication.
+  - name: check
+    summary: Validate the Release Workspace and its working-tree Release Model.
+    mode: non-interactive
+    output:
+      modes:
+        - name: human-readable
+          description: Prints conformance diagnostics or a successful check result.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: Release Workspace conformance passed.
+        - code: 1
+          meaning: >-
+            Configuration, intent, planning, tag, or Release Model conformance
+            failed.
+    examples:
+      - intentional check
+    notes:
+      - >-
+        When `.intentional/release-model.json` exists, check compares its bytes
+        with a fresh projection of working-tree inputs. A difference, invalid
+        JSON, or a file outside the current contract is the `release-model-stale`
+        error; run `intentional model` to repair it. An absent model is not a
+        diagnostic. A dirty working tree is not itself a diagnostic.
+  - name: verify
+    summary: Verify one established Release or baseline from its annotated tag.
+    mode: non-interactive
+    positional-arguments:
+      - name: tag
+        description: Exact annotated tag that identifies the Release, Release Unit, or baseline.
+        position: 0
+        required: true
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+    options:
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit stable structured verification results.
+        required: false
+        repeatable: false
+    output:
+      modes:
+        - name: human-readable
+          description: >-
+            Reports verified identities, guarantees, and historical claims.
+          machine-readable: false
+        - name: json
+          description: >-
+            Prints structured verification status, verified identities,
+            guarantees, and stable diagnostics.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: Every verification requested by the invocation passed.
+        - code: 1
+          meaning: Tag, plan, baseline, or materialized source verification failed.
+    examples:
+      - intentional verify example-unit@1.2.3
+      - intentional verify example-unit@1.2.3 --json
+    notes:
+      - >-
+        Verification needs Git history and no hosting-platform credentials.
+        It reconstructs the canonical plan and materialized source from the
+        selected tag and verifies the complete core identity-tag set.
+      - >-
+        For a baseline tag record, it recomputes the baseline set at the
+        tagged commit and verifies the baseline digest and every tag that
+        establishing the baseline creates. A stream leaves the set only
+        through a tag record under the fixed tagger that agrees with its tag
+        and sits on an earlier commit or is a tag of a Release reconstructed
+        at the baseline commit. A tag without a tag record supplies its
+        version and is not verified as a baseline tag. Each Release Unit whose
+        primary tag at the baseline commit carries a baseline tag record must
+        have every version-bearing projection there at its baseline version.
+        Verification reads Git history only, so a baseline created from
+        uncommitted configuration or projection versions fails.
+      - >-
+        Error diagnostic codes are `tag-missing`, `tag-not-annotated`,
+        `tag-record-missing`, `tag-record-invalid`, `tagger-mismatch`,
+        `reconstruction-failed`, `plan-digest-mismatch`,
+        `baseline-digest-mismatch`, `baseline-projection-mismatch`,
+        `materialized-tree-mismatch`,
+        `identity-tag-missing`, and `identity-tag-mismatch`. A recomputed
+        digest that differs for a tag record naming another producing version
+        is the advisory `producing-version-differs`, which does not fail
+        verification.
+  - name: model
+    summary: Write the Release Model that release process templates read.
+    mode: non-interactive
+    options:
+      - name: dry-run
+        flags:
+          - --dry-run
+        kind: flag
+        description: Report the operation without writing the Release Model.
+        required: false
+        repeatable: false
+      - name: stdout
+        flags:
+          - --stdout
+        kind: flag
+        description: Write the Release Model to standard output and nothing to the tree.
+        required: false
+        repeatable: false
+      - name: json
+        flags:
+          - --json
+        kind: flag
+        description: Emit structured operation, path, and dry_run results.
+        required: false
+        repeatable: false
+        conflicts-with:
+          - stdout
+    output:
+      modes:
+        - name: operation
+          description: >-
+            Reports `written` when `.intentional/release-model.json` or only its
+            root `.gitattributes` LF checkout rule needs a change; reports
+            `unchanged` when both are current. Model and initialization model
+            writes ensure `.intentional/release-model.json text eol=lf`,
+            preserving unrelated attributes bytes. Dry-run changes neither file.
+          machine-readable: false
+        - name: release-model
+          description: Prints the canonical Release Model document selected by --stdout.
+          machine-readable: true
+        - name: json
+          description: Prints operation, path, and dry_run as JSON.
+          machine-readable: true
+      exit-codes:
+        - code: 0
+          meaning: The Release Model was written, already current, previewed, or printed.
+        - code: 1
+          meaning: Release Workspace input was invalid or the operation failed.
+    examples:
+      - intentional model
+      - intentional model --dry-run
+      - intentional model --stdout
+      - intentional model --json
+    notes:
+      - >-
+        The command validates the Release Workspace first and writes nothing
+        when validation fails.
+      - >-
+        The model is a pure function of tracked files at one commit. No
+        command reads it back as input.
+  - name: skill
+    summary: Print the agent-facing Intentional workflow skill.
+    mode: non-interactive
+    output:
+      modes:
+        - name: markdown
+          description: Prints the complete embedded SKILL.md document.
+          machine-readable: false
+      exit-codes:
+        - code: 0
+          meaning: The embedded workflow skill was printed.
+        - code: 1
+          meaning: Standard output could not be written.
+    examples:
+      - intentional skill
+notes:
+  - >-
+    Help and version flags follow the command parser's standard behavior and are
+    omitted from individual command definitions.
+  - >-
+    Every command requires Git and no hosting platform. The surrounding release
+    process owns commits, pushes, release records, and publication.

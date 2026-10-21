@@ -1,0 +1,130 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: intent-driven-polyglot-release
+  realizes: intentional
+objective: >-
+  Compute one deterministic semantic version and changelog for each releasing
+  Release Unit from annotated tag authority, pending Change Intents, dependency
+  effects, and release-group constraints.
+proposed-design:
+  identity-and-authority: >-
+    Release Unit identity is stable workspace configuration and independent of
+    ecosystem package names. One Release Unit can own several projections while
+    retaining one version and changelog. Exactly one configured annotated tag
+    stream is primary and supplies current-version authority. Projection tags
+    record the same Release Unit release in other namespaces. Workspace tags
+    record repository-wide release streams without becoming Release Unit version
+    authority, and every workspace stream is optional. Tag templates produce
+    plain semantic versions unless their configured namespace adds other text.
+
+  change-intent: >-
+    A Change Intent maps one or more Release Unit identifiers to major, minor,
+    or patch claims and carries changelog prose. Its filename supplies stable
+    intent identity. Parallel branches create independent memorable filenames.
+    Pending intent can be revised or withdrawn. Establishing a final Release
+    consumes its contributing intent. Candidate planning and materialization do
+    not consume intent in domain state. Channel Releases retain the intent so
+    every channel calculation starts from the same complete pending set.
+
+  version-computation: >-
+    Computation loads the latest valid primary tag for every configured Release Unit,
+    aggregates direct intent claims by maximum significance, propagates required
+    internal dependency bumps, and evaluates release-group constraints to a fixed
+    point. The producing Intentional version maps the effective bump onto the
+    current semantic version. A Release Unit with no effective bump remains
+    unchanged unless a fixed-group invariant requires its release.
+
+  pre-one-versioning: >-
+    Release Workspace configuration selects the pre-1.0 mapping. Component
+    mapping applies major, minor, and patch to their
+    corresponding semantic-version components. Compatibility mapping treats the
+    names as compatibility significance: major advances `0.x.y` to `0.(x+1).0`,
+    while minor and patch advance to `0.x.(y+1)`. Versions at or above `1.0.0`
+    use ordinary semantic-version components in either mapping.
+
+  dependency-propagation: >-
+    Explicit Release Unit dependency edges and maintained ecosystem dependency
+    evidence form the internal graph. When a dependency releases outside a
+    dependent's accepted range or the workspace policy requires synchronized
+    updates, the dependent receives at least the configured internal-dependency
+    bump. Propagation applies only when the dependent and its dependency share
+    an ecosystem adapter, because propagation releases the dependent manifest
+    whose internal dependency range the release rewrites. Generic format
+    adapters carry no dependency ranges. An edge without a shared ecosystem
+    adapter orders releases and carries no bump; release groups couple versions
+    across ecosystems. Generated changelog entries identify dependency-driven
+    releases. Propagation repeats with release groups until neither versions nor releasing
+    membership changes.
+
+  fixed-groups: >-
+    A fixed group shares one version. When any configured member receives a direct
+    or dependency-derived bump, every configured member releases. The group begins
+    from its highest current member version, applies the highest effective bump
+    once, and assigns that result to every member. A suspended member blocks a
+    fixed-group release because the shared invariant cannot be satisfied.
+
+  linked-groups: >-
+    A linked group aligns the next version of members that are already releasing.
+    Releasing members begin from the highest current version across the group and
+    receive the highest effective bump among them. Unaffected members retain
+    their versions. A suspended member blocks only when computation requires it
+    to release. A Release Unit belongs to at most one release group.
+
+  channels-and-build-versions: >-
+    A channel invocation adds the selected prerelease identifier and an iteration
+    derived from existing authoritative channel tags for the computed base
+    version. No mutable channel counter exists. Ephemeral build versions compose
+    the next intent-derived version, a prerelease identifier, and first-parent
+    commit height counted after the latest reachable authoritative primary tag's
+    target through the commit being stamped. Stamping writes such a version only
+    into projections configured for build-time injection.
+
+  version-projections: >-
+    A committed projection materializes the Release Unit version in source. An
+    injected projection receives a build version without becoming committed
+    authority. A tag-only projection stores no manifest version. One native
+    version field has exactly one Release Unit owner. Native adapters update
+    version fields and internal dependency requirements using ecosystem rules. A
+    Cargo package that declares `version.workspace = true` projects through the
+    workspace root's `[workspace.package].version`, and materialization writes
+    that field once. JSON, TOML, and YAML adapters read and update only the
+    scalar at an explicit pointer; the projected file is source authority for
+    that field and nothing else. Writers preserve unrelated formatting,
+    comments, field order, quoting, and whitespace.
+
+  changelog: >-
+    One deterministic CommonMark changelog belongs to each Release Unit. The
+    release section groups consumed intent by semantic significance and includes
+    generated internal-dependency entries. An intent affecting several Release
+    Units contributes its prose to each corresponding changelog. A Release Unit
+    with several projections still receives one section. A final
+    Release consolidates channel sections for the same version into the final
+    section.
+
+  tag-streams: >-
+    Primary, projection, and workspace tags for one Release target the same
+    commit and carry agreeing producing Intentional version, Release Plan
+    digest, and version evidence. Primary and workspace tag templates never
+    prefix the version with `v`. A projection tag uses one only where its
+    ecosystem requires that syntax: a Go module pairs its primary tag with
+    `v{version}` at the repository root, or `<module-subdirectory>/v{version}`
+    for a nested module, where the subdirectory omits a trailing `/vN`
+    major-version directory. A workspace stream computes its next version from its own
+    latest tag and the highest effective bump among participating Release Units.
+    A new tag stream requires explicit baseline evidence. Tag prerequisite edges
+    form an acyclic graph and produce deterministic creation order.
+
+  status-and-drift: >-
+    Status projects pending intent, direct and propagated bumps, next versions,
+    release-group effects, baseline requirements, and projection drift without
+    mutation. A version-bearing projection that differs from current tag
+    authority is drift. Suspended Release Units remain visible and block only the
+    computations that require them. Excluded candidates remain outside version
+    computation.
+
+  determinism: >-
+    Computation depends only on Release Workspace configuration, the producing
+    Intentional version, pending Change Intents, repository tree, and
+    reachable annotated tags. Canonical ordering uses stable Release Unit,
+    intent, tag, and path identities. Wall-clock time, network state, ambient Git
+    identity, and filesystem enumeration order do not affect the result.

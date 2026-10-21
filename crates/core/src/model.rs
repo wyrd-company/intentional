@@ -84,13 +84,27 @@ pub enum ReleaseUnitDisposition {
     Suspended,
 }
 
+/// Whether every release of a release unit has a release record on its primary tag.
+///
+/// The surrounding release process creates the record; Intentional creates none
+/// under either value.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseRecordPolicy {
+    /// Every release has a release record, such as a GitHub Release.
+    #[default]
+    Required,
+    /// The release unit has no release record; its tag records are its complete record.
+    None,
+}
+
 /// Version-authority role of a release-unit tag.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum TagRole {
     /// The single tag stream used to discover the release unit's current version.
     Primary,
-    /// An additional release record carrying the same logical version.
+    /// An additional tag carrying the same logical version.
     Projection,
 }
 
@@ -116,6 +130,7 @@ impl fmt::Display for TagPhase {
 /// Manifest or generic format adapter used by a projection.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Adapter {
     /// npm `package.json`.
     Npm,

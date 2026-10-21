@@ -1,9 +1,9 @@
 # ---
 # relationships:
-#   implements: intent-driven-polyglot-release
+#   realizes: initialization-plan
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/init-plan.yml
+$id: https://intentional.foo/schemas/0.2/init-plan
 title: Intentional initialization plan
 type: object
 additionalProperties: false
@@ -21,7 +21,7 @@ required:
   - post-commit-action
 properties:
   $schema:
-    const: https://intentional.foo/schemas/init-plan.yml
+    const: https://intentional.foo/schemas/0.2/init-plan
   state:
     enum: [ needs-input, ready ]
   source-kind:
@@ -31,16 +31,16 @@ properties:
     pattern: "^sha256:[0-9a-f]{64}$"
   inferred-config:
     oneOf:
-      - $ref: config.yml
-      - $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/empty-inferred-config"
+      - $ref: https://intentional.foo/schemas/0.2/config
+      - $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/empty-inferred-config"
   discovery-candidates:
     type: array
     items:
-      $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/discovery-candidate"
+      $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/discovery-candidate"
   diagnostics:
     type: array
     items:
-      $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/diagnostic"
+      $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/diagnostic"
   converted-intents:
     type: array
     items:
@@ -48,7 +48,8 @@ properties:
       additionalProperties: false
       required: [ id, release-units, message, source, target ]
       properties:
-        id: { type: string }
+        id:
+          $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
         release-units:
           type: object
           additionalProperties:
@@ -73,24 +74,28 @@ properties:
             release-unit: { type: string }
             current-version: { type: string }
             source:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/parity-release"
             proposed:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/parity-release"
   planned-operations:
     type: array
     items: { type: string }
+  next-actions:
+    type: array
+    items:
+      type: string
+    description: >-
+      Ordered release process handoff after planned operations; absent when input is needed.
   post-commit-action:
     enum: [ "", intentional tag --baseline ]
 $defs:
   empty-inferred-config:
     type: object
     additionalProperties: false
-    required: [ contract, release-units ]
+    required: [ $schema, release-units ]
     properties:
       $schema:
-        const: https://intentional.foo/schemas/config.yml
-      contract:
-        const: contract-1
+        const: https://intentional.foo/schemas/0.2/config
       settings:
         type: object
         additionalProperties: false
@@ -105,16 +110,11 @@ $defs:
         type: object
         maxProperties: 0
   detector-id:
-    type: string
-    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   release-unit-id:
-    type: string
-    pattern: "^[A-Za-z0-9@/_.-]+$"
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
   exact-path:
-    type: string
-    minLength: 1
-    not: { const: "." }
-    pattern: '^(?!/)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*//)(?!.*[*?\[\]{}])[^/]+(?:/[^/]+)*$'
+    $ref: "https://intentional.foo/schemas/0.2/config#/$defs/exact-path"
   discovery-candidate:
     type: object
     additionalProperties: false
@@ -124,14 +124,14 @@ $defs:
         type: string
         pattern: "^candidate:[0-9a-f]{64}$"
       detector:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/detector-id"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/detector-id"
       path:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
       evidence:
         type: array
         minItems: 1
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       native-identity:
         type: string
         minLength: 1
@@ -147,7 +147,7 @@ $defs:
             type: array
             minItems: 1
             items:
-              $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+              $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       projection:
         type: object
         additionalProperties: false
@@ -156,7 +156,7 @@ $defs:
           adapter:
             enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
           path:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
           mode:
             enum: [ committed, injected, none ]
           pointer:
@@ -175,19 +175,26 @@ $defs:
         required: [ id, role, template ]
         properties:
           id:
-            type: string
-            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
           role:
             enum: [ primary, projection ]
           template:
-            type: string
-            pattern: '^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
+            $ref: "https://intentional.foo/schemas/0.2/config#/$defs/tag-template"
+        allOf:
+          - if:
+              properties:
+                role: { const: primary }
+              required: [ role ]
+            then:
+              properties:
+                template:
+                  $ref: "https://intentional.foo/schemas/0.2/config#/$defs/primary-tag-template"
       diagnostics:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/extraction-diagnostic"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/extraction-diagnostic"
       resolution:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/candidate-resolution"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/candidate-resolution"
   candidate-resolution:
     oneOf:
       - type: object
@@ -196,14 +203,14 @@ $defs:
         properties:
           kind: { const: independent }
           release-unit:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
       - type: object
         additionalProperties: false
         required: [ kind, release-unit ]
         properties:
           kind: { const: projection }
           release-unit:
-            $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/release-unit-id"
+            $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/release-unit-id"
           target-candidate:
             type: string
             pattern: "^candidate:[0-9a-f]{64}$"
@@ -224,7 +231,7 @@ $defs:
         type: array
         minItems: 1
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
   parity-release:
     type: object
     additionalProperties: false
@@ -238,7 +245,7 @@ $defs:
     required: [ path, digest ]
     properties:
       path:
-        $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/exact-path"
+        $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/exact-path"
       digest:
         type: string
         pattern: "^sha256:[0-9a-f]{64}$"
@@ -259,7 +266,7 @@ $defs:
       evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       choices:
         type: array
         items: { type: string }
@@ -271,11 +278,11 @@ $defs:
       supporting-evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       contradictory-evidence:
         type: array
         items:
-          $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/evidence"
+          $ref: "https://intentional.foo/schemas/0.2/init-plan#/$defs/evidence"
       uncertainty:
         type: string
         minLength: 1

@@ -16,6 +16,11 @@ pub fn check_workspace(root: &Path) -> Result<()> {
     let config = Config::load(root)?;
     Intent::load_all(root, &config)?;
     let status = crate::status::WorkspaceStatus::load(root)?;
+    if status.release_model_stale {
+        return Err(Error::Validation(
+            crate::status::release_model_stale_message(),
+        ));
+    }
     if !status.missing_baselines.is_empty() {
         return Err(Error::Validation(format!(
             "[{}] missing baseline tags for {}; run {}",
@@ -30,8 +35,8 @@ pub fn check_workspace(root: &Path) -> Result<()> {
             status.tag_record_issues.join("; ")
         )));
     }
-    let first = ReleasePlan::build(root, None)?.to_canonical_json()?;
-    let second = ReleasePlan::build(root, None)?.to_canonical_json()?;
+    let first = ReleasePlan::build(root, None)?.encode()?;
+    let second = ReleasePlan::build(root, None)?.encode()?;
     if first != second {
         return Err(Error::Validation(
             "release plan generation is not deterministic".to_owned(),

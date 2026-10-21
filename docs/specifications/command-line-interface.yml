@@ -1,0 +1,45 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - intent-driven-polyglot-release
+    - repository-initialization
+    - release-planning-and-records
+    - release-model
+  models:
+    - intentional
+description: >-
+  Defines Intentional's supported command-line interface for Release Workspace
+  reconciliation, Change Intent authoring, status, Release planning,
+  materialization, injected projection stamping, annotated tag authority,
+  Release verification, conformance, Release Model emission, and embedded agent
+  guidance. Every command requires Git and no hosting platform; the
+  surrounding release process owns commits, pushes, release records, and
+  publication.
+  `docs/specifications/command-line-interface.spec.yml` is the machine-readable
+  command definition.
+format: cli
+validation-criteria: >-
+  A conforming command line matches
+  `docs/specifications/command-line-interface.spec.yml` under the CLI Command
+  Specification schema at `https://commonclischema.org/draft/2026-04/schema`.
+  Command tokens, nesting, aliases, option flags, value types, defaults,
+  repetition, conflicts, requirements, interaction modes, output modes, and exit
+  meanings agree with that asset. `--directory` establishes the repository root
+  for every relative path. Initialization configures no release process and
+  never mutates hosting-platform repository or organization settings. Dry-run
+  commands compute and print the same ordered operation set as mutation without
+  changing repository state. `plan` emits the canonical Release Plan. `tag`
+  requires exactly one baseline or plan mode. Plan mode verifies the
+  materialized candidate before creating annotated Release authority, and
+  creates a phased tag only under a matching `--phase` declaration. `check`
+  applies Release Workspace conformance and reports a stale committed Release
+  Model. `verify` reconstructs core Release identity from an exact annotated
+  tag. `model` writes the canonical Release Model to
+  `.intentional/release-model.json`, or to standard output under `--stdout`.
+  Model writes and initialization model writes ensure the root `.gitattributes`
+  rule `.intentional/release-model.json text eol=lf`, preserving unrelated bytes.
+  `model` reports `written` when either the model or only its attributes need a
+  change, and `unchanged` when both are current. `--dry-run` changes neither
+  file; `--stdout` changes nothing in the tree. `--json` emits `operation`,
+  `path`, and `dry_run`, and conflicts with `--stdout`. Initialization writes
+  the model whenever it writes configuration.

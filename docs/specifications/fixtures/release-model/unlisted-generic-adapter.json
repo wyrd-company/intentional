@@ -1,0 +1,245 @@
+{
+  "$schema": "https://intentional.foo/schemas/release-model/1",
+  "paths": {
+    "config": ".intentional/config.yml",
+    "intents": ".intentional/intents",
+    "model": ".intentional/release-model.json"
+  },
+  "release_groups": {
+    "fixed": [
+      [
+        "atlas",
+        "atlas-cli"
+      ]
+    ],
+    "linked": [
+      [
+        "beacon",
+        "compass"
+      ]
+    ]
+  },
+  "release_units": {
+    "atlas": {
+      "changelog": "packages/atlas/CHANGELOG.md",
+      "depends_on": [],
+      "disposition": "managed",
+      "ecosystems": [
+        "npm"
+      ],
+      "path": "packages/atlas",
+      "projections": [
+        {
+          "adapter": "npm",
+          "file": "package.json",
+          "generic": false,
+          "mode": "committed",
+          "native_identity": "atlas",
+          "workspace_file": "packages/atlas/package.json"
+        }
+      ],
+      "release_group": {
+        "kind": "fixed",
+        "members": [
+          "atlas",
+          "atlas-cli"
+        ]
+      },
+      "release_record": "required",
+      "sources": [
+        {
+          "detector": "npm",
+          "path": "packages/atlas/package.json"
+        }
+      ],
+      "tags": {
+        "mirror": {
+          "require_phase": "after-publication",
+          "role": "projection",
+          "tag_after": [
+            "release-unit/atlas/primary"
+          ],
+          "template": "mirror-atlas@{version}"
+        },
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{id}@{version}"
+        }
+      }
+    },
+    "atlas-cli": {
+      "changelog": "crates/atlas-cli/CHANGELOG.md",
+      "depends_on": [
+        "atlas"
+      ],
+      "disposition": "managed",
+      "ecosystems": [
+        "cargo"
+      ],
+      "path": "crates/atlas-cli",
+      "projections": [
+        {
+          "adapter": "cargo",
+          "file": "Cargo.toml",
+          "generic": false,
+          "mode": "committed",
+          "native_identity": "atlas-cli",
+          "workspace_file": "crates/atlas-cli/Cargo.toml"
+        },
+        {
+          "adapter": "ini",
+          "file": "settings/version.ini",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/version",
+          "workspace_file": "crates/atlas-cli/settings/version.ini"
+        }
+      ],
+      "release_group": {
+        "kind": "fixed",
+        "members": [
+          "atlas",
+          "atlas-cli"
+        ]
+      },
+      "release_record": "required",
+      "sources": [
+        {
+          "detector": "cargo",
+          "path": "crates/atlas-cli/Cargo.toml"
+        }
+      ],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [
+            "release-unit/atlas/primary"
+          ],
+          "template": "{id}@{version}"
+        }
+      }
+    },
+    "atlas-docs": {
+      "changelog": "docs/CHANGELOG.md",
+      "depends_on": [],
+      "disposition": "managed",
+      "ecosystems": [],
+      "path": "docs",
+      "projections": [],
+      "release_record": "none",
+      "sources": [],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{id}@{version}"
+        }
+      }
+    },
+    "beacon": {
+      "changelog": "tools/beacon/CHANGELOG.md",
+      "depends_on": [],
+      "disposition": "suspended",
+      "ecosystems": [
+        "python"
+      ],
+      "path": "tools/beacon",
+      "projections": [
+        {
+          "adapter": "python",
+          "file": "pyproject.toml",
+          "generic": false,
+          "mode": "committed",
+          "native_identity": "beacon",
+          "workspace_file": "tools/beacon/pyproject.toml"
+        }
+      ],
+      "release_group": {
+        "kind": "linked",
+        "members": [
+          "beacon",
+          "compass"
+        ]
+      },
+      "release_record": "required",
+      "sources": [
+        {
+          "detector": "python",
+          "path": "tools/beacon/pyproject.toml"
+        }
+      ],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{id}@{version}"
+        }
+      }
+    },
+    "compass": {
+      "changelog": "services/compass/CHANGELOG.md",
+      "depends_on": [
+        "beacon"
+      ],
+      "disposition": "managed",
+      "ecosystems": [
+        "go"
+      ],
+      "path": "services/compass",
+      "projections": [
+        {
+          "adapter": "go",
+          "file": "go.mod",
+          "generic": false,
+          "mode": "none",
+          "native_identity": "example.invalid/compass",
+          "workspace_file": "services/compass/go.mod"
+        }
+      ],
+      "release_group": {
+        "kind": "linked",
+        "members": [
+          "beacon",
+          "compass"
+        ]
+      },
+      "release_record": "required",
+      "sources": [
+        {
+          "detector": "go",
+          "path": "services/compass/go.mod"
+        }
+      ],
+      "tags": {
+        "module": {
+          "role": "projection",
+          "tag_after": [
+            "release-unit/compass/primary"
+          ],
+          "template": "services/compass/v{version}"
+        },
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "compass/{version}"
+        }
+      }
+    }
+  },
+  "workspace_tags": {
+    "release": {
+      "require_phase": "after-publication",
+      "tag_after": [
+        "release-unit/atlas-cli/primary",
+        "release-unit/atlas/primary",
+        "release-unit/compass/primary"
+      ],
+      "template": "{version}"
+    },
+    "snapshot": {
+      "tag_after": [],
+      "template": "snapshot-{version}"
+    }
+  }
+}

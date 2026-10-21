@@ -747,12 +747,22 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
     assert!(added.to_string().contains("source evidence became stale"));
     fs::remove_file(repository.root.join(".changeset/added-after-planning.md")).unwrap();
 
+    repository.write(intentional_core::RELEASE_MODEL_PATH, "old derived model\n");
     repository
         .cli()
         .args(["init", "--take-over"])
         .assert()
         .success();
     assert!(repository.root.join(".intentional/config.yml").is_file());
+    let model = fs::read(repository.root.join(intentional_core::RELEASE_MODEL_PATH)).unwrap();
+    assert_eq!(
+        model,
+        intentional_core::ReleaseModel::build(&repository.root)
+            .unwrap()
+            .encode()
+            .unwrap()
+            .into_bytes()
+    );
     assert!(!plan_path.exists());
     assert!(!repository.root.join(".changeset").exists());
     let converted = fs::read_to_string(
@@ -1819,7 +1829,7 @@ release-units:
             "-a",
             "witness@1.0.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
         ],
     );
     let tags_before = git(
@@ -1980,7 +1990,7 @@ release-units:
             "-a",
             "witness@1.1.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
         ],
     );
     repository
@@ -2067,4 +2077,83 @@ release-units:
         "tag"
     );
     repository.cli().arg("check").assert().success();
+}
+
+#[test]
+fn init_handoff_takeover_orders_baseline_model_and_template() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        r#"{"name":"sample-root","private":true,"workspaces":["packages/*"]}"#,
+    );
+    repository.write(
+        "packages/library/package.json",
+        r#"{"name":"sample-library","version":"1.0.0"}"#,
+    );
+    repository.write(".changeset/config.json", r#"{"changelog":false,"commit":false,"fixed":[],"linked":[],"access":"public","baseBranch":"main","updateInternalDependencies":"patch","ignore":[]}"#);
+    git(&repository.root, &["add", "-A"]);
+    git(&repository.root, &["commit", "-qm", "add fixture"]);
+    repository.cli().arg("init").assert().code(2);
+    let path = repository.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    resolve_discovery_candidates(&mut plan);
+    for diagnostic in &mut plan.diagnostics {
+        diagnostic.resolution = diagnostic.recommended.clone();
+    }
+    repository.write(".intentional/init-plan.yml", &plan.to_yaml().unwrap());
+    // The ready plan includes the model write performed by explicit takeover.
+    let output = repository
+        .cli()
+        .args(["init", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let ready: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(ready.state, InitState::Ready);
+    assert_eq!(ready.next_actions, ["apply a release process template"]);
+    assert!(ready
+        .planned_operations
+        .contains(&format!("write {}", intentional_core::RELEASE_MODEL_PATH)));
+    assert!(!repository.root.join(".intentional/config.yml").exists());
+    assert!(!repository
+        .root
+        .join(intentional_core::RELEASE_MODEL_PATH)
+        .exists());
+    assert_eq!(ready.post_commit_action, "intentional tag --baseline");
+    repository
+        .cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "next: apply a release process template\n",
+        ))
+        .stdout(predicate::str::contains("next: intentional model").not())
+        .stdout(predicate::str::contains("initialization state: ready\n"));
+    // Takeover writes the model, so its handoff omits the model command.
+    let output = repository
+        .cli()
+        .args(["init", "--take-over", "--dry-run", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let takeover: InitPlan = serde_json::from_slice(&output).unwrap();
+    assert_eq!(takeover.next_actions, ["apply a release process template"]);
+    assert_eq!(takeover.post_commit_action, "intentional tag --baseline");
+    repository
+        .cli()
+        .args(["init", "--take-over"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "after commit: intentional tag --baseline\nnext: apply a release process template\n",
+        ));
+    assert!(repository
+        .root
+        .join(intentional_core::RELEASE_MODEL_PATH)
+        .is_file());
 }

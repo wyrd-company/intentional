@@ -7,8 +7,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
     check_workspace, initialize, ApplyResult, Bump, Config, InitState, IntentDraft, ReleasePlan,
-    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE,
-    MISSING_BASELINE_NEXT_ACTION,
+    Severity, StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH,
+    MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
 use std::collections::BTreeMap;
@@ -36,20 +36,28 @@ struct Cli {
 enum Command {
     /// Scan supported manifests and create the release-unit inventory.
     Init(InitArgs),
+    /// Write the template-facing Release Model.
+    Model(ModelArgs),
     /// Author a pending change intent.
     Add(AddArgs),
     /// Show pending intents and computed release-unit versions.
-    Status,
+    Status {
+        /// Emit machine-readable workspace status.
+        #[arg(long)]
+        json: bool,
+    },
     /// Emit canonical digest-bound release-plan JSON.
     Plan(ChannelArgs),
     /// Materialize versions, changelogs, dependencies, and intent consumption.
     Apply(ChannelDryRunArgs),
     /// Write computed versions into injected projections only.
     Stamp(StampArgs),
-    /// Create annotated release records or establish baseline tags.
+    /// Create annotated tag records or establish baseline tags.
     Tag(TagArgs),
     /// Validate config, intents, and deterministic planning for CI.
     Check,
+    /// Verify one established Release or baseline from its annotated tag.
+    Verify(VerifyArgs),
     /// Print the agent-facing Intentional workflow skill.
     Skill,
 }
@@ -74,6 +82,19 @@ struct InitArgs {
     /// Print mutations without changing the workspace.
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+struct ModelArgs {
+    /// Report the operation without writing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Print canonical model JSON without changing the tree.
+    #[arg(long)]
+    stdout: bool,
+    /// Emit structured operation results.
+    #[arg(long, conflicts_with = "stdout")]
+    json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -137,6 +158,16 @@ struct TagArgs {
 }
 
 #[derive(Debug, Args)]
+struct VerifyArgs {
+    /// Exact annotated tag that identifies the Release or Release Unit.
+    tag: String,
+
+    /// Emit stable structured verification results.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
 struct StampArgs {
     /// Prerelease identifier composed with first-parent tag height.
     #[arg(long)]
@@ -161,8 +192,10 @@ fn run() -> Result<u8> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init(args) => return init(&cli.directory, args),
+        Command::Verify(args) => return verify(&cli.directory, args),
         Command::Add(args) => add(&cli.directory, args),
-        Command::Status => status(&cli.directory),
+        Command::Status { json } => status(&cli.directory, json),
+        Command::Model(args) => model(&cli.directory, args),
         Command::Plan(args) => plan(&cli.directory, args.channel.as_deref()),
         Command::Apply(args) => apply(&cli.directory, args.channel.as_deref(), args.dry_run),
         Command::Stamp(args) => stamp(&cli.directory, args.prerelease.as_deref(), args.dry_run),
@@ -171,6 +204,34 @@ fn run() -> Result<u8> {
         Command::Skill => skill(),
     }?;
     Ok(0)
+}
+
+fn verify(root: &std::path::Path, args: VerifyArgs) -> Result<u8> {
+    let verification = intentional_core::verify_release(root, &args.tag)?;
+    if args.json {
+        println!("{}", verification.to_json()?);
+    } else {
+        match &verification.target {
+            Some(target) if verification.verified => {
+                println!("verified {} at {target}", verification.tag)
+            }
+            _ => println!("verification failed for {}", verification.tag),
+        }
+        for guarantee in &verification.guarantees {
+            println!("guarantee: {guarantee}");
+        }
+        for tag in &verification.identity_tags {
+            println!("identity tag: {tag}");
+        }
+        for diagnostic in &verification.diagnostics {
+            let severity = match diagnostic.severity {
+                Severity::Error => "error",
+                Severity::Advisory => "advisory",
+            };
+            println!("{severity} [{}] {}", diagnostic.code, diagnostic.message);
+        }
+    }
+    Ok(if verification.verified { 0 } else { 1 })
 }
 
 fn skill() -> Result<()> {
@@ -244,7 +305,7 @@ fn apply(root: &std::path::Path, channel: Option<&str>, dry_run: bool) -> Result
 
 fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
     let plan = ReleasePlan::build(root, channel)?;
-    println!("{}", plan.to_canonical_json()?);
+    println!("{}", plan.encode()?);
     Ok(())
 }
 
@@ -253,12 +314,20 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
     if args.json {
         println!("{}", result.to_json()?);
     } else {
-        println!("initialization state: {:?}", result.state);
+        let state = match result.state {
+            InitState::NeedsInput => "needs-input",
+            InitState::Ready | InitState::Success => "ready",
+        };
+        println!("initialization state: {state}");
         for operation in &result.operations {
             println!("{operation}");
         }
-        if result.plan.is_some() && !args.take_over {
+        if result.path == std::path::Path::new(intentional_core::INIT_PLAN_PATH) && !args.take_over
+        {
             println!("plan: {}", result.path.display());
+        }
+        for action in result.next_actions(root) {
+            println!("next: {action}");
         }
     }
     result.apply(root, args.dry_run)?;
@@ -303,8 +372,15 @@ fn add(root: &std::path::Path, args: AddArgs) -> Result<()> {
     Ok(())
 }
 
-fn status(root: &std::path::Path) -> Result<()> {
+fn status(root: &std::path::Path, json: bool) -> Result<()> {
     let status = WorkspaceStatus::load(root)?;
+    if json {
+        println!("{}", serde_json::to_string(&status)?);
+        return Ok(());
+    }
+    if status.release_model_stale {
+        println!("{}", intentional_core::release_model_stale_message());
+    }
     if status.intents.is_empty() {
         println!("Pending intents: none");
     } else {
@@ -356,4 +432,98 @@ fn prompt(label: &str) -> Result<String> {
     let mut value = String::new();
     io::stdin().read_line(&mut value)?;
     Ok(value.trim().to_owned())
+}
+
+fn model(root: &std::path::Path, args: ModelArgs) -> Result<()> {
+    if args.stdout {
+        print!("{}", intentional_core::ReleaseModel::build(root)?.encode()?);
+        return Ok(());
+    }
+    let written = intentional_core::write_release_model(root, args.dry_run)?;
+    let operation = if written { "written" } else { "unchanged" };
+    if args.json {
+        println!(
+            "{}",
+            format_args!(
+                r#"{{"dry_run":{},"operation":"{}","path":"{}"}}"#,
+                args.dry_run,
+                operation,
+                intentional_core::RELEASE_MODEL_PATH
+            )
+        );
+    } else {
+        println!(
+            "{}{} {}",
+            if args.dry_run { "dry-run: " } else { "" },
+            operation,
+            intentional_core::RELEASE_MODEL_PATH
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+
+    fn long_flags(command: &clap::Command) -> BTreeSet<String> {
+        command
+            .get_arguments()
+            .filter(|argument| !argument.is_global_set())
+            .filter(|argument| !matches!(argument.get_id().as_str(), "help" | "version"))
+            .filter_map(|argument| argument.get_long())
+            .map(|long| format!("--{long}"))
+            .collect()
+    }
+
+    fn specified_flags(options: &serde_yaml::Value) -> BTreeSet<String> {
+        options
+            .as_sequence()
+            .map(|options| {
+                options
+                    .iter()
+                    .flat_map(|option| option["flags"].as_sequence().cloned().unwrap_or_default())
+                    .filter_map(|flag| flag.as_str().map(str::to_owned))
+                    .filter(|flag| flag.starts_with("--"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn commands_and_flags_match_the_cli_specification() {
+        let specification: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/command-line-interface.spec.yml"
+        ))
+        .expect("CLI specification parses");
+        let cli = Cli::command();
+        let shipped = cli
+            .get_subcommands()
+            .map(|command| command.get_name().to_owned())
+            .collect::<BTreeSet<_>>();
+        let specified = specification["commands"]
+            .as_sequence()
+            .expect("commands")
+            .iter()
+            .filter_map(|command| command["name"].as_str().map(str::to_owned))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(shipped, specified);
+        for command in specification["commands"].as_sequence().expect("commands") {
+            let name = command["name"].as_str().expect("command name");
+            let Some(subcommand) = cli.find_subcommand(name) else {
+                continue;
+            };
+            assert_eq!(
+                long_flags(subcommand),
+                specified_flags(&command["options"]),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            specified_flags(&specification["global-options"]),
+            BTreeSet::from(["--directory".to_owned()])
+        );
+    }
 }

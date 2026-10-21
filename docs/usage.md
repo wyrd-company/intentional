@@ -7,7 +7,7 @@ relationships:
 ---
 
 A release has three Intentional-owned moves: declare change intent, project the
-accepted plan into the working tree, and create annotated release records. The
+accepted plan into the working tree, and create annotated tag records. The
 surrounding harness owns review, commits, pushes, publication, and forge
 operations.
 
@@ -35,6 +35,37 @@ For a repository without `.intentional/config.yml`, follow the
 candidate resolutions, already released repositories, Go modules, baseline
 versions, and Changesets adoption. Once configuration and version authority are
 established, use the release workflow below.
+
+## Write the Release Model
+
+Release process templates read `.intentional/release-model.json` for the workspace
+inventory, projections, native identities, discovery sources, tag templates,
+dependencies, release groups, and release-record policy:
+
+```bash
+intentional model
+intentional model --dry-run
+intentional model --stdout
+intentional model --json
+```
+
+Commit the generated file and root `.gitattributes` with the source changes.
+Both `model` and initialization ensure `.intentional/release-model.json text eol=lf`
+so that Git checks out canonical LF bytes even with `core.autocrlf=true`.
+They append or amend only the model rule and preserve unrelated bytes.
+The command reports `written` when either file needs a change, or `unchanged`
+when both are current; an unchanged model is left untouched even when its
+attribute needs repair. `--dry-run` reports the operation without writing either
+file. `--stdout` prints only the canonical JSON document and
+leaves the tree unchanged. `--json` reports `operation`, `path`, and `dry_run` as
+JSON and cannot be combined with `--stdout`. Invalid configuration or an unreadable
+projection exits with code `1` and leaves the existing model untouched.
+
+The model contains no versions, pending intents, Git remote, branch, clock,
+publication settings, or process settings. It has its own schema identity,
+`https://intentional.foo/schemas/release-model/1`. Initialization writes it in the
+same operation set whenever it writes configuration. Intentional never runs the
+release process template tool.
 
 ## Declare an intent
 
@@ -74,12 +105,20 @@ missing baselines.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
-Tags created before Intentional carry no Intentional record. Both lightweight
-tags and annotated tags without any Intentional record field are tolerated as
+When `.intentional/release-model.json` exists, `check` compares its bytes with
+an in-memory model built from the working-tree inputs. A difference, invalid
+JSON, or another schema reports the error `release-model-stale`; run
+`intentional model` to repair it. An absent model produces no diagnostic.
+`status` reports the same condition without repairing the file. Use
+`intentional status --json` for structured output; `release_model_stale` is a
+boolean. A dirty working tree does not itself make a model stale.
+
+Tags created before Intentional carry no tag record. Both lightweight tags and
+annotated tags without any tag record field are tolerated as
 pre-Intentional history: they supply the current version and raise no issue.
 `tag --baseline` leaves such a tag in place instead of retagging it. An
-annotated tag that carries any Intentional record field is validated in full,
-so a partial or corrupt record fails closed.
+annotated tag that carries any tag record field is validated in full, so a
+partial or corrupt tag record fails closed.
 
 ## Preview the plan
 
@@ -91,10 +130,12 @@ intents, release notes, expected tags, required phases, and tag order:
 intentional plan > release-plan.json
 ```
 
-The sealed payload contains the interpretation contract, generator identity,
-old and new versions, contributing intent ids, rendered release notes,
-release-unit and workspace tags, phase declarations, `tag-after` prerequisites,
-and tag order. It contains no publication graph. Preserve the exact output;
+The sealed payload contains the Release Plan schema identity (`$schema`), the
+interpretation contract, generator identity, the source commit and tree the
+plan was computed from (`source`), old and new versions, contributing intent
+ids, rendered release notes, release-unit and workspace tags, phase
+declarations, `tag_after` prerequisites, and tag order. It contains no
+publication graph. Preserve the exact output;
 do not hand-edit or reformat the sealed plan.
 
 ## Project the versions
@@ -147,6 +188,84 @@ workspace binary (`task self-release:verify`) and create annotated tags only
 through the guarded operator path (`CREATE_ACK=create-annotated-tag task
 self-release:tag`). Do not use an older installed Intentional for tag creation
 after apply.
+
+## Verify a release
+
+`verify` checks one established Release from any of its annotated identity
+tags. It reads Git history only, so it needs no network and no
+hosting-platform credentials:
+
+```bash
+intentional verify sample-library@1.2.3
+intentional verify sample-library@1.2.3 --json
+```
+
+It checks four things:
+
+- The tag is annotated, carries a valid tag record, and is tagged by
+  `Intentional <intentional@wyrd.company>` at the time of the commit it tags.
+- The Release Plan recomputed at the commit the release was planned from has
+  the plan digest the tag record carries.
+- The release commit holds the files that applying that plan writes, and none
+  of the intents it consumes.
+- Every tag the plan names exists at the release commit, carries a tag record
+  for the same plan digest, and has the same fixed tagger.
+
+`verify` exits `0` when every check passes and `1` otherwise. Each failure is a
+diagnostic with a stable code, such as `tag-not-annotated`,
+`plan-digest-mismatch`, `materialized-tree-mismatch`, or
+`identity-tag-missing`. A tag that another Intentional version produced can
+recompute to a different digest under this version. That difference is the
+advisory `producing-version-differs` and does not fail verification. Tags
+that Intentional wrote before 0.1.6 have no tagger and fail with
+`tagger-mismatch`.
+
+### Verify a baseline
+
+`verify` takes a baseline tag the same way:
+
+```bash
+intentional verify sample-library@1.2.3
+```
+
+For a baseline it checks four things:
+
+- The tag is annotated, carries a valid baseline tag record, and has the fixed
+  tagger.
+- The baseline set recomputed at the commit the tag marks, from the
+  configuration and the tags in its history, has the baseline digest the tag
+  record carries. The digest is computed under the generator version the tag
+  record names.
+- Every tag that `tag --baseline` creates for that set exists at that commit,
+  carries a baseline tag record for the same digest, and has the same fixed
+  tagger.
+- Each Release Unit whose primary tag the baseline created has every
+  version-bearing projection at that commit at its baseline version, as
+  `tag --baseline` requires.
+
+`verify` accepts what `tag --baseline` leaves out of the set and in place:
+
+- A stream already established by a tag record is outside the set. The tag
+  record must have the fixed tagger and agree with the tag it occupies, and
+  either sit on an earlier commit or be a tag of a Release that `verify`
+  reconstructs at the baseline commit itself.
+- A tag without a tag record, lightweight or annotated, is pre-Intentional
+  history: it supplies its version and is not checked as a baseline tag.
+
+Any other tag of a stream keeps the stream in the set, so its tags are checked
+as baseline tags and fail with `identity-tag-mismatch` or
+`identity-tag-missing`. A tag that only later history holds counts as missing.
+A recomputed baseline digest that differs fails with
+`baseline-digest-mismatch`, or is the advisory `producing-version-differs`
+when the tag record names another Intentional version. A baseline whose only
+source for a version is a deleted tag cannot be recomputed and fails with
+`reconstruction-failed`.
+
+`verify` reads Git history only. Commit the configuration and every
+version-bearing projection before `tag --baseline`: a baseline created from
+uncommitted configuration fails with `reconstruction-failed`, and one created
+from an uncommitted projection version fails with
+`baseline-projection-mismatch`.
 
 ## Stamp build versions
 
@@ -210,6 +329,7 @@ Every mutating command supports `--dry-run` and prints the same operation set as
 the real invocation:
 
 ```console
+intentional model --dry-run
 intentional init --dry-run
 intentional init --take-over --dry-run
 intentional add --release-unit library:patch --message "Correct a defect." --dry-run

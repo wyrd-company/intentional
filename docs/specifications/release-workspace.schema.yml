@@ -1,17 +1,18 @@
 # ---
 # relationships:
-#   implements: intent-driven-polyglot-release
+#   realizes: release-workspace
 # ---
 $schema: https://json-schema.org/draft/2020-12/schema
-$id: https://intentional.foo/schemas/config.yml
+$id: https://intentional.foo/schemas/0.2/config
 title: Intentional workspace configuration
 type: object
 additionalProperties: false
 required: [ contract, release-units ]
 properties:
   $schema:
-    type: string
-    format: uri
+    enum:
+      - https://intentional.foo/schemas/0.2/config
+      - https://intentional.foo/schemas/config.yml
   contract:
     const: contract-1
   settings:
@@ -30,6 +31,8 @@ properties:
     $ref: "#/$defs/groups"
   workspace-tags:
     type: object
+    propertyNames:
+      $ref: "#/$defs/stable-id"
     additionalProperties:
       $ref: "#/$defs/workspace-tag"
   discovery:
@@ -37,9 +40,14 @@ properties:
   release-units:
     type: object
     minProperties: 1
+    propertyNames:
+      $ref: "#/$defs/stable-id"
     additionalProperties:
       $ref: "#/$defs/release-unit"
 $defs:
+  stable-id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
   bump:
     enum: [ major, minor, patch ]
   groups:
@@ -49,12 +57,26 @@ $defs:
       minItems: 2
       uniqueItems: true
       items:
-        type: string
-  phase:
-    enum: [ before-publication, after-publication ]
+        $ref: "#/$defs/stable-id"
   detector-id:
+    $ref: "#/$defs/stable-id"
+  tag-phase:
+    enum: [ before-publication, after-publication ]
+  workspace-tag-id:
     type: string
-    pattern: "^[a-z0-9][a-z0-9._-]*$"
+    pattern: "^workspace/[a-z0-9][a-z0-9._-]*$"
+  tag-id:
+    type: string
+    pattern: "^(?:release-unit/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*|workspace/[a-z0-9][a-z0-9._-]*)$"
+  tag-template:
+    type: string
+    pattern: '^(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
+  primary-tag-template:
+    type: string
+    pattern: '^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\}[\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
+  workspace-tag-template:
+    type: string
+    pattern: '^(?![\s\S]*v\{version\})(?![\s\S]*\{version\}[\s\S]*\{version\})(?![\s\S]*\{id\})(?=[\s\S]*\{version\})[\s\S]*$'
   exact-path:
     type: string
     minLength: 1
@@ -77,8 +99,7 @@ $defs:
             path:
               $ref: "#/$defs/exact-path"
             release-unit:
-              type: string
-              minLength: 1
+              $ref: "#/$defs/stable-id"
       excluded-paths:
         type: array
         uniqueItems: true
@@ -105,6 +126,9 @@ $defs:
       disposition:
         enum: [ managed, suspended ]
         default: managed
+      release-record:
+        enum: [ required, none ]
+        default: required
       projections:
         type: array
         items:
@@ -113,10 +137,12 @@ $defs:
         type: array
         uniqueItems: true
         items:
-          type: string
+          $ref: "#/$defs/stable-id"
       tags:
         type: object
         minProperties: 1
+        propertyNames:
+          $ref: "#/$defs/stable-id"
         additionalProperties:
           $ref: "#/$defs/release-unit-tag"
   projection:
@@ -134,6 +160,13 @@ $defs:
       pointer:
         type: string
         minLength: 1
+    allOf:
+      - if:
+          properties:
+            adapter:
+              enum: [ json, toml, yaml ]
+        then:
+          required: [ pointer ]
   release-unit-tag:
     type: object
     additionalProperties: false
@@ -142,27 +175,34 @@ $defs:
       role:
         enum: [ primary, projection ]
       template:
-        type: string
-        pattern: "\\{version\\}"
+        $ref: "#/$defs/tag-template"
       require-phase:
-        $ref: "#/$defs/phase"
+        $ref: "#/$defs/tag-phase"
       tag-after:
         type: array
         uniqueItems: true
         items:
-          type: string
+          $ref: "#/$defs/tag-id"
+    allOf:
+      - if:
+          properties:
+            role: { const: primary }
+          required: [ role ]
+        then:
+          properties:
+            template:
+              $ref: "#/$defs/primary-tag-template"
   workspace-tag:
     type: object
     additionalProperties: false
     required: [ template ]
     properties:
       template:
-        type: string
-        pattern: "\\{version\\}"
+        $ref: "#/$defs/workspace-tag-template"
       require-phase:
-        $ref: "#/$defs/phase"
+        $ref: "#/$defs/tag-phase"
       tag-after:
         type: array
         uniqueItems: true
         items:
-          type: string
+          $ref: "#/$defs/tag-id"

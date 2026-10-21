@@ -125,14 +125,45 @@ intentional init --dry-run
 intentional init
 ```
 
-Ordinary initialization writes `.intentional/config.yml`, creates
+Ordinary initialization writes `.intentional/config.yml` and
+`.intentional/release-model.json`, ensures the model's LF checkout rule in root
+`.gitattributes`, creates
 `.intentional/intents/`, and removes `.intentional/init-plan.yml` when the
 complete candidate graph validates. Review the generated configuration,
-including release-unit ids and tag templates, then commit it through your
-normal repository workflow. Init does not commit, publish, or create tags.
+including release-unit ids and tag templates, then commit configuration,
+`.intentional/release-model.json`, and `.gitattributes` through your normal
+repository workflow. Init does not commit, publish, or create tags.
 
 A later `init` scans configured repositories too. Matching receipts make it a
 no-op; new candidates or changed excluded evidence require explicit input.
+
+## Continue to a release process
+
+A ready result ends with `next: apply a release process template`. Commit the
+configuration, `.intentional/release-model.json`, and `.gitattributes` before
+applying your chosen template. Initialization configures no release process and
+never runs a template tool. Every Release Unit it creates uses the default
+`required` release-record
+policy; configuration omits `release-record` for this default.
+
+A no-op rerun does not write an absent model. In that case the output first names
+`next: intentional model`, then `next: apply a release process template`. A plan
+that needs input and an invalid repository name no handoff. A dry run describes
+the actions after its planned writes. A ready imported plan counts the model
+and attributes writes in its planned takeover operations and names only the
+template step.
+Complete takeover before following that handoff.
+
+`init --json` returns an Initialization Plan, including on ordinary success:
+`state` is `ready`, `inferred-config` carries the configuration, and optional
+`next-actions` carries the ordered handoff. After takeover, the existing
+`post-commit-action` baseline command comes before the release process handoff.
+
+These paths are covered by `init_handoff_ready_without_model_and_no_op_rerun`,
+`init_handoff_ready_with_committed_model_names_only_template`,
+`init_handoff_needs_input_and_invalid_repository_name_no_actions`,
+`init_handoff_config_write_includes_model_and_feature_policy_required`, and
+`init_handoff_takeover_orders_baseline_model_and_template`.
 
 ## Bootstrap an already released repository
 
@@ -165,12 +196,12 @@ intentional check
 ```
 
 Matching pre-Intentional lightweight tags and annotated tags without
-Intentional record fields supply current-version authority. With a matching
+tag record fields supply current-version authority. With a matching
 `0.1.0` tag, the current version is `0.1.0`: no new baseline tag or repeat release
 is needed. Do not recreate or move that tag. `tag --baseline` also leaves it in
 place, ignoring an explicit `--version` for that existing stream. A tag carrying
-any Intentional record field is validated in full;
-partial or corrupt records fail validation.
+any tag record field is validated in full;
+partial or corrupt tag records fail validation.
 
 For Go this works without a manifest version. If the expected tag is present
 but `status` reports a missing baseline, inspect the configured template and
@@ -281,7 +312,8 @@ contract is also explicit, and current divergence remains blocking.
 
 `--take-over` is the only authority handoff. It refuses unresolved, stale, or
 non-equivalent plans, then performs a rollback-capable transaction that writes
-canonical Intentional state, moves pending intents, removes recognized
+canonical Intentional configuration and Release Model, ensures the model's LF
+rule in `.gitattributes`, moves pending intents, removes recognized
 `.changeset/` state, applies explicitly authorized proxy-manifest removals, and
 consumes the one transient initialization plan.
 References in workflows, package scripts and dependencies, lockfiles, release

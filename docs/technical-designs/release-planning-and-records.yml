@@ -1,0 +1,151 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: intent-driven-polyglot-release
+  realizes: intentional
+  related-to: release-model
+objective: >-
+  Seal deterministic release decisions, materialize them, and establish
+  observable tag-backed release authority that a surrounding release process
+  can build on.
+proposed-design:
+  release-plan: >-
+    A Release Plan is canonical structured data derived from Release Workspace
+    configuration, authoritative tags, pending Change Intents, and the selected
+    release channel. It records the exact producing Intentional version, source
+    identity, Release Unit versions, contributing intent, release notes, and the
+    complete tag graph with each tag's prerequisites and required phase. Its
+    digest is computed over the complete canonical payload excluding the digest
+    field. A computed plan is a digest-bound candidate until authoritative
+    release identity binds it to a commit and annotated tag set.
+
+  release-creation: >-
+    Local plan computation and materialization are candidate operations. A
+    Release comes into existence when the verified materialized commit and its
+    annotated identity tags become authoritative repository objects. This
+    authority transition seals the candidate plan as durable Release state. It
+    consumes contributing Change Intents for a channel-less Release and retains
+    them for a channel Release. Every later command accepts the sealed plan or an
+    authority record that embeds its digest.
+
+  materialization: >-
+    Materialization writes computed versions into committed projections, updates
+    native internal dependency requirements, and creates deterministic changelog
+    sections. A channel-less materialization removes contributing intent files
+    from the candidate tree; a channel materialization retains them. It calculates
+    the complete operation set before mutation and supports dry-run. The resulting
+    tree is a witness of the candidate plan. File removal does not consume Change
+    Intent in domain state until annotated tags establish the Release. A mismatch
+    between materialized values and a recomputed plan blocks release authority.
+
+  release-identity: >-
+    Release identity binds the plan digest, producing Intentional version, source
+    commit, and complete configured set of annotated identity tags. Creating the
+    verified tags against the materialized commit establishes the Release and
+    seals the plan. Each Release Unit's primary tag names that unit's release.
+
+  release-protocol: >-
+    `intentional plan` computes the digest-bound candidate. `intentional apply`
+    materializes its tree. The surrounding release process creates the commit.
+    `intentional tag --plan` verifies that commit against the saved candidate
+    and creates the exact annotated tag records, which establishes the Release
+    in the repository. The process owns every push, build, release record, and
+    publication. The protocol provides versioning, changelogs, final-release
+    intent consumption, and the tag records that establish the Release, and the
+    same commands serve a person, a harness, and a rendered release process.
+
+  release-records: >-
+    A release record is the GitHub Release that the surrounding process
+    publishes for one Release Unit. The Release Model design owns release-record
+    policy and its placement on the primary tag. The Release Plan supplies each
+    releasing unit's version, primary tag, and release notes, so a process
+    derives a release record's identity and text from the sealed plan.
+
+  annotated-tag-records: >-
+    Every Intentional-created tag is annotated. Its canonical message is its tag
+    record, which holds the interpretation contract, producing Intentional
+    version, Release Plan digest, tag ID, version, and baseline status.
+    Verification takes the tag's role and prerequisites from the plan and its
+    target from the tag object, so a tag record needs none of them. Intentional
+    derives tagger identity from a fixed product identity and tagger time from
+    the target commit's committer timestamp and offset. Ambient Git
+    configuration, runner timezone, wall-clock time, randomness, and network
+    state cannot change the tag object.
+
+  tag-prerequisites: >-
+    A tag can require other canonical tag records. Before creating it,
+    Intentional resolves every prerequisite expected by the sealed plan and
+    verifies its target commit, tag ID, version, contract, and plan digest. The
+    plan contains the deterministic topological order. An exact
+    existing tag satisfies its operation; an incompatible object is a conflict.
+
+  tag-phases: >-
+    A tag stream can require an executor phase, `before-publication` or
+    `after-publication`. `intentional tag --phase <phase>` creates only the
+    planned tags that require that phase, and a run without `--phase` creates
+    only tags that require none. The declaration states what the surrounding
+    process has completed; Intentional does not observe publication. Phases and
+    prerequisites together let a process create a tag only after the work it
+    marks.
+
+  recovery: >-
+    Recovery reconstructs an established Release from Git history, the sealed
+    plan, prior tag records, and the materialized tree. It reads deleted Change
+    Intents from the release commit's parent when plan bytes are unavailable
+    locally and recomputes the expected release with the recorded Intentional
+    version. The witnessed release set holds each Release Unit whose leading
+    changelog section is newer than its latest primary tag, or equal to it while
+    that tag already marks the commit being tagged; a Release Unit whose leading
+    section equals a tag on an earlier commit did not move and is outside the
+    comparison, so a Release may move any subset of Release Units. Self-hosted
+    releases retain the exact producing binary and its integrity data for
+    execution and canonical reconstruction.
+
+  idempotency-and-conflict: >-
+    Every mutating operation computes an expected immutable result before
+    writing. An exact existing commit or tag satisfies the operation. An object
+    at the same identity with another target, tag ID, version, contract, plan
+    digest, or baseline status is a conflict and remains unchanged. Partial
+    execution can therefore rerun the same protocol without a separate
+    recovery mode.
+
+  channel-records: >-
+    Channel Releases carry the same sealed-plan and tag-record guarantees as
+    final Releases. Their iteration derives from existing authoritative tags and
+    their materialization retains Change Intents. The channel records remain
+    independently verifiable. The final channel-less Release consumes the intent
+    and materializes the consolidated changelog.
+
+  verification: >-
+    `intentional verify <tag>` checks one established Release from any of its
+    identity tags with Git history only and without hosting-platform
+    credentials. It checks the tag record and its fixed tagger, finds the
+    commit the release was planned from as recovery does, and recomputes the
+    plan there under the tag record's producing version. It then checks that
+    the recomputed plan has the recorded digest, that the release commit holds
+    the content that materializing the plan writes at each path it writes and
+    none of the intents it consumes, and that every tag in the plan carries a
+    tag record for the same digest at the release commit under the same fixed
+    tagger. A recomputed digest
+    that differs for a tag record naming another producing version is an
+    advisory, because
+    the running binary does not carry earlier versions' planning semantics; a
+    difference under the running version fails. A baseline tag establishes
+    authority without a Release. For a baseline tag record, verify recomputes
+    the complete baseline set at the tagged commit from configuration and the
+    tags that commit reaches, computes the baseline digest payload under the
+    tag record's generator version, and compares its digest with the
+    recorded `plan-digest` under the same advisory rule. A stream leaves the
+    recomputed set only through a tag record that the same reader accepts:
+    the fixed tagger, and the tag ID, version, and contract of the tag it
+    occupies, on an earlier commit or as a tag of a Release that verify
+    reconstructs at the baseline commit, whose plan names the tag and whose
+    digest the release check accepts. It then checks that
+    every tag that baseline establishment creates for the set carries a
+    baseline tag record for the same digest at that commit under the fixed
+    tagger. A tag without a tag record is pre-Intentional history that
+    supplies its version and is not checked as a baseline tag. Each Release
+    Unit whose primary tag at the baseline commit carries a baseline tag
+    record must have every version-bearing projection there at its baseline
+    version, the projection rule of baseline establishment. A baseline
+    created from configuration or projection versions that the baseline
+    commit does not hold fails.

@@ -27,12 +27,12 @@ Projection modes describe where a computed version is materialized:
 - `none`: the version exists only in tags, as with Go modules.
 
 A release unit without a version-bearing projection is tag-only. Named
-workspace tags provide repository-level release records and continuous
-delivery triggers without becoming version authority for a release unit.
+workspace tags provide repository-level tag records and continuous delivery
+triggers without becoming version authority for a release unit.
 
-## Verifiable release records
+## Verifiable tag records
 
-Every Intentional-created tag is annotated. Its record binds the release
+Every Intentional-created tag is annotated. Its tag record binds the release
 interpretation contract, Intentional version, and canonical plan digest to the
 target commit. Primary, projection, and workspace tags for one release agree
 on the version, commit, contract, and digest.
@@ -44,7 +44,9 @@ harness decides when publication and other external effects occur.
 
 Intentional never creates commits, pushes branches or tags, publishes to a
 registry, opens pull requests, or operates a forge. `tag` is its only
-Git-writing command. Tag templates do not add a `v` prefix.
+Git-writing command. Primary and workspace tag templates do not add a `v`
+prefix. A projection tag may use one where its ecosystem requires it, such as a
+Go module tag.
 
 ## Supported ecosystems
 

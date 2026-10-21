@@ -1,0 +1,77 @@
+# Released record fixtures
+
+Each `released-<version>/` directory holds bytes that the published
+`intentional-linux-x86_64` binary of that release wrote. Tests read them to
+prove that the current schemas and the current binary still accept them.
+Regenerate a fixture only from the same released binary; never edit one.
+
+All fixtures come from a fresh Git repository whose only file is a
+`package.json` with `"name": "sample-library"` and `"version": "1.2.3"`.
+
+- `config.yml`: `intentional init`, then the one npm candidate resolved as
+  `independent` with Release Unit `sample-library`, then `intentional init`
+  again. Versions 0.1.2, 0.1.8, and 0.2.0 write identical bytes. Version 0.1.0
+  writes the earlier `packages` shape, which is before the compatibility floor.
+- `released-0.2.0/release-config.yml`: `config.yml` with a `release` workspace
+  tag stream added (`require-phase: after-publication`, `tag-after` the
+  primary tag), committed with the tag `sample-library@1.2.3`. Version 0.2.0
+  loads it.
+- `released-0.2.0/release-plan.json`: `intentional plan` on the committed
+  `release-config.yml`, the tag `sample-library@1.2.3`, and one committed minor
+  intent for `sample-library`.
+- `released-0.2.0/release-unit-tag-record.txt` and `workspace-tag-record.txt`:
+  the messages of `sample-library@1.3.0` and `0.0.1`, created by
+  `intentional tag --plan release-plan.json` and
+  `intentional tag --plan release-plan.json --phase after-publication` after
+  `intentional apply` and a commit of its output.
+- `released-0.2.0/baseline-tag-record.txt` and
+  `baseline-workspace-tag-record.txt`: the messages of `sample-library@1.2.3`
+  and `0.1.0`, created by
+  `intentional tag --baseline --version workspace/release=0.1.0` on the
+  committed `release-config.yml` with no tags.
+- `released-0.2.0/baseline-digest-payload.json`: the canonical baseline digest
+  payload whose SHA-256 digest is that baseline tag record's `plan-digest`.
+
+# Record codec fixtures
+
+`release-plan/` and `tag-record/` hold hand-built documents that the record
+codecs decode. Each valid document is canonical: decoding then encoding it
+gives its bytes. A Release Plan document ends with the one newline that
+`intentional plan` prints after the encoded plan.
+
+- `release-plan/canonical.json`: a channel plan that carries every optional
+  member. Its `digest` is the SHA-256 digest of its canonical payload without
+  `digest`.
+- `release-plan/reordered.json`: the same plan with its keys in reverse order
+  and indented. It decodes to the same plan and digest.
+- `release-plan/invalid/`: `canonical.json` with one schema violation each,
+  named for the violation.
+- `tag-record/complete.txt`: a workspace tag record that carries every
+  optional member, with two `prerequisite` lines in tag ID order.
+- `tag-record/baseline-digest-payload-reordered.json`: the released `0.2.0`
+  baseline digest payload with its keys in reverse order and indented. Its
+  canonical bytes, and so its digest, are those of the released payload.
+- `tag-record/invalid/`: `complete.txt` with one schema violation each, named
+  for the violation. A tag record carries no `$schema` member;
+  `schema-member.txt` shows that such a line is an undeclared member.
+
+# Release Model fixtures
+
+`release-model/` holds hand-built Release Model documents in canonical form:
+members sorted by code point, two-space indentation, and one trailing newline.
+The `release_model_schema` test of `intentional-core` validates every document
+against `docs/specifications/release-model.schema.yml`.
+
+- `release-model/complete.json`: managed, suspended, and tag-only Release
+  Units, both `release_record` values, a generic format projection with a
+  `pointer` and no `native_identity`, fixed and linked release groups, and two
+  workspace tags.
+- `release-model/unknown-members.json`: `complete.json` with one undefined
+  member in every object kind. It validates, because every Release Model
+  object admits members it does not define.
+- `release-model/unlisted-adapter.json`: `complete.json` with one more
+  Release Unit whose adapter is not a known value. It validates, because
+  `adapter` and `ecosystems` are open string values.
+- `release-model/invalid/`: `complete.json` with one schema violation each,
+  named for the violation. The test states the location and keyword each one
+  fails with, and fails when a fixture on disk has no stated violation.

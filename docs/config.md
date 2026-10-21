@@ -21,7 +21,7 @@ produces explicit candidates before it writes canonical configuration.
 ## Configuration file
 
 ```yaml
-$schema: https://intentional.foo/schemas/config.yml
+$schema: https://intentional.foo/schemas/0.2/config
 contract: contract-1
 settings:
   internal-dependency-bump: patch
@@ -64,11 +64,11 @@ release-units:
 
 | Key | Purpose |
 | --- | --- |
-| `$schema` | Schema URL for editor validation. |
-| `contract` | Versioned interpretation semantics used by plans and tags. |
+| `$schema` | Optional schema identity for editor validation. `init` writes `https://intentional.foo/schemas/0.2/config`; the earlier value `https://intentional.foo/schemas/config.yml` is also accepted. |
+| `contract` | Required. Versioned interpretation semantics used by plans and tags; `contract-1` is the only value. |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
-| `workspace-tags` | Repository-level release records and triggers. |
+| `workspace-tags` | Repository-level tag streams and triggers. |
 | `fixed` | Groups whose managed members release at one shared version. |
 | `linked` | Groups whose releasing members share a version calculation. |
 | `discovery` | Managed and excluded candidate receipts. |
@@ -96,6 +96,14 @@ ecosystem package name.
 | `tags` | Yes | Exactly one primary tag and optional projection tags. |
 | `depends-on` | No | Internal release-unit dependencies. |
 | `disposition` | No | `managed` by default; `suspended` keeps identity while blocking a required release. |
+| `release-record` | No | `required` by default: every release has a release record, such as a GitHub Release, on its primary tag. `none`: the unit has no release record and its tag records are its complete record. |
+
+`release-record` states a policy for the surrounding release process.
+Intentional creates no release record under either value, and `plan`, `apply`,
+and `tag` behave the same for both. The release process creates the record when
+the policy is `required`. Documentation units and Dev Container Feature and
+Template units use `none`. `init` writes no `release-record`, so new units take
+`required`.
 
 Each projection has an adapter, relative file path, and mode. Generic `json`,
 `toml`, and `yaml` projections also require a pointer to the version field.
@@ -125,14 +133,16 @@ units in different ecosystems release together, put them in a `fixed` or
 
 Each release unit has one tag with `role: primary` and may have tags with
 `role: projection`. Named workspace tags live under `workspace-tags`. Every
-template contains `{version}`, may contain `{id}` where supported, and must not
-prefix the version with `v`.
+template contains `{version}` and may contain `{id}` where supported. Primary
+and workspace tags do not prefix the version with `v`. A projection tag may use
+a `v` prefix when its ecosystem requires it. For example, a Go module can pair
+primary `{id}@{version}` with projection `v{version}`.
 
 Common templates are:
 
 - `{id}@{version}` for a release-unit namespace, such as
   `sample-library@1.4.0`;
-- `{version}` for a single-release-unit repository or workspace release record.
+- `{version}` for a single-release-unit repository or a workspace tag.
 
 Set `require-phase` to `before-publication` or `after-publication` when the
 executor must declare the external phase before creating a tag. Set

@@ -1,0 +1,233 @@
+# ---
+# relationships:
+#   realizes: release-model
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/release-model/1
+title: Intentional Release Model
+description: >-
+  `adapter` and each `ecosystems` item are the only open values in the Release
+  Model: a new adapter stays within the line. Every other enumerated member,
+  `mode`, `require_phase`, `disposition`, `release_record`, `role`, and `kind`,
+  is closed, and a new value for any of them mints the next line.
+type: object
+required:
+  - $schema
+  - paths
+  - release_units
+  - workspace_tags
+  - release_groups
+properties:
+  $schema:
+    const: https://intentional.foo/schemas/release-model/1
+  paths:
+    $ref: "#/$defs/paths"
+  release_units:
+    type: object
+    propertyNames:
+      $ref: "#/$defs/stable-id"
+    additionalProperties:
+      $ref: "#/$defs/release-unit"
+  workspace_tags:
+    type: object
+    propertyNames:
+      $ref: "#/$defs/stable-id"
+    additionalProperties:
+      $ref: "#/$defs/workspace-tag"
+  release_groups:
+    $ref: "#/$defs/release-groups"
+$defs:
+  stable-id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9._-]*$"
+  tag-id:
+    type: string
+    pattern: "^(?:release-unit/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*|workspace/[a-z0-9][a-z0-9._-]*)$"
+  relative-path:
+    type: string
+    minLength: 1
+  stable-id-list:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/stable-id"
+  tag-id-list:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/tag-id"
+  tag-template:
+    type: string
+    minLength: 1
+  tag-phase:
+    enum: [ before-publication, after-publication ]
+  adapter:
+    description: >-
+      Open set. Known ecosystem adapters are npm, cargo, pub, python, msbuild,
+      and go; known generic format adapters are json, toml, and yaml.
+    type: string
+    minLength: 1
+    examples: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
+  generic-adapter:
+    enum: [ json, toml, yaml ]
+  paths:
+    type: object
+    required: [ config, intents, model ]
+    properties:
+      config:
+        const: .intentional/config.yml
+      intents:
+        const: .intentional/intents
+      model:
+        const: .intentional/release-model.json
+  release-unit:
+    type: object
+    required:
+      - path
+      - changelog
+      - disposition
+      - release_record
+      - depends_on
+      - ecosystems
+      - projections
+      - sources
+      - tags
+    properties:
+      path:
+        $ref: "#/$defs/relative-path"
+      changelog:
+        $ref: "#/$defs/relative-path"
+      disposition:
+        enum: [ managed, suspended ]
+      release_record:
+        enum: [ required, none ]
+      depends_on:
+        $ref: "#/$defs/stable-id-list"
+      release_group:
+        $ref: "#/$defs/release-group-membership"
+      ecosystems:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/adapter"
+      projections:
+        type: array
+        items:
+          $ref: "#/$defs/projection"
+      sources:
+        type: array
+        uniqueItems: true
+        items:
+          $ref: "#/$defs/source"
+      tags:
+        type: object
+        propertyNames:
+          $ref: "#/$defs/stable-id"
+        additionalProperties:
+          $ref: "#/$defs/release-unit-tag"
+  release-group-membership:
+    type: object
+    required: [ kind, members ]
+    properties:
+      kind:
+        enum: [ fixed, linked ]
+      members:
+        $ref: "#/$defs/stable-id-list"
+  projection:
+    type: object
+    required: [ adapter, file, workspace_file, mode, generic ]
+    properties:
+      adapter:
+        $ref: "#/$defs/adapter"
+      file:
+        $ref: "#/$defs/relative-path"
+      workspace_file:
+        $ref: "#/$defs/relative-path"
+      mode:
+        enum: [ committed, injected, none ]
+      generic:
+        description: True for a generic format adapter; false for an ecosystem adapter.
+        type: boolean
+      pointer:
+        type: string
+        minLength: 1
+      native_identity:
+        type: string
+        minLength: 1
+    allOf:
+      - if:
+          properties:
+            adapter:
+              $ref: "#/$defs/generic-adapter"
+          required: [ adapter ]
+        then:
+          properties:
+            generic:
+              const: true
+      - if:
+          properties:
+            adapter:
+              anyOf:
+                - const: npm
+                - const: cargo
+                - const: pub
+                - const: python
+                - const: msbuild
+                - const: go
+          required: [ adapter ]
+        then:
+          properties:
+            generic:
+              const: false
+      - if:
+          properties:
+            generic:
+              const: true
+          required: [ generic ]
+        then:
+          required: [ pointer ]
+          not:
+            required: [ native_identity ]
+  source:
+    type: object
+    required: [ detector, path ]
+    properties:
+      detector:
+        $ref: "#/$defs/stable-id"
+      path:
+        $ref: "#/$defs/relative-path"
+  release-unit-tag:
+    type: object
+    required: [ role, template, tag_after ]
+    properties:
+      role:
+        enum: [ primary, projection ]
+      template:
+        $ref: "#/$defs/tag-template"
+      require_phase:
+        $ref: "#/$defs/tag-phase"
+      tag_after:
+        $ref: "#/$defs/tag-id-list"
+  workspace-tag:
+    type: object
+    required: [ template, tag_after ]
+    properties:
+      template:
+        $ref: "#/$defs/tag-template"
+      require_phase:
+        $ref: "#/$defs/tag-phase"
+      tag_after:
+        $ref: "#/$defs/tag-id-list"
+  release-groups:
+    type: object
+    required: [ fixed, linked ]
+    properties:
+      fixed:
+        $ref: "#/$defs/group-list"
+      linked:
+        $ref: "#/$defs/group-list"
+  group-list:
+    type: array
+    uniqueItems: true
+    items:
+      $ref: "#/$defs/stable-id-list"
