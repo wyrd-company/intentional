@@ -56,13 +56,21 @@ pub fn check_workspace(root: &Path) -> Result<()> {
 /// of their unit. The release version is the version of an applied release
 /// that waits for its tag, as `tag` detects it, or else the tag-derived
 /// current version. Every committed projection of a unit must hold the same
-/// version, so a partly applied release fails.
+/// version, so a partly applied release fails. An existing changelog whose
+/// leading heading is not SemVer is not evidence of an applied release.
 fn committed_drift(root: &Path, config: &Config, status: &WorkspaceStatus) -> Result<Vec<String>> {
     let mut findings = Vec::new();
     for unit in &status.release_units {
         let release_unit = &config.release_units[&unit.id];
-        let applied = release_version(root, &release_unit.path, &unit.current)?
-            .filter(|version| version > &unit.current);
+        let applied = match release_version(root, &release_unit.path, &unit.current) {
+            Ok(version) => version,
+            // Before the first apply, an adopted repository can have a
+            // changelog in another format. Keep tag's strict parsing, but
+            // compare these projections with the tag-derived version.
+            Err(Error::Semver(_)) => None,
+            Err(error) => return Err(error),
+        }
+        .filter(|version| version > &unit.current);
         let expected = match &applied {
             Some(applied) => format!("applied release {applied}"),
             None => unit.current.to_string(),

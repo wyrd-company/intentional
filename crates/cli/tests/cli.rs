@@ -1132,6 +1132,59 @@ fn check_passes_a_committed_projection_at_the_tag_version() {
     repo.cli().arg("check").assert().success();
 }
 
+fn check_adopted_changelog(heading: &str) {
+    let repo = tagged_npm_repository("committed", "1.0.0");
+    repo.write(
+        "CHANGELOG.md",
+        &format!("# Changelog\n\n{heading}\n\nNotes.\n\n## 1.0.1\n\nOlder notes.\n"),
+    );
+    repo.commit("retain existing changelog");
+    repo.cli().arg("status").assert().success();
+    repo.cli().arg("check").assert().success();
+    // Adoption does not relax the release validation that tag already enforces.
+    repo.cli()
+        .args(["tag", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid semantic version"));
+
+    repo.write("package.json", &npm_manifest("1.0.1"));
+    repo.commit("move only the projection");
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release unit sample projection package.json is 1.0.1, expected 1.0.0",
+        ));
+
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("patch", "Fix a user-visible defect."),
+    );
+    repo.commit("prepare first release");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply first release");
+    repo.cli().arg("check").assert().success();
+    repo.cli().args(["tag", "--dry-run"]).assert().success();
+}
+
+#[test]
+fn check_adopts_a_changelog_with_an_unreleased_heading() {
+    check_adopted_changelog("## [Unreleased]");
+}
+
+#[test]
+fn check_adopts_a_changelog_with_a_bracketed_version_and_date() {
+    check_adopted_changelog("## [1.0.0] - 2024-01-01");
+}
+
+#[test]
+fn check_adopts_a_changelog_with_a_linked_version_and_date() {
+    check_adopted_changelog("## [1.0.0](https://example.invalid/compare) (2024-01-01)");
+}
+
 #[test]
 fn check_ignores_drift_on_injected_and_none_projections() {
     for mode in ["injected", "none"] {
@@ -1249,6 +1302,78 @@ fn check_fails_a_partly_applied_cargo_release() {
         )
         .and(predicate::str::contains("package.json").not()),
     );
+}
+
+#[test]
+fn check_accepts_a_beta_release_above_the_last_stable_tag() {
+    let repo = applied_cargo_repository();
+    repo.cli().arg("check").assert().success();
+    repo.cli().arg("tag").assert().success();
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("minor", "Add a user-visible capability."),
+    );
+    repo.commit("prepare beta release");
+    repo.cli()
+        .args(["apply", "--channel", "beta"])
+        .assert()
+        .success();
+    repo.commit("apply beta release");
+    assert!(fs::read_to_string(repo.root.join("Cargo.toml"))
+        .unwrap()
+        .contains("1.1.0-beta.1"));
+    assert!(fs::read_to_string(repo.root.join("package.json"))
+        .unwrap()
+        .contains("1.1.0-beta.1"));
+    repo.cli().arg("check").assert().success();
+    repo.cli()
+        .args(["tag", "--dry-run", "--channel", "beta"])
+        .assert()
+        .success();
+
+    repo.write("Cargo.toml", &cargo_manifest("1.0.1"));
+    repo.commit("restore one projection to the stable version");
+    repo.cli().arg("check").assert().failure().stderr(
+        predicate::str::contains(
+            "release unit sample projection Cargo.toml is 1.0.1, expected applied release 1.1.0-beta.1",
+        )
+        .and(predicate::str::contains("package.json").not()),
+    );
+    repo.cli()
+        .args(["tag", "--dry-run", "--channel", "beta"])
+        .assert()
+        .failure();
+
+    repo.write("Cargo.toml", &cargo_manifest("1.1.0-beta.1"));
+    repo.commit("complete beta projections");
+    repo.cli()
+        .args(["tag", "--channel", "beta"])
+        .assert()
+        .success();
+    repo.write("notes.txt", "Additional notes.\n");
+    repo.commit("continue after beta tag");
+    repo.cli().arg("check").assert().success();
+
+    repo.write("Cargo.toml", &cargo_manifest("1.0.1"));
+    repo.commit("restore one projection after beta tag");
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+        "release unit sample projection Cargo.toml is 1.0.1, expected applied release 1.1.0-beta.1",
+    ));
+    repo.cli()
+        .args(["tag", "--dry-run", "--channel", "beta"])
+        .assert()
+        .failure();
+    repo.write("Cargo.toml", &cargo_manifest("1.1.0-beta.1"));
+    repo.commit("restore complete beta projections");
+
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply stable release");
+    repo.cli().arg("check").assert().success();
+    repo.cli().args(["tag", "--dry-run"]).assert().success();
 }
 
 #[test]

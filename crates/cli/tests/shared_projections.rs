@@ -813,6 +813,31 @@ fn refuses_one_field_projected_through_symlink_aliases() {
 }
 
 #[test]
+fn check_refuses_changelog_resolving_outside_repository() {
+    let repo = root_projection_repository();
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("CHANGELOG.md");
+    fs::write(&outside, "# Changelog\n\n## [Unreleased]\n").expect("outside changelog");
+    fs::create_dir_all(repo.root.join("site/beta")).expect("unit directory");
+    symlink_file(
+        "../../../CHANGELOG.md",
+        &repo.root.join("site/beta/CHANGELOG.md"),
+    );
+    repo.commit("retain outside changelog link");
+    repo.cli().arg("status").assert().success();
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "site/beta/CHANGELOG.md resolves outside the repository",
+        )));
+}
+
+#[test]
 fn tag_refuses_changelog_resolving_outside_repository() {
     let repo = root_projection_repository();
     repo.intent("docs-0001", &[("beta", "patch")]);

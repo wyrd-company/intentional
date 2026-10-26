@@ -96,7 +96,11 @@ proposed-design:
     than competing authority. Drift on a committed projection fails check.
     The expected version is the tag version or, when the release unit has an
     applied release that waits for its tag, that release version for every
-    committed projection of the unit, detected by the same rule as tag, so a
+    committed projection of the unit, detected by the same rule as tag. A
+    prerelease version above the last stable tag also supplies this version,
+    including after its channel tag. For check, a leading changelog heading
+    that is not plain SemVer supplies no applied release, so the expected
+    version falls back to the tag. Tag retains strict release validation. A
     partly applied release fails. Drift on injected projections is reported
     only by status, and none projections are not read. Monorepo support
     includes per-release-unit intents,
