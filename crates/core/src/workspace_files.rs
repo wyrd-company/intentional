@@ -107,14 +107,31 @@ pub(crate) enum CaseRule {
 }
 
 impl CaseRule {
-    /// Probe a directory: look up one of its entries with the letter case
-    /// of its name swapped, and see whether that reaches the same entry.
+    /// Probe a directory through one of its entries whose name has letter
+    /// case.
+    ///
+    /// Two entries whose names differ only in case show that the directory
+    /// distinguishes case. Otherwise the entry's name with its case swapped
+    /// is looked up: if it is not found, the directory distinguishes case;
+    /// if it reaches the same entry, the directory ignores case. Equal
+    /// handles alone prove nothing, because two distinct entries can be
+    /// hard links or symlinks to one file, so the swapped name must not be
+    /// an entry of its own. Any other outcome leaves the rule unknown.
     pub(crate) fn of(directory: &Path) -> Self {
         let Ok(entries) = std::fs::read_dir(directory) else {
             return Self::Unknown;
         };
-        for entry in entries.flatten().take(64) {
-            let name = entry.file_name();
+        let mut names = BTreeSet::new();
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return Self::Unknown;
+            };
+            if names.len() == MAX_PROBED_ENTRIES {
+                return Self::Unknown;
+            }
+            names.insert(entry.file_name());
+        }
+        for name in &names {
             let Some(text) = name.to_str() else { continue };
             let upper = text.to_uppercase();
             let swapped = if upper == text {
@@ -125,19 +142,24 @@ impl CaseRule {
             if swapped == text {
                 continue;
             }
-            let Ok(original) = Handle::from_path(directory.join(&name)) else {
+            if names.contains(std::ffi::OsStr::new(&swapped)) {
+                return Self::Distinguishes;
+            }
+            let Ok(original) = Handle::from_path(directory.join(name)) else {
                 continue;
             };
             return match Handle::from_path(directory.join(&swapped)) {
                 Ok(other) if other == original => Self::Ignores,
-                Ok(_) => Self::Distinguishes,
                 Err(error) if error.kind() == ErrorKind::NotFound => Self::Distinguishes,
-                Err(_) => continue,
+                _ => Self::Unknown,
             };
         }
         Self::Unknown
     }
 }
+
+/// A larger directory is not listed in full; its case rule stays unknown.
+const MAX_PROBED_ENTRIES: usize = 4096;
 
 fn folded(names: &[OsString]) -> Vec<String> {
     names
@@ -502,6 +524,32 @@ mod tests {
         let new = FileIdentity::of(&root.join("New/CHANGELOG.md")).expect("identity");
         let lower = FileIdentity::of(&root.join("new/CHANGELOG.md")).expect("identity");
         assert_eq!(new == lower, ignores);
+    }
+
+    #[test]
+    fn case_rule_is_not_fooled_by_entries_that_differ_only_in_case() {
+        let (_temp, root) = workspace();
+        for (directory, link) in [("hard", "hard link"), ("soft", "symlink")] {
+            let directory = root.join(directory);
+            fs::create_dir(&directory).expect("probe directory");
+            fs::write(directory.join("probe"), "x").expect("probe entry");
+            let made = if link == "hard link" {
+                fs::hard_link(directory.join("probe"), directory.join("PROBE"))
+            } else {
+                #[cfg(unix)]
+                let made = std::os::unix::fs::symlink("probe", directory.join("PROBE"));
+                #[cfg(windows)]
+                let made = std::os::windows::fs::symlink_file("probe", directory.join("PROBE"));
+                made
+            };
+            let expected = match made {
+                Ok(()) => CaseRule::Distinguishes,
+                // Only a directory that ignores case refuses the second name.
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => CaseRule::Ignores,
+                Err(error) => panic!("{link}: {error}"),
+            };
+            assert_eq!(CaseRule::of(&directory), expected, "{link}");
+        }
     }
 
     #[test]

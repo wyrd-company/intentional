@@ -987,3 +987,43 @@ fn apply_merges_case_aliases_of_new_directories() {
     assert!(changelog.contains("Fix the lower widget."), "{changelog}");
     assert!(changelog.contains("Fix the upper widget."), "{changelog}");
 }
+
+#[test]
+fn apply_keeps_case_variant_directories_apart_beside_case_variant_links() {
+    let repo = TestRepo::new();
+    if ignores_case(&repo) {
+        // Such a directory cannot hold two entries that differ only in case.
+        return;
+    }
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("lower", "empty/widgets", "/meta.yml", "/lower", "committed"),
+            yaml_unit("upper", "empty/Widgets", "/meta.yml", "/upper", "committed"),
+        ]),
+    );
+    repo.write("meta.yml", "lower: 0.1.0\nupper: 0.2.0\n");
+    repo.write("empty/probe", "x");
+    fs::hard_link(repo.root.join("empty/probe"), repo.root.join("empty/PROBE"))
+        .expect("case-variant hard link");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nlower: patch\nupper: patch\n---\n\nFix both widgets.\n",
+    );
+    repo.commit("add intent");
+    assert_eq!(
+        repo.writes(&["apply", "--dry-run"]),
+        [
+            "write empty/Widgets/CHANGELOG.md",
+            "write empty/widgets/CHANGELOG.md",
+            "write meta.yml",
+        ]
+        .map(native)
+    );
+    repo.cli().arg("apply").assert().success();
+    assert!(repo.read("empty/widgets/CHANGELOG.md").contains("## 0.1.1"));
+    assert!(repo.read("empty/Widgets/CHANGELOG.md").contains("## 0.2.1"));
+}
