@@ -776,3 +776,49 @@ fn refuses_outside_cargo_manifest(outside_manifest: &str) {
             .stdout(predicate::str::contains("7.8.9").not());
     }
 }
+
+#[test]
+fn refuses_a_projection_of_an_inherited_cargo_version() {
+    let repo = inherited_cargo_repository(
+        "[workspace]\nmembers = [\"a\"]\n\n[workspace.package]\nversion = \"1.0.0\"\n",
+    );
+    let mut config = repo.read(".intentional/config.yml");
+    config.push_str("  beta:\n    path: b\n    projections:\n      - { adapter: toml, file: /Cargo.toml, pointer: /workspace/package/version, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n");
+    repo.write(".intentional/config.yml", &config);
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: minor\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    let message = format!(
+        "release units alpha and beta both project /workspace/package/version in one file: Cargo.toml (inherited by {}) and Cargo.toml are the same file",
+        native("a/Cargo.toml")
+    );
+    for args in [&["status"][..], &["check"], &["apply", "--dry-run"]] {
+        repo.cli()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message.clone()));
+    }
+    assert!(repo
+        .root
+        .join(".intentional/intents/joint-0001.md")
+        .exists());
+}
+
+#[test]
+fn allows_cargo_members_that_inherit_one_workspace_version() {
+    let repo = inherited_cargo_repository(
+        "[workspace]\nmembers = [\"a\", \"b\"]\n\n[workspace.package]\nversion = \"1.0.0\"\n",
+    );
+    let mut config = repo.read(".intentional/config.yml");
+    config.push_str("  beta:\n    path: b\n    projections:\n      - { adapter: cargo, file: Cargo.toml, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n");
+    repo.write(".intentional/config.yml", &config);
+    repo.write(
+        "b/Cargo.toml",
+        "[package]\nname = \"beta\"\nversion.workspace = true\n",
+    );
+    repo.commit("add fixture");
+    repo.cli().arg("status").assert().success();
+}

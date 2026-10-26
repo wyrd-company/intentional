@@ -6,10 +6,12 @@
 //! Ownership of the version fields that projections write.
 
 use crate::adapters::format::{json_pointer, key_pointer};
+use crate::adapters::CargoAdapter;
+use crate::apply::workspace_manifest;
 use crate::config::{Config, Projection, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::model::{Adapter, ProjectionMode};
-use crate::workspace_files::{contained, FileIdentity};
+use crate::workspace_files::{contained, read_contained, FileIdentity};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -107,27 +109,82 @@ pub(crate) fn check_ownership(release_units: &BTreeMap<String, ReleaseUnitConfig
     Ok(())
 }
 
+/// The physical field that one projection writes.
+struct PhysicalTarget {
+    identity: FileIdentity,
+    field: ProjectionField,
+    /// The file as reported in a refusal.
+    display: String,
+    /// A Cargo member that writes its workspace's inherited version.
+    inherited: bool,
+}
+
+impl PhysicalTarget {
+    /// Resolve the file and field a projection writes.
+    ///
+    /// A Cargo member whose version is inherited writes
+    /// `/workspace/package/version` in its workspace manifest, not its own
+    /// manifest. A member that cannot be read keeps its own field; the
+    /// command that reads it then fails.
+    fn of(root: &Path, path: PathBuf, projection: &Projection) -> Result<Self> {
+        if projection.adapter == Adapter::Cargo {
+            let inherited = read_contained(root, &path)
+                .ok()
+                .and_then(|text| CargoAdapter.version(&text).ok())
+                .is_some_and(|version| version.is_none());
+            if inherited {
+                let workspace = workspace_manifest(root, &path)?;
+                return Ok(Self {
+                    identity: FileIdentity::of(&contained(root, &workspace)?)?,
+                    field: ProjectionField::Keys(
+                        ["workspace", "package", "version"]
+                            .map(str::to_owned)
+                            .to_vec(),
+                    ),
+                    display: format!("{} (inherited by {})", workspace.display(), path.display()),
+                    inherited: true,
+                });
+            }
+        }
+        Ok(Self {
+            identity: FileIdentity::of(&contained(root, &path)?)?,
+            field: ProjectionField::of(projection),
+            display: path.display().to_string(),
+            inherited: false,
+        })
+    }
+
+    /// Whether two projections write one field. Cargo members that inherit
+    /// one workspace version share it; apply refuses them when their
+    /// versions differ.
+    fn conflicts_with(&self, other: &Self) -> bool {
+        self.identity == other.identity
+            && self.field == other.field
+            && !(self.inherited && other.inherited)
+    }
+}
+
 /// Refuse two projections that write one field of one physical file.
 ///
 /// Config load compares paths as text, so it cannot see two paths that
 /// reach one file through symlinks, or through letter case on a
-/// filesystem that ignores it. Commands that edit or read projections run
-/// this check against the filesystem.
+/// filesystem that ignores it, or a Cargo member that writes its
+/// workspace's inherited version. Commands that edit or read projections
+/// run this check against the filesystem.
 pub(crate) fn check_physical_ownership(root: &Path, config: &Config) -> Result<()> {
-    let mut owners = Vec::<(FileIdentity, PathBuf, ProjectionField, &str)>::new();
+    let mut owners = Vec::<(PhysicalTarget, &str)>::new();
     for (id, release_unit) in &config.release_units {
         for projection in &release_unit.projections {
             if !writes(projection) {
                 continue;
             }
             let path = projection.file.workspace_path(&release_unit.path);
-            let identity = FileIdentity::of(&contained(root, &path)?)?;
-            let field = ProjectionField::of(projection);
-            if let Some((_, other, _, owner)) =
-                owners.iter().find(|(known, other, known_field, _)| {
-                    *known == identity && *known_field == field && *other != path
-                })
+            let target = PhysicalTarget::of(root, path, projection)?;
+            if let Some((other, owner)) = owners
+                .iter()
+                .find(|(known, _)| known.conflicts_with(&target))
             {
+                let field = &target.field;
                 let owners = if *owner == id.as_str() {
                     format!("release unit {id} projects {field} twice")
                 } else {
@@ -135,11 +192,10 @@ pub(crate) fn check_physical_ownership(root: &Path, config: &Config) -> Result<(
                 };
                 return Err(Error::Validation(format!(
                     "{owners} in one file: {} and {} are the same file",
-                    other.display(),
-                    path.display()
+                    other.display, target.display
                 )));
             }
-            owners.push((identity, path, field, id));
+            owners.push((target, id));
         }
     }
     Ok(())

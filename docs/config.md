@@ -165,6 +165,11 @@ one field of one file through different paths: a symlink, a hard link, or
 letter case on a filesystem that ignores case. Through such paths, `apply` and
 `stamp` still edit one file once.
 
+A `cargo` member whose version is inherited writes `/workspace/package/version`
+in its workspace manifest. Several such members may share that field, and
+`apply` refuses them when their versions differ, but no other projection may
+write it.
+
 A generic projection has no ecosystem, so a release of `sample-cli` does not
 bump `sample-docs`. Put both units in a `fixed` or `linked` group when they
 must release together.
