@@ -128,11 +128,14 @@ proposed-design:
     configuration. Each field of each file has one owner: configuration load
     refuses two committed or injected projections whose resolved paths and
     parsed pointers match, and an ecosystem adapter owns its fixed version
-    field. Edits to one file merge by physical file identity, so paths that
+    field. A Cargo member that inherits its version owns the workspace
+    manifest's version field, shared only with the other members that
+    inherit it. Edits to one file merge by physical file identity, so paths that
     reach one file through symlinks, hard links, or letter case share one
     edit, and the commands that read or edit projections repeat the ownership
-    check by physical identity. A projection file or changelog that resolves
-    outside the repository is refused.
+    check by physical identity.
+    A projection file or changelog that resolves outside the repository is
+    refused, when it is read and again when it is written.
   root-projection-file-syntax: >-
     A root file is written with a leading / (/docs/site.yml), the anchor
     convention of .gitignore and CODEOWNERS, in one canonical form: one /,
