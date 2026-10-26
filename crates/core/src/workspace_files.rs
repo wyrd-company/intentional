@@ -85,12 +85,94 @@ pub(crate) fn read_contained(root: &Path, relative: &Path) -> Result<String> {
 /// goes through.
 ///
 /// A file that exists is its own handle. A file that does not exist yet is
-/// its nearest existing ancestor plus the remaining names.
-#[derive(Debug, PartialEq, Eq)]
+/// its nearest existing ancestor plus the remaining names, compared by
+/// letter case only as far as that ancestor ignores case.
+#[derive(Debug)]
 pub(crate) enum FileIdentity {
     Existing(Handle),
-    Absent(Handle, Vec<OsString>),
+    Absent {
+        ancestor: Handle,
+        names: Vec<OsString>,
+        case: CaseRule,
+    },
 }
+
+/// How a directory compares the names of its entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaseRule {
+    Distinguishes,
+    Ignores,
+    /// No entry of the directory could show the rule.
+    Unknown,
+}
+
+impl CaseRule {
+    /// Probe a directory: look up one of its entries with the letter case
+    /// of its name swapped, and see whether that reaches the same entry.
+    pub(crate) fn of(directory: &Path) -> Self {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return Self::Unknown;
+        };
+        for entry in entries.flatten().take(64) {
+            let name = entry.file_name();
+            let Some(text) = name.to_str() else { continue };
+            let upper = text.to_uppercase();
+            let swapped = if upper == text {
+                text.to_lowercase()
+            } else {
+                upper
+            };
+            if swapped == text {
+                continue;
+            }
+            let Ok(original) = Handle::from_path(directory.join(&name)) else {
+                continue;
+            };
+            return match Handle::from_path(directory.join(&swapped)) {
+                Ok(other) if other == original => Self::Ignores,
+                Ok(_) => Self::Distinguishes,
+                Err(error) if error.kind() == ErrorKind::NotFound => Self::Distinguishes,
+                Err(_) => continue,
+            };
+        }
+        Self::Unknown
+    }
+}
+
+fn folded(names: &[OsString]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .collect()
+}
+
+impl PartialEq for FileIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Existing(left), Self::Existing(right)) => left == right,
+            (
+                Self::Absent {
+                    ancestor: left,
+                    names: left_names,
+                    case,
+                },
+                Self::Absent {
+                    ancestor: right,
+                    names: right_names,
+                    ..
+                },
+            ) => {
+                left == right
+                    && (left_names == right_names
+                        || (*case == CaseRule::Ignores
+                            && folded(left_names) == folded(right_names)))
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for FileIdentity {}
 
 impl FileIdentity {
     pub(crate) fn of(absolute: &Path) -> Result<Self> {
@@ -101,7 +183,11 @@ impl FileIdentity {
                 Ok(handle) if missing.is_empty() => return Ok(Self::Existing(handle)),
                 Ok(handle) => {
                     missing.reverse();
-                    return Ok(Self::Absent(handle, missing));
+                    return Ok(Self::Absent {
+                        ancestor: handle,
+                        names: missing,
+                        case: CaseRule::of(current),
+                    });
                 }
                 Err(error) if error.kind() == ErrorKind::NotFound => {
                     let (Some(parent), Some(name)) = (current.parent(), current.file_name()) else {
@@ -112,6 +198,27 @@ impl FileIdentity {
                 }
                 Err(error) => return Err(Error::io(current, error)),
             }
+        }
+    }
+
+    /// Whether two different identities may still be one file: absent
+    /// names that differ only by letter case, in a directory whose case
+    /// rule is unknown.
+    fn may_alias(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Absent {
+                    ancestor: left,
+                    names: left_names,
+                    case: CaseRule::Unknown,
+                },
+                Self::Absent {
+                    ancestor: right,
+                    names: right_names,
+                    ..
+                },
+            ) => left == right && folded(left_names) == folded(right_names),
+            _ => false,
         }
     }
 }
@@ -149,6 +256,18 @@ impl<'a> EditTree<'a> {
         let index = match self.files.iter().position(|file| file.identity == identity) {
             Some(index) => index,
             None => {
+                if let Some(file) = self
+                    .files
+                    .iter()
+                    .find(|file| identity.may_alias(&file.identity))
+                {
+                    let known = file.paths.iter().next().expect("reached by a path");
+                    return Err(Error::Validation(format!(
+                        "{} and {} differ only in letter case, and Intentional cannot tell whether their directory ignores case",
+                        known.display(),
+                        relative.display()
+                    )));
+                }
                 self.files.push(TreeFile {
                     identity,
                     absolute,
@@ -365,6 +484,40 @@ mod tests {
                     contents: "c: 1\n".to_owned(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn case_rule_follows_the_directory() {
+        let (_temp, root) = workspace();
+        let ignores = root.join("SITE").exists();
+        let expected = if ignores {
+            CaseRule::Ignores
+        } else {
+            CaseRule::Distinguishes
+        };
+        assert_eq!(CaseRule::of(&root), expected);
+        fs::create_dir(root.join("empty")).expect("empty directory");
+        assert_eq!(CaseRule::of(&root.join("empty")), CaseRule::Unknown);
+        let new = FileIdentity::of(&root.join("New/CHANGELOG.md")).expect("identity");
+        let lower = FileIdentity::of(&root.join("new/CHANGELOG.md")).expect("identity");
+        assert_eq!(new == lower, ignores);
+    }
+
+    #[test]
+    fn edit_tree_refuses_case_variants_where_the_case_rule_is_unknown() {
+        let (_temp, root) = workspace();
+        fs::create_dir(root.join("empty")).expect("empty directory");
+        let mut tree = EditTree::new(&root);
+        tree.read_optional(Path::new("empty/New/CHANGELOG.md"))
+            .expect("first path");
+        let error = tree
+            .read_optional(Path::new("empty/new/CHANGELOG.md"))
+            .expect_err("case variant refused")
+            .to_string();
+        assert!(
+            error.contains("differ only in letter case, and Intentional cannot tell"),
+            "{error}"
         );
     }
 

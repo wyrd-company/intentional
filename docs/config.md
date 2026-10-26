@@ -163,7 +163,9 @@ refuses them, in one release unit or across release units:
 `status`, `check`, `apply`, `stamp`, and `tag` also refuse two projections that
 reach one field of one file through different paths: a symlink, a hard link, or
 letter case on a filesystem that ignores case. Through such paths, `apply` and
-`stamp` still edit one file once.
+`stamp` still edit one file once, including a file that does not exist yet,
+such as a first changelog. When Intentional cannot tell whether a directory
+ignores case, it refuses two new files whose paths differ only in letter case.
 
 A `cargo` member whose version is inherited writes `/workspace/package/version`
 in its workspace manifest. Several such members may share that field, and

@@ -476,20 +476,26 @@ fn stamp_merges_edits_reached_through_symlinks() {
     assert_eq!(repo.read("shared.yml"), "alpha: 0.0.1\nbeta: 0.0.1\n");
 }
 
+/// Whether the repository's filesystem ignores letter case. CI sets
+/// `INTENTIONAL_TEST_CASE_INSENSITIVE` where it does, so that a case test
+/// cannot pass there without running.
+fn ignores_case(repo: &TestRepo) -> bool {
+    repo.write("probe/case", "");
+    let ignores = repo.root.join("PROBE/CASE").exists();
+    fs::remove_dir_all(repo.root.join("probe")).expect("remove probe");
+    assert!(
+        ignores || std::env::var_os("INTENTIONAL_TEST_CASE_INSENSITIVE").is_none(),
+        "expected a filesystem that ignores letter case"
+    );
+    ignores
+}
+
 #[test]
 fn apply_merges_case_aliases() {
     let repo = TestRepo::new();
-    repo.write("site/probe", "");
-    if !repo.root.join("SITE/PROBE").exists() {
-        // CI sets this where the filesystem ignores case, so that this test
-        // cannot pass there without running.
-        assert!(
-            std::env::var_os("INTENTIONAL_TEST_CASE_INSENSITIVE").is_none(),
-            "expected a filesystem that ignores letter case"
-        );
+    if !ignores_case(&repo) {
         return;
     }
-    fs::remove_file(repo.root.join("site/probe")).expect("remove probe");
     repo.write(
         ".intentional/config.yml",
         &config(&[
@@ -941,4 +947,43 @@ fn stamp_refuses_a_target_that_leaves_the_repository_after_planning() {
     assert!(repo
         .read("packages/alpha/manifest.json")
         .contains("\"version\": \"0.0.0\""));
+}
+
+#[test]
+fn apply_merges_case_aliases_of_new_directories() {
+    let repo = TestRepo::new();
+    if !ignores_case(&repo) {
+        return;
+    }
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("lower", "widgets", "/meta.yml", "/lower", "committed"),
+            yaml_unit("upper", "Widgets", "/meta.yml", "/upper", "committed"),
+        ]),
+    );
+    repo.write("meta.yml", "lower: 0.1.0\nupper: 0.2.0\n");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.write(
+        ".intentional/intents/lower-0001.md",
+        "---\nlower: patch\n---\n\nFix the lower widget.\n",
+    );
+    repo.write(
+        ".intentional/intents/upper-0001.md",
+        "---\nupper: patch\n---\n\nFix the upper widget.\n",
+    );
+    repo.commit("add intents");
+    assert!(!repo.root.join("widgets").exists());
+    let writes = repo.writes(&["apply", "--dry-run"]);
+    assert_eq!(
+        writes,
+        ["write Widgets/CHANGELOG.md", "write meta.yml"].map(native),
+        "{writes:?}"
+    );
+    repo.cli().arg("apply").assert().success();
+    let changelog = repo.read("widgets/CHANGELOG.md");
+    assert!(changelog.contains("Fix the lower widget."), "{changelog}");
+    assert!(changelog.contains("Fix the upper widget."), "{changelog}");
 }
