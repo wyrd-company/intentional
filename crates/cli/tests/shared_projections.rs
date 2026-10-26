@@ -6,6 +6,8 @@
 //! Projection files that several release units share.
 
 use assert_cmd::Command;
+use intentional_core::{initialize, CandidateResolution, InitPlan, InitState};
+use predicates::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
@@ -42,6 +44,25 @@ impl TestRepo {
     fn commit(&self, message: &str) {
         git(&self.root, &["add", "-A"]);
         git(&self.root, &["commit", "-q", "-m", message]);
+    }
+
+    fn intent(&self, slug: &str, bumps: &[(&str, &str)]) {
+        let frontmatter = bumps
+            .iter()
+            .map(|(id, bump)| format!("{id}: {bump}\n"))
+            .collect::<String>();
+        self.write(
+            &format!(".intentional/intents/{slug}.md"),
+            &format!("---\n{frontmatter}---\n\nShip a change.\n"),
+        );
+        self.commit(&format!("add intent {slug}"));
+    }
+
+    fn tags(&self) -> Vec<String> {
+        git(&self.root, &["tag", "--list"])
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     fn cli(&self) -> Command {
@@ -107,4 +128,241 @@ fn stamp_merges_equivalent_paths_in_shared_file() {
         .stdout("write site/meta.yml\n");
     repo.cli().arg("stamp").assert().success();
     assert_eq!(repo.read("site/meta.yml"), "alpha: 0.0.1\nbeta: 0.0.1\n");
+}
+
+/// A code unit `alpha` at `packages/alpha` and a docs unit `beta` at
+/// `site/beta`. Both write fields of the shared root file `/site/meta.yml`.
+fn root_projection_config(mode: &str) -> String {
+    format!(
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n  alpha:\n    path: packages/alpha\n    projections:\n      - {{ adapter: json, file: manifest.json, pointer: /version, mode: {mode} }}\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: /products/alpha/version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n  beta:\n    path: site/beta\n    projections:\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: products.alpha.docs-version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n"
+    )
+}
+
+fn meta(version: &str, docs_version: &str) -> String {
+    format!("products:\n  alpha:\n    version: {version}\n    docs-version: {docs_version}\n")
+}
+
+/// The root-projection fixture, committed and baselined at 0.1.0.
+fn root_projection_repository() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &root_projection_config("committed"),
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.1.0\"\n}\n",
+    );
+    repo.write("site/meta.yml", &meta("0.1.0", "0.1.0"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo
+}
+
+#[test]
+fn apply_merges_two_units_into_one_root_projection_file() {
+    let repo = root_projection_repository();
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+
+    repo.cli()
+        .args(["apply", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(
+            "write packages/alpha/CHANGELOG.md\nwrite packages/alpha/manifest.json\nwrite site/beta/CHANGELOG.md\nwrite site/meta.yml\ndelete .intentional/intents/joint-0001.md\n",
+        );
+    repo.cli().arg("apply").assert().success();
+    assert_eq!(repo.read("site/meta.yml"), meta("0.1.1", "0.1.1"));
+    assert!(repo
+        .read("packages/alpha/manifest.json")
+        .contains("\"version\": \"0.1.1\""));
+    repo.commit("apply release");
+
+    repo.cli().arg("tag").assert().success();
+    let tags = repo.tags();
+    assert!(tags.contains(&"alpha@0.1.1".to_owned()), "{tags:?}");
+    assert!(tags.contains(&"beta@0.1.1".to_owned()), "{tags:?}");
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Drift: none"));
+}
+
+#[test]
+fn apply_keeps_changelog_at_unit_path_with_root_projection() {
+    let repo = root_projection_repository();
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    assert!(repo
+        .read("packages/alpha/CHANGELOG.md")
+        .contains("## 0.1.1"));
+    assert!(repo.read("site/beta/CHANGELOG.md").contains("## 0.1.1"));
+    assert!(!repo.root.join("CHANGELOG.md").exists());
+    assert!(!repo.root.join("site/CHANGELOG.md").exists());
+}
+
+#[test]
+fn subset_release_edits_only_the_released_pointer() {
+    let repo = root_projection_repository();
+    repo.intent("docs-0001", &[("beta", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    assert_eq!(repo.read("site/meta.yml"), meta("0.1.0", "0.1.1"));
+    assert!(repo
+        .read("packages/alpha/manifest.json")
+        .contains("\"version\": \"0.1.0\""));
+    repo.commit("apply release");
+    repo.cli().arg("tag").assert().success();
+    let tags = repo.tags();
+    assert!(tags.contains(&"beta@0.1.1".to_owned()), "{tags:?}");
+    assert!(!tags.contains(&"alpha@0.1.1".to_owned()), "{tags:?}");
+}
+
+#[test]
+fn status_reports_drift_for_root_projection() {
+    let repo = root_projection_repository();
+    repo.write("site/meta.yml", &meta("0.9.0", "0.1.0"));
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "  alpha site/meta.yml: manifest 0.9.0 != tag 0.1.0",
+        ));
+}
+
+#[test]
+fn tag_refuses_drifted_root_projection() {
+    let repo = root_projection_repository();
+    repo.intent("alpha-0001", &[("alpha", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    repo.write("site/meta.yml", &meta("0.1.0", "0.1.0"));
+    repo.commit("apply release with a reverted field");
+    repo.cli()
+        .arg("tag")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release unit alpha projection site/meta.yml is 0.1.0, applied release is 0.1.1",
+        ));
+}
+
+#[test]
+fn baseline_reads_root_projection() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &root_projection_config("committed"),
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.1.0\"\n}\n",
+    );
+    repo.write("site/meta.yml", &meta("0.2.0", "0.1.0"));
+    repo.commit("add fixture");
+    repo.cli()
+        .args(["tag", "--baseline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "baseline projections disagree for alpha: packages/alpha/manifest.json=0.1.0, site/meta.yml=0.2.0",
+        ));
+}
+
+#[test]
+fn stamp_writes_injected_root_projection() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &root_projection_config("injected"),
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.0.0\"\n}\n",
+    );
+    repo.write("site/meta.yml", &meta("0.0.0", "0.0.0"));
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: patch\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    repo.cli()
+        .args(["stamp", "--dry-run"])
+        .assert()
+        .success()
+        .stdout("write packages/alpha/manifest.json\nwrite site/meta.yml\n");
+    repo.cli().arg("stamp").assert().success();
+    assert_eq!(repo.read("site/meta.yml"), meta("0.0.1", "0.0.1"));
+}
+
+#[test]
+fn init_rerun_preserves_root_projection() {
+    let repo = TestRepo::new();
+    repo.write("pnpm-workspace.yaml", "packages:\n  - components/*\n");
+    repo.write(
+        "components/library/package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repo.commit("add discovery fixture");
+    repo.cli().arg("init").assert().code(2);
+    resolve_independent(&repo);
+    repo.cli().arg("init").assert().success();
+
+    // Add a root projection to the initialized unit by hand.
+    let mut config = intentional_core::Config::load(&repo.root).expect("initialized config");
+    let unit = config
+        .release_units
+        .get_mut("sample-library")
+        .expect("initialized unit");
+    unit.projections.push(
+        serde_yaml::from_str(
+            "{ adapter: yaml, file: /site/meta.yml, pointer: /library, mode: committed }",
+        )
+        .expect("root projection"),
+    );
+    repo.write(
+        ".intentional/config.yml",
+        &config.to_yaml().expect("config"),
+    );
+    repo.write("site/meta.yml", "library: 1.0.0\n");
+    repo.commit("add a root projection");
+
+    let no_op = initialize(&repo.root, false).expect("repeatable no-op");
+    assert_eq!(no_op.state, InitState::Success);
+    assert!(no_op.operations.is_empty());
+
+    // A newly discovered manifest makes init rewrite the configuration.
+    repo.write(
+        "components/other/package.json",
+        "{\n  \"name\": \"sample-other\",\n  \"version\": \"1.0.0\"\n}\n",
+    );
+    repo.commit("add another package");
+    repo.cli().arg("init").assert().code(2);
+    resolve_independent(&repo);
+    repo.cli().arg("init").assert().success();
+    let config = intentional_core::Config::load(&repo.root).expect("reconciled config");
+    assert!(config.release_units.contains_key("sample-other"));
+    let root = &config.release_units["sample-library"].projections;
+    assert!(
+        root.iter()
+            .any(|projection| projection.file == "/site/meta.yml"
+                && projection.pointer.as_deref() == Some("/library")),
+        "{root:?}"
+    );
+}
+
+/// Resolve every open discovery candidate as an independent release unit.
+fn resolve_independent(repo: &TestRepo) {
+    let path = repo.root.join(".intentional/init-plan.yml");
+    let mut plan: InitPlan =
+        serde_yaml::from_str(&fs::read_to_string(&path).expect("init plan")).expect("valid plan");
+    for candidate in &mut plan.discovery_candidates {
+        if candidate.resolution.is_none() {
+            candidate.resolution = Some(CandidateResolution::Independent {
+                release_unit: candidate.native_identity.clone().expect("native identity"),
+            });
+        }
+    }
+    fs::write(&path, serde_yaml::to_string(&plan).expect("plan yaml")).expect("write plan");
 }

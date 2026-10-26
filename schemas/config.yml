@@ -127,8 +127,14 @@ $defs:
       adapter:
         enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
       file:
+        description: >-
+          File relative to the release-unit path. A file that starts with /
+          is relative to the repository root, in one canonical form: no
+          empty, . or .. segment and no backslash. Only json, toml, and yaml
+          projections may use a root file.
         type: string
         minLength: 1
+        pattern: '^(?:[^/\\].*|/(?:[^/\\.][^/\\]*|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:/(?:[^/\\.][^/\\]*|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*)$'
       mode:
         enum: [ committed, injected, none ]
       pointer:

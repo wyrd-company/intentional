@@ -6,15 +6,20 @@
 //! Projection file paths and their one resolver.
 
 use crate::error::{Error, Result};
+use crate::model::Adapter;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
 /// The `file` of a projection, kept as written in configuration.
 ///
+/// A file that starts with `/` is a root file: it resolves from the
+/// workspace root. Any other file resolves below the release-unit path.
+///
 /// The text is private, so that [`ProjectionFile::workspace_path`] is the
 /// only way to turn it into a path. No caller joins a release-unit path and
-/// a projection file by hand.
+/// a projection file by hand. That matters for a root file: joining `/x`
+/// onto any path gives the filesystem root, outside the workspace.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct ProjectionFile(String);
@@ -25,14 +30,45 @@ impl ProjectionFile {
         Self(path.to_string_lossy().into_owned())
     }
 
-    /// Workspace-relative path of this file for a release unit at `unit_path`.
-    pub fn workspace_path(&self, unit_path: &Path) -> PathBuf {
-        normalized(&unit_path.join(&self.0))
+    /// Whether this file resolves from the workspace root.
+    pub fn is_root(&self) -> bool {
+        self.0.starts_with('/')
     }
 
-    /// Refuse a file that is empty, absolute, or contains `..`.
-    pub(crate) fn validate(&self, description: &str) -> Result<()> {
-        validate_relative_path(Path::new(&self.0), description)
+    /// Workspace-relative path of this file for a release unit at `unit_path`.
+    pub fn workspace_path(&self, unit_path: &Path) -> PathBuf {
+        match self.0.strip_prefix('/') {
+            Some(segments) => segments.split('/').collect(),
+            None => normalized(&unit_path.join(&self.0)),
+        }
+    }
+
+    /// Refuse a file that this release unit and adapter cannot project.
+    ///
+    /// A root file must be in its one canonical form, and only the generic
+    /// `json`, `toml`, and `yaml` adapters may use it. The check reads the
+    /// text, not a `Path`, so that every platform gives the same result. A
+    /// unit-relative file must be non-empty, relative, and free of `..`. A
+    /// leading `\` or drive prefix is refused in either form, because on
+    /// Windows it leaves the workspace.
+    pub(crate) fn validate(&self, release_unit_id: &str, adapter: Adapter) -> Result<()> {
+        let description = format!("release unit {release_unit_id} projection file");
+        if self.is_root() || self.0.starts_with('\\') || has_drive_prefix(&self.0) {
+            if !is_canonical_root(&self.0) {
+                return Err(Error::Validation(format!(
+                    "{description} {} must be a root path of the form /dir/file with no empty, . or .. segments, no \\ and no drive prefix",
+                    self.0
+                )));
+            }
+            if !adapter.requires_pointer() {
+                return Err(Error::Validation(format!(
+                    "release unit {release_unit_id} {} projection file must be relative to the release-unit path; only json, toml, and yaml projections may use a root path",
+                    format!("{adapter:?}").to_lowercase()
+                )));
+            }
+            return Ok(());
+        }
+        validate_relative_path(Path::new(&self.0), &description)
     }
 
     fn as_path(&self) -> &Path {
@@ -58,6 +94,23 @@ impl fmt::Display for ProjectionFile {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
+}
+
+/// Exactly one `/`, then `/`-separated segments that are not empty, `.`,
+/// or `..`, with no `\` anywhere.
+fn is_canonical_root(text: &str) -> bool {
+    text.strip_prefix('/').is_some_and(|segments| {
+        !segments.contains('\\')
+            && segments
+                .split('/')
+                .all(|segment| !matches!(segment, "" | "." | ".."))
+    })
+}
+
+/// `C:` and similar: a Windows drive prefix.
+fn has_drive_prefix(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 /// One path per file, so `./docs/x` and `docs/x` are the same key.

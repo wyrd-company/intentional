@@ -1586,6 +1586,7 @@ dependencies = [
  "glob",
  "node-semver",
  "rand",
+ "regex",
  "semver",
  "serde",
  "serde_json",

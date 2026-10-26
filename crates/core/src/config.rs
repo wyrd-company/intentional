@@ -286,9 +286,7 @@ impl Config {
 
             let mut projection_keys = Vec::new();
             for projection in &release_unit.projections {
-                projection
-                    .file
-                    .validate(&format!("release unit {id} projection file"))?;
+                projection.file.validate(id, projection.adapter)?;
                 if projection.adapter.requires_pointer()
                     && projection.pointer.as_deref().is_none_or(str::is_empty)
                 {
@@ -733,6 +731,133 @@ release-units:
                 .as_str(),
             Some("^sha256:[0-9a-f]{64}$")
         );
+    }
+
+    /// `VALID` with one more release unit `beta` at `site` whose single
+    /// projection uses `adapter` and `file`.
+    fn with_projection(adapter: &str, file: &str) -> String {
+        VALID.replace(
+            "release-units:\n",
+            &format!(
+                "release-units:\n  beta:\n    path: site\n    projections:\n      - {{ adapter: {adapter}, file: '{file}', pointer: /beta, mode: committed }}\n    tags:\n      primary: {{ role: primary, template: 'beta@{{version}}' }}\n"
+            ),
+        )
+    }
+
+    const NON_CANONICAL_ROOT_FILES: &[&str] = &[
+        "/a/../b.yml",
+        "/./b.yml",
+        "/a/./b.yml",
+        "//b.yml",
+        "/a//b.yml",
+        "/b/",
+        "/",
+        "/..",
+        "/a/b\\c.yml",
+        "\\b.yml",
+        "\\\\server\\b.yml",
+        "C:/b.yml",
+        "c:b.yml",
+    ];
+
+    #[test]
+    fn accepts_root_projection_for_generic_adapters() {
+        for adapter in ["json", "toml", "yaml"] {
+            let config = Config::from_yaml(&with_projection(adapter, "/docs/meta.yml"))
+                .expect("root projection accepted");
+            let file = &config.release_units["beta"].projections[0].file;
+            assert!(file.is_root());
+            for unit_path in ["site", ".", "a/b"] {
+                let resolved = file.workspace_path(Path::new(unit_path));
+                assert_eq!(resolved, Path::new("docs").join("meta.yml"));
+                assert!(resolved
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_))));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_non_canonical_root_projection_paths() {
+        for file in NON_CANONICAL_ROOT_FILES {
+            let error = Config::from_yaml(&with_projection("yaml", file))
+                .expect_err("non-canonical root projection rejected")
+                .to_string();
+            assert!(
+                error.contains(&format!(
+                    "release unit beta projection file {file} must be a root path of the form /dir/file"
+                )),
+                "{file}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_root_projection_for_ecosystem_adapters() {
+        for adapter in ["npm", "cargo", "pub", "python", "msbuild", "go"] {
+            let error = Config::from_yaml(&with_projection(adapter, "/site/manifest"))
+                .expect_err("ecosystem root projection rejected")
+                .to_string();
+            assert!(
+                error.contains(&format!(
+                    "release unit beta {adapter} projection file must be relative to the release-unit path; only json, toml, and yaml projections may use a root path"
+                )),
+                "{adapter}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn keeps_unit_relative_projection_rules() {
+        Config::from_yaml(&with_projection("yaml", "./meta.yml")).expect("dot prefix accepted");
+        Config::from_yaml(&with_projection("yaml", "sub/meta.yml")).expect("nested accepted");
+        for file in ["../meta.yml", "sub/../../meta.yml"] {
+            assert!(Config::from_yaml(&with_projection("yaml", file))
+                .expect_err("parent segment rejected")
+                .to_string()
+                .contains("must be a non-empty relative path without .."));
+        }
+    }
+
+    #[test]
+    fn root_projection_round_trips_through_to_yaml() {
+        let config = Config::from_yaml(&with_projection("yaml", "/docs/meta.yml"))
+            .expect("root projection accepted");
+        let yaml = config.to_yaml().expect("serialized");
+        assert!(yaml.contains("file: /docs/meta.yml"), "{yaml}");
+        assert_eq!(Config::from_yaml(&yaml).expect("reparsed"), config);
+    }
+
+    #[test]
+    fn published_projection_file_pattern_agrees_with_config_validation() {
+        let schema: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../../schemas/config.yml"))
+                .expect("config schema parses");
+        let pattern = schema["$defs"]["projection"]["properties"]["file"]["pattern"]
+            .as_str()
+            .expect("projection file pattern");
+        let pattern = regex::Regex::new(pattern).expect("pattern compiles");
+        let accepted = [
+            "/b.yml",
+            "/docs/meta.yml",
+            "/.config/x.yml",
+            "/a/..b/c.yml",
+            "/a/b..",
+            "meta.yml",
+            "./meta.yml",
+            "sub/meta.yml",
+        ];
+        for file in accepted {
+            assert!(pattern.is_match(file), "schema refuses {file}");
+            Config::from_yaml(&with_projection("yaml", file))
+                .unwrap_or_else(|error| panic!("config refuses {file}: {error}"));
+        }
+        for file in NON_CANONICAL_ROOT_FILES
+            .iter()
+            .filter(|file| file.starts_with(['/', '\\']))
+        {
+            assert!(!pattern.is_match(file), "schema accepts {file}");
+        }
     }
 
     #[test]
