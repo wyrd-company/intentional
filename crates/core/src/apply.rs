@@ -16,7 +16,7 @@ use crate::model::{Adapter, ProjectionMode};
 use crate::ownership::check_physical_ownership;
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
 use crate::projection_file::normalized;
-use crate::workspace_files::{contained, write_contained, EditTree};
+use crate::workspace_files::{contained, write_contained, EditTree, SharedVersions};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -55,7 +55,7 @@ impl ApplyResult {
             .iter()
             .map(|release_unit| (release_unit.id.as_str(), release_unit))
             .collect();
-        let mut workspace_versions = BTreeMap::new();
+        let mut workspace_versions = SharedVersions::default();
         let mut notices = Vec::new();
 
         for release_unit in &plan.release_units {
@@ -157,7 +157,7 @@ fn edit_projection_version(
     release_unit: &ReleaseUnitConfig,
     projection: &Projection,
     version: &str,
-    workspace_versions: &mut BTreeMap<PathBuf, String>,
+    workspace_versions: &mut SharedVersions,
 ) -> Result<()> {
     let relative = projection.file.workspace_path(&release_unit.path);
     let text = tree.read(&relative)?;
@@ -167,14 +167,13 @@ fn edit_projection_version(
             Some(_) => CargoAdapter.edit_version(&text, version)?,
             None => {
                 let workspace_manifest = workspace_manifest(root, &relative)?;
-                if let Some(existing) = workspace_versions.get(&workspace_manifest) {
-                    if existing != version {
-                        return Err(Error::Validation(format!(
-                            "Cargo workspace members require conflicting versions {existing} and {version}"
-                        )));
-                    }
+                if let Some(existing) =
+                    workspace_versions.claim(root, &workspace_manifest, version)?
+                {
+                    return Err(Error::Validation(format!(
+                        "Cargo workspace members require conflicting versions {existing} and {version}"
+                    )));
                 }
-                workspace_versions.insert(workspace_manifest.clone(), version.to_owned());
                 let workspace_text = tree.read(&workspace_manifest)?;
                 let workspace_edited =
                     CargoAdapter.edit_workspace_version(&workspace_text, version)?;

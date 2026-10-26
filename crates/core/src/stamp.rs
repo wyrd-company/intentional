@@ -16,10 +16,9 @@ use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, bump_version, effective_bumps, VersionRepository};
-use crate::workspace_files::{write_contained, EditTree};
+use crate::workspace_files::{write_contained, EditTree, SharedVersions};
 use semver::Prerelease;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Complete projection-only stamp mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,7 +37,7 @@ impl StampResult {
         let bumps = effective_bumps(&config, &declared);
         let repository = VersionRepository::discover(root)?;
         let mut tree = EditTree::new(root);
-        let mut workspace_versions = BTreeMap::<PathBuf, String>::new();
+        let mut workspace_versions = SharedVersions::default();
 
         for (id, release_unit) in &config.release_units {
             let (_, primary) = config.primary_tag(id)?;
@@ -61,14 +60,13 @@ impl StampResult {
                         Some(_) => CargoAdapter.edit_version(&text, &version.to_string())?,
                         None => {
                             let workspace = workspace_manifest(root, &relative)?;
-                            if let Some(existing) = workspace_versions.get(&workspace) {
-                                if existing != &version.to_string() {
-                                    return Err(Error::Validation(format!(
-                                        "Cargo workspace stamp requires conflicting versions {existing} and {version}"
-                                    )));
-                                }
+                            if let Some(existing) =
+                                workspace_versions.claim(root, &workspace, &version.to_string())?
+                            {
+                                return Err(Error::Validation(format!(
+                                    "Cargo workspace stamp requires conflicting versions {existing} and {version}"
+                                )));
                             }
-                            workspace_versions.insert(workspace.clone(), version.to_string());
                             let workspace_text = tree.read(&workspace)?;
                             let workspace_edited = CargoAdapter
                                 .edit_workspace_version(&workspace_text, &version.to_string())?;

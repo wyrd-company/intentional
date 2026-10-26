@@ -245,6 +245,33 @@ impl FileIdentity {
     }
 }
 
+/// Versions claimed for shared files, keyed by physical file identity.
+///
+/// Cargo members that inherit one workspace version must agree on it,
+/// whatever path reaches their workspace manifest.
+#[derive(Default)]
+pub(crate) struct SharedVersions {
+    claims: Vec<(FileIdentity, String)>,
+}
+
+impl SharedVersions {
+    /// Claim `version` for the file at `relative`. Returns the version
+    /// already claimed for that file when it differs.
+    pub(crate) fn claim(
+        &mut self,
+        root: &Path,
+        relative: &Path,
+        version: &str,
+    ) -> Result<Option<String>> {
+        let identity = FileIdentity::of(&contained(root, relative)?)?;
+        if let Some((_, existing)) = self.claims.iter().find(|(known, _)| *known == identity) {
+            return Ok((existing != version).then(|| existing.clone()));
+        }
+        self.claims.push((identity, version.to_owned()));
+        Ok(None)
+    }
+}
+
 /// In-memory edits to workspace files, one entry per physical file.
 ///
 /// Every path that reaches one file shares its edits. The file is written

@@ -1027,3 +1027,142 @@ fn apply_keeps_case_variant_directories_apart_beside_case_variant_links() {
     assert!(repo.read("empty/widgets/CHANGELOG.md").contains("## 0.1.1"));
     assert!(repo.read("empty/Widgets/CHANGELOG.md").contains("## 0.2.1"));
 }
+
+fn cargo_unit(id: &str, path: &str, mode: &str) -> String {
+    format!(
+        "  {id}:\n    path: {path}\n    projections:\n      - {{ adapter: cargo, file: Cargo.toml, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n"
+    )
+}
+
+const WORKSPACE_MANIFEST: &str =
+    "[workspace]\nmembers = [\"a\", \"b\"]\n\n[workspace.package]\nversion = \"1.0.0\"\n";
+
+/// Members `alpha` and `beta` inherit one workspace version, reaching the
+/// workspace manifest through two paths. Both are baselined at 1.0.0 and
+/// carry one intent with conflicting bumps.
+fn aliased_workspace_repository(mode: &str, layout: &str) -> (TestRepo, &'static str) {
+    let repo = TestRepo::new();
+    let member = |path: &str, name: &str| {
+        repo.write(
+            path,
+            &format!("[package]\nname = \"{name}\"\nversion.workspace = true\n"),
+        );
+    };
+    let manifest = match layout {
+        // `alias` is a symlink to the workspace directory.
+        "directory symlink" => {
+            repo.write(
+                ".intentional/config.yml",
+                &config(&[
+                    cargo_unit("alpha", "workspace/a", mode),
+                    cargo_unit("beta", "alias/b", mode),
+                ]),
+            );
+            repo.write("workspace/Cargo.toml", WORKSPACE_MANIFEST);
+            member("workspace/a/Cargo.toml", "alpha");
+            member("workspace/b/Cargo.toml", "beta");
+            symlink_dir("workspace", &repo.root.join("alias"));
+            "workspace/Cargo.toml"
+        }
+        // `nest/Cargo.toml` is a hard link to the root manifest.
+        "manifest hard link" => {
+            repo.write(
+                ".intentional/config.yml",
+                &config(&[
+                    cargo_unit("alpha", "a", mode),
+                    cargo_unit("beta", "nest/b", mode),
+                ]),
+            );
+            repo.write("Cargo.toml", WORKSPACE_MANIFEST);
+            member("a/Cargo.toml", "alpha");
+            member("nest/b/Cargo.toml", "beta");
+            fs::hard_link(
+                repo.root.join("Cargo.toml"),
+                repo.root.join("nest/Cargo.toml"),
+            )
+            .expect("manifest hard link");
+            "Cargo.toml"
+        }
+        _ => unreachable!("unknown layout"),
+    };
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: minor\n---\n\nShip a change.\n",
+    );
+    repo.commit("add intent");
+    (repo, manifest)
+}
+
+fn apply_refuses_conflicting_inherited_versions(layout: &str) {
+    let (repo, manifest) = aliased_workspace_repository("committed", layout);
+    repo.cli()
+        .arg("apply")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Cargo workspace members require conflicting versions",
+        ));
+    assert_eq!(repo.read(manifest), WORKSPACE_MANIFEST);
+    assert!(repo
+        .root
+        .join(".intentional/intents/joint-0001.md")
+        .exists());
+    assert!(!repo.root.join("workspace/a/CHANGELOG.md").exists());
+    assert!(!repo.root.join("a/CHANGELOG.md").exists());
+}
+
+fn stamp_refuses_conflicting_inherited_versions(layout: &str) {
+    let (repo, manifest) = aliased_workspace_repository("injected", layout);
+    repo.cli()
+        .arg("stamp")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Cargo workspace stamp requires conflicting versions",
+        ));
+    assert_eq!(repo.read(manifest), WORKSPACE_MANIFEST);
+}
+
+#[test]
+fn apply_refuses_conflicting_inherited_versions_through_a_directory_symlink() {
+    apply_refuses_conflicting_inherited_versions("directory symlink");
+}
+
+#[test]
+fn apply_refuses_conflicting_inherited_versions_through_a_manifest_hard_link() {
+    apply_refuses_conflicting_inherited_versions("manifest hard link");
+}
+
+#[test]
+fn stamp_refuses_conflicting_inherited_versions_through_a_directory_symlink() {
+    stamp_refuses_conflicting_inherited_versions("directory symlink");
+}
+
+#[test]
+fn stamp_refuses_conflicting_inherited_versions_through_a_manifest_hard_link() {
+    stamp_refuses_conflicting_inherited_versions("manifest hard link");
+}
+
+#[test]
+fn apply_shares_one_inherited_version_through_a_workspace_alias() {
+    let (repo, manifest) = aliased_workspace_repository("committed", "directory symlink");
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: patch\n---\n\nShip a change.\n",
+    );
+    repo.commit("agree on one bump");
+    let writes = repo.writes(&["apply", "--dry-run"]);
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|line| line.ends_with("Cargo.toml"))
+            .count(),
+        1,
+        "{writes:?}"
+    );
+    repo.cli().arg("apply").assert().success();
+    assert!(repo.read(manifest).contains("version = \"1.0.1\""));
+}
