@@ -622,8 +622,10 @@ fn refuses_changelog_resolving_outside_repository() {
 
 #[test]
 fn refuses_one_field_projected_through_symlink_aliases() {
-    let message = native(
-        "release units alpha and beta both project /version in one file: a/shared.yml and b/shared.yml are the same file",
+    let message = format!(
+        "release units alpha and beta both project /version in one file: {} and {} are the same file",
+        native("a/shared.yml"),
+        native("b/shared.yml")
     );
     let repo = symlinked_repository("/version", "/version");
     repo.write("shared.yml", "version: 1.0.0\n");
