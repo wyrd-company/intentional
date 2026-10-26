@@ -994,7 +994,7 @@ fn stamp_uses_first_parent_height_and_preserves_intents() {
         .args(["stamp", "--prerelease", "alpha", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("write ./package.json"));
+        .stdout(predicate::str::contains("write package.json"));
     assert_eq!(
         fs::read_to_string(repo.root.join("package.json")).unwrap(),
         before

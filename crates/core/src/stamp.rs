@@ -9,7 +9,7 @@ use crate::adapters::{
     CargoAdapter, FormatAdapter, JsonFormat, MsbuildAdapter, NpmAdapter, PubAdapter, PythonAdapter,
     TomlFormat, YamlFormat,
 };
-use crate::apply::{workspace_manifest, FileWrite};
+use crate::apply::{normalized, workspace_manifest, FileWrite};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
@@ -51,7 +51,7 @@ impl StampResult {
                 .iter()
                 .filter(|projection| projection.mode == ProjectionMode::Injected)
             {
-                let relative = release_unit.path.join(&projection.file);
+                let relative = normalized(&release_unit.path.join(&projection.file));
                 let text = read(root, &writes, &mut original, &relative)?;
                 let edited = match projection.adapter {
                     Adapter::Npm => NpmAdapter.edit_version(&text, &version.to_string())?,

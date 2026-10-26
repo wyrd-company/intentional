@@ -219,7 +219,7 @@ impl<'a> WorkingTree<'a> {
 }
 
 /// One working-tree key per file, so `./docs/x` and `docs/x` share edits.
-fn normalized(relative: &Path) -> PathBuf {
+pub(crate) fn normalized(relative: &Path) -> PathBuf {
     relative
         .components()
         .filter(|component| !matches!(component, Component::CurDir))
