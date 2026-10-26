@@ -881,17 +881,33 @@ release-units:
             "meta.yml",
             "./meta.yml",
             "sub/meta.yml",
+            "sub//meta.yml",
+            "sub/./meta.yml",
+            "..b/meta.yml",
+            "ab:c/meta.yml",
+            "sub/ab:c.yml",
         ];
         for file in accepted {
             assert!(pattern.is_match(file), "schema refuses {file}");
             Config::from_yaml(&with_projection("yaml", file))
                 .unwrap_or_else(|error| panic!("config refuses {file}: {error}"));
         }
+        let unit_relative_refused = [
+            "../meta.yml",
+            "sub/../meta.yml",
+            "sub/..",
+            "docs/C:/meta.yml",
+            "docs/c:meta.yml",
+            "C:/b.yml",
+            "c:b.yml",
+        ];
         for file in NON_CANONICAL_ROOT_FILES
             .iter()
-            .filter(|file| file.starts_with(['/', '\\']))
+            .chain(&unit_relative_refused)
         {
             assert!(!pattern.is_match(file), "schema accepts {file}");
+            Config::from_yaml(&with_projection("yaml", file))
+                .expect_err(&format!("config accepts {file}"));
         }
     }
 

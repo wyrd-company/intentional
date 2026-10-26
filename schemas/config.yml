@@ -128,14 +128,16 @@ $defs:
         enum: [ npm, cargo, pub, python, msbuild, go, json, toml, yaml ]
       file:
         description: >-
-          File relative to the release-unit path. A file that starts with /
+          File relative to the release-unit path, with no .. segment and no
+          segment that starts with a drive prefix such as C:. A file that
+          starts with /
           is relative to the repository root, in one canonical form: no
           empty, . or .. segment, no segment that starts with a drive prefix
           such as C:, and no backslash. Only json, toml, and yaml projections
           may use a root file.
         type: string
         minLength: 1
-        pattern: '^(?:[^/\\].*|/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*)$'
+        pattern: '^(?:(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:[/\\]+(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*[/\\]*|/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*)$'
       mode:
         enum: [ committed, injected, none ]
       pointer:
