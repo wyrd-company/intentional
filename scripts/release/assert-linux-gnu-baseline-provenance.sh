@@ -11,7 +11,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 baseline_env="$root/scripts/release/linux-gnu-baseline.env"
 technical_design="$root/docs/technical-designs/intent-driven-polyglot-release.yml"
 decision_record="$root/docs/decisions/build-linux-gnu-release-on-pinned-cross-baseline.yml"
-install_doc="$root/docs/install.md"
+install_doc="$root/docs/user/install.md"
 
 required_env_vars=(
   CROSS_SOURCE_TAG_OBJECT

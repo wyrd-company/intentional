@@ -1,7 +1,7 @@
 ---
-docs: true
 title: Usage
 order: 4
+product: intentional
 relationships:
   implements: intent-driven-polyglot-release
 ---

@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=https://wyrd.foo/schemas/docs/v1.json
+# ---
+# relationships:
+#   publishes-to: wyrd-foo
+#   implements: intent-driven-polyglot-release
+# ---
+schemaVersion: 1
+assets:
+  - assets/demo.gif
+  - assets/logo.svg
+  - assets/logo-dark.svg
+  - assets/favicon.svg
+  - assets/social-image.png
+products:
+  intentional:
+    name: intentional
+    version: 0.2.1
+    docs-version: 0.1.0
+    tagline: Intent-driven polyglot releases.
+    blurb: >-
+      Declare release intent once, project versions across package ecosystems,
+      and create verifiable annotated release records without handing
+      publication or repository choreography to the versioning tool.
+    status: stable
+    category: Release & Versioning
+    order: 2
+    logo: assets/logo.svg
+    logo-dark: assets/logo-dark.svg
+    favicon: assets/favicon.svg
+    social-image: assets/social-image.png
+    # DRAFT highlights, pending Bob's approval.
+    highlights:
+      - >-
+        Pending intent files declare what changes; annotated Git tags record
+        what was released.
+      - >-
+        Projects one version into npm, Cargo, Pub, Python, MSBuild, Go, Dev
+        Container and generic JSON, TOML and YAML manifests, keeping their
+        formatting.
+      - >-
+        Previews the next version of each release unit before it writes
+        anything.
+      - >-
+        Writes changelogs and annotated release tags; commits, pushes and
+        publication stay with your pipeline.
+      - >-
+        Adopts versions a repository already released, and takes over from
+        Changesets.
+      - >-
+        Ships as one native executable from Homebrew, Cargo or npm, and as a
+        GitHub Action.
+    media:
+      - src: assets/demo.gif
+        caption: Intentional computes and previews the next version from a pending change intent.
+        alt: >-
+          Terminal recording of intentional adding a change intent and
+          previewing the next release version.
+    kinds:
+      - kind: cli
+        install:
+          - method: homebrew
+            os: [ macos, linux ]
+            default: true
+            command: brew install wyrd-company/tools/intentional
+          - method: cargo
+            os: [ macos, linux, windows ]
+            command: cargo install intentional-cli --locked
+          - method: npm
+            os: [ macos, linux, windows ]
+            command: npm install --global @wyrd-company/intentional
+          - method: npx
+            os: [ macos, linux, windows ]
+            command: npx --yes @wyrd-company/intentional --version

@@ -1,7 +1,7 @@
 ---
-docs: true
 title: Overview
 order: 1
+product: intentional
 relationships:
   implements: intent-driven-polyglot-release
 ---

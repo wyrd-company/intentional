@@ -88,7 +88,7 @@ tasks:
     deps: [ build ]
     cmds:
       - vhs docs/demo.tape
-      - gifsicle --batch --optimize=3 --colors 256 docs/assets/demo.gif
+      - gifsicle --batch --optimize=3 --colors 256 docs/user/assets/demo.gif
 
   docs:check:
     desc: Validate public documentation and its generated demo
