@@ -717,3 +717,62 @@ fn apply_refuses_a_non_canonical_json_array_index() {
         .join(".intentional/intents/joint-0001.md")
         .exists());
 }
+
+/// Unit `alpha` at `a` is a Cargo member that inherits its version from
+/// the workspace manifest at the repository root.
+fn inherited_cargo_repository(root_manifest: &str) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            "  alpha:\n    path: a\n    projections:\n      - { adapter: cargo, file: Cargo.toml, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n".to_owned(),
+        ]),
+    );
+    repo.write(
+        "a/Cargo.toml",
+        "[package]\nname = \"alpha\"\nversion.workspace = true\n",
+    );
+    repo.write("Cargo.toml", root_manifest);
+    repo
+}
+
+#[test]
+fn refuses_cargo_workspace_manifest_resolving_outside_repository() {
+    // The second outside manifest is not a workspace: a search that read it
+    // would go on and report a missing workspace instead of refusing.
+    for outside_manifest in [
+        "[workspace]\nmembers = [\"a\"]\n\n[workspace.package]\nversion = \"7.8.9\"\n",
+        "[package]\nname = \"outside\"\nversion = \"7.8.9\"\n",
+    ] {
+        refuses_outside_cargo_manifest(outside_manifest);
+    }
+}
+
+fn refuses_outside_cargo_manifest(outside_manifest: &str) {
+    let repo = inherited_cargo_repository("");
+    fs::remove_file(repo.root.join("Cargo.toml")).expect("remove manifest");
+    fs::write(
+        repo.root
+            .parent()
+            .expect("temporary parent")
+            .join("outside.toml"),
+        outside_manifest,
+    )
+    .expect("outside manifest");
+    symlink_file("../outside.toml", &repo.root.join("Cargo.toml"));
+    repo.write(
+        ".intentional/intents/alpha-0001.md",
+        "---\nalpha: patch\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    for args in [&["status"][..], &["check"], &["apply", "--dry-run"]] {
+        repo.cli()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "Cargo.toml resolves outside the repository",
+            ))
+            .stdout(predicate::str::contains("7.8.9").not());
+    }
+}

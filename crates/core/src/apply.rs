@@ -15,7 +15,8 @@ use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::ownership::check_physical_ownership;
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
-use crate::workspace_files::EditTree;
+use crate::projection_file::normalized;
+use crate::workspace_files::{contained, EditTree};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -315,11 +316,16 @@ fn rewrite_internal_dependencies(
     Ok(())
 }
 
+/// Workspace-relative path of the Cargo workspace manifest for `member`.
+///
+/// Each candidate manifest, from the member's directory up to the workspace
+/// root, is read only after it passes the containment check.
 pub(crate) fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> {
-    let absolute_member = root.join(member);
-    let mut directory = absolute_member.parent();
+    let member = normalized(member);
+    let mut directory = member.parent();
     while let Some(candidate) = directory {
-        let manifest = candidate.join("Cargo.toml");
+        let relative = candidate.join("Cargo.toml");
+        let manifest = contained(root, &relative)?;
         if manifest.exists() {
             let text =
                 std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
@@ -329,14 +335,8 @@ pub(crate) fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> 
                 .and_then(|document| document.get("workspace").cloned())
                 .is_some()
             {
-                return manifest
-                    .strip_prefix(root)
-                    .map(Path::to_owned)
-                    .map_err(|error| Error::Validation(error.to_string()));
+                return Ok(normalized(&relative));
             }
-        }
-        if candidate == root {
-            break;
         }
         directory = candidate.parent();
     }

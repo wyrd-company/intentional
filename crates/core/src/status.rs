@@ -140,8 +140,7 @@ pub(crate) fn read_projection_version(
             Some(version) => Ok(version),
             None => {
                 let workspace_path = crate::apply::workspace_manifest(root, relative)?;
-                let workspace = std::fs::read_to_string(root.join(&workspace_path))
-                    .map_err(|error| crate::Error::io(root.join(&workspace_path), error))?;
+                let workspace = read_contained(root, &workspace_path)?;
                 TomlFormat.read_text(&workspace, "/workspace/package/version")
             }
         },
