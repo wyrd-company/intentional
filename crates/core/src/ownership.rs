@@ -66,16 +66,24 @@ impl fmt::Display for ProjectionField {
     }
 }
 
+/// Whether a projection writes its field.
+///
+/// Mode `none` neither reads nor writes, except for Go: apply rewrites the
+/// module path of every Go projection on a major release.
+fn writes(projection: &Projection) -> bool {
+    projection.mode != ProjectionMode::None || projection.adapter == Adapter::Go
+}
+
 /// Refuse two projections that write one field of one file.
 ///
 /// Files compare by their resolved workspace path, so `/docs/x.yml` on any
-/// unit and `docs/x.yml` on a unit at `.` are one file. Projections with
-/// mode `none` neither read nor write, so they do not count.
+/// unit and `docs/x.yml` on a unit at `.` are one file. Projections that do
+/// not write their field do not count.
 pub(crate) fn check_ownership(release_units: &BTreeMap<String, ReleaseUnitConfig>) -> Result<()> {
     let mut owners = BTreeMap::<(PathBuf, ProjectionField), &str>::new();
     for (id, release_unit) in release_units {
         for projection in &release_unit.projections {
-            if projection.mode == ProjectionMode::None {
+            if !writes(projection) {
                 continue;
             }
             let path = projection.file.workspace_path(&release_unit.path);
@@ -109,7 +117,7 @@ pub(crate) fn check_physical_ownership(root: &Path, config: &Config) -> Result<(
     let mut owners = Vec::<(FileIdentity, PathBuf, ProjectionField, &str)>::new();
     for (id, release_unit) in &config.release_units {
         for projection in &release_unit.projections {
-            if projection.mode == ProjectionMode::None {
+            if !writes(projection) {
                 continue;
             }
             let path = projection.file.workspace_path(&release_unit.path);
@@ -171,6 +179,18 @@ mod tests {
         )
         .expect("mode none loads");
         check_physical_ownership(root, &ignored).expect("mode none does not own a field");
+
+        let go = Config::from_yaml(
+            "contract: contract-1\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: go, file: meta.yml, mode: none }\n      - { adapter: go, file: alias.yml, mode: none }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
+        )
+        .expect("lexically distinct module files load");
+        let error = check_physical_ownership(root, &go)
+            .expect_err("one module path refused in mode none")
+            .to_string();
+        assert!(
+            error.contains("release unit alpha projects the module path twice"),
+            "{error}"
+        );
 
         fs::remove_file(root.join("a/alias.yml")).expect("remove link");
         fs::write(root.join("a/alias.yml"), "version: 1.0.0\n").expect("distinct file");

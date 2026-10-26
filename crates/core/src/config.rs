@@ -1100,6 +1100,26 @@ release-units:
     }
 
     #[test]
+    fn go_projections_own_the_module_path_in_every_mode() {
+        let config = units(&[
+            (
+                "alpha",
+                "pkg",
+                &["{ adapter: go, file: go.mod, mode: none }"],
+            ),
+            (
+                "beta",
+                ".",
+                &["{ adapter: go, file: pkg/go.mod, mode: none }"],
+            ),
+        ]);
+        assert!(ownership_error(&config).contains(&format!(
+            "release units alpha and beta both project the module path in {}",
+            native("pkg/go.mod")
+        )));
+    }
+
+    #[test]
     fn allows_distinct_pointers_in_one_shared_file() {
         let config = units(&[
             (

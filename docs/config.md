@@ -155,7 +155,8 @@ refuses them, in one release unit or across release units:
   `/products/sample/version` are one field. An ecosystem adapter owns its
   fixed version field: an `npm` projection and a `json` projection at
   `/version` in one `package.json` collide.
-- Projections with mode `none` do not count.
+- Projections with mode `none` do not count, except `go` projections: a major
+  release rewrites the module path in every mode.
 
 `status`, `check`, `apply`, and `stamp` also refuse two projections that reach
 one field of one file through different paths: a symlink, a hard link, or
