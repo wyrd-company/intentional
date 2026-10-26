@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <title>intentional: Intent-driven polyglot releases.</title>
+  <rect width="1280" height="640" fill="#141518"/>
+  <svg x="100" y="100" width="440" height="440" viewBox="186 179 880 880"><defs><mask id="sp-cut" maskUnits="userSpaceOnUse" x="186" y="179" width="880" height="880"><rect x="186" y="179" width="880" height="880" fill="#fff"/><path d="M436 912L630 783Q674 754 674 708V634L824 534" fill="none" stroke="#000" stroke-width="44" stroke-linejoin="round"/><g fill="#000"><circle cx="586" cy="818" r="52"/><circle cx="674" cy="618" r="52"/></g></mask></defs><g fill="#ECECEA"><circle cx="626" cy="330" r="104"/><path mask="url(#sp-cut)" d="M549 459H704A60 60 0 0 1 764 519V934A78 78 0 0 1 686 1012H567A78 78 0 0 1 489 934V519A60 60 0 0 1 549 459Z"/></g></svg>
+  <g font-family="DejaVu Sans, Helvetica, Arial, sans-serif">
+    <text x="470" y="305" font-size="108" font-weight="700" letter-spacing="-2" fill="#ECECEA">intentional</text>
+    <rect x="476" y="339" width="104" height="8" rx="4" fill="#3A3C42"/>
+    <text x="470" y="417" font-size="40" fill="#A3A6AD">Intent-driven</text>
+    <text x="470" y="469" font-size="40" fill="#A3A6AD">polyglot releases.</text>
+  </g>
+</svg>
