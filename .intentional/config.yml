@@ -18,7 +18,27 @@ release-units:
       - adapter: npm
         file: npm/package.json
         mode: committed
+      # The wyrd.foo product page shows the installed version.
+      - adapter: yaml
+        file: /docs/user/docs.yml
+        pointer: /products/intentional/version
+        mode: committed
     tags:
       primary:
         role: primary
         template: "{version}"
+  # The public docs release on their own, so the docs footer can say which
+  # docs describe which intentional version. Docs units are tag-only.
+  intentional-docs:
+    path: docs/user
+    depends-on:
+      - intentional
+    projections:
+      - adapter: yaml
+        file: /docs/user/docs.yml
+        pointer: /products/intentional/docs-version
+        mode: committed
+    tags:
+      primary:
+        role: primary
+        template: "{id}@{version}"
