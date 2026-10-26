@@ -36,6 +36,9 @@ pub struct ReleaseUnitStatus {
     pub next: Version,
     /// Effective bump after dependency propagation.
     pub bump: Bump,
+    /// Version of an applied release that waits for its primary tag: the
+    /// leading changelog version, when it is above the current version.
+    pub applied: Option<Version>,
 }
 
 /// Complete read-only workspace status.
@@ -60,6 +63,10 @@ pub struct Drift {
     pub release_unit: String,
     /// Workspace-relative manifest path.
     pub file: std::path::PathBuf,
+    /// Pointer of a generic-format projection.
+    pub pointer: Option<String>,
+    /// Projection materialization mode.
+    pub mode: ProjectionMode,
     /// Tag-derived version.
     pub expected: String,
     /// Manifest-projected version.
@@ -100,6 +107,7 @@ impl WorkspaceStatus {
                 current: versions.current.clone(),
                 next: versions.next.clone(),
                 bump: versions.bump,
+                applied: applied_version(root, &release_unit.path, &versions.current),
             });
             for projection in &release_unit.projections {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
@@ -112,6 +120,8 @@ impl WorkspaceStatus {
                     drift.push(Drift {
                         release_unit: id.clone(),
                         file: relative,
+                        pointer: projection.pointer.clone(),
+                        mode: projection.mode,
                         expected: expected.clone(),
                         actual,
                     });
@@ -126,6 +136,43 @@ impl WorkspaceStatus {
             tag_record_issues: crate::tag::tag_record_issues(root, config)?,
         })
     }
+}
+
+impl WorkspaceStatus {
+    /// Drift that fails `check`: a committed projection whose version is
+    /// neither the tag-derived current version nor the version of an applied
+    /// release that waits for its tag. Injected projections are placeholders
+    /// between stamps, so their drift is reported but does not fail.
+    pub fn committed_drift(&self) -> Vec<&Drift> {
+        self.drift
+            .iter()
+            .filter(|drift| drift.mode == ProjectionMode::Committed)
+            .filter(|drift| {
+                self.applied(&drift.release_unit)
+                    .is_none_or(|applied| applied.to_string() != drift.actual)
+            })
+            .collect()
+    }
+
+    /// Applied release version of one release unit, if any.
+    pub fn applied(&self, release_unit: &str) -> Option<&Version> {
+        self.release_units
+            .iter()
+            .find(|status| status.id == release_unit)
+            .and_then(|status| status.applied.as_ref())
+    }
+}
+
+/// The leading changelog version of a release unit, when it is above the
+/// tag-derived current version. `apply` writes it before the harness commits
+/// and `tag` records it. An absent changelog, or a leading heading that is not
+/// a version, means no applied release.
+fn applied_version(root: &Path, unit_path: &Path, current: &Version) -> Option<Version> {
+    let changelog = read_contained(root, &unit_path.join("CHANGELOG.md")).ok()?;
+    crate::tag::leading_changelog_version(&changelog)
+        .ok()
+        .flatten()
+        .filter(|version| version > current)
 }
 
 pub(crate) fn read_projection_version(

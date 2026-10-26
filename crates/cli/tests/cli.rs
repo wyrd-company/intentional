@@ -1102,6 +1102,66 @@ fn status_reports_manifest_drift_from_tag_version() {
         .stdout(predicate::str::contains("manifest 9.9.9 != tag 1.0.0"));
 }
 
+/// A single npm release unit in `mode`, tagged at 1.0.0, whose manifest
+/// says `version`.
+fn tagged_npm_repository(mode: &str, version: &str) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest(version));
+    repo.write(".intentional/config.yml", &config(mode));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.tag("sample@1.0.0");
+    repo
+}
+
+#[test]
+fn check_fails_on_committed_projection_drift() {
+    let repo = tagged_npm_repository("committed", "9.9.9");
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "committed projection drift: release unit sample projection package.json is 9.9.9, expected 1.0.0",
+        ));
+}
+
+#[test]
+fn check_passes_a_committed_projection_at_the_tag_version() {
+    let repo = tagged_npm_repository("committed", "1.0.0");
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_ignores_drift_on_injected_and_none_projections() {
+    for mode in ["injected", "none"] {
+        let repo = tagged_npm_repository(mode, "9.9.9");
+        repo.cli().arg("check").assert().success();
+    }
+}
+
+#[test]
+fn check_accepts_an_applied_release_that_awaits_its_tag() {
+    let repo = tagged_npm_repository("committed", "1.0.0");
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("patch", "Fix a user-visible defect."),
+    );
+    repo.commit("add intent");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo.cli().arg("check").assert().success();
+
+    repo.write("package.json", &npm_manifest("1.0.5"));
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release unit sample projection package.json is 1.0.5, expected 1.0.0 or applied release 1.0.1",
+        ));
+}
+
 #[test]
 fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
     let repo = TestRepo::new();

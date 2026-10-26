@@ -277,6 +277,90 @@ fn status_reports_drift_for_root_projection() {
 }
 
 #[test]
+fn check_fails_on_drift_in_a_root_projection() {
+    let repo = root_projection_repository();
+    repo.write("site/meta.yml", &meta("0.9.0", "0.1.0"));
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "committed projection drift: release unit alpha projection site/meta.yml pointer /products/alpha/version is 0.9.0, expected 0.1.0",
+        )));
+}
+
+#[test]
+fn check_names_the_release_unit_whose_shared_field_drifted() {
+    let repo = root_projection_repository();
+    repo.write("site/meta.yml", &meta("0.1.0", "0.4.0"));
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(native(
+                "release unit beta projection site/meta.yml pointer products.alpha.docs-version is 0.4.0, expected 0.1.0",
+            ))
+            .and(predicate::str::contains("release unit alpha").not()),
+        );
+}
+
+#[test]
+fn check_fails_on_drift_in_a_json_projection() {
+    let repo = root_projection_repository();
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.3.0\"\n}\n",
+    );
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "release unit alpha projection packages/alpha/manifest.json pointer /version is 0.3.0, expected 0.1.0",
+        )));
+}
+
+#[test]
+fn check_ignores_drift_in_an_injected_root_projection() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &root_projection_config("injected"),
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.1.0\"\n}\n",
+    );
+    repo.write("site/meta.yml", &meta("0.1.0", "0.1.0"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.write("site/meta.yml", &meta("0.0.0", "0.0.0"));
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(native(
+            "  alpha site/meta.yml: manifest 0.0.0 != tag 0.1.0",
+        )));
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_and_status_refuse_a_missing_projection_file() {
+    let repo = root_projection_repository();
+    fs::remove_file(repo.root.join("site/meta.yml")).expect("remove projection file");
+    for command in ["status", "check"] {
+        repo.cli()
+            .arg(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(native("site/meta.yml")));
+    }
+}
+
+#[test]
 fn tag_refuses_drifted_root_projection() {
     let repo = root_projection_repository();
     repo.intent("alpha-0001", &[("alpha", "patch")]);

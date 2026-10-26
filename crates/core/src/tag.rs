@@ -1243,7 +1243,7 @@ fn render_tag(template: &str, id: &str, version: &str) -> String {
     template.replace("{id}", id).replace("{version}", version)
 }
 
-fn leading_changelog_version(changelog: &str) -> Result<Option<Version>> {
+pub(crate) fn leading_changelog_version(changelog: &str) -> Result<Option<Version>> {
     let Some(heading) = changelog.lines().find(|line| line.starts_with("## ")) else {
         return Ok(None);
     };
