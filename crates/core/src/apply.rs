@@ -13,6 +13,7 @@ use crate::config::{Config, Projection, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
+use crate::ownership::check_physical_ownership;
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
 use crate::workspace_files::EditTree;
 use std::collections::BTreeMap;
@@ -44,6 +45,7 @@ impl ApplyResult {
     /// Plan all release tree mutations.
     pub fn build(root: &Path, channel: Option<&str>) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let intents = Intent::load_all(root, &config)?;
         let plan = ReleasePlan::from_inputs(root, &config, &intents, channel)?;
         let mut tree = EditTree::new(root);

@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
+use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, bump_version, effective_bumps, VersionRepository};
 use crate::workspace_files::EditTree;
 use semver::Prerelease;
@@ -31,6 +32,7 @@ impl StampResult {
     /// Compute all injected projection writes.
     pub fn build(root: &Path, prerelease: Option<&str>) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let intents = Intent::load_all(root, &config)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let bumps = effective_bumps(&config, &declared);

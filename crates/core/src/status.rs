@@ -13,6 +13,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::intent::Intent;
 use crate::model::{Adapter, Bump, ProjectionMode};
+use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, resolve_versions, VersionRepository};
 use crate::workspace_files::read_contained;
 use semver::Version;
@@ -75,6 +76,7 @@ impl WorkspaceStatus {
 
     /// Compute status from already-loaded inputs.
     pub fn compute(root: &Path, config: &Config, intents: &[Intent]) -> Result<Self> {
+        check_physical_ownership(root, config)?;
         let repository = VersionRepository::discover(root)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let mut current_versions = std::collections::BTreeMap::new();

@@ -6,12 +6,13 @@
 //! Ownership of the version fields that projections write.
 
 use crate::adapters::format::{json_pointer, key_pointer};
-use crate::config::{Projection, ReleaseUnitConfig};
+use crate::config::{Config, Projection, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::model::{Adapter, ProjectionMode};
+use crate::workspace_files::{contained, FileIdentity};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The field in a file that one projection reads and writes.
 ///
@@ -96,4 +97,83 @@ pub(crate) fn check_ownership(release_units: &BTreeMap<String, ReleaseUnitConfig
         }
     }
     Ok(())
+}
+
+/// Refuse two projections that write one field of one physical file.
+///
+/// Config load compares paths as text, so it cannot see two paths that
+/// reach one file through symlinks, or through letter case on a
+/// filesystem that ignores it. Commands that edit or read projections run
+/// this check against the filesystem.
+pub(crate) fn check_physical_ownership(root: &Path, config: &Config) -> Result<()> {
+    let mut owners = Vec::<(FileIdentity, PathBuf, ProjectionField, &str)>::new();
+    for (id, release_unit) in &config.release_units {
+        for projection in &release_unit.projections {
+            if projection.mode == ProjectionMode::None {
+                continue;
+            }
+            let path = projection.file.workspace_path(&release_unit.path);
+            let identity = FileIdentity::of(&contained(root, &path)?)?;
+            let field = ProjectionField::of(projection);
+            if let Some((_, other, _, owner)) =
+                owners.iter().find(|(known, other, known_field, _)| {
+                    *known == identity && *known_field == field && *other != path
+                })
+            {
+                let owners = if *owner == id.as_str() {
+                    format!("release unit {id} projects {field} twice")
+                } else {
+                    format!("release units {owner} and {id} both project {field}")
+                };
+                return Err(Error::Validation(format!(
+                    "{owners} in one file: {} and {} are the same file",
+                    other.display(),
+                    path.display()
+                )));
+            }
+            owners.push((identity, path, field, id));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn physical_check_refuses_one_unit_reaching_one_field_twice() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let root = temp.path();
+        fs::create_dir(root.join("a")).expect("unit directory");
+        fs::write(root.join("a/meta.yml"), "version: 1.0.0\n").expect("shared file");
+        fs::hard_link(root.join("a/meta.yml"), root.join("a/alias.yml")).expect("hard link");
+        let config = Config::from_yaml(
+            "contract: contract-1\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: yaml, file: meta.yml, pointer: /version, mode: committed }\n      - { adapter: yaml, file: alias.yml, pointer: version, mode: injected }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
+        )
+        .expect("lexically distinct files load");
+        let error = check_physical_ownership(root, &config)
+            .expect_err("one physical field refused")
+            .to_string();
+        let expected = format!(
+            "release unit alpha projects /version twice in one file: {} and {} are the same file",
+            Path::new("a").join("meta.yml").display(),
+            Path::new("a").join("alias.yml").display()
+        );
+        assert!(error.contains(&expected), "{error}");
+
+        let ignored: Config = Config::from_yaml(
+            &config
+                .to_yaml()
+                .expect("config yaml")
+                .replace("mode: injected", "mode: none"),
+        )
+        .expect("mode none loads");
+        check_physical_ownership(root, &ignored).expect("mode none does not own a field");
+
+        fs::remove_file(root.join("a/alias.yml")).expect("remove link");
+        fs::write(root.join("a/alias.yml"), "version: 1.0.0\n").expect("distinct file");
+        check_physical_ownership(root, &config).expect("distinct files accepted");
+    }
 }

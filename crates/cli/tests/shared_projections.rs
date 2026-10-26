@@ -614,3 +614,42 @@ fn refuses_changelog_resolving_outside_repository() {
     assert!(!outside.join("CHANGELOG.md").exists());
     assert_eq!(repo.read("site/meta.yml"), meta("0.1.0", "0.1.0"));
 }
+
+#[test]
+fn refuses_one_field_projected_through_symlink_aliases() {
+    let message = native(
+        "release units alpha and beta both project /version in one file: a/shared.yml and b/shared.yml are the same file",
+    );
+    let repo = symlinked_repository("/version", "/version");
+    repo.write("shared.yml", "version: 1.0.0\n");
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+    for args in [&["status"][..], &["check"], &["apply", "--dry-run"]] {
+        repo.cli()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message.clone()));
+    }
+
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", "a", "shared.yml", "/version", "injected"),
+            yaml_unit("beta", "b", "shared.yml", "version", "injected"),
+        ]),
+    );
+    repo.write("shared.yml", "version: 0.0.0\n");
+    symlink_file("../shared.yml", &repo.root.join("a/shared.yml"));
+    symlink_file("../shared.yml", &repo.root.join("b/shared.yml"));
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: minor\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    repo.cli()
+        .args(["stamp", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(message));
+}
