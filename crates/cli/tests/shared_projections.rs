@@ -822,3 +822,23 @@ fn allows_cargo_members_that_inherit_one_workspace_version() {
     repo.commit("add fixture");
     repo.cli().arg("status").assert().success();
 }
+
+#[test]
+fn tag_refuses_one_field_projected_through_symlink_aliases() {
+    let message = format!(
+        "release units alpha and beta both project /version in one file: {} and {} are the same file",
+        native("a/shared.yml"),
+        native("b/shared.yml")
+    );
+    let repo = symlinked_repository("/version", "/version");
+    repo.write("shared.yml", "version: 1.0.0\n");
+    repo.commit("share one field");
+    for args in [&["tag", "--baseline"][..], &["tag"]] {
+        repo.cli()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message.clone()));
+    }
+    assert!(repo.tags().is_empty());
+}

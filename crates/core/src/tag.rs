@@ -9,6 +9,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
+use crate::ownership::check_physical_ownership;
 use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
@@ -66,6 +67,7 @@ impl TagResult {
         plan_path: Option<&Path>,
     ) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
@@ -132,6 +134,7 @@ impl TagResult {
     /// Infer and plan initial annotated baseline tags.
     pub fn build_baseline(root: &Path, explicit: &BTreeMap<String, Version>) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;

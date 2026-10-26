@@ -160,8 +160,8 @@ refuses them, in one release unit or across release units:
 - Projections with mode `none` do not count, except `go` projections: a major
   release rewrites the module path in every mode.
 
-`status`, `check`, `apply`, and `stamp` also refuse two projections that reach
-one field of one file through different paths: a symlink, a hard link, or
+`status`, `check`, `apply`, `stamp`, and `tag` also refuse two projections that
+reach one field of one file through different paths: a symlink, a hard link, or
 letter case on a filesystem that ignores case. Through such paths, `apply` and
 `stamp` still edit one file once.
 
