@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "intentional-cli"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "intentional-core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "gix",
  "glob",

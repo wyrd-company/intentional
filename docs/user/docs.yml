@@ -14,8 +14,8 @@ assets:
 products:
   intentional:
     name: intentional
-    version: 0.2.1
-    docs-version: 0.1.0
+    version: 0.3.0
+    docs-version: 0.1.1
     tagline: Intent-driven polyglot releases.
     blurb: >-
       Declare release intent once, project versions across package ecosystems,
