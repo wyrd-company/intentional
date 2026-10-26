@@ -479,7 +479,7 @@ fn repeatable_init_reconciles_receipts_and_reopens_changed_exclusions() {
                 assert!(config.release_units["sample-library"]
                     .projections
                     .iter()
-                    .any(|projection| projection.file == Path::new("pyproject.toml")));
+                    .any(|projection| projection.file == "pyproject.toml"));
             }
             _ => unreachable!(),
         }
@@ -712,7 +712,7 @@ fn devcontainer_candidates_support_every_resolution_flow() {
     let config = intentional_core::Config::load(&independent.root).expect("independent config");
     let projection = &config.release_units["sample-independent"].projections[0];
     assert_eq!(projection.adapter, Adapter::Json);
-    assert_eq!(projection.file, Path::new("devcontainer-feature.json"));
+    assert_eq!(projection.file, "devcontainer-feature.json");
     assert_eq!(projection.pointer.as_deref(), Some("/version"));
 
     let same_plan = TestRepo::new();
@@ -776,7 +776,7 @@ fn devcontainer_candidates_support_every_resolution_flow() {
         .iter()
         .any(|projection| {
             projection.adapter == Adapter::Json
-                && projection.file == Path::new("devcontainer-template.json")
+                && projection.file == "devcontainer-template.json"
                 && projection.pointer.as_deref() == Some("/version")
         }));
 

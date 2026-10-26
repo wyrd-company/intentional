@@ -14,8 +14,9 @@ use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
+use crate::projection_file::normalized;
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// One planned file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +74,10 @@ impl ApplyResult {
                 if go_major {
                     notices.push(format!(
                         "rewrite Go module major path {}",
-                        config_release_unit.path.join(&projection.file).display()
+                        projection
+                            .file
+                            .workspace_path(&config_release_unit.path)
+                            .display()
                     ));
                 }
             }
@@ -218,14 +222,6 @@ impl<'a> WorkingTree<'a> {
     }
 }
 
-/// One working-tree key per file, so `./docs/x` and `docs/x` share edits.
-pub(crate) fn normalized(relative: &Path) -> PathBuf {
-    relative
-        .components()
-        .filter(|component| !matches!(component, Component::CurDir))
-        .collect()
-}
-
 fn edit_projection_version(
     tree: &mut WorkingTree<'_>,
     root: &Path,
@@ -234,7 +230,7 @@ fn edit_projection_version(
     version: &str,
     workspace_versions: &mut BTreeMap<PathBuf, String>,
 ) -> Result<()> {
-    let relative = release_unit.path.join(&projection.file);
+    let relative = projection.file.workspace_path(&release_unit.path);
     let text = tree.read(&relative)?;
     let edited = match projection.adapter {
         Adapter::Npm => NpmAdapter.edit_version(&text, version)?,
@@ -316,7 +312,7 @@ fn rewrite_internal_dependencies(
                 }) else {
                     continue;
                 };
-                let source_path = dependency.path.join(&source_projection.file);
+                let source_path = source_projection.file.workspace_path(&dependency.path);
                 let source_text = tree.read(&source_path)?;
                 let dependency_name = match adapter {
                     Adapter::Npm => NpmAdapter.name(&source_text)?,
@@ -329,7 +325,7 @@ fn rewrite_internal_dependencies(
                     Adapter::Go => GoAdapter.name(&source_text)?,
                     _ => unreachable!(),
                 };
-                let target_path = dependent.path.join(&target_projection.file);
+                let target_path = target_projection.file.workspace_path(&dependent.path);
                 let target_text = tree.read(&target_path)?;
                 let edited = match adapter {
                     Adapter::Npm => NpmAdapter.edit_dependency(

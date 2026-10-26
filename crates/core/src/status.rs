@@ -102,7 +102,7 @@ impl WorkspaceStatus {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                     continue;
                 }
-                let relative = release_unit.path.join(&projection.file);
+                let relative = projection.file.workspace_path(&release_unit.path);
                 let text = std::fs::read_to_string(root.join(&relative))
                     .map_err(|error| crate::Error::io(root.join(&relative), error))?;
                 let actual = read_projection_version(root, &relative, projection, &text)?;

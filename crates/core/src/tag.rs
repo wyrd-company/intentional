@@ -157,7 +157,7 @@ impl TagResult {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                     continue;
                 }
-                let relative = release_unit.path.join(&projection.file);
+                let relative = projection.file.workspace_path(&release_unit.path);
                 let text = std::fs::read_to_string(root.join(&relative))
                     .map_err(|error| Error::io(root.join(&relative), error))?;
                 evidence.push((
@@ -453,7 +453,7 @@ fn verify_version_projections(
             if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                 continue;
             }
-            let relative = release_unit.path.join(&projection.file);
+            let relative = projection.file.workspace_path(&release_unit.path);
             let text = std::fs::read_to_string(root.join(&relative))
                 .map_err(|error| Error::io(root.join(&relative), error))?;
             let actual = read_projection_version(root, &relative, projection, &text)?;
@@ -819,7 +819,7 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
             if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                 continue;
             }
-            let relative = release_unit.path.join(&projection.file);
+            let relative = projection.file.workspace_path(&release_unit.path);
             let text = std::fs::read_to_string(root.join(&relative))
                 .map_err(|error| Error::io(root.join(&relative), error))?;
             let actual = read_projection_version(root, &relative, projection, &text)?;

@@ -9,6 +9,8 @@ use crate::error::{Error, Result};
 use crate::model::{
     Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
+use crate::projection_file::validate_relative_path;
+pub use crate::projection_file::ProjectionFile;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -192,7 +194,7 @@ pub struct Projection {
     /// Adapter specialization.
     pub adapter: Adapter,
     /// File relative to the release-unit path.
-    pub file: PathBuf,
+    pub file: ProjectionFile,
     /// Projection materialization mode.
     pub mode: ProjectionMode,
     /// JSON Pointer or dotted TOML/YAML key path for generic formats.
@@ -282,12 +284,11 @@ impl Config {
                 )));
             }
 
-            let mut projection_keys = BTreeSet::new();
+            let mut projection_keys = Vec::new();
             for projection in &release_unit.projections {
-                validate_relative_path(
-                    &projection.file,
-                    &format!("release unit {id} projection file"),
-                )?;
+                projection
+                    .file
+                    .validate(&format!("release unit {id} projection file"))?;
                 if projection.adapter.requires_pointer()
                     && projection.pointer.as_deref().is_none_or(str::is_empty)
                 {
@@ -297,12 +298,13 @@ impl Config {
                     )));
                 }
                 let key = (&projection.file, projection.pointer.as_deref());
-                if !projection_keys.insert(key) {
+                if projection_keys.contains(&key) {
                     return Err(Error::Validation(format!(
                         "release unit {id} repeats projection {}",
-                        projection.file.display()
+                        projection.file
                     )));
                 }
+                projection_keys.push(key);
             }
 
             validate_dependencies(id, release_unit, &self.release_units)?;
@@ -577,20 +579,6 @@ pub(crate) fn validate_sha256(value: &str, description: &str) -> Result<()> {
     {
         return Err(Error::Validation(format!(
             "{description} must be sha256 followed by 64 lowercase hexadecimal digits"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
-    if path.as_os_str().is_empty()
-        || path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(Error::Validation(format!(
-            "{description} must be a non-empty relative path without .."
         )));
     }
     Ok(())

@@ -14,6 +14,7 @@ pub mod init;
 pub mod intent;
 pub mod model;
 pub mod plan;
+pub mod projection_file;
 pub mod stamp;
 pub mod status;
 pub mod tag;
@@ -22,7 +23,7 @@ pub mod version;
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
-    Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection,
+    Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection, ProjectionFile,
     ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
