@@ -56,6 +56,8 @@ jobs:
           projection_file:: config::tests:: ownership:: workspace_files::
       - name: Test shared projection files end to end
         run: cargo test --locked -p intentional-cli --test shared_projections
+        env:
+          INTENTIONAL_TEST_CASE_INSENSITIVE: "1"
 
   npm-launcher:
     name: npm launcher (${{ matrix.os }})

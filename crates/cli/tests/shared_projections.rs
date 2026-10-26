@@ -481,7 +481,12 @@ fn apply_merges_case_aliases() {
     let repo = TestRepo::new();
     repo.write("site/probe", "");
     if !repo.root.join("SITE/PROBE").exists() {
-        eprintln!("the filesystem distinguishes letter case; no case alias exists");
+        // CI sets this where the filesystem ignores case, so that this test
+        // cannot pass there without running.
+        assert!(
+            std::env::var_os("INTENTIONAL_TEST_CASE_INSENSITIVE").is_none(),
+            "expected a filesystem that ignores letter case"
+        );
         return;
     }
     fs::remove_file(repo.root.join("site/probe")).expect("remove probe");
