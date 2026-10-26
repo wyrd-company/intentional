@@ -911,6 +911,11 @@ release-units:
         text
     }
 
+    /// A `/`-separated workspace path as error messages print it.
+    fn native(path: &str) -> String {
+        path.replace('/', std::path::MAIN_SEPARATOR_STR)
+    }
+
     fn ownership_error(config: &str) -> String {
         Config::from_yaml(config)
             .expect_err("shared field rejected")
@@ -931,8 +936,10 @@ release-units:
                 &["{ adapter: yaml, file: meta.yml, pointer: /meta/version, mode: injected }"],
             ),
         ]);
-        assert!(ownership_error(&config)
-            .contains("release units alpha and beta both project /meta/version in site/meta.yml"));
+        assert!(ownership_error(&config).contains(&format!(
+            "release units alpha and beta both project /meta/version in {}",
+            native("site/meta.yml")
+        )));
     }
 
     #[test]
@@ -949,8 +956,10 @@ release-units:
                 &["{ adapter: yaml, file: /site/meta.yml, pointer: /meta/version, mode: committed }"],
             ),
         ]);
-        assert!(ownership_error(&dotted)
-            .contains("release units alpha and beta both project /meta/version in site/meta.yml"));
+        assert!(ownership_error(&dotted).contains(&format!(
+            "release units alpha and beta both project /meta/version in {}",
+            native("site/meta.yml")
+        )));
 
         let escaped = units(&[
             (
@@ -966,8 +975,10 @@ release-units:
         ]);
         assert!(ownership_error(&escaped).contains("must be a root path"));
         let escaped = escaped.replace("/./site/../site/meta.json", "/site/meta.json");
-        assert!(ownership_error(&escaped)
-            .contains("release units alpha and beta both project /a~1b in site/meta.json"));
+        assert!(ownership_error(&escaped).contains(&format!(
+            "release units alpha and beta both project /a~1b in {}",
+            native("site/meta.json")
+        )));
 
         let ecosystem = units(&[
             (
@@ -981,8 +992,10 @@ release-units:
                 &["{ adapter: json, file: /pkg/package.json, pointer: /version, mode: committed }"],
             ),
         ]);
-        assert!(ownership_error(&ecosystem)
-            .contains("release units alpha and beta both project /version in pkg/package.json"));
+        assert!(ownership_error(&ecosystem).contains(&format!(
+            "release units alpha and beta both project /version in {}",
+            native("pkg/package.json")
+        )));
 
         let same_unit = units(&[(
             "alpha",
@@ -1049,7 +1062,8 @@ release-units:
             let error = ownership_error(&config);
             assert!(
                 error.contains(&format!(
-                    "release units alpha and beta both project {field} in pkg/{file}"
+                    "release units alpha and beta both project {field} in {}",
+                    native(&format!("pkg/{file}"))
                 )),
                 "{adapter}: {error}"
             );
