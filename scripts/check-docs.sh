@@ -37,7 +37,7 @@ done
 for page in "${pages[@]}"; do
   test "$(yq --front-matter=extract -r '.product' "$page")" = "intentional"
   test "$(yq --front-matter=extract -r 'has("docs")' "$page")" = "false"
-  test -n "$(yq --front-matter=extract -r '.title' "$page")"
+  yq --front-matter=extract -e '.title | select(type == "!!str") | select(length > 0)' "$page" >/dev/null
   yq --front-matter=extract -e '.order | type == "!!int"' "$page" >/dev/null
 done
 
