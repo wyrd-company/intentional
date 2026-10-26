@@ -116,7 +116,7 @@ changelog stays at the release-unit path.
 | --- | --- |
 | `committed` | `apply` writes the release version. `check` fails when the file holds another version. |
 | `injected` | `stamp` writes a computed build version. `check` ignores the committed placeholder. |
-| `none` | The listed manifest is not written; tags remain authoritative. |
+| `none` | The listed manifest is not written; tags remain authoritative. `status` and `check` do not read it. |
 
 The ecosystem adapters are `npm`, `cargo`, `pub`, `python`, `msbuild`, and
 `go`. The generic adapters are `json`, `toml`, and `yaml`.

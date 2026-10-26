@@ -76,11 +76,15 @@ repository root.
 projection versions, and deterministic planning for continuous integration.
 Drift on a `committed` projection fails `check`: each finding names the
 release unit, the projection file and pointer, the version found, and the
-expected version. The expected version is the tag-derived current version, or
-the version of an applied release that waits for its tag, so the commit of an
-applied release passes. Drift on `injected` and `none` projections appears only
-in `status`. A projection file that does not exist fails both `status` and
-`check`.
+expected version. The expected version is the tag-derived current version.
+When the leading changelog version of the release unit is above the tag, the
+release unit has an applied release that waits for its tag, and the expected
+version is that release version for every `committed` projection of the unit.
+So the commit of a full apply passes, and a release that was only partly
+applied fails, as `tag` refuses it. Drift on an `injected` projection appears
+only in `status`. Neither command reads a `none` projection, so neither
+reports its drift. A `committed` or `injected` projection file that does not
+exist fails both `status` and `check`.
 
 Tags created before Intentional carry no Intentional record. Both lightweight
 tags and annotated tags without any Intentional record field are tolerated as

@@ -3,4 +3,4 @@ intentional: major
 intentional-docs: patch
 ---
 
-`check` fails when a `committed` projection holds a version other than the tag-derived current version, naming the release unit, file, pointer, found version, and expected version. The commit of an applied release that waits for its tag still passes. `injected` and `none` projections stay exempt; `status` reports their drift.
+`check` fails when a `committed` projection holds a version other than the tag-derived current version, naming the release unit, file, pointer, found version, and expected version. When a release unit has an applied release that waits for its tag, every `committed` projection of the unit must hold that release version, so the commit of a full apply passes and a partly applied release fails. `status` reports drift on `injected` projections without failing `check`; neither command reads `none` projections.

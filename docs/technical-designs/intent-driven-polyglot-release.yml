@@ -93,10 +93,13 @@ proposed-design:
     prefix. The next version is the primary tag version plus the accumulated
     intent bump interpreted by the workspace contract. No version field exists
     in config, so hand-edited manifest versions are observable drift rather
-    than competing authority. Drift on a committed projection fails check
-    unless the projection holds the version of an applied release that waits
-    for its tag; drift on injected and none projections is reported only by
-    status. Monorepo support includes per-release-unit intents,
+    than competing authority. Drift on a committed projection fails check.
+    The expected version is the tag version or, when the release unit has an
+    applied release that waits for its tag, that release version for every
+    committed projection of the unit, detected by the same rule as tag, so a
+    partly applied release fails. Drift on injected projections is reported
+    only by status, and none projections are not read. Monorepo support
+    includes per-release-unit intents,
     internal-dependency bumping with generated changelog entries, fixed and
     linked release groups, and changed/unchanged partitioning. During init
     reconciliation, current non-development npm manifest dependencies are
@@ -385,9 +388,9 @@ proposed-design:
     with a required phase, and accepts --baseline to establish initial release
     authority. Tag is the only git-writing command. check is the CI gate for
     config, schema, intent validity, tag-record consistency, baseline presence,
-    committed projection drift, and plan determinism. Every writing verb supports --dry-run and reports the
-    exact operation set. Commit, push, and forge choreography belong to the
-    harness.
+    committed projection drift, and plan determinism. Every writing verb
+    supports --dry-run and reports the exact operation set. Commit, push, and
+    forge choreography belong to the harness.
   release-plan: >-
     Plan emits canonical JSON listing release units, old and new versions,
     contributing intent ids, primary, projection, and workspace tags, tag-after
