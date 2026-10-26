@@ -97,8 +97,17 @@ ecosystem package name.
 | `depends-on` | No | Internal release-unit dependencies. |
 | `disposition` | No | `managed` by default; `suspended` keeps identity while blocking a required release. |
 
-Each projection has an adapter, relative file path, and mode. Generic `json`,
-`toml`, and `yaml` projections also require a pointer to the version field.
+Each projection has an adapter, a file, and a mode. Generic `json`, `toml`,
+and `yaml` projections also require a pointer to the version field.
+
+A `file` is relative to the release-unit path and must not contain `..`. A
+`file` that starts with `/` is a root file: it is relative to the repository
+root, so that a release unit can write its version into a file outside its
+own path. Only generic projections may use a root file. A root file has one
+form: one `/`, then segments separated by `/`, with no empty, `.`, or `..`
+segment and no `\`. A file that resolves outside the repository through a
+symlink is refused. The release unit's changelog stays at the release-unit
+path.
 
 | Mode | Behavior |
 | --- | --- |
@@ -108,6 +117,53 @@ Each projection has an adapter, relative file path, and mode. Generic `json`,
 
 The ecosystem adapters are `npm`, `cargo`, `pub`, `python`, `msbuild`, and
 `go`. The generic adapters are `json`, `toml`, and `yaml`.
+
+### Shared projection files
+
+Several release units may write different fields of one file. `apply` edits
+the file once, with the field of each released unit, and leaves the fields of
+the other units as they are.
+
+```yaml
+release-units:
+  sample-cli:
+    path: packages/cli
+    projections:
+      - adapter: npm
+        file: package.json
+        mode: committed
+      - adapter: yaml
+        file: /docs/site.yml
+        pointer: /products/sample/version
+        mode: committed
+  sample-docs:
+    path: docs/sample
+    projections:
+      - adapter: yaml
+        file: /docs/site.yml
+        pointer: /products/sample/docs-version
+        mode: committed
+```
+
+Two projections must not write the same field of one file. Configuration load
+refuses them, in one release unit or across release units:
+
+- Files compare by their path from the repository root, so `/docs/site.yml` on
+  any unit and `docs/site.yml` on a unit at `.` are one file.
+- Fields compare by their parsed pointer, so `products.sample.version` and
+  `/products/sample/version` are one field. An ecosystem adapter owns its
+  fixed version field: an `npm` projection and a `json` projection at
+  `/version` in one `package.json` collide.
+- Projections with mode `none` do not count.
+
+`status`, `check`, `apply`, and `stamp` also refuse two projections that reach
+one field of one file through different paths: a symlink, a hard link, or
+letter case on a filesystem that ignores case. Through such paths, `apply` and
+`stamp` still edit one file once.
+
+A generic projection has no ecosystem, so a release of `sample-cli` does not
+bump `sample-docs`. Put both units in a `fixed` or `linked` group when they
+must release together.
 
 ### Dependency propagation
 

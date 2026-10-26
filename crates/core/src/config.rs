@@ -194,7 +194,8 @@ pub struct WorkspaceTagConfig {
 pub struct Projection {
     /// Adapter specialization.
     pub adapter: Adapter,
-    /// File relative to the release-unit path.
+    /// File relative to the release-unit path, or to the repository root
+    /// when it starts with `/`.
     pub file: ProjectionFile,
     /// Projection materialization mode.
     pub mode: ProjectionMode,

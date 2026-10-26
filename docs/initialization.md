@@ -239,6 +239,8 @@ Initialization exits with:
 `intentional init --json` emits the same plan as stable structured JSON.
 Reruns preserve resolutions while their evidence remains valid, report stale
 resolutions, and verify repository-integration edits from actual file state.
+Initialization never proposes a root projection file, and a rerun keeps the
+root projections that the configuration already has.
 
 When an npm manifest is explicitly projected onto a non-npm release unit,
 initialization may present a `retain` or `remove` integration choice. A

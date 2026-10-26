@@ -67,5 +67,7 @@ reformatting unrelated content:
 
 Ecosystem adapters know their native version and dependency fields. Generic
 `json`, `toml`, and `yaml` projections use an explicit pointer to an arbitrary
-version field. Discovery proves only what manifest evidence supports; it does
+version field. A generic projection may name its file from the repository
+root, so that several release units can write their fields into one shared
+file. Discovery proves only what manifest evidence supports; it does
 not infer registries, publication policy, or repository-specific choreography.

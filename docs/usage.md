@@ -70,7 +70,8 @@ intentional check
 
 `status` lists pending intents, tag-derived current versions, projected next
 versions, suspended release blockers, manifest drift, tag-record issues, and
-missing baselines.
+missing baselines. A drift row names the projection file by its path from the
+repository root.
 `check` validates configuration, intents, tag records, baselines, and
 deterministic planning for continuous integration.
 
@@ -101,7 +102,8 @@ do not hand-edit or reformat the sealed plan.
 
 `apply` writes release versions into committed projections, rewrites internal
 dependency ranges, updates each release unit's changelog, and consumes the
-included intents. It edits only the working tree:
+included intents. A file that several release units project is written once,
+with the field of each released unit. It edits only the working tree:
 
 ```bash
 intentional apply
