@@ -40,6 +40,23 @@ jobs:
       - name: Check this repository with intentional
         run: cargo run --bin intentional -- check
 
+  path-semantics:
+    name: Path semantics (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-14 ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test projection path resolution and file identity
+        run: >-
+          cargo test --locked -p intentional-core --lib --
+          projection_file:: config::tests:: ownership:: workspace_files::
+      - name: Test shared projection files end to end
+        run: cargo test --locked -p intentional-cli --test shared_projections
+
   npm-launcher:
     name: npm launcher (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
