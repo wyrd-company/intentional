@@ -3,7 +3,7 @@
 //   implements: intent-driven-polyglot-release
 // ---
 
-//! Workspace files by physical identity.
+//! Workspace files by physical identity, kept inside the repository.
 
 use crate::apply::FileWrite;
 use crate::error::{Error, Result};
@@ -13,6 +13,42 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+/// Absolute path of a workspace-relative file that resolves inside the
+/// repository.
+///
+/// The nearest existing ancestor of the file is resolved through every
+/// symlink and must stay below the resolved repository root. A missing
+/// tail cannot leave the repository, because configured paths have no `..`.
+pub(crate) fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
+    let relative = normalized(relative);
+    let absolute = root.join(&relative);
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| Error::io(root, error))?;
+    let mut existing = absolute.as_path();
+    loop {
+        match existing.canonicalize() {
+            Ok(canonical) if canonical.starts_with(&canonical_root) => return Ok(absolute),
+            Ok(_) => break,
+            Err(error) if error.kind() == ErrorKind::NotFound => match existing.parent() {
+                Some(parent) => existing = parent,
+                None => break,
+            },
+            Err(error) => return Err(Error::io(existing, error)),
+        }
+    }
+    Err(Error::Validation(format!(
+        "{} resolves outside the repository",
+        relative.display()
+    )))
+}
+
+/// Read a workspace file that resolves inside the repository.
+pub(crate) fn read_contained(root: &Path, relative: &Path) -> Result<String> {
+    let path = contained(root, relative)?;
+    std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))
+}
 
 /// The physical file a path reaches, whatever symlinks or letter case it
 /// goes through.
@@ -77,7 +113,7 @@ impl<'a> EditTree<'a> {
 
     fn entry(&mut self, relative: &Path) -> Result<&mut TreeFile> {
         let relative = normalized(relative);
-        let absolute = self.root.join(&relative);
+        let absolute = contained(self.root, &relative)?;
         let identity = FileIdentity::of(&absolute)?;
         let index = match self.files.iter().position(|file| file.identity == identity) {
             Some(index) => index,
@@ -177,6 +213,50 @@ mod tests {
         fs::write(root.join("site/meta.yml"), "a: 1\nb: 1\n").expect("shared file");
         fs::write(root.join("site/other.yml"), "a: 1\n").expect("other file");
         (temp, root)
+    }
+
+    #[test]
+    fn contained_refuses_files_that_resolve_outside_the_workspace() {
+        let (temp, root) = workspace();
+        fs::write(temp.path().join("outside.yml"), "a: 1\n").expect("outside file");
+        symlink(&temp.path().join("outside.yml"), &root.join("site/out.yml"));
+        symlink(temp.path(), &root.join("parent"));
+        for (relative, message) in [
+            ("site/out.yml", "resolves outside the repository"),
+            ("parent/outside.yml", "resolves outside the repository"),
+            ("parent/new/CHANGELOG.md", "resolves outside the repository"),
+        ] {
+            let error = contained(&root, Path::new(relative))
+                .expect_err("outside file refused")
+                .to_string();
+            assert!(error.contains(message), "{relative}: {error}");
+        }
+        let error = contained(&root, Path::new("./parent/outside.yml"))
+            .expect_err("outside file refused")
+            .to_string();
+        let reported = Path::new("parent").join("outside.yml");
+        assert!(
+            error.contains(&format!("failed: {} resolves", reported.display())),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn contained_accepts_files_inside_the_workspace() {
+        let (temp, root) = workspace();
+        symlink(&root.join("site"), &root.join("docs"));
+        symlink(&root, &temp.path().join("alias"));
+        for relative in ["site/meta.yml", "docs/meta.yml", "site/new/CHANGELOG.md"] {
+            assert_eq!(
+                contained(&root, Path::new(relative)).expect("inside file"),
+                root.join(relative)
+            );
+        }
+        let alias = temp.path().join("alias");
+        assert_eq!(
+            contained(&alias, Path::new("docs/meta.yml")).expect("root through a symlink"),
+            alias.join("docs/meta.yml")
+        );
     }
 
     #[test]

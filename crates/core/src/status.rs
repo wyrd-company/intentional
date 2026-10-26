@@ -14,6 +14,7 @@ use crate::error::Result;
 use crate::intent::Intent;
 use crate::model::{Adapter, Bump, ProjectionMode};
 use crate::version::{aggregate_bumps, resolve_versions, VersionRepository};
+use crate::workspace_files::read_contained;
 use semver::Version;
 use std::path::Path;
 
@@ -103,8 +104,7 @@ impl WorkspaceStatus {
                     continue;
                 }
                 let relative = projection.file.workspace_path(&release_unit.path);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| crate::Error::io(root.join(&relative), error))?;
+                let text = read_contained(root, &relative)?;
                 let actual = read_projection_version(root, &relative, projection, &text)?;
                 if actual != expected {
                     drift.push(Drift {

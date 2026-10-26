@@ -12,6 +12,7 @@ use crate::model::{Adapter, ProjectionMode, TagPhase};
 use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
+use crate::workspace_files::read_contained;
 use semver::Version;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -158,8 +159,7 @@ impl TagResult {
                     continue;
                 }
                 let relative = projection.file.workspace_path(&release_unit.path);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| Error::io(root.join(&relative), error))?;
+                let text = read_contained(root, &relative)?;
                 evidence.push((
                     relative.clone(),
                     read_projection_version(root, &relative, projection, &text)?,
@@ -454,8 +454,7 @@ fn verify_version_projections(
                 continue;
             }
             let relative = projection.file.workspace_path(&release_unit.path);
-            let text = std::fs::read_to_string(root.join(&relative))
-                .map_err(|error| Error::io(root.join(&relative), error))?;
+            let text = read_contained(root, &relative)?;
             let actual = read_projection_version(root, &relative, projection, &text)?;
             if &actual != expected {
                 return Err(Error::Validation(format!(
@@ -820,8 +819,7 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
                 continue;
             }
             let relative = projection.file.workspace_path(&release_unit.path);
-            let text = std::fs::read_to_string(root.join(&relative))
-                .map_err(|error| Error::io(root.join(&relative), error))?;
+            let text = read_contained(root, &relative)?;
             let actual = read_projection_version(root, &relative, projection, &text)?;
             if actual != planned.new_version {
                 return Err(Error::Validation(format!(

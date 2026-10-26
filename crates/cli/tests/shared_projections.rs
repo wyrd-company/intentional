@@ -102,6 +102,18 @@ fn symlink_file(target: &str, link: &Path) {
     std::os::windows::fs::symlink_file(target, link).expect("file symlink");
 }
 
+/// Make `link` a symlink to the directory `target`, relative to the link.
+fn symlink_dir(target: &str, link: &Path) {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent).expect("link parent");
+    }
+    let target = native(target);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("directory symlink");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link).expect("directory symlink");
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = ProcessCommand::new("git")
         .args(args)
@@ -496,4 +508,109 @@ fn apply_merges_case_aliases() {
     );
     repo.cli().arg("apply").assert().success();
     assert_eq!(repo.read("site/meta.yml"), "alpha: 1.0.1\nbeta: 1.0.1\n");
+}
+
+/// The root-projection fixture with `/site/meta.yml` replaced by a symlink
+/// to a file outside the repository.
+fn outside_repository(mode: &str) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(".intentional/config.yml", &root_projection_config(mode));
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.1.0\"\n}\n",
+    );
+    fs::write(
+        repo.root
+            .parent()
+            .expect("temporary parent")
+            .join("outside.yml"),
+        meta("0.1.0", "0.1.0"),
+    )
+    .expect("outside file");
+    symlink_file("../../outside.yml", &repo.root.join("site/meta.yml"));
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: patch\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    repo
+}
+
+#[test]
+fn refuses_projection_resolving_outside_repository() {
+    let message = native("site/meta.yml resolves outside the repository");
+    let repo = outside_repository("committed");
+    for args in [
+        &["status"][..],
+        &["check"],
+        &["apply", "--dry-run"],
+        &["tag", "--baseline"],
+    ] {
+        repo.cli()
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message.clone()));
+    }
+    let repo = outside_repository("injected");
+    repo.cli()
+        .args(["stamp", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(message));
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("outside.yml");
+    assert_eq!(
+        fs::read_to_string(outside).expect("outside file"),
+        meta("0.1.0", "0.1.0")
+    );
+}
+
+#[test]
+fn tag_refuses_projection_resolving_outside_repository() {
+    let repo = root_projection_repository();
+    repo.intent("alpha-0001", &[("alpha", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("outside.yml");
+    fs::rename(repo.root.join("site/meta.yml"), &outside).expect("move file out");
+    symlink_file("../../outside.yml", &repo.root.join("site/meta.yml"));
+    repo.commit("apply release through an outside file");
+    repo.cli()
+        .arg("tag")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "site/meta.yml resolves outside the repository",
+        )));
+    assert!(!repo.tags().contains(&"alpha@0.1.1".to_owned()));
+}
+
+#[test]
+fn refuses_changelog_resolving_outside_repository() {
+    let repo = root_projection_repository();
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+    fs::remove_dir_all(repo.root.join("site/beta")).ok();
+    symlink_dir("../../outside", &repo.root.join("site/beta"));
+    repo.intent("docs-0001", &[("beta", "patch")]);
+    repo.cli()
+        .arg("apply")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "site/beta/CHANGELOG.md resolves outside the repository",
+        )));
+    assert!(!outside.join("CHANGELOG.md").exists());
+    assert_eq!(repo.read("site/meta.yml"), meta("0.1.0", "0.1.0"));
 }
