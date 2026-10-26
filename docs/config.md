@@ -98,7 +98,9 @@ ecosystem package name.
 | `disposition` | No | `managed` by default; `suspended` keeps identity while blocking a required release. |
 
 Each projection has an adapter, a file, and a mode. Generic `json`, `toml`,
-and `yaml` projections also require a pointer to the version field.
+and `yaml` projections also require a pointer to the version field. A `json`
+pointer selects an array element only by its index without leading zeros, such
+as `/versions/1`.
 
 A `file` is relative to the release-unit path. It must not contain `..` or a
 segment that starts with a drive prefix such as `C:`. A `file` that starts

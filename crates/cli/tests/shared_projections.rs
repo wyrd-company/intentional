@@ -686,3 +686,34 @@ fn tag_refuses_changelog_resolving_outside_repository() {
         )));
     assert!(!repo.tags().contains(&"beta@0.1.1".to_owned()));
 }
+
+#[test]
+fn apply_refuses_a_non_canonical_json_array_index() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            "  alpha:\n    path: .\n    projections:\n      - { adapter: json, file: meta.json, pointer: /versions/1, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n".to_owned(),
+            "  beta:\n    path: b\n    projections:\n      - { adapter: json, file: /meta.json, pointer: /versions/01, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n".to_owned(),
+        ]),
+    );
+    let meta = "{\n  \"versions\": [\"0.0.0\", \"1.0.0\"]\n}\n";
+    repo.write("meta.json", meta);
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: minor\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    repo.cli()
+        .arg("apply")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "JSON pointer segment \"01\" was not found",
+        ));
+    assert_eq!(repo.read("meta.json"), meta);
+    assert!(repo
+        .root
+        .join(".intentional/intents/joint-0001.md")
+        .exists());
+}
