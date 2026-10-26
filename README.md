@@ -3,6 +3,13 @@ relationships:
   implements: intent-driven-polyglot-release
 ---
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/user/assets/logo-dark.svg">
+    <img src="docs/user/assets/logo.svg" alt="intentional logo" width="160">
+  </picture>
+</p>
+
 # intentional
 
 `intentional` is an intent-driven polyglot release and versioning CLI. Pending
