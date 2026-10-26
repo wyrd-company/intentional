@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: wyrd-company/wyrd.foo/.github/actions/publish-docs@v1
+      - uses: wyrd-company/wyrd.foo/.github/actions/publish-docs@v2
         with:
           app-id: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_APP_ID }}
           private-key: ${{ secrets.WYRD_TOOLS_DOCS_PUBLISHER_PRIVATE_KEY }}
