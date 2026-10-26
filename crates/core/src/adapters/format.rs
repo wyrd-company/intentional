@@ -307,7 +307,7 @@ impl<'a> JsonParser<'a> {
     }
 }
 
-fn json_pointer(pointer: &str) -> Result<Vec<String>> {
+pub(crate) fn json_pointer(pointer: &str) -> Result<Vec<String>> {
     if pointer.is_empty() {
         return Ok(Vec::new());
     }
@@ -320,7 +320,7 @@ fn json_pointer(pointer: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-fn key_pointer(pointer: &str) -> Result<Vec<String>> {
+pub(crate) fn key_pointer(pointer: &str) -> Result<Vec<String>> {
     let parts = if let Some(rest) = pointer.strip_prefix('/') {
         rest.split('/').collect::<Vec<_>>()
     } else {

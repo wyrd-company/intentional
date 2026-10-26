@@ -9,6 +9,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
+use crate::ownership::check_ownership;
 use crate::projection_file::validate_relative_path;
 pub use crate::projection_file::ProjectionFile;
 use serde::{Deserialize, Serialize};
@@ -284,7 +285,6 @@ impl Config {
                 )));
             }
 
-            let mut projection_keys = Vec::new();
             for projection in &release_unit.projections {
                 projection.file.validate(id, projection.adapter)?;
                 if projection.adapter.requires_pointer()
@@ -295,14 +295,6 @@ impl Config {
                         projection.adapter
                     )));
                 }
-                let key = (&projection.file, projection.pointer.as_deref());
-                if projection_keys.contains(&key) {
-                    return Err(Error::Validation(format!(
-                        "release unit {id} repeats projection {}",
-                        projection.file
-                    )));
-                }
-                projection_keys.push(key);
             }
 
             validate_dependencies(id, release_unit, &self.release_units)?;
@@ -339,6 +331,7 @@ impl Config {
             }
         }
 
+        check_ownership(&self.release_units)?;
         self.validate_discovery()?;
         self.validate_release_groups()?;
         self.validate_dependency_acyclic()?;
@@ -858,6 +851,214 @@ release-units:
         {
             assert!(!pattern.is_match(file), "schema accepts {file}");
         }
+    }
+
+    /// A config of release units built from `(id, path, projections)`,
+    /// where each projection is a flow mapping.
+    fn units(units: &[(&str, &str, &[&str])]) -> String {
+        let mut text = "contract: contract-1\nrelease-units:\n".to_owned();
+        for (id, path, projections) in units {
+            text.push_str(&format!("  {id}:\n    path: {path}\n    projections:\n"));
+            for projection in *projections {
+                text.push_str(&format!("      - {projection}\n"));
+            }
+            text.push_str(&format!(
+                "    tags:\n      primary: {{ role: primary, template: '{id}@{{version}}' }}\n"
+            ));
+        }
+        text
+    }
+
+    fn ownership_error(config: &str) -> String {
+        Config::from_yaml(config)
+            .expect_err("shared field rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn rejects_two_release_units_projecting_one_pointer() {
+        let config = units(&[
+            (
+                "alpha",
+                "a",
+                &["{ adapter: yaml, file: /site/meta.yml, pointer: /meta/version, mode: committed }"],
+            ),
+            (
+                "beta",
+                "site",
+                &["{ adapter: yaml, file: meta.yml, pointer: /meta/version, mode: injected }"],
+            ),
+        ]);
+        assert!(ownership_error(&config)
+            .contains("release units alpha and beta both project /meta/version in site/meta.yml"));
+    }
+
+    #[test]
+    fn rejects_pointer_spelling_aliases() {
+        let dotted = units(&[
+            (
+                "alpha",
+                ".",
+                &["{ adapter: yaml, file: site/meta.yml, pointer: meta.version, mode: committed }"],
+            ),
+            (
+                "beta",
+                "b",
+                &["{ adapter: yaml, file: /site/meta.yml, pointer: /meta/version, mode: committed }"],
+            ),
+        ]);
+        assert!(ownership_error(&dotted)
+            .contains("release units alpha and beta both project /meta/version in site/meta.yml"));
+
+        let escaped = units(&[
+            (
+                "alpha",
+                "a",
+                &["{ adapter: json, file: /site/meta.json, pointer: /a~1b, mode: committed }"],
+            ),
+            (
+                "beta",
+                "b",
+                &["{ adapter: json, file: /./site/../site/meta.json, pointer: /a~1b, mode: committed }"],
+            ),
+        ]);
+        assert!(ownership_error(&escaped).contains("must be a root path"));
+        let escaped = escaped.replace("/./site/../site/meta.json", "/site/meta.json");
+        assert!(ownership_error(&escaped)
+            .contains("release units alpha and beta both project /a~1b in site/meta.json"));
+
+        let ecosystem = units(&[
+            (
+                "alpha",
+                "pkg",
+                &["{ adapter: npm, file: package.json, mode: committed }"],
+            ),
+            (
+                "beta",
+                "b",
+                &["{ adapter: json, file: /pkg/package.json, pointer: /version, mode: committed }"],
+            ),
+        ]);
+        assert!(ownership_error(&ecosystem)
+            .contains("release units alpha and beta both project /version in pkg/package.json"));
+
+        let same_unit = units(&[(
+            "alpha",
+            "a",
+            &[
+                "{ adapter: yaml, file: meta.yml, pointer: meta.version, mode: committed }",
+                "{ adapter: yaml, file: ./meta.yml, pointer: /meta/version, mode: committed }",
+            ],
+        )]);
+        assert!(ownership_error(&same_unit)
+            .contains("release unit alpha repeats projection ./meta.yml"));
+    }
+
+    #[test]
+    fn ecosystem_adapters_own_their_fixed_version_field() {
+        let cases = [
+            ("npm", "package.json", "json", "/version"),
+            ("cargo", "Cargo.toml", "toml", "package.version"),
+            ("pub", "pubspec.yaml", "yaml", "/version"),
+            ("python", "pyproject.toml", "toml", "/project/version"),
+        ];
+        for (adapter, file, generic, pointer) in cases {
+            let config = units(&[
+                (
+                    "alpha",
+                    "pkg",
+                    &[&format!("{{ adapter: {adapter}, file: {file}, mode: committed }}")],
+                ),
+                (
+                    "beta",
+                    "b",
+                    &[&format!(
+                        "{{ adapter: {generic}, file: /pkg/{file}, pointer: {pointer}, mode: committed }}"
+                    )],
+                ),
+            ]);
+            let error = ownership_error(&config);
+            assert!(
+                error.contains("release units alpha and beta both project"),
+                "{adapter}: {error}"
+            );
+        }
+        for (adapter, file, field) in [
+            ("msbuild", "Sample.csproj", "<Version>"),
+            ("go", "go.mod", "the module path"),
+            ("npm", "package.json", "/version"),
+        ] {
+            let config = units(&[
+                (
+                    "alpha",
+                    "pkg",
+                    &[&format!(
+                        "{{ adapter: {adapter}, file: {file}, mode: committed }}"
+                    )],
+                ),
+                (
+                    "beta",
+                    ".",
+                    &[&format!(
+                        "{{ adapter: {adapter}, file: pkg/{file}, mode: injected }}"
+                    )],
+                ),
+            ]);
+            let error = ownership_error(&config);
+            assert!(
+                error.contains(&format!(
+                    "release units alpha and beta both project {field} in pkg/{file}"
+                )),
+                "{adapter}: {error}"
+            );
+        }
+        let distinct = units(&[
+            (
+                "alpha",
+                "pkg",
+                &["{ adapter: cargo, file: Cargo.toml, mode: committed }"],
+            ),
+            (
+                "beta",
+                "b",
+                &["{ adapter: toml, file: /pkg/Cargo.toml, pointer: /dependencies/beta/version, mode: committed }"],
+            ),
+        ]);
+        Config::from_yaml(&distinct).expect("distinct field in one manifest accepted");
+    }
+
+    #[test]
+    fn allows_distinct_pointers_in_one_shared_file() {
+        let config = units(&[
+            (
+                "alpha",
+                "a",
+                &["{ adapter: yaml, file: /site/meta.yml, pointer: /alpha/version, mode: committed }"],
+            ),
+            (
+                "beta",
+                "site",
+                &["{ adapter: yaml, file: meta.yml, pointer: /alpha/docs-version, mode: committed }"],
+            ),
+        ]);
+        Config::from_yaml(&config).expect("distinct pointers accepted");
+    }
+
+    #[test]
+    fn ignores_none_mode_in_ownership() {
+        let config = units(&[
+            (
+                "alpha",
+                "a",
+                &["{ adapter: yaml, file: /site/meta.yml, pointer: /meta/version, mode: committed }"],
+            ),
+            (
+                "beta",
+                "site",
+                &["{ adapter: yaml, file: meta.yml, pointer: /meta/version, mode: none }"],
+            ),
+        ]);
+        Config::from_yaml(&config).expect("mode none does not own a field");
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod error;
 pub mod init;
 pub mod intent;
 pub mod model;
+mod ownership;
 pub mod plan;
 pub mod projection_file;
 pub mod stamp;
