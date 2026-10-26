@@ -13,9 +13,12 @@ use crate::config::{Config, Projection, ReleaseUnitConfig};
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
+use crate::ownership::check_physical_ownership;
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
+use crate::projection_file::normalized;
+use crate::workspace_files::{contained, write_contained, EditTree, SharedVersions};
 use std::collections::BTreeMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 /// One planned file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,15 +46,16 @@ impl ApplyResult {
     /// Plan all release tree mutations.
     pub fn build(root: &Path, channel: Option<&str>) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let intents = Intent::load_all(root, &config)?;
         let plan = ReleasePlan::from_inputs(root, &config, &intents, channel)?;
-        let mut tree = WorkingTree::new(root);
+        let mut tree = EditTree::new(root);
         let by_id: BTreeMap<_, _> = plan
             .release_units
             .iter()
             .map(|release_unit| (release_unit.id.as_str(), release_unit))
             .collect();
-        let mut workspace_versions = BTreeMap::new();
+        let mut workspace_versions = SharedVersions::default();
         let mut notices = Vec::new();
 
         for release_unit in &plan.release_units {
@@ -73,7 +77,10 @@ impl ApplyResult {
                 if go_major {
                     notices.push(format!(
                         "rewrite Go module major path {}",
-                        config_release_unit.path.join(&projection.file).display()
+                        projection
+                            .file
+                            .workspace_path(&config_release_unit.path)
+                            .display()
                     ));
                 }
             }
@@ -85,7 +92,7 @@ impl ApplyResult {
                 &release_unit.new_version,
                 channel.is_none(),
             );
-            tree.set(changelog, next);
+            tree.set(&changelog, next)?;
         }
 
         rewrite_internal_dependencies(&mut tree, root, &config, &by_id)?;
@@ -135,13 +142,7 @@ impl ApplyResult {
         if dry_run {
             return Ok(());
         }
-        for write in &self.writes {
-            let path = root.join(&write.path);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
-            }
-            std::fs::write(&path, &write.contents).map_err(|error| Error::io(&path, error))?;
-        }
+        write_contained(root, &self.writes)?;
         for relative in &self.deletes {
             let path = root.join(relative);
             std::fs::remove_file(&path).map_err(|error| Error::io(&path, error))?;
@@ -150,91 +151,15 @@ impl ApplyResult {
     }
 }
 
-struct WorkingTree<'a> {
-    root: &'a Path,
-    original: BTreeMap<PathBuf, Option<String>>,
-    current: BTreeMap<PathBuf, String>,
-}
-
-impl<'a> WorkingTree<'a> {
-    fn new(root: &'a Path) -> Self {
-        Self {
-            root,
-            original: BTreeMap::new(),
-            current: BTreeMap::new(),
-        }
-    }
-
-    fn read(&mut self, relative: &Path) -> Result<String> {
-        let relative = &normalized(relative);
-        if let Some(text) = self.current.get(relative) {
-            return Ok(text.clone());
-        }
-        let path = self.root.join(relative);
-        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-        self.original
-            .entry(relative.to_owned())
-            .or_insert_with(|| Some(text.clone()));
-        self.current.insert(relative.to_owned(), text.clone());
-        Ok(text)
-    }
-
-    fn read_optional(&mut self, relative: &Path) -> Result<Option<String>> {
-        let relative = &normalized(relative);
-        if let Some(text) = self.current.get(relative) {
-            return Ok(Some(text.clone()));
-        }
-        let path = self.root.join(relative);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                self.original
-                    .entry(relative.to_owned())
-                    .or_insert_with(|| Some(text.clone()));
-                self.current.insert(relative.to_owned(), text.clone());
-                Ok(Some(text))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.original.entry(relative.to_owned()).or_insert(None);
-                Ok(None)
-            }
-            Err(error) => Err(Error::io(path, error)),
-        }
-    }
-
-    fn set(&mut self, relative: PathBuf, contents: String) {
-        let relative = normalized(&relative);
-        self.original.entry(relative.clone()).or_insert(None);
-        self.current.insert(relative, contents);
-    }
-
-    fn finish(self) -> Vec<FileWrite> {
-        self.current
-            .into_iter()
-            .filter(|(path, contents)| {
-                self.original.get(path).and_then(Option::as_ref) != Some(contents)
-            })
-            .map(|(path, contents)| FileWrite { path, contents })
-            .collect()
-    }
-}
-
-/// One working-tree key per file, so `./docs/x` and `docs/x` share edits.
-fn normalized(relative: &Path) -> PathBuf {
-    relative
-        .components()
-        .filter(|component| !matches!(component, Component::CurDir))
-        .collect()
-}
-
 fn edit_projection_version(
-    tree: &mut WorkingTree<'_>,
+    tree: &mut EditTree<'_>,
     root: &Path,
     release_unit: &ReleaseUnitConfig,
     projection: &Projection,
     version: &str,
-    workspace_versions: &mut BTreeMap<PathBuf, String>,
+    workspace_versions: &mut SharedVersions,
 ) -> Result<()> {
-    let relative = release_unit.path.join(&projection.file);
+    let relative = projection.file.workspace_path(&release_unit.path);
     let text = tree.read(&relative)?;
     let edited = match projection.adapter {
         Adapter::Npm => NpmAdapter.edit_version(&text, version)?,
@@ -242,18 +167,17 @@ fn edit_projection_version(
             Some(_) => CargoAdapter.edit_version(&text, version)?,
             None => {
                 let workspace_manifest = workspace_manifest(root, &relative)?;
-                if let Some(existing) = workspace_versions.get(&workspace_manifest) {
-                    if existing != version {
-                        return Err(Error::Validation(format!(
-                            "Cargo workspace members require conflicting versions {existing} and {version}"
-                        )));
-                    }
+                if let Some(existing) =
+                    workspace_versions.claim(root, &workspace_manifest, version)?
+                {
+                    return Err(Error::Validation(format!(
+                        "Cargo workspace members require conflicting versions {existing} and {version}"
+                    )));
                 }
-                workspace_versions.insert(workspace_manifest.clone(), version.to_owned());
                 let workspace_text = tree.read(&workspace_manifest)?;
                 let workspace_edited =
                     CargoAdapter.edit_workspace_version(&workspace_text, version)?;
-                tree.set(workspace_manifest, workspace_edited);
+                tree.set(&workspace_manifest, workspace_edited)?;
                 text
             }
         },
@@ -277,12 +201,12 @@ fn edit_projection_version(
         Adapter::Msbuild => MsbuildAdapter.edit_version(&text, version)?,
         Adapter::Go => GoAdapter.edit_major_module_path(&text, version)?,
     };
-    tree.set(relative, edited);
+    tree.set(&relative, edited)?;
     Ok(())
 }
 
 fn rewrite_internal_dependencies(
-    tree: &mut WorkingTree<'_>,
+    tree: &mut EditTree<'_>,
     root: &Path,
     config: &Config,
     released: &BTreeMap<&str, &PlanReleaseUnit>,
@@ -316,7 +240,7 @@ fn rewrite_internal_dependencies(
                 }) else {
                     continue;
                 };
-                let source_path = dependency.path.join(&source_projection.file);
+                let source_path = source_projection.file.workspace_path(&dependency.path);
                 let source_text = tree.read(&source_path)?;
                 let dependency_name = match adapter {
                     Adapter::Npm => NpmAdapter.name(&source_text)?,
@@ -329,7 +253,7 @@ fn rewrite_internal_dependencies(
                     Adapter::Go => GoAdapter.name(&source_text)?,
                     _ => unreachable!(),
                 };
-                let target_path = dependent.path.join(&target_projection.file);
+                let target_path = target_projection.file.workspace_path(&dependent.path);
                 let target_text = tree.read(&target_path)?;
                 let edited = match adapter {
                     Adapter::Npm => NpmAdapter.edit_dependency(
@@ -346,7 +270,7 @@ fn rewrite_internal_dependencies(
                                 &dependency_name,
                                 &dependency_release.new_version,
                             )?;
-                            tree.set(workspace, workspace_edited);
+                            tree.set(&workspace, workspace_edited)?;
                             target_text
                         } else {
                             CargoAdapter.edit_dependency(
@@ -378,18 +302,23 @@ fn rewrite_internal_dependencies(
                     )?,
                     _ => unreachable!(),
                 };
-                tree.set(target_path, edited);
+                tree.set(&target_path, edited)?;
             }
         }
     }
     Ok(())
 }
 
+/// Workspace-relative path of the Cargo workspace manifest for `member`.
+///
+/// Each candidate manifest, from the member's directory up to the workspace
+/// root, is read only after it passes the containment check.
 pub(crate) fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> {
-    let absolute_member = root.join(member);
-    let mut directory = absolute_member.parent();
+    let member = normalized(member);
+    let mut directory = member.parent();
     while let Some(candidate) = directory {
-        let manifest = candidate.join("Cargo.toml");
+        let relative = candidate.join("Cargo.toml");
+        let manifest = contained(root, &relative)?;
         if manifest.exists() {
             let text =
                 std::fs::read_to_string(&manifest).map_err(|error| Error::io(&manifest, error))?;
@@ -399,14 +328,8 @@ pub(crate) fn workspace_manifest(root: &Path, member: &Path) -> Result<PathBuf> 
                 .and_then(|document| document.get("workspace").cloned())
                 .is_some()
             {
-                return manifest
-                    .strip_prefix(root)
-                    .map(Path::to_owned)
-                    .map_err(|error| Error::Validation(error.to_string()));
+                return Ok(normalized(&relative));
             }
-        }
-        if candidate == root {
-            break;
         }
         directory = candidate.parent();
     }
@@ -484,24 +407,6 @@ mod tests {
         assert_eq!(
             output,
             "# Changelog\n\n## 1.0.1\n\n### Fixes\n\n- Correct a defect.\n"
-        );
-    }
-
-    #[test]
-    fn working_tree_shares_edits_across_equivalent_relative_paths() {
-        let mut tree = WorkingTree::new(Path::new("/nonexistent-workspace"));
-        tree.set(PathBuf::from("./docs/docs.yml"), "a: 1\nb: 0\n".to_owned());
-        let shared = tree.read(Path::new("docs/docs.yml")).expect("shared edit");
-        tree.set(
-            PathBuf::from("docs/docs.yml"),
-            shared.replace("b: 0", "b: 1"),
-        );
-        assert_eq!(
-            tree.finish(),
-            [FileWrite {
-                path: PathBuf::from("docs/docs.yml"),
-                contents: "a: 1\nb: 1\n".to_owned(),
-            }]
         );
     }
 }

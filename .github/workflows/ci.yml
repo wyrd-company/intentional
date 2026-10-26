@@ -40,6 +40,22 @@ jobs:
       - name: Check this repository with intentional
         run: cargo run --bin intentional -- check
 
+  path-semantics:
+    name: Path semantics (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-14 ]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test projection path resolution, file identity, and shared files
+        shell: bash
+        run: scripts/test-path-semantics.sh
+        env:
+          INTENTIONAL_TEST_CASE_INSENSITIVE: "1"
+
   npm-launcher:
     name: npm launcher (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

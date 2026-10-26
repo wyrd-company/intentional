@@ -378,6 +378,10 @@ between those operations.
 - Treat manifest drift as evidence that a projection no longer matches tag
   authority; do not silence it by changing tags or manifests without proving
   which state is correct.
+- Treat a refusal that two projections write one field of one file as an
+  ownership conflict. Give each release unit its own pointer, or remove the
+  duplicate projection; a symlink or another spelling of the path does not
+  avoid the check.
 - Treat a plan-digest mismatch as stale or modified release evidence. Generate
   and approve a new plan rather than editing the old plan or bypassing
   verification.

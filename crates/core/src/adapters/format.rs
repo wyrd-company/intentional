@@ -151,10 +151,7 @@ impl JsonNode {
         for segment in pointer {
             current = match &current.kind {
                 JsonKind::Object(values) => values.get(segment),
-                JsonKind::Array(values) => segment
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|index| values.get(index)),
+                JsonKind::Array(values) => array_index(segment).and_then(|index| values.get(index)),
                 JsonKind::Scalar => None,
             }
             .ok_or_else(|| {
@@ -307,7 +304,19 @@ impl<'a> JsonParser<'a> {
     }
 }
 
-fn json_pointer(pointer: &str) -> Result<Vec<String>> {
+/// An RFC 6901 array index: `0`, or digits without a leading zero. Any
+/// other spelling selects no element, so one element has one pointer.
+fn array_index(segment: &str) -> Option<usize> {
+    let canonical = segment == "0"
+        || (segment.bytes().all(|byte| byte.is_ascii_digit()) && !segment.starts_with('0'));
+    if canonical {
+        segment.parse().ok()
+    } else {
+        None
+    }
+}
+
+pub(crate) fn json_pointer(pointer: &str) -> Result<Vec<String>> {
     if pointer.is_empty() {
         return Ok(Vec::new());
     }
@@ -320,7 +329,7 @@ fn json_pointer(pointer: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-fn key_pointer(pointer: &str) -> Result<Vec<String>> {
+pub(crate) fn key_pointer(pointer: &str) -> Result<Vec<String>> {
     let parts = if let Some(rest) = pointer.strip_prefix('/') {
         rest.split('/').collect::<Vec<_>>()
     } else {
@@ -447,6 +456,42 @@ fn unquote_yaml(raw: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_array_index_has_one_spelling() {
+        let text = r#"{ "versions": ["0.1.0", "1.0.0"] }"#;
+        assert_eq!(
+            JsonFormat.read_text(text, "/versions/0").expect("index 0"),
+            "0.1.0"
+        );
+        assert_eq!(
+            JsonFormat.read_text(text, "/versions/1").expect("index 1"),
+            "1.0.0"
+        );
+        for pointer in [
+            "/versions/01",
+            "/versions/+1",
+            "/versions/00",
+            "/versions/-0",
+            "/versions/ 1",
+        ] {
+            assert!(
+                JsonFormat.read_text(text, pointer).is_err(),
+                "{pointer} selected an element"
+            );
+            assert!(
+                JsonFormat.edit_text(text, pointer, "2.0.0").is_err(),
+                "{pointer} edited an element"
+            );
+        }
+        let keyed = r#"{ "versions": { "01": "0.1.0", "1": "1.0.0" } }"#;
+        assert_eq!(
+            JsonFormat
+                .read_text(keyed, "/versions/01")
+                .expect("object key"),
+            "0.1.0"
+        );
+    }
 
     #[test]
     fn json_targeted_edit_preserves_odd_indentation() {

@@ -119,6 +119,39 @@ proposed-design:
     adapter is tag-only, except that a major bump rewrites the module path
     suffix. Projection modes are committed (the version bump lands in a
     commit), injected (stamp materializes a build-time version), and none.
+    A projection file is relative to its release-unit path; a generic
+    projection may instead name a root file, relative to the repository root,
+    so that several release units write their own fields into one shared
+    file while each changelog stays at its release-unit path. One resolver
+    turns a projection file into a workspace path, and every command reads
+    and writes through it, so every command finds the same file for the same
+    configuration. Each field of each file has one owner: configuration load
+    refuses two committed or injected projections whose resolved paths and
+    parsed pointers match, and an ecosystem adapter owns its fixed version
+    field. A Cargo member that inherits its version owns the workspace
+    manifest's version field, shared only with the other members that
+    inherit it. Edits to one file merge by physical file identity, so paths that
+    reach one file through symlinks, hard links, or letter case share one
+    edit, and the commands that read or edit projections repeat the ownership
+    check by physical identity.
+    A projection file or changelog that resolves outside the repository is
+    refused, when it is read and again when it is written.
+  root-projection-file-syntax: >-
+    A root file is written with a leading / (/docs/site.yml), the anchor
+    convention of .gitignore and CODEOWNERS, in one canonical form: one /,
+    then segments with no empty, . or .. segment and no backslash, checked
+    on the text so that every platform agrees. The considered alternatives
+    were a separate root-file key exclusive with file, which needs an
+    exclusivity rule and comparisons across two keys; allowing .. with
+    normalization, which gives one file many spellings and breaks when a
+    release unit moves; and a top-level map of shared files, which splits a
+    release unit's projections across two places. A rooted path replaces the
+    base when joined, so a leading / joined by hand would reach the
+    filesystem root. The configured text is private to one projection-file
+    type whose resolver is the only way to a path, so that no command joins
+    it by hand. Root files are limited to the generic adapters, because
+    discovery, initialization, and dependency-range rewriting assume an
+    ecosystem manifest lies inside its release unit.
   version-computation: >-
     Ephemeral build versions compose statelessly: next version from intents,
     prerelease identifier, height from tagver — for example 1.3.0-alpha.5.

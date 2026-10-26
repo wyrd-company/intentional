@@ -9,9 +9,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode, TagPhase};
+use crate::ownership::check_physical_ownership;
 use crate::plan::{canonical_json, sha256_digest, Generator, ReleasePlan};
 use crate::status::read_projection_version;
 use crate::version::VersionRepository;
+use crate::workspace_files::{contained, read_contained};
 use semver::Version;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,12 +67,13 @@ impl TagResult {
         plan_path: Option<&Path>,
     ) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions_by_release_unit = BTreeMap::new();
         for (id, release_unit) in &config.release_units {
-            let changelog_path = root.join(&release_unit.path).join("CHANGELOG.md");
+            let changelog_path = contained(root, &release_unit.path.join("CHANGELOG.md"))?;
             let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
                 continue;
             };
@@ -131,6 +134,7 @@ impl TagResult {
     /// Infer and plan initial annotated baseline tags.
     pub fn build_baseline(root: &Path, explicit: &BTreeMap<String, Version>) -> Result<Self> {
         let config = Config::load(root)?;
+        check_physical_ownership(root, &config)?;
         let repository = VersionRepository::discover(root)?;
         let git = gix::discover(root)
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
@@ -157,9 +161,8 @@ impl TagResult {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                     continue;
                 }
-                let relative = release_unit.path.join(&projection.file);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| Error::io(root.join(&relative), error))?;
+                let relative = projection.file.workspace_path(&release_unit.path);
+                let text = read_contained(root, &relative)?;
                 evidence.push((
                     relative.clone(),
                     read_projection_version(root, &relative, projection, &text)?,
@@ -453,9 +456,8 @@ fn verify_version_projections(
             if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                 continue;
             }
-            let relative = release_unit.path.join(&projection.file);
-            let text = std::fs::read_to_string(root.join(&relative))
-                .map_err(|error| Error::io(root.join(&relative), error))?;
+            let relative = projection.file.workspace_path(&release_unit.path);
+            let text = read_contained(root, &relative)?;
             let actual = read_projection_version(root, &relative, projection, &text)?;
             if &actual != expected {
                 return Err(Error::Validation(format!(
@@ -802,9 +804,7 @@ fn verify_plan_release_unit_versions(
 fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan) -> Result<()> {
     for planned in &plan.release_units {
         let release_unit = &config.release_units[&planned.id];
-        let changelog_path = root.join(&release_unit.path).join("CHANGELOG.md");
-        let changelog = std::fs::read_to_string(&changelog_path)
-            .map_err(|error| Error::io(&changelog_path, error))?;
+        let changelog = read_contained(root, &release_unit.path.join("CHANGELOG.md"))?;
         if leading_changelog_version(&changelog)?
             .as_ref()
             .map(Version::to_string)
@@ -819,9 +819,8 @@ fn verify_materialized_release(root: &Path, config: &Config, plan: &ReleasePlan)
             if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                 continue;
             }
-            let relative = release_unit.path.join(&projection.file);
-            let text = std::fs::read_to_string(root.join(&relative))
-                .map_err(|error| Error::io(root.join(&relative), error))?;
+            let relative = projection.file.workspace_path(&release_unit.path);
+            let text = read_contained(root, &relative)?;
             let actual = read_projection_version(root, &relative, projection, &text)?;
             if actual != planned.new_version {
                 return Err(Error::Validation(format!(
