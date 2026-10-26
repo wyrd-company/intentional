@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 /// The nearest existing ancestor of the file is resolved through every
 /// symlink and must stay below the resolved repository root. A missing
 /// tail cannot leave the repository, because configured paths have no `..`.
+/// A symlink whose target does not exist cannot be checked, so it is
+/// refused.
 pub(crate) fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
     let relative = normalized(relative);
     let absolute = root.join(&relative);
@@ -31,10 +33,18 @@ pub(crate) fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
         match existing.canonicalize() {
             Ok(canonical) if canonical.starts_with(&canonical_root) => return Ok(absolute),
             Ok(_) => break,
-            Err(error) if error.kind() == ErrorKind::NotFound => match existing.parent() {
-                Some(parent) => existing = parent,
-                None => break,
-            },
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                if existing.symlink_metadata().is_ok() {
+                    return Err(Error::Validation(format!(
+                        "{} reaches a symlink whose target does not exist, so it cannot be shown to resolve inside the repository",
+                        relative.display()
+                    )));
+                }
+                match existing.parent() {
+                    Some(parent) => existing = parent,
+                    None => break,
+                }
+            }
             Err(error) => return Err(Error::io(existing, error)),
         }
     }
@@ -221,10 +231,18 @@ mod tests {
         fs::write(temp.path().join("outside.yml"), "a: 1\n").expect("outside file");
         symlink(&temp.path().join("outside.yml"), &root.join("site/out.yml"));
         symlink(temp.path(), &root.join("parent"));
+        symlink(
+            &root.join("site/missing.yml"),
+            &root.join("site/dangling.yml"),
+        );
         for (relative, message) in [
             ("site/out.yml", "resolves outside the repository"),
             ("parent/outside.yml", "resolves outside the repository"),
             ("parent/new/CHANGELOG.md", "resolves outside the repository"),
+            (
+                "site/dangling.yml",
+                "reaches a symlink whose target does not exist",
+            ),
         ] {
             let error = contained(&root, Path::new(relative))
                 .expect_err("outside file refused")
