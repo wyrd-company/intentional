@@ -14,7 +14,7 @@ use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
-use crate::projection_file::normalized;
+use crate::workspace_files::EditTree;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -46,7 +46,7 @@ impl ApplyResult {
         let config = Config::load(root)?;
         let intents = Intent::load_all(root, &config)?;
         let plan = ReleasePlan::from_inputs(root, &config, &intents, channel)?;
-        let mut tree = WorkingTree::new(root);
+        let mut tree = EditTree::new(root);
         let by_id: BTreeMap<_, _> = plan
             .release_units
             .iter()
@@ -89,7 +89,7 @@ impl ApplyResult {
                 &release_unit.new_version,
                 channel.is_none(),
             );
-            tree.set(changelog, next);
+            tree.set(&changelog, next)?;
         }
 
         rewrite_internal_dependencies(&mut tree, root, &config, &by_id)?;
@@ -154,76 +154,8 @@ impl ApplyResult {
     }
 }
 
-struct WorkingTree<'a> {
-    root: &'a Path,
-    original: BTreeMap<PathBuf, Option<String>>,
-    current: BTreeMap<PathBuf, String>,
-}
-
-impl<'a> WorkingTree<'a> {
-    fn new(root: &'a Path) -> Self {
-        Self {
-            root,
-            original: BTreeMap::new(),
-            current: BTreeMap::new(),
-        }
-    }
-
-    fn read(&mut self, relative: &Path) -> Result<String> {
-        let relative = &normalized(relative);
-        if let Some(text) = self.current.get(relative) {
-            return Ok(text.clone());
-        }
-        let path = self.root.join(relative);
-        let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-        self.original
-            .entry(relative.to_owned())
-            .or_insert_with(|| Some(text.clone()));
-        self.current.insert(relative.to_owned(), text.clone());
-        Ok(text)
-    }
-
-    fn read_optional(&mut self, relative: &Path) -> Result<Option<String>> {
-        let relative = &normalized(relative);
-        if let Some(text) = self.current.get(relative) {
-            return Ok(Some(text.clone()));
-        }
-        let path = self.root.join(relative);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                self.original
-                    .entry(relative.to_owned())
-                    .or_insert_with(|| Some(text.clone()));
-                self.current.insert(relative.to_owned(), text.clone());
-                Ok(Some(text))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.original.entry(relative.to_owned()).or_insert(None);
-                Ok(None)
-            }
-            Err(error) => Err(Error::io(path, error)),
-        }
-    }
-
-    fn set(&mut self, relative: PathBuf, contents: String) {
-        let relative = normalized(&relative);
-        self.original.entry(relative.clone()).or_insert(None);
-        self.current.insert(relative, contents);
-    }
-
-    fn finish(self) -> Vec<FileWrite> {
-        self.current
-            .into_iter()
-            .filter(|(path, contents)| {
-                self.original.get(path).and_then(Option::as_ref) != Some(contents)
-            })
-            .map(|(path, contents)| FileWrite { path, contents })
-            .collect()
-    }
-}
-
 fn edit_projection_version(
-    tree: &mut WorkingTree<'_>,
+    tree: &mut EditTree<'_>,
     root: &Path,
     release_unit: &ReleaseUnitConfig,
     projection: &Projection,
@@ -249,7 +181,7 @@ fn edit_projection_version(
                 let workspace_text = tree.read(&workspace_manifest)?;
                 let workspace_edited =
                     CargoAdapter.edit_workspace_version(&workspace_text, version)?;
-                tree.set(workspace_manifest, workspace_edited);
+                tree.set(&workspace_manifest, workspace_edited)?;
                 text
             }
         },
@@ -273,12 +205,12 @@ fn edit_projection_version(
         Adapter::Msbuild => MsbuildAdapter.edit_version(&text, version)?,
         Adapter::Go => GoAdapter.edit_major_module_path(&text, version)?,
     };
-    tree.set(relative, edited);
+    tree.set(&relative, edited)?;
     Ok(())
 }
 
 fn rewrite_internal_dependencies(
-    tree: &mut WorkingTree<'_>,
+    tree: &mut EditTree<'_>,
     root: &Path,
     config: &Config,
     released: &BTreeMap<&str, &PlanReleaseUnit>,
@@ -342,7 +274,7 @@ fn rewrite_internal_dependencies(
                                 &dependency_name,
                                 &dependency_release.new_version,
                             )?;
-                            tree.set(workspace, workspace_edited);
+                            tree.set(&workspace, workspace_edited)?;
                             target_text
                         } else {
                             CargoAdapter.edit_dependency(
@@ -374,7 +306,7 @@ fn rewrite_internal_dependencies(
                     )?,
                     _ => unreachable!(),
                 };
-                tree.set(target_path, edited);
+                tree.set(&target_path, edited)?;
             }
         }
     }
@@ -480,24 +412,6 @@ mod tests {
         assert_eq!(
             output,
             "# Changelog\n\n## 1.0.1\n\n### Fixes\n\n- Correct a defect.\n"
-        );
-    }
-
-    #[test]
-    fn working_tree_shares_edits_across_equivalent_relative_paths() {
-        let mut tree = WorkingTree::new(Path::new("/nonexistent-workspace"));
-        tree.set(PathBuf::from("./docs/docs.yml"), "a: 1\nb: 0\n".to_owned());
-        let shared = tree.read(Path::new("docs/docs.yml")).expect("shared edit");
-        tree.set(
-            PathBuf::from("docs/docs.yml"),
-            shared.replace("b: 0", "b: 1"),
-        );
-        assert_eq!(
-            tree.finish(),
-            [FileWrite {
-                path: PathBuf::from("docs/docs.yml"),
-                contents: "a: 1\nb: 1\n".to_owned(),
-            }]
         );
     }
 }

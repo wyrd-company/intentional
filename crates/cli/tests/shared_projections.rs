@@ -65,11 +65,41 @@ impl TestRepo {
             .collect()
     }
 
+    /// The `write` lines that a command prints, in order.
+    fn writes(&self, args: &[&str]) -> Vec<String> {
+        let output = self.cli().args(args).output().expect("run intentional");
+        assert!(output.status.success(), "{args:?} failed: {output:?}");
+        String::from_utf8(output.stdout)
+            .expect("UTF-8 output")
+            .lines()
+            .filter(|line| line.starts_with("write "))
+            .map(str::to_owned)
+            .collect()
+    }
+
     fn cli(&self) -> Command {
         let mut command = Command::new(assert_cmd::cargo::cargo_bin!("intentional"));
         command.arg("-C").arg(&self.root);
         command
     }
+}
+
+/// `text` with each `/` replaced by the platform separator, as output
+/// prints workspace paths.
+fn native(text: &str) -> String {
+    text.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
+
+/// Make `link` a symlink to the file `target`, relative to the link.
+fn symlink_file(target: &str, link: &Path) {
+    if let Some(parent) = link.parent() {
+        fs::create_dir_all(parent).expect("link parent");
+    }
+    let target = native(target);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("file symlink");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(target, link).expect("file symlink");
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
@@ -121,11 +151,10 @@ fn stamp_merges_equivalent_paths_in_shared_file() {
     );
     repo.commit("add fixture");
 
-    repo.cli()
-        .args(["stamp", "--dry-run"])
-        .assert()
-        .success()
-        .stdout("write site/meta.yml\n");
+    assert_eq!(
+        repo.writes(&["stamp", "--dry-run"]),
+        [native("write site/meta.yml")]
+    );
     repo.cli().arg("stamp").assert().success();
     assert_eq!(repo.read("site/meta.yml"), "alpha: 0.0.1\nbeta: 0.0.1\n");
 }
@@ -165,13 +194,16 @@ fn apply_merges_two_units_into_one_root_projection_file() {
     let repo = root_projection_repository();
     repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
 
-    repo.cli()
-        .args(["apply", "--dry-run"])
-        .assert()
-        .success()
-        .stdout(
-            "write packages/alpha/CHANGELOG.md\nwrite packages/alpha/manifest.json\nwrite site/beta/CHANGELOG.md\nwrite site/meta.yml\ndelete .intentional/intents/joint-0001.md\n",
-        );
+    assert_eq!(
+        repo.writes(&["apply", "--dry-run"]),
+        [
+            "write packages/alpha/CHANGELOG.md",
+            "write packages/alpha/manifest.json",
+            "write site/beta/CHANGELOG.md",
+            "write site/meta.yml",
+        ]
+        .map(native)
+    );
     repo.cli().arg("apply").assert().success();
     assert_eq!(repo.read("site/meta.yml"), meta("0.1.1", "0.1.1"));
     assert!(repo
@@ -227,9 +259,9 @@ fn status_reports_drift_for_root_projection() {
         .arg("status")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
+        .stdout(predicate::str::contains(native(
             "  alpha site/meta.yml: manifest 0.9.0 != tag 0.1.0",
-        ));
+        )));
 }
 
 #[test]
@@ -243,9 +275,9 @@ fn tag_refuses_drifted_root_projection() {
         .arg("tag")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
+        .stderr(predicate::str::contains(native(
             "release unit alpha projection site/meta.yml is 0.1.0, applied release is 0.1.1",
-        ));
+        )));
 }
 
 #[test]
@@ -265,9 +297,7 @@ fn baseline_reads_root_projection() {
         .args(["tag", "--baseline"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "baseline projections disagree for alpha: packages/alpha/manifest.json=0.1.0, site/meta.yml=0.2.0",
-        ));
+        .stderr(predicate::str::contains(native("baseline projections disagree for alpha: packages/alpha/manifest.json=0.1.0, site/meta.yml=0.2.0")));
 }
 
 #[test]
@@ -287,11 +317,10 @@ fn stamp_writes_injected_root_projection() {
         "---\nalpha: patch\nbeta: patch\n---\n\nShip a change.\n",
     );
     repo.commit("add fixture");
-    repo.cli()
-        .args(["stamp", "--dry-run"])
-        .assert()
-        .success()
-        .stdout("write packages/alpha/manifest.json\nwrite site/meta.yml\n");
+    assert_eq!(
+        repo.writes(&["stamp", "--dry-run"]),
+        ["write packages/alpha/manifest.json", "write site/meta.yml"].map(native)
+    );
     repo.cli().arg("stamp").assert().success();
     assert_eq!(repo.read("site/meta.yml"), meta("0.0.1", "0.0.1"));
 }
@@ -365,4 +394,106 @@ fn resolve_independent(repo: &TestRepo) {
         }
     }
     fs::write(&path, serde_yaml::to_string(&plan).expect("plan yaml")).expect("write plan");
+}
+
+/// The reproduction from the symlink-alias issue: units `alpha` at `a` and
+/// `beta` at `b` each reach the shared file through their own symlink.
+fn symlinked_repository(alpha_pointer: &str, beta_pointer: &str) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", "a", "shared.yml", alpha_pointer, "committed"),
+            yaml_unit("beta", "b", "shared.yml", beta_pointer, "committed"),
+        ]),
+    );
+    repo.write("shared.yml", "alpha: 1.0.0\nbeta: 1.0.0\n");
+    symlink_file("../shared.yml", &repo.root.join("a/shared.yml"));
+    symlink_file("../shared.yml", &repo.root.join("b/shared.yml"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo
+}
+
+#[test]
+fn apply_merges_edits_reached_through_symlinks() {
+    let repo = symlinked_repository("/alpha", "/beta");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+    assert_eq!(
+        repo.writes(&["apply", "--dry-run"]),
+        [
+            "write a/CHANGELOG.md",
+            "write a/shared.yml",
+            "write b/CHANGELOG.md"
+        ]
+        .map(native)
+    );
+    repo.cli().arg("apply").assert().success();
+    assert_eq!(repo.read("shared.yml"), "alpha: 1.0.1\nbeta: 1.0.1\n");
+    repo.commit("apply release");
+    repo.cli().arg("tag").assert().success();
+    let tags = repo.tags();
+    assert!(tags.contains(&"alpha@1.0.1".to_owned()), "{tags:?}");
+    assert!(tags.contains(&"beta@1.0.1".to_owned()), "{tags:?}");
+}
+
+#[test]
+fn stamp_merges_edits_reached_through_symlinks() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", "a", "shared.yml", "/alpha", "injected"),
+            yaml_unit("beta", "b", "shared.yml", "/beta", "injected"),
+        ]),
+    );
+    repo.write("shared.yml", "alpha: 0.0.0\nbeta: 0.0.0\n");
+    symlink_file("../shared.yml", &repo.root.join("a/shared.yml"));
+    symlink_file("../shared.yml", &repo.root.join("b/shared.yml"));
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: patch\n---\n\nShip a shared change.\n",
+    );
+    repo.commit("add fixture");
+    assert_eq!(
+        repo.writes(&["stamp", "--dry-run"]),
+        [native("write a/shared.yml")]
+    );
+    repo.cli().arg("stamp").assert().success();
+    assert_eq!(repo.read("shared.yml"), "alpha: 0.0.1\nbeta: 0.0.1\n");
+}
+
+#[test]
+fn apply_merges_case_aliases() {
+    let repo = TestRepo::new();
+    repo.write("site/probe", "");
+    if !repo.root.join("SITE/PROBE").exists() {
+        eprintln!("the filesystem distinguishes letter case; no case alias exists");
+        return;
+    }
+    fs::remove_file(repo.root.join("site/probe")).expect("remove probe");
+    repo.write(
+        ".intentional/config.yml",
+        &config(&[
+            yaml_unit("alpha", "a", "/site/Meta.yml", "/alpha", "committed"),
+            yaml_unit("beta", "b", "/site/meta.yml", "/beta", "committed"),
+        ]),
+    );
+    repo.write("site/meta.yml", "alpha: 1.0.0\nbeta: 1.0.0\n");
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.cli().args(["tag", "--baseline"]).assert().success();
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+    let writes = repo.writes(&["apply", "--dry-run"]);
+    assert!(
+        writes.contains(&native("write site/Meta.yml")),
+        "{writes:?}"
+    );
+    assert!(
+        !writes.contains(&native("write site/meta.yml")),
+        "{writes:?}"
+    );
+    repo.cli().arg("apply").assert().success();
+    assert_eq!(repo.read("site/meta.yml"), "alpha: 1.0.1\nbeta: 1.0.1\n");
 }

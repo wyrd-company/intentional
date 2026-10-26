@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::version::{aggregate_bumps, bump_version, effective_bumps, VersionRepository};
+use crate::workspace_files::EditTree;
 use semver::Prerelease;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -34,8 +35,7 @@ impl StampResult {
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let bumps = effective_bumps(&config, &declared);
         let repository = VersionRepository::discover(root)?;
-        let mut writes = BTreeMap::<PathBuf, String>::new();
-        let mut original = BTreeMap::<PathBuf, String>::new();
+        let mut tree = EditTree::new(root);
         let mut workspace_versions = BTreeMap::<PathBuf, String>::new();
 
         for (id, release_unit) in &config.release_units {
@@ -52,7 +52,7 @@ impl StampResult {
                 .filter(|projection| projection.mode == ProjectionMode::Injected)
             {
                 let relative = projection.file.workspace_path(&release_unit.path);
-                let text = read(root, &writes, &mut original, &relative)?;
+                let text = tree.read(&relative)?;
                 let edited = match projection.adapter {
                     Adapter::Npm => NpmAdapter.edit_version(&text, &version.to_string())?,
                     Adapter::Cargo => match CargoAdapter.version(&text)? {
@@ -67,10 +67,10 @@ impl StampResult {
                                 }
                             }
                             workspace_versions.insert(workspace.clone(), version.to_string());
-                            let workspace_text = read(root, &writes, &mut original, &workspace)?;
+                            let workspace_text = tree.read(&workspace)?;
                             let workspace_edited = CargoAdapter
                                 .edit_workspace_version(&workspace_text, &version.to_string())?;
-                            writes.insert(workspace, workspace_edited);
+                            tree.set(&workspace, workspace_edited)?;
                             text
                         }
                     },
@@ -94,16 +94,13 @@ impl StampResult {
                     )?,
                     Adapter::Go => text,
                 };
-                writes.insert(relative, edited);
+                tree.set(&relative, edited)?;
             }
         }
 
-        let writes = writes
-            .into_iter()
-            .filter(|(path, contents)| original.get(path) != Some(contents))
-            .map(|(path, contents)| FileWrite { path, contents })
-            .collect();
-        Ok(Self { writes })
+        Ok(Self {
+            writes: tree.finish(),
+        })
     }
 
     /// Human-readable operations printed identically for dry and real runs.
@@ -125,23 +122,6 @@ impl StampResult {
         }
         Ok(())
     }
-}
-
-fn read(
-    root: &Path,
-    writes: &BTreeMap<PathBuf, String>,
-    original: &mut BTreeMap<PathBuf, String>,
-    relative: &Path,
-) -> Result<String> {
-    if let Some(text) = writes.get(relative) {
-        return Ok(text.clone());
-    }
-    let path = root.join(relative);
-    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
-    original
-        .entry(relative.to_owned())
-        .or_insert_with(|| text.clone());
-    Ok(text)
 }
 
 #[cfg(test)]

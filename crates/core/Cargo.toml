@@ -17,6 +17,7 @@ gix.workspace = true
 glob.workspace = true
 node-semver.workspace = true
 rand.workspace = true
+same-file.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,3 +30,4 @@ walkdir.workspace = true
 
 [dev-dependencies]
 regex = "1.13"
+tempfile = "3.8"

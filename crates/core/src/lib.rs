@@ -20,6 +20,7 @@ pub mod stamp;
 pub mod status;
 pub mod tag;
 pub mod version;
+mod workspace_files;
 
 pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
