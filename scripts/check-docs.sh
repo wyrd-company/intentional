@@ -6,9 +6,21 @@
 
 set -euo pipefail
 
-rumdl check docs/user/*.md
+# Generated release data is checked by release-plan and tag validation.
+pages=()
+for page in docs/user/*.md; do
+  if [[ "$page" != "docs/user/CHANGELOG.md" ]]; then
+    pages+=("$page")
+  fi
+done
+if (( ${#pages[@]} == 0 )); then
+  echo "No authored documentation pages found." >&2
+  exit 1
+fi
+
+rumdl check "${pages[@]}"
 ryl check docs/user/docs.yml .github/workflows/publish-docs.yml Taskfile.yml
-ryl --markdown docs/user/*.md
+ryl --markdown "${pages[@]}"
 
 test "$(yq -r '.products | keys | join(",")' docs/user/docs.yml)" = "intentional"
 test "$(yq -r '.products.intentional.name' docs/user/docs.yml)" = "intentional"
@@ -22,10 +34,10 @@ for asset in $(yq -r '.assets[]' docs/user/docs.yml); do
   test -f "docs/user/$asset"
 done
 
-for page in docs/user/*.md; do
+for page in "${pages[@]}"; do
   test "$(yq --front-matter=extract -r '.product' "$page")" = "intentional"
   test "$(yq --front-matter=extract -r 'has("docs")' "$page")" = "false"
-  test -n "$(yq --front-matter=extract -r '.title' "$page")"
+  yq --front-matter=extract -e '.title | select(type == "!!str") | select(length > 0)' "$page" >/dev/null
   yq --front-matter=extract -e '.order | type == "!!int"' "$page" >/dev/null
 done
 
@@ -36,7 +48,7 @@ test "$(wc -c < docs/user/assets/demo.gif)" -le 3145728
 test "$(rg -c '^Output docs/user/assets/demo.gif$' docs/demo.tape)" = "1"
 test "$(rg -c '^Set (Shell|FontSize|Width|Height|Theme|Padding|TypingSpeed)' docs/demo.tape)" -ge "7"
 
-if rg -n '\]\((?!https?://|assets/demo\.gif)[^)]+\)' docs/user/*.md --pcre2; then
+if rg -n '\]\((?!https?://|assets/demo\.gif)[^)]+\)' "${pages[@]}" --pcre2; then
   echo "Unexpected local documentation link; add it to the validator." >&2
   exit 1
 fi
