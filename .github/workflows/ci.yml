@@ -50,12 +50,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test projection path resolution and file identity
-        run: >-
-          cargo test --locked -p intentional-core --lib --
-          projection_file:: config::tests:: ownership:: workspace_files::
-      - name: Test shared projection files end to end
-        run: cargo test --locked -p intentional-cli --test shared_projections
+      - name: Test projection path resolution, file identity, and shared files
+        shell: bash
+        run: scripts/test-path-semantics.sh
         env:
           INTENTIONAL_TEST_CASE_INSENSITIVE: "1"
 
