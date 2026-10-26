@@ -100,14 +100,15 @@ ecosystem package name.
 Each projection has an adapter, a file, and a mode. Generic `json`, `toml`,
 and `yaml` projections also require a pointer to the version field.
 
-A `file` is relative to the release-unit path and must not contain `..`. A
-`file` that starts with `/` is a root file: it is relative to the repository
-root, so that a release unit can write its version into a file outside its
-own path. Only generic projections may use a root file. A root file has one
-form: one `/`, then segments separated by `/`, with no empty, `.`, or `..`
-segment and no `\`. A file that resolves outside the repository through a
-symlink is refused. The release unit's changelog stays at the release-unit
-path.
+A `file` is relative to the release-unit path. It must not contain `..` or a
+segment that starts with a drive prefix such as `C:`. A `file` that starts
+with `/` is a root file: it is relative to the repository root, so that a
+release unit can write its version into a file outside its own path. Only
+generic projections may use a root file. A root file has one form: one `/`,
+then segments separated by `/`, with no empty, `.`, or `..` segment, no
+segment that starts with a drive prefix, and no `\`. A file that resolves
+outside the repository through a symlink is refused. The release unit's
+changelog stays at the release-unit path.
 
 | Mode | Behavior |
 | --- | --- |

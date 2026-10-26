@@ -130,11 +130,12 @@ $defs:
         description: >-
           File relative to the release-unit path. A file that starts with /
           is relative to the repository root, in one canonical form: no
-          empty, . or .. segment and no backslash. Only json, toml, and yaml
-          projections may use a root file.
+          empty, . or .. segment, no segment that starts with a drive prefix
+          such as C:, and no backslash. Only json, toml, and yaml projections
+          may use a root file.
         type: string
         minLength: 1
-        pattern: '^(?:[^/\\].*|/(?:[^/\\.][^/\\]*|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:/(?:[^/\\.][^/\\]*|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*)$'
+        pattern: '^(?:[^/\\].*|/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+)(?:/(?:[^/\\.A-Za-z][^/\\]*|[A-Za-z](?:[^/\\:][^/\\]*)?|\.[^/\\.][^/\\]*|\.\.[^/\\]+))*)$'
       mode:
         enum: [ committed, injected, none ]
       pointer:

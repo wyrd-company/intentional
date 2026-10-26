@@ -752,6 +752,9 @@ release-units:
         "\\\\server\\b.yml",
         "C:/b.yml",
         "c:b.yml",
+        "/c:/b.yml",
+        "/a/C:/b.yml",
+        "/a/z:b.yml",
     ];
 
     #[test]
@@ -784,6 +787,42 @@ release-units:
                 "{file}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_drive_prefixed_path_segments() {
+        for file in ["/docs/C:/meta.yml", "/c:/meta.yml", "/docs/z:meta.yml"] {
+            let error = Config::from_yaml(&with_projection("yaml", file))
+                .expect_err("drive-prefixed root segment rejected")
+                .to_string();
+            assert!(error.contains("must be a root path"), "{file}: {error}");
+        }
+        for file in [
+            "docs/C:/meta.yml",
+            "docs\\\\C:\\\\meta.yml",
+            "docs/c:meta.yml",
+        ] {
+            let error = Config::from_yaml(&with_projection("yaml", file))
+                .expect_err("drive-prefixed unit-relative segment rejected")
+                .to_string();
+            let segment = file
+                .split(['/', '\\'])
+                .find(|segment| segment.contains(':'))
+                .expect("drive segment");
+            assert!(
+                error.contains(&format!(
+                    "release unit beta projection file {file} has a segment {segment} that starts with a drive prefix; on Windows the path would leave the repository"
+                )),
+                "{file}: {error}"
+            );
+        }
+        let unit_path = VALID.replace("path: packages/library", "path: packages/C:/library");
+        assert!(Config::from_yaml(&unit_path)
+            .expect_err("drive-prefixed unit path rejected")
+            .to_string()
+            .contains("release unit library path packages/C:/library has a segment C: that starts with a drive prefix"));
+        Config::from_yaml(&with_projection("yaml", "/docs/ab:c/CC:z.yml"))
+            .expect("a colon after the first character is no drive prefix");
     }
 
     #[test]
@@ -837,6 +876,8 @@ release-units:
             "/.config/x.yml",
             "/a/..b/c.yml",
             "/a/b..",
+            "/a/ab:c/b.yml",
+            "/a/C/b.yml",
             "meta.yml",
             "./meta.yml",
             "sub/meta.yml",

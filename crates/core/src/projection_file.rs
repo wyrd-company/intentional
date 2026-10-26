@@ -49,8 +49,8 @@ impl ProjectionFile {
     /// `json`, `toml`, and `yaml` adapters may use it. The check reads the
     /// text, not a `Path`, so that every platform gives the same result. A
     /// unit-relative file must be non-empty, relative, and free of `..`. A
-    /// leading `\` or drive prefix is refused in either form, because on
-    /// Windows it leaves the workspace.
+    /// leading `\`, or a drive prefix on any segment, is refused in either
+    /// form, because on Windows it leaves the workspace.
     pub(crate) fn validate(&self, release_unit_id: &str, adapter: Adapter) -> Result<()> {
         let description = format!("release unit {release_unit_id} projection file");
         if self.is_root() || self.0.starts_with('\\') || has_drive_prefix(&self.0) {
@@ -97,17 +97,18 @@ impl fmt::Display for ProjectionFile {
 }
 
 /// Exactly one `/`, then `/`-separated segments that are not empty, `.`,
-/// or `..`, with no `\` anywhere.
+/// or `..`, and do not start with a drive prefix, with no `\` anywhere.
 fn is_canonical_root(text: &str) -> bool {
     text.strip_prefix('/').is_some_and(|segments| {
         !segments.contains('\\')
             && segments
                 .split('/')
-                .all(|segment| !matches!(segment, "" | "." | ".."))
+                .all(|segment| !matches!(segment, "" | "." | "..") && !has_drive_prefix(segment))
     })
 }
 
-/// `C:` and similar: a Windows drive prefix.
+/// `C:` and similar: a Windows drive prefix. On Windows, a path segment
+/// with a drive prefix replaces the path it is pushed onto.
 fn has_drive_prefix(text: &str) -> bool {
     let bytes = text.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
@@ -121,6 +122,9 @@ pub(crate) fn normalized(relative: &Path) -> PathBuf {
         .collect()
 }
 
+/// Refuse a configured relative path that is empty, absolute, contains
+/// `..`, or has a segment that starts with a drive prefix. Segments split on
+/// both `/` and `\`, so that every platform refuses the same text.
 pub(crate) fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
@@ -130,6 +134,15 @@ pub(crate) fn validate_relative_path(path: &Path, description: &str) -> Result<(
     {
         return Err(Error::Validation(format!(
             "{description} must be a non-empty relative path without .."
+        )));
+    }
+    let text = path.to_string_lossy();
+    if let Some(segment) = text
+        .split(['/', '\\'])
+        .find(|segment| has_drive_prefix(segment))
+    {
+        return Err(Error::Validation(format!(
+            "{description} {text} has a segment {segment} that starts with a drive prefix; on Windows the path would leave the repository"
         )));
     }
     Ok(())
