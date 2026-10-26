@@ -36,8 +36,8 @@ for asset in intentional-linux-x86_64.tar.gz intentional-linux-arm64.tar.gz; do
     echo "render-homebrew-formula.sh is missing asset $asset" >&2
     exit 1
   fi
-  if ! grep -Fq "$asset" "$root/docs/install.md"; then
-    echo "docs/install.md is missing asset $asset" >&2
+  if ! grep -Fq "$asset" "$root/docs/user/install.md"; then
+    echo "docs/user/install.md is missing asset $asset" >&2
     exit 1
   fi
 done

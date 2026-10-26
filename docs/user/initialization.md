@@ -1,7 +1,7 @@
 ---
-docs: true
 title: Initialization
 order: 3
+product: intentional
 relationships:
   implements: intent-driven-polyglot-release
 ---

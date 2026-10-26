@@ -1,7 +1,7 @@
 ---
-docs: true
 title: Configuration
 order: 5
+product: intentional
 relationships:
   implements: intent-driven-polyglot-release
 ---
