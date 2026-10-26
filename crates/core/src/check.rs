@@ -8,14 +8,19 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
+use crate::model::{Adapter, ProjectionMode};
 use crate::plan::ReleasePlan;
+use crate::status::{read_projection_version, WorkspaceStatus};
+use crate::tag::release_version;
+use crate::workspace_files::read_contained;
 use std::path::Path;
 
-/// Validate configuration, intent references, and deterministic plan generation.
+/// Validate configuration, intent references, tag records, baselines,
+/// committed projection versions, and deterministic plan generation.
 pub fn check_workspace(root: &Path) -> Result<()> {
     let config = Config::load(root)?;
     Intent::load_all(root, &config)?;
-    let status = crate::status::WorkspaceStatus::load(root)?;
+    let status = WorkspaceStatus::load(root)?;
     if !status.missing_baselines.is_empty() {
         return Err(Error::Validation(format!(
             "[{}] missing baseline tags for {}; run {}",
@@ -30,6 +35,13 @@ pub fn check_workspace(root: &Path) -> Result<()> {
             status.tag_record_issues.join("; ")
         )));
     }
+    let drift = committed_drift(root, &config, &status)?;
+    if !drift.is_empty() {
+        return Err(Error::Validation(format!(
+            "committed projection drift: {}",
+            drift.join("; ")
+        )));
+    }
     let first = ReleasePlan::build(root, None)?.to_canonical_json()?;
     let second = ReleasePlan::build(root, None)?.to_canonical_json()?;
     if first != second {
@@ -38,4 +50,52 @@ pub fn check_workspace(root: &Path) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Findings for committed projections that do not hold the release version
+/// of their unit. The release version is the version of an applied release
+/// that waits for its tag, as `tag` detects it, or else the tag-derived
+/// current version. Every committed projection of a unit must hold the same
+/// version, so a partly applied release fails. An existing changelog whose
+/// leading heading is not SemVer is not evidence of an applied release.
+fn committed_drift(root: &Path, config: &Config, status: &WorkspaceStatus) -> Result<Vec<String>> {
+    let mut findings = Vec::new();
+    for unit in &status.release_units {
+        let release_unit = &config.release_units[&unit.id];
+        let applied = match release_version(root, &release_unit.path, &unit.current) {
+            Ok(version) => version,
+            // Before the first apply, an adopted repository can have a
+            // changelog in another format. Keep tag's strict parsing, but
+            // compare these projections with the tag-derived version.
+            Err(Error::Semver(_)) => None,
+            Err(error) => return Err(error),
+        }
+        .filter(|version| version > &unit.current);
+        let expected = match &applied {
+            Some(applied) => format!("applied release {applied}"),
+            None => unit.current.to_string(),
+        };
+        let expected_version = applied.as_ref().unwrap_or(&unit.current).to_string();
+        for projection in &release_unit.projections {
+            if projection.mode != ProjectionMode::Committed || projection.adapter == Adapter::Go {
+                continue;
+            }
+            let relative = projection.file.workspace_path(&release_unit.path);
+            let text = read_contained(root, &relative)?;
+            let actual = read_projection_version(root, &relative, projection, &text)?;
+            if actual != expected_version {
+                let pointer = projection
+                    .pointer
+                    .as_deref()
+                    .map(|pointer| format!(" pointer {pointer}"))
+                    .unwrap_or_default();
+                findings.push(format!(
+                    "release unit {} projection {}{pointer} is {actual}, expected {expected}",
+                    unit.id,
+                    relative.display(),
+                ));
+            }
+        }
+    }
+    Ok(findings)
 }

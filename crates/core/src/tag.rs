@@ -73,11 +73,9 @@ impl TagResult {
             .map_err(|error| Error::Git(format!("failed to discover repository: {error}")))?;
         let mut versions_by_release_unit = BTreeMap::new();
         for (id, release_unit) in &config.release_units {
-            let changelog_path = contained(root, &release_unit.path.join("CHANGELOG.md"))?;
-            let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
-                continue;
-            };
-            let Some(version) = leading_changelog_version(&changelog)? else {
+            let (_, primary) = config.primary_tag(id)?;
+            let current = repository.current_version(id, &primary.template)?;
+            let Some(version) = release_version(root, &release_unit.path, &current)? else {
                 continue;
             };
             let matches_channel = match channel {
@@ -87,8 +85,6 @@ impl TagResult {
             if !matches_channel {
                 continue;
             }
-            let (_, primary) = config.primary_tag(id)?;
-            let current = repository.current_version(id, &primary.template)?;
             // A unit still at its tagged version is part of this release only
             // when that tag marks HEAD, which is a retry of this release.
             // Otherwise it did not move and is not in the release set.
@@ -97,7 +93,7 @@ impl TagResult {
                     &git,
                     &render_tag(&primary.template, id, &current.to_string()),
                 )?;
-            if version < current || unmoved {
+            if unmoved {
                 continue;
             }
             versions_by_release_unit.insert(id.clone(), version);
@@ -1241,6 +1237,22 @@ fn tag_message(contract: &str, digest: &str, id: &str, version: &str, baseline: 
 
 fn render_tag(template: &str, id: &str, version: &str) -> String {
     template.replace("{id}", id).replace("{version}", version)
+}
+
+/// The release version of a release unit: its leading changelog version,
+/// unless that is below the tag-derived current version. Above the current
+/// version, it is an applied release that waits for its tag, and every
+/// projection of the unit must hold it. An absent changelog means no release.
+pub(crate) fn release_version(
+    root: &Path,
+    unit_path: &Path,
+    current: &Version,
+) -> Result<Option<Version>> {
+    let changelog_path = contained(root, &unit_path.join("CHANGELOG.md"))?;
+    let Ok(changelog) = std::fs::read_to_string(&changelog_path) else {
+        return Ok(None);
+    };
+    Ok(leading_changelog_version(&changelog)?.filter(|version| version >= current))
 }
 
 fn leading_changelog_version(changelog: &str) -> Result<Option<Version>> {

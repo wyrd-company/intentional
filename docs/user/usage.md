@@ -72,8 +72,25 @@ intentional check
 versions, suspended release blockers, manifest drift, tag-record issues, and
 missing baselines. A drift row names the projection file by its path from the
 repository root.
-`check` validates configuration, intents, tag records, baselines, and
-deterministic planning for continuous integration.
+`check` validates configuration, intents, tag records, baselines, committed
+projection versions, and deterministic planning for continuous integration.
+Drift on a `committed` projection fails `check`: each finding names the
+release unit, the projection file and pointer, the version found, and the
+expected version. The expected version is the tag-derived current version.
+When the leading changelog version of the release unit is above the tag, the
+release unit has an applied release that waits for its tag, and the expected
+version is that release version for every `committed` projection of the unit.
+This includes a prerelease version above the last stable tag, such as the
+version written by `apply --channel beta`, even after the beta tag is created.
+An existing changelog whose leading heading is not a plain SemVer version,
+such as `## [Unreleased]`, supplies no applied release; `check` compares the
+projections with the tag-derived version. `tag` keeps its strict validation
+of applied releases.
+So the commit of a full apply passes, and a release that was only partly
+applied fails, as `tag` refuses it. Drift on an `injected` projection appears
+only in `status`. Neither command reads a `none` projection, so neither
+reports its drift. A `committed` or `injected` projection file that does not
+exist fails both `status` and `check`.
 
 Tags created before Intentional carry no Intentional record. Both lightweight
 tags and annotated tags without any Intentional record field are tolerated as

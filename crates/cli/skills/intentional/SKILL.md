@@ -53,7 +53,15 @@ deployment behavior from discovered manifests.
 
 Treat `status` as the human-readable view of pending intents, current and next
 versions, missing baselines, manifest drift, and tag-record issues. Treat
-`check` as the continuous-integration validation gate.
+`check` as the continuous-integration validation gate. It fails when a
+`committed` projection holds a version other than the tag-derived current
+version, or, while an applied release waits for its tag, other than that
+release version. This includes a prerelease version above the last stable
+tag, even after its channel tag. A leading changelog heading that is not plain
+SemVer supplies no applied release to `check`, which compares projections with
+the tag-derived version. `tag` retains strict release validation. A partly
+applied release fails. Drift on `injected` projections appears only in
+`status`; neither command reads `none` projections.
 
 ## Choose the workflow
 
