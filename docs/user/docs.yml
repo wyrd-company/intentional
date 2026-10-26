@@ -28,7 +28,6 @@ products:
     logo-dark: assets/logo-dark.svg
     favicon: assets/favicon.svg
     social-image: assets/social-image.png
-    # DRAFT highlights, pending Bob's approval.
     highlights:
       - >-
         Pending intent files declare what changes; annotated Git tags record
