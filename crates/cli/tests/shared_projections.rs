@@ -653,3 +653,29 @@ fn refuses_one_field_projected_through_symlink_aliases() {
         .failure()
         .stderr(predicate::str::contains(message));
 }
+
+#[test]
+fn tag_refuses_changelog_resolving_outside_repository() {
+    let repo = root_projection_repository();
+    repo.intent("docs-0001", &[("beta", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("CHANGELOG.md");
+    fs::rename(repo.root.join("site/beta/CHANGELOG.md"), &outside).expect("move changelog out");
+    symlink_file(
+        "../../../CHANGELOG.md",
+        &repo.root.join("site/beta/CHANGELOG.md"),
+    );
+    repo.commit("apply release through an outside changelog");
+    repo.cli()
+        .arg("tag")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(native(
+            "site/beta/CHANGELOG.md resolves outside the repository",
+        )));
+    assert!(!repo.tags().contains(&"beta@0.1.1".to_owned()));
+}
