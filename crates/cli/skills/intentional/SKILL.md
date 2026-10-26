@@ -55,8 +55,9 @@ Treat `status` as the human-readable view of pending intents, current and next
 versions, missing baselines, manifest drift, and tag-record issues. Treat
 `check` as the continuous-integration validation gate. It fails when a
 `committed` projection holds a version other than the tag-derived current
-version or the version of an applied release that waits for its tag.
-`injected` and `none` projections do not fail it.
+version, or, while an applied release waits for its tag, other than that
+release version. A partly applied release fails. `injected` and `none`
+projections do not fail it.
 
 ## Choose the workflow
 

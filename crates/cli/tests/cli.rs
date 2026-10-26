@@ -1158,8 +1158,97 @@ fn check_accepts_an_applied_release_that_awaits_its_tag() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "release unit sample projection package.json is 1.0.5, expected 1.0.0 or applied release 1.0.1",
+            "release unit sample projection package.json is 1.0.5, expected applied release 1.0.1",
         ));
+}
+
+/// The npm fixture with release 1.0.1 applied and committed, waiting for
+/// its tag.
+fn applied_npm_repository() -> TestRepo {
+    let repo = tagged_npm_repository("committed", "1.0.0");
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("patch", "Fix a user-visible defect."),
+    );
+    repo.commit("add intent");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo
+}
+
+#[test]
+fn check_fails_a_partly_applied_npm_release() {
+    let repo = applied_npm_repository();
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.cli().args(["tag", "--dry-run"]).assert().failure();
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release unit sample projection package.json is 1.0.0, expected applied release 1.0.1",
+        ));
+}
+
+#[test]
+fn check_fails_a_changelog_heading_above_the_tag_without_the_projection() {
+    let repo = tagged_npm_repository("committed", "1.0.0");
+    repo.write(
+        "CHANGELOG.md",
+        "# Changelog\n\n## 1.0.1\n\n- Fix a defect.\n",
+    );
+    repo.commit("edit changelog");
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "release unit sample projection package.json is 1.0.0, expected applied release 1.0.1",
+        ));
+}
+
+fn cargo_manifest(version: &str) -> String {
+    format!("[package]\nname = \"sample-crate\"\nversion = \"{version}\"\nedition = \"2021\"\n")
+}
+
+/// A release unit with a cargo and an npm projection, release 1.0.1
+/// applied and committed over the tag 1.0.0.
+fn applied_cargo_repository() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write("Cargo.toml", &cargo_manifest("1.0.0"));
+    repo.write("package.json", &npm_manifest("1.0.0"));
+    repo.write(
+        ".intentional/config.yml",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n",
+    );
+    repo.write(
+        ".intentional/intents/quiet-lantern-1234.md",
+        &intent("patch", "Fix a user-visible defect."),
+    );
+    repo.commit("add fixture");
+    repo.tag("sample@1.0.0");
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo
+}
+
+#[test]
+fn check_accepts_a_fully_applied_cargo_release() {
+    let repo = applied_cargo_repository();
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_fails_a_partly_applied_cargo_release() {
+    let repo = applied_cargo_repository();
+    repo.write("Cargo.toml", &cargo_manifest("1.0.0"));
+    repo.cli().args(["tag", "--dry-run"]).assert().failure();
+    repo.cli().arg("check").assert().failure().stderr(
+        predicate::str::contains(
+            "release unit sample projection Cargo.toml is 1.0.0, expected applied release 1.0.1",
+        )
+        .and(predicate::str::contains("package.json").not()),
+    );
 }
 
 #[test]

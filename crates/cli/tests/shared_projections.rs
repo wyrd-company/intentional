@@ -362,6 +362,65 @@ fn check_and_status_refuse_a_missing_projection_file() {
     }
 }
 
+/// The root-projection fixture with release 0.1.1 of both units applied
+/// and committed, waiting for its tags.
+fn applied_root_projection_repository() -> TestRepo {
+    let repo = root_projection_repository();
+    repo.intent("joint-0001", &[("alpha", "patch"), ("beta", "patch")]);
+    repo.cli().arg("apply").assert().success();
+    repo.commit("apply release");
+    repo
+}
+
+#[test]
+fn check_accepts_a_fully_applied_root_projection_release() {
+    let repo = applied_root_projection_repository();
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn check_fails_a_partly_applied_yaml_projection() {
+    let repo = applied_root_projection_repository();
+    repo.write("site/meta.yml", &meta("0.1.0", "0.1.1"));
+    repo.cli().args(["tag", "--dry-run"]).assert().failure();
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(format!(
+                "committed projection drift: release unit alpha projection {} pointer /products/alpha/version is 0.1.0, expected applied release 0.1.1",
+                native("site/meta.yml"),
+            ))
+            .and(predicate::str::contains("release unit beta").not()),
+        );
+}
+
+#[test]
+fn check_fails_a_hand_edited_heading_with_mixed_projections() {
+    let repo = root_projection_repository();
+    repo.write(
+        "packages/alpha/CHANGELOG.md",
+        "# Changelog\n\n## 0.1.1\n\n- Fix a defect.\n",
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.1.1\"\n}\n",
+    );
+    repo.commit("edit release by hand");
+    repo.cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(format!(
+                "release unit alpha projection {} pointer /products/alpha/version is 0.1.0, expected applied release 0.1.1",
+                native("site/meta.yml"),
+            ))
+            .and(predicate::str::contains("manifest.json").not()),
+        );
+}
+
 #[test]
 fn tag_refuses_drifted_root_projection() {
     let repo = root_projection_repository();
