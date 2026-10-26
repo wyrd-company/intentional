@@ -842,3 +842,103 @@ fn tag_refuses_one_field_projected_through_symlink_aliases() {
     }
     assert!(repo.tags().is_empty());
 }
+
+/// Replace `relative` with a symlink to a sentinel file outside the
+/// repository, and return the sentinel's path.
+fn swap_for_outside_sentinel(repo: &TestRepo, relative: &str, link_target: &str) -> PathBuf {
+    let sentinel = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("sentinel.yml");
+    fs::write(&sentinel, "sentinel\n").expect("sentinel");
+    fs::remove_file(repo.root.join(relative)).expect("remove planned file");
+    symlink_file(link_target, &repo.root.join(relative));
+    sentinel
+}
+
+#[test]
+fn apply_refuses_a_target_that_leaves_the_repository_after_planning() {
+    let repo = root_projection_repository();
+    repo.intent("alpha-0001", &[("alpha", "patch")]);
+    let result = intentional_core::ApplyResult::build(&repo.root, None).expect("planned release");
+    let sentinel = swap_for_outside_sentinel(&repo, "site/meta.yml", "../../sentinel.yml");
+    let error = result
+        .apply(&repo.root, false)
+        .expect_err("swapped target refused")
+        .to_string();
+    assert!(
+        error.contains(&native("site/meta.yml resolves outside the repository")),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&sentinel).expect("sentinel"),
+        "sentinel\n"
+    );
+    assert!(!repo.root.join("packages/alpha/CHANGELOG.md").exists());
+    assert!(repo
+        .root
+        .join(".intentional/intents/alpha-0001.md")
+        .exists());
+}
+
+#[test]
+fn apply_refuses_a_directory_that_leaves_the_repository_after_planning() {
+    let repo = root_projection_repository();
+    repo.intent("docs-0001", &[("beta", "patch")]);
+    let result = intentional_core::ApplyResult::build(&repo.root, None).expect("planned release");
+    let outside = repo
+        .root
+        .parent()
+        .expect("temporary parent")
+        .join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+    symlink_dir("../../outside", &repo.root.join("site/beta"));
+    let error = result
+        .apply(&repo.root, false)
+        .expect_err("swapped directory refused")
+        .to_string();
+    assert!(
+        error.contains(&native(
+            "site/beta/CHANGELOG.md resolves outside the repository"
+        )),
+        "{error}"
+    );
+    assert!(!outside.join("CHANGELOG.md").exists());
+}
+
+#[test]
+fn stamp_refuses_a_target_that_leaves_the_repository_after_planning() {
+    let repo = TestRepo::new();
+    repo.write(
+        ".intentional/config.yml",
+        &root_projection_config("injected"),
+    );
+    repo.write(
+        "packages/alpha/manifest.json",
+        "{\n  \"version\": \"0.0.0\"\n}\n",
+    );
+    repo.write("site/meta.yml", &meta("0.0.0", "0.0.0"));
+    repo.write(
+        ".intentional/intents/joint-0001.md",
+        "---\nalpha: patch\nbeta: patch\n---\n\nShip a change.\n",
+    );
+    repo.commit("add fixture");
+    let result = intentional_core::StampResult::build(&repo.root, None).expect("planned stamp");
+    let sentinel = swap_for_outside_sentinel(&repo, "site/meta.yml", "../../sentinel.yml");
+    let error = result
+        .apply(&repo.root, false)
+        .expect_err("swapped target refused")
+        .to_string();
+    assert!(
+        error.contains(&native("site/meta.yml resolves outside the repository")),
+        "{error}"
+    );
+    assert_eq!(
+        fs::read_to_string(&sentinel).expect("sentinel"),
+        "sentinel\n"
+    );
+    assert!(repo
+        .read("packages/alpha/manifest.json")
+        .contains("\"version\": \"0.0.0\""));
+}

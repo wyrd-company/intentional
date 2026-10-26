@@ -54,6 +54,27 @@ pub(crate) fn contained(root: &Path, relative: &Path) -> Result<PathBuf> {
     )))
 }
 
+/// Write planned files, each only while it still resolves inside the
+/// repository.
+///
+/// Every target is checked before any is written, so that a target that
+/// moved outside since planning leaves the tree unchanged. Each target is
+/// checked again right before its write, after its directories exist.
+pub(crate) fn write_contained(root: &Path, writes: &[FileWrite]) -> Result<()> {
+    for write in writes {
+        contained(root, &write.path)?;
+    }
+    for write in writes {
+        let path = contained(root, &write.path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+        }
+        let path = contained(root, &write.path)?;
+        std::fs::write(&path, &write.contents).map_err(|error| Error::io(&path, error))?;
+    }
+    Ok(())
+}
+
 /// Read a workspace file that resolves inside the repository.
 pub(crate) fn read_contained(root: &Path, relative: &Path) -> Result<String> {
     let path = contained(root, relative)?;

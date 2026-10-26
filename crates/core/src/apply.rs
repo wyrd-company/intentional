@@ -16,7 +16,7 @@ use crate::model::{Adapter, ProjectionMode};
 use crate::ownership::check_physical_ownership;
 use crate::plan::{PlanReleaseUnit, ReleasePlan};
 use crate::projection_file::normalized;
-use crate::workspace_files::{contained, EditTree};
+use crate::workspace_files::{contained, write_contained, EditTree};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -142,13 +142,7 @@ impl ApplyResult {
         if dry_run {
             return Ok(());
         }
-        for write in &self.writes {
-            let path = root.join(&write.path);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
-            }
-            std::fs::write(&path, &write.contents).map_err(|error| Error::io(&path, error))?;
-        }
+        write_contained(root, &self.writes)?;
         for relative in &self.deletes {
             let path = root.join(relative);
             std::fs::remove_file(&path).map_err(|error| Error::io(&path, error))?;

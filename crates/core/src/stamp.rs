@@ -16,7 +16,7 @@ use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
 use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, bump_version, effective_bumps, VersionRepository};
-use crate::workspace_files::EditTree;
+use crate::workspace_files::{write_contained, EditTree};
 use semver::Prerelease;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -118,11 +118,7 @@ impl StampResult {
         if dry_run {
             return Ok(());
         }
-        for write in &self.writes {
-            let path = root.join(&write.path);
-            std::fs::write(&path, &write.contents).map_err(|error| Error::io(&path, error))?;
-        }
-        Ok(())
+        write_contained(root, &self.writes)
     }
 }
 
