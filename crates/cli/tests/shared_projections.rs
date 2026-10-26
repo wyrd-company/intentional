@@ -284,8 +284,9 @@ fn check_fails_on_drift_in_a_root_projection() {
         .arg("check")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(native(
-            "committed projection drift: release unit alpha projection site/meta.yml pointer /products/alpha/version is 0.9.0, expected 0.1.0",
+        .stderr(predicate::str::contains(format!(
+            "committed projection drift: release unit alpha projection {} pointer /products/alpha/version is 0.9.0, expected 0.1.0",
+            native("site/meta.yml"),
         )));
 }
 
@@ -316,8 +317,9 @@ fn check_fails_on_drift_in_a_json_projection() {
         .arg("check")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(native(
-            "release unit alpha projection packages/alpha/manifest.json pointer /version is 0.3.0, expected 0.1.0",
+        .stderr(predicate::str::contains(format!(
+            "release unit alpha projection {} pointer /version is 0.3.0, expected 0.1.0",
+            native("packages/alpha/manifest.json"),
         )));
 }
 
