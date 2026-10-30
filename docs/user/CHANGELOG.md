@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+### Fixes
+
+- The initialization guide states which manifests are not discovery candidates: a Cargo manifest without `[package]` and a `package.json` without a string `name`.
+
 ## 0.1.2
 
 ### Features
