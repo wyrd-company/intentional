@@ -1,6 +1,6 @@
 {
   "name": "@wyrd-company/intentional",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Public npm launcher for the Intentional release and versioning CLI.",
   "keywords": [
     "release",
