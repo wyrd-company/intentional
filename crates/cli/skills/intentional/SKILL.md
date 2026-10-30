@@ -66,6 +66,8 @@ applied release fails. Drift on `injected` projections appears only in
 ## Choose the workflow
 
 - No configuration: initialize the repository.
+- A command reports that `.intentional/config.yml` uses `contract-1`: upgrade
+  it with `intentional init`.
 - Existing Changesets configuration: use the explicit adoption workflow.
 - A change needs release notes or a version bump: author an intent.
 - Pending intents are approved for release: plan, apply, commit, then tag.
@@ -243,6 +245,16 @@ intentional init --take-over --dry-run
 intentional init --take-over
 ```
 
+The plan's `bump-translation` field decides how pending changesets become
+intents. Changesets reads a bump name as the version component to increment;
+Intentional reads it as change significance. The default, `parity`, rewrites
+bumps at `0.x` so that the next versions match Changesets: `major` becomes
+`major` with `graduate` (1.0.0), and `minor` becomes `major`. `significance`
+keeps the bump names, and parity marks the resulting version changes as
+`expected-difference`. Ask the user which one they want when the plan has
+pending `0.x` changesets; pass `init --bump-translation parity|significance`
+to record the choice.
+
 Inspect the transaction's diff, commit the takeover, and only then run:
 
 ```bash
@@ -265,13 +277,33 @@ intentional add \
   --message "Add a user-visible capability."
 ```
 
-Use `major`, `minor`, or `patch` according to the repository's configured
-pre-1.0 mapping and compatibility contract. Write concise changelog prose about
+A bump name states the significance of the change: `major` breaks
+compatibility, `minor` adds a capability, and `patch` fixes a defect. Before
+1.0.0, `major` gives `0.(x+1).0`, and `minor` and `patch` give `0.x.(y+1)`.
+Write concise changelog prose about
 the user-visible outcome. One intent may bump multiple release units when they
 represent one coherent change. Review the generated Markdown and commit it with
 the implementation; do not edit versions directly in projected manifests.
 
 Use `--dry-run` to inspect the planned intent file before writing it.
+
+### Graduate a release unit to 1.0.0
+
+No bump moves a `0.x` release unit to 1.0.0. Graduate only when the user asks
+for the 1.0.0 release; never infer it from a breaking change:
+
+```bash
+intentional add \
+  --release-unit sample-library:major \
+  --graduate sample-library \
+  --message "Declare the stable public interface."
+```
+
+`--graduate` requires `major` for the same release unit and writes
+`sample-library: { bump: major, graduate: true }` in long form. The next
+version is exactly 1.0.0, and `status` shows `graduates to 1.0.0`. One
+graduating member graduates a fixed group, or the releasing members of a
+linked group. `check` fails when the release unit is already at 1.0.0 or later.
 
 ## Prepare and apply a release
 
@@ -395,6 +427,11 @@ between those operations.
   verification.
 - Treat exit code `2` from `init` as unresolved input or repository edits. Treat
   exit code `1` as invalid input or operational failure.
+- Treat "uses contract-1" as a required upgrade. Run `intentional init`. A
+  `component` configuration with pending intents writes a `ready` plan with
+  `source-kind: contract-1` and a `bump-translation`; show the rewritten
+  intents to the user, then run `intentional init` again to upgrade. Commit
+  the upgraded config and intents together.
 - If a command would require committing, pushing, publishing, or forge access,
   stop at the Intentional boundary unless that external action is explicitly in
   scope.

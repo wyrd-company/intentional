@@ -69,10 +69,11 @@ changes with intents, apply a release plan, commit, and tag.
 - [Initialization](https://wyrd.foo/docs/intentional/initialization): candidate
   resolution examples, already released repositories, Go baselines, and
   Changesets adoption.
-- [Usage](https://wyrd.foo/docs/intentional/usage): intents, release plans, tags,
-  build versions, and prerelease channels.
+- [Usage](https://wyrd.foo/docs/intentional/usage): intents, graduation to
+  1.0.0, release plans, tags, build versions, and prerelease channels.
 - [Configuration](https://wyrd.foo/docs/intentional/config): release units,
-  projections, tag templates, dependency propagation, and release groups.
+  projections, tag templates, version interpretation, the `contract-1` upgrade,
+  dependency propagation, and release groups.
 - [Installation](https://wyrd.foo/docs/intentional/install): platforms, binary
   verification, and GitHub Actions.
 - [Overview](https://wyrd.foo/docs/intentional/overview): the release model and

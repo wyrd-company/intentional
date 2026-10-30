@@ -975,13 +975,22 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
                 Config::release_unit_tag_id(release_unit_id, primary_id),
             ),
             ("version", version.to_string()),
-            ("contract", config.contract.clone()),
         ] {
             if primary_record.fields.get(field) != Some(&expected) {
                 issues.push(format!(
                     "release unit {release_unit_id} primary tag {primary_name} has unexpected {field}"
                 ));
             }
+        }
+        // A record keeps the contract it was created under. Records from
+        // before an `init` upgrade carry contract-1 and stay valid history.
+        let record_contract = primary_record.fields.get("contract").map(String::as_str);
+        if record_contract != Some(config.contract.as_str())
+            && record_contract != Some(crate::config::CONTRACT_1)
+        {
+            issues.push(format!(
+                "release unit {release_unit_id} primary tag {primary_name} has unexpected contract"
+            ));
         }
         for (tag_id, tag) in &release_unit.tags {
             let name = render_tag(&tag.template, release_unit_id, &version.to_string());

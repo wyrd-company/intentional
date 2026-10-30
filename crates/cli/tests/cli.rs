@@ -91,7 +91,7 @@ fn npm_manifest(version: &str) -> String {
 
 fn config(mode: &str) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: {mode}\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
     )
 }
 
@@ -761,7 +761,7 @@ fn devcontainer_candidates_support_every_resolution_flow() {
     );
     configured.write(
         ".intentional/config.yml",
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n",
     );
     configured.commit("add configured projection fixture");
     configured.cli().arg("init").assert().code(2);
@@ -861,7 +861,7 @@ fn candidate_resolution_preserves_configured_cross_ecosystem_dependencies() {
     );
     repo.write(
         ".intentional/config.yml",
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n    - detector: cargo-package\n      path: components/rust/Cargo.toml\n      release-unit: sample-rust\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-library@{version}'\n    depends-on: [ sample-rust ]\n  sample-rust:\n    path: components/rust\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-rust@{version}'\n",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample-library\n    - detector: cargo-package\n      path: components/rust/Cargo.toml\n      release-unit: sample-rust\nrelease-units:\n  sample-library:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-library@{version}'\n    depends-on: [ sample-rust ]\n  sample-rust:\n    path: components/rust\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample-rust@{version}'\n",
     );
     repo.commit("add configured dependency fixture");
 
@@ -1272,7 +1272,7 @@ fn applied_cargo_repository() -> TestRepo {
     repo.write("package.json", &npm_manifest("1.0.0"));
     repo.write(
         ".intentional/config.yml",
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: component\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: cargo\n        file: Cargo.toml\n        mode: committed\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n",
     );
     repo.write(
         ".intentional/intents/quiet-lantern-1234.md",
@@ -1382,15 +1382,10 @@ fn workspace_tag_advances_its_own_stream_by_the_highest_bump() {
     repo.write("package.json", &npm_manifest("0.1.0"));
     repo.write(
         ".intentional/config.yml",
-        &config("committed")
-            .replace(
-                "pre-1-0-bump-mapping: component",
-                "pre-1-0-bump-mapping: compatibility",
-            )
-            .replace(
-                "release-units:",
-                "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
-            ),
+        &config("committed").replace(
+            "release-units:",
+            "workspace-tags:\n  release:\n    template: '{version}'\nrelease-units:",
+        ),
     );
     repo.write(".intentional/intents/.keep", "");
     repo.commit("add fixture");
@@ -1921,4 +1916,358 @@ fn release_tagging_still_refuses_a_recordless_tag_at_the_release_version() {
         .stderr(predicate::str::contains(
             "existing tag mirror@1.0.1 is not an annotated Intentional record",
         ));
+}
+
+fn contract_1_config(mapping: &str) -> String {
+    format!(
+        "# Release configuration.\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: {mapping}\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: package.json\n      release-unit: sample\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{{version}}'\n"
+    )
+}
+
+fn graduation_fixture(version: &str) -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest(version));
+    repo.write(".intentional/config.yml", &config("committed"));
+    repo.write(".intentional/intents/.keep", "");
+    repo.commit("add fixture");
+    repo.tag(&format!("sample@{version}"));
+    repo
+}
+
+#[test]
+fn graduate_intent_releases_1_0_0_through_plan_and_apply() {
+    let repo = graduation_fixture("0.4.1");
+    repo.cli()
+        .args([
+            "add",
+            "--release-unit",
+            "sample:major",
+            "--graduate",
+            "sample",
+            "--message",
+            "Declare the stable interface.",
+        ])
+        .assert()
+        .success();
+    repo.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        &intent("minor", "Add a capability."),
+    );
+    repo.commit("add intents");
+
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "sample: 0.4.1 -> 1.0.0 (major, graduates to 1.0.0)",
+        ));
+    let plan = repo.cli().arg("plan").output().expect("plan");
+    let plan: Value = serde_json::from_slice(&plan.stdout).expect("plan JSON");
+    let unit = &plan["release_units"][0];
+    assert_eq!(unit["new_version"], "1.0.0");
+    assert_eq!(unit["graduates"], true);
+    assert_eq!(plan["contract"], "contract-2");
+    assert_eq!(unit["contributing_intent_ids"].as_array().unwrap().len(), 2);
+
+    let rc = repo
+        .cli()
+        .args(["plan", "--channel", "rc"])
+        .output()
+        .expect("channel plan");
+    let rc: Value = serde_json::from_slice(&rc.stdout).expect("plan JSON");
+    assert_eq!(rc["release_units"][0]["new_version"], "1.0.0-rc.1");
+
+    repo.cli().arg("apply").assert().success();
+    let changelog = fs::read_to_string(repo.root.join("CHANGELOG.md")).expect("changelog");
+    assert!(changelog.contains("## 1.0.0\n\nGraduates from `0.x` to `1.0.0`.\n"));
+    assert!(changelog.contains("- Declare the stable interface."));
+    assert!(changelog.contains("- Add a capability."));
+    assert!(fs::read_to_string(repo.root.join("package.json"))
+        .unwrap()
+        .contains("\"version\": \"1.0.0\""));
+}
+
+#[test]
+fn major_without_graduate_stays_in_0_x() {
+    let repo = graduation_fixture("0.4.1");
+    repo.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        &intent("major", "Change a contract."),
+    );
+    repo.commit("add intent");
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample: 0.4.1 -> 0.5.0 (major)"));
+}
+
+#[test]
+fn graduate_is_rejected_without_major_and_at_1_0_0() {
+    let repo = graduation_fixture("0.4.1");
+    repo.cli()
+        .args([
+            "add",
+            "--release-unit",
+            "sample:minor",
+            "--graduate",
+            "sample",
+            "--message",
+            "Add a capability.",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires bump major"));
+
+    let stable = graduation_fixture("1.2.0");
+    stable.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        "---\nsample:\n  bump: major\n  graduate: true\n---\n\nChange a contract.\n",
+    );
+    stable.commit("add intent");
+    stable
+        .cli()
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("graduate is valid only at 0.x"));
+}
+
+#[test]
+fn contract_1_config_names_the_init_upgrade() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(
+        ".intentional/config.yml",
+        &contract_1_config("compatibility"),
+    );
+    repo.commit("add fixture");
+    for command in [
+        &["status"][..],
+        &["check"],
+        &["plan"],
+        &["apply", "--dry-run"],
+    ] {
+        repo.cli()
+            .args(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(
+                "uses contract-1, which this version of intentional does not load; run `intentional init` to upgrade it to contract-2",
+            ))
+            .stderr(predicate::str::contains("unsupported interpretation contract").not());
+    }
+}
+
+#[test]
+fn init_upgrades_a_compatibility_config_without_changing_intents() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(
+        ".intentional/config.yml",
+        &contract_1_config("compatibility"),
+    );
+    let pending = intent("minor", "Add a capability.");
+    repo.write(".intentional/intents/quiet-otter-0001.md", &pending);
+    repo.commit("add fixture");
+    // A release record created under contract-1 stays valid history.
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "sample@0.4.1",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.3.0\nplan-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\ntag-id: release-unit/sample/primary\nversion: 0.4.1\nbaseline: true\n",
+        ],
+    );
+
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "upgrade .intentional/config.yml from contract-1 to contract-2",
+        ));
+    let config = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap();
+    assert!(config.starts_with("# Release configuration.\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\ndiscovery:"));
+    assert!(!config.contains("pre-1-0-bump-mapping"));
+    assert_eq!(
+        fs::read_to_string(repo.root.join(".intentional/intents/quiet-otter-0001.md")).unwrap(),
+        pending
+    );
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample: 0.4.1 -> 0.4.2 (minor)"))
+        .stdout(predicate::str::contains("Tag record").not());
+    repo.commit("upgrade to contract-2");
+    repo.cli().arg("check").assert().success();
+}
+
+#[test]
+fn init_upgrades_a_component_config_without_pending_intents_directly() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(".intentional/config.yml", &contract_1_config("component"));
+    repo.commit("add fixture");
+    repo.tag("sample@0.4.1");
+    repo.cli().arg("init").assert().success();
+    assert!(!repo.root.join(".intentional/init-plan.yml").exists());
+    repo.cli().arg("status").assert().success();
+}
+
+fn component_upgrade_fixture() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(".intentional/config.yml", &contract_1_config("component"));
+    repo.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        &intent("minor", "Add a capability."),
+    );
+    repo.write(
+        ".intentional/intents/brisk-comet-0002.md",
+        &intent("patch", "Correct a defect."),
+    );
+    repo.commit("add fixture");
+    repo.tag("sample@0.4.1");
+    repo
+}
+
+#[test]
+fn init_records_the_component_translation_for_review_then_upgrades() {
+    let repo = component_upgrade_fixture();
+    repo.cli()
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("bump translation: parity"));
+    let plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(repo.root.join(".intentional/init-plan.yml")).unwrap(),
+    )
+    .expect("upgrade plan");
+    assert_eq!(plan.state, InitState::Ready);
+    assert_eq!(plan.source_kind, "contract-1");
+    assert_eq!(plan.inferred_config.contract, "contract-2");
+    assert_eq!(plan.converted_intents.len(), 1);
+    assert_eq!(plan.converted_intents[0].id, "quiet-otter-0001");
+    // Nothing is written until the reviewed plan is accepted.
+    assert!(
+        fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("contract: contract-1")
+    );
+
+    repo.cli().arg("init").assert().success();
+    assert!(!repo.root.join(".intentional/init-plan.yml").exists());
+    let rewritten =
+        fs::read_to_string(repo.root.join(".intentional/intents/quiet-otter-0001.md")).unwrap();
+    assert!(rewritten.starts_with("---\nsample: major\n---\n\nAdd a capability.\n\n<!-- bump translation: contract-1 `minor` for `sample` at 0.4.1 is `major` here, so that the next version stays 0.5.0. -->"));
+    assert_eq!(
+        fs::read_to_string(repo.root.join(".intentional/intents/brisk-comet-0002.md")).unwrap(),
+        intent("patch", "Correct a defect.")
+    );
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample: 0.4.1 -> 0.5.0 (major)"));
+}
+
+#[test]
+fn init_component_upgrade_graduates_a_pending_major() {
+    let repo = component_upgrade_fixture();
+    repo.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        &intent("major", "Change a contract."),
+    );
+    repo.commit("use a major intent");
+    repo.cli()
+        .args(["init", "--bump-translation", "parity"])
+        .assert()
+        .success();
+    let rewritten =
+        fs::read_to_string(repo.root.join(".intentional/intents/quiet-otter-0001.md")).unwrap();
+    assert!(rewritten.starts_with("---\nsample:\n  bump: major\n  graduate: true\n---\n"));
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "sample: 0.4.1 -> 1.0.0 (major, graduates to 1.0.0)",
+        ));
+}
+
+#[test]
+fn init_component_upgrade_can_keep_bump_names() {
+    let repo = component_upgrade_fixture();
+    repo.cli()
+        .args(["init", "--bump-translation", "significance"])
+        .assert()
+        .success();
+    assert!(!repo.root.join(".intentional/init-plan.yml").exists());
+    assert_eq!(
+        fs::read_to_string(repo.root.join(".intentional/intents/quiet-otter-0001.md")).unwrap(),
+        intent("minor", "Add a capability.")
+    );
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample: 0.4.1 -> 0.4.2 (minor)"));
+}
+
+#[test]
+fn edited_upgrade_plan_translation_is_honored() {
+    let repo = component_upgrade_fixture();
+    repo.cli().arg("init").assert().success();
+    let path = repo.root.join(".intentional/init-plan.yml");
+    let edited = fs::read_to_string(&path)
+        .unwrap()
+        .replace("bump-translation: parity", "bump-translation: significance");
+    fs::write(&path, edited).unwrap();
+    repo.cli().arg("init").assert().success();
+    assert_eq!(
+        fs::read_to_string(repo.root.join(".intentional/intents/quiet-otter-0001.md")).unwrap(),
+        intent("minor", "Add a capability.")
+    );
+}
+
+#[test]
+fn config_upgrade_does_not_wait_for_unresolved_candidates() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(
+        "extra/package.json",
+        "{\n  \"name\": \"sample-extra\",\n  \"version\": \"0.1.0\"\n}\n",
+    );
+    repo.write(
+        ".intentional/config.yml",
+        &contract_1_config("compatibility"),
+    );
+    repo.commit("add fixture");
+    repo.tag("sample@0.4.1");
+    repo.cli()
+        .arg("init")
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "upgrade .intentional/config.yml from contract-1 to contract-2",
+        ));
+    assert!(
+        fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("contract: contract-2")
+    );
+    let plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(repo.root.join(".intentional/init-plan.yml")).unwrap(),
+    )
+    .expect("candidate plan");
+    assert_eq!(plan.source_kind, "intentional");
+    assert!(plan
+        .discovery_candidates
+        .iter()
+        .any(|candidate| candidate.path == Path::new("extra/package.json")));
 }

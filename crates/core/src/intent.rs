@@ -10,7 +10,8 @@ use crate::error::{Error, Result};
 use crate::model::Bump;
 use rand::seq::IndexedRandom;
 use rand::RngExt;
-use std::collections::BTreeMap;
+use serde::Deserialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// Directory containing pending intent files.
@@ -30,6 +31,8 @@ pub struct Intent {
     pub id: String,
     /// Release-unit bump claims.
     pub release_units: BTreeMap<String, Bump>,
+    /// Release units this intent graduates to `1.0.0`.
+    pub graduates: BTreeSet<String>,
     /// Markdown changelog prose.
     pub message: String,
     /// Source file.
@@ -41,6 +44,8 @@ pub struct Intent {
 pub struct IntentDraft {
     /// Release-unit bump claims.
     pub release_units: BTreeMap<String, Bump>,
+    /// Release units this intent graduates to `1.0.0`.
+    pub graduates: BTreeSet<String>,
     /// Markdown changelog prose.
     pub message: String,
 }
@@ -83,8 +88,8 @@ impl Intent {
     /// Parse and validate one intent from supplied contents.
     pub fn parse(path: &Path, text: &str, config: &Config) -> Result<Self> {
         let (frontmatter, message) = split_frontmatter(text)?;
-        let release_units: BTreeMap<String, Bump> = serde_yaml::from_str(frontmatter)?;
-        validate_draft(&release_units, message, config)?;
+        let (release_units, graduates) = parse_claims(frontmatter)?;
+        validate_draft(&release_units, &graduates, message, config)?;
         let id = path
             .file_stem()
             .and_then(|stem| stem.to_str())
@@ -95,6 +100,7 @@ impl Intent {
         Ok(Self {
             id,
             release_units,
+            graduates,
             message: message.trim().to_owned(),
             path: path.to_owned(),
         })
@@ -104,7 +110,7 @@ impl Intent {
 impl IntentDraft {
     /// Validate and render a new intent with a generated memorable slug.
     pub fn plan(self, root: &Path, config: &Config) -> Result<IntentWrite> {
-        validate_draft(&self.release_units, &self.message, config)?;
+        validate_draft(&self.release_units, &self.graduates, &self.message, config)?;
         let mut rng = rand::rng();
         let adjective = ADJECTIVES
             .choose(&mut rng)
@@ -120,8 +126,7 @@ impl IntentDraft {
                 relative.display()
             )));
         }
-        let yaml = serde_yaml::to_string(&self.release_units)?;
-        let contents = format!("---\n{yaml}---\n\n{}\n", self.message.trim());
+        let contents = render_intent(&self.release_units, &self.graduates, &self.message)?;
         Ok(IntentWrite {
             path: relative,
             contents,
@@ -142,8 +147,68 @@ impl IntentWrite {
     }
 }
 
+/// Render intent file contents. A graduating release unit uses the long
+/// form `{ bump: major, graduate: true }`; every other one uses the short
+/// form `id: bump`.
+pub(crate) fn render_intent(
+    release_units: &BTreeMap<String, Bump>,
+    graduates: &BTreeSet<String>,
+    message: &str,
+) -> Result<String> {
+    let mut frontmatter = serde_yaml::Mapping::new();
+    for (id, bump) in release_units {
+        let value = if graduates.contains(id) {
+            let mut claim = serde_yaml::Mapping::new();
+            claim.insert("bump".into(), serde_yaml::to_value(bump)?);
+            claim.insert("graduate".into(), true.into());
+            serde_yaml::Value::Mapping(claim)
+        } else {
+            serde_yaml::to_value(bump)?
+        };
+        frontmatter.insert(id.as_str().into(), value);
+    }
+    let yaml = serde_yaml::to_string(&frontmatter)?;
+    Ok(format!("---\n{yaml}---\n\n{}\n", message.trim()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LongClaim {
+    bump: Bump,
+    #[serde(default)]
+    graduate: bool,
+}
+
+/// Parse frontmatter claims. Each value is a bump name, or a mapping with
+/// `bump` and an optional `graduate`.
+fn parse_claims(frontmatter: &str) -> Result<(BTreeMap<String, Bump>, BTreeSet<String>)> {
+    let claims: BTreeMap<String, serde_yaml::Value> = serde_yaml::from_str(frontmatter)?;
+    let mut release_units = BTreeMap::new();
+    let mut graduates = BTreeSet::new();
+    for (id, value) in claims {
+        let bump = match value {
+            serde_yaml::Value::String(_) => serde_yaml::from_value(value)?,
+            serde_yaml::Value::Mapping(_) => {
+                let claim: LongClaim = serde_yaml::from_value(value)?;
+                if claim.graduate {
+                    graduates.insert(id.clone());
+                }
+                claim.bump
+            }
+            _ => {
+                return Err(Error::Validation(format!(
+                    "intent release unit {id} must declare a bump name or a mapping with bump and graduate"
+                )))
+            }
+        };
+        release_units.insert(id, bump);
+    }
+    Ok((release_units, graduates))
+}
+
 fn validate_draft(
     release_units: &BTreeMap<String, Bump>,
+    graduates: &BTreeSet<String>,
     message: &str,
     config: &Config,
 ) -> Result<()> {
@@ -169,6 +234,21 @@ fn validate_draft(
             )));
         }
     }
+    for release_unit in graduates {
+        match release_units.get(release_unit) {
+            Some(Bump::Major) => {}
+            Some(_) => {
+                return Err(Error::Validation(format!(
+                    "intent release unit {release_unit} sets graduate, which requires bump major"
+                )))
+            }
+            None => {
+                return Err(Error::Validation(format!(
+                    "intent graduates release unit {release_unit}, which it does not bump"
+                )))
+            }
+        }
+    }
     Ok(())
 }
 
@@ -189,7 +269,7 @@ mod tests {
     fn config() -> Config {
         Config::from_yaml(
             r#"
-contract: contract-1
+contract: contract-2
 release-units:
   library:
     path: .
@@ -206,6 +286,7 @@ release-units:
     fn plans_direct_frontmatter_mapping() {
         let draft = IntentDraft {
             release_units: BTreeMap::from([("library".to_owned(), Bump::Minor)]),
+            graduates: BTreeSet::new(),
             message: "Add a useful capability.".to_owned(),
         };
         let write = draft.plan(Path::new("."), &config()).expect("planned");
@@ -218,11 +299,52 @@ release-units:
     fn rejects_unknown_release_unit() {
         let draft = IntentDraft {
             release_units: BTreeMap::from([("missing".to_owned(), Bump::Patch)]),
+            graduates: BTreeSet::new(),
             message: "Correct a defect.".to_owned(),
         };
         let error = draft
             .plan(Path::new("."), &config())
             .expect_err("unknown release unit rejected");
         assert!(error.to_string().contains("unknown release unit missing"));
+    }
+
+    #[test]
+    fn graduating_release_unit_round_trips_in_long_form() {
+        let draft = IntentDraft {
+            release_units: BTreeMap::from([("library".to_owned(), Bump::Major)]),
+            graduates: BTreeSet::from(["library".to_owned()]),
+            message: "Declare the stable interface.".to_owned(),
+        };
+        let write = draft.plan(Path::new("."), &config()).expect("planned");
+        assert!(write
+            .contents
+            .starts_with("---\nlibrary:\n  bump: major\n  graduate: true\n---"));
+        let intent =
+            Intent::parse(Path::new("x.md"), &write.contents, &config()).expect("parsed back");
+        assert_eq!(intent.release_units["library"], Bump::Major);
+        assert!(intent.graduates.contains("library"));
+    }
+
+    #[test]
+    fn long_form_without_graduate_is_an_ordinary_bump() {
+        let intent = Intent::parse(
+            Path::new("x.md"),
+            "---\nlibrary: { bump: minor }\n---\n\nAdd a capability.\n",
+            &config(),
+        )
+        .expect("parsed");
+        assert_eq!(intent.release_units["library"], Bump::Minor);
+        assert!(intent.graduates.is_empty());
+    }
+
+    #[test]
+    fn graduate_requires_major() {
+        let error = Intent::parse(
+            Path::new("x.md"),
+            "---\nlibrary: { bump: minor, graduate: true }\n---\n\nAdd a capability.\n",
+            &config(),
+        )
+        .expect_err("graduate with minor rejected");
+        assert!(error.to_string().contains("requires bump major"));
     }
 }

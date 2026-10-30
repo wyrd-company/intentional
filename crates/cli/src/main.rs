@@ -6,12 +6,12 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use intentional_core::{
-    check_workspace, initialize, ApplyResult, Bump, Config, InitState, IntentDraft, ReleasePlan,
-    StampResult, TagPhase, TagResult, WorkspaceStatus, CONFIG_PATH, MISSING_BASELINE_CODE,
-    MISSING_BASELINE_NEXT_ACTION,
+    check_workspace, initialize_with, ApplyResult, Bump, BumpTranslation, Config, InitOptions,
+    InitState, IntentDraft, ReleasePlan, StampResult, TagPhase, TagResult, WorkspaceStatus,
+    CONFIG_PATH, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
 };
 use semver::Version;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::path::PathBuf;
 
@@ -67,6 +67,11 @@ struct InitArgs {
     #[arg(long)]
     take_over: bool,
 
+    /// How pending component-style bumps translate: `parity` keeps the next
+    /// versions, `significance` keeps the bump names.
+    #[arg(long, value_name = "parity|significance")]
+    bump_translation: Option<BumpTranslation>,
+
     /// Emit stable structured JSON.
     #[arg(long)]
     json: bool,
@@ -81,6 +86,10 @@ struct AddArgs {
     /// Release-unit bump as `id:major|minor|patch`; repeat for multiple release units.
     #[arg(long = "release-unit")]
     release_units: Vec<String>,
+
+    /// Graduate this release unit from `0.x` to `1.0.0`; requires its bump to be major.
+    #[arg(long = "graduate", value_name = "ID")]
+    graduates: Vec<String>,
 
     /// Changelog prose.
     #[arg(long)]
@@ -249,7 +258,13 @@ fn plan(root: &std::path::Path, channel: Option<&str>) -> Result<()> {
 }
 
 fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
-    let result = initialize(root, args.take_over)?;
+    let result = initialize_with(
+        root,
+        InitOptions {
+            take_over: args.take_over,
+            bump_translation: args.bump_translation,
+        },
+    )?;
     if args.json {
         println!("{}", result.to_json()?);
     } else {
@@ -257,8 +272,16 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
         for operation in &result.operations {
             println!("{operation}");
         }
-        if result.plan.is_some() && !args.take_over {
+        if let Some(plan) = result.plan.as_ref().filter(|_| !args.take_over) {
             println!("plan: {}", result.path.display());
+            if let Some(translation) = plan.bump_translation {
+                println!("bump translation: {translation}");
+                if plan.source_kind == "contract-1" && result.state == InitState::Ready {
+                    println!(
+                        "review the bump translation and rewritten intents in the plan, then run intentional init again to upgrade"
+                    );
+                }
+            }
         }
     }
     result.apply(root, args.dry_run)?;
@@ -289,12 +312,19 @@ fn add(root: &std::path::Path, args: AddArgs) -> Result<()> {
             bail!("release unit {id} was specified more than once");
         }
     }
+    let mut graduates = BTreeSet::new();
+    for id in args.graduates {
+        if !graduates.insert(id.clone()) {
+            bail!("release unit {id} was given to --graduate more than once");
+        }
+    }
     let message = match args.message {
         Some(message) => message,
         None => prompt("Changelog message: ")?,
     };
     let write = IntentDraft {
         release_units,
+        graduates,
         message,
     }
     .plan(root, &config)?;
@@ -320,8 +350,13 @@ fn status(root: &std::path::Path) -> Result<()> {
         println!("Tag record: {issue}");
     }
     for release_unit in status.release_units {
+        let graduation = if release_unit.graduates {
+            ", graduates to 1.0.0"
+        } else {
+            ""
+        };
         println!(
-            "{}: {} -> {} ({})",
+            "{}: {} -> {} ({}{graduation})",
             release_unit.id, release_unit.current, release_unit.next, release_unit.bump
         );
     }

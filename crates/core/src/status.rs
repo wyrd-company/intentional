@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::intent::Intent;
 use crate::model::{Adapter, Bump, ProjectionMode};
 use crate::ownership::check_physical_ownership;
-use crate::version::{aggregate_bumps, resolve_versions, VersionRepository};
+use crate::version::{aggregate_bumps, aggregate_graduations, resolve_versions, VersionRepository};
 use crate::workspace_files::read_contained;
 use semver::Version;
 use std::path::Path;
@@ -36,6 +36,8 @@ pub struct ReleaseUnitStatus {
     pub next: Version,
     /// Effective bump after dependency propagation.
     pub bump: Bump,
+    /// Whether the next release graduates the release unit to `1.0.0`.
+    pub graduates: bool,
 }
 
 /// Complete read-only workspace status.
@@ -79,6 +81,7 @@ impl WorkspaceStatus {
         check_physical_ownership(root, config)?;
         let repository = VersionRepository::discover(root)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
+        let graduating = aggregate_graduations(intents.iter().map(|intent| &intent.graduates));
         let mut current_versions = std::collections::BTreeMap::new();
         let mut missing_baselines = Vec::new();
         for id in config.release_units.keys() {
@@ -89,7 +92,7 @@ impl WorkspaceStatus {
             }
             current_versions.insert(id.clone(), current);
         }
-        let resolved = resolve_versions(config, &declared, &current_versions)?;
+        let resolved = resolve_versions(config, &declared, &graduating, &current_versions)?;
         let mut release_units = Vec::with_capacity(config.release_units.len());
         let mut drift = Vec::new();
         for (id, release_unit) in &config.release_units {
@@ -100,6 +103,7 @@ impl WorkspaceStatus {
                 current: versions.current.clone(),
                 next: versions.next.clone(),
                 bump: versions.bump,
+                graduates: versions.graduates,
             });
             for projection in &release_unit.projections {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {

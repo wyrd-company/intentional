@@ -13,7 +13,7 @@ properties:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
   contract:
-    const: contract-1
+    const: contract-2
   generator:
     type: object
     additionalProperties: false
@@ -40,6 +40,9 @@ properties:
         old_version: { type: string }
         new_version: { type: string }
         bump: { enum: [ major, minor, patch ] }
+        graduates:
+          description: The release graduates the release unit from 0.x to 1.0.0.
+          const: true
         contributing_intent_ids:
           type: array
           items: { type: string }

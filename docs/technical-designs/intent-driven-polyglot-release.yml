@@ -114,7 +114,9 @@ proposed-design:
   intent-files: >-
     Intents live in .intentional/intents/ as markdown files with a YAML
     frontmatter block mapping release unit ids to bump levels; the markdown
-    body is the changelog prose. Filenames are generated memorable slugs so
+    body is the changelog prose. A frontmatter value is a bump name, or a
+    mapping with `bump` and an optional `graduate` flag; `graduate: true` is
+    valid only with `bump: major`. Filenames are generated memorable slugs so
     parallel branches do not conflict. Intents reference logical ids, never
     ecosystem names. A release unit with npm and pub projections is one
     release unit with one version — cross-ecosystem linked versioning falls out of
@@ -170,18 +172,30 @@ proposed-design:
     existing tags (max existing channel tag for that version, plus one). No
     stored pre-mode state exists. Channel releases do not consume intents;
     intents survive until the final channel-less release, so every channel
-    release recomputes from the full intent set. The workspace config selects
-    pre-1-0-bump-mapping. Component mapping applies major, minor, and patch to
-    the corresponding SemVer component. Compatibility mapping treats bump
-    names as compatibility significance: major advances 0.x.y to 0.(x+1).0,
-    while minor and patch advance to 0.x.(y+1). New workspaces use
-    compatibility mapping; Changesets adoption recommends component mapping.
+    release recomputes from the full intent set. Bump names always state
+    change significance. Before 1.0.0, major advances 0.x.y to 0.(x+1).0,
+    while minor and patch advance to 0.x.(y+1), which matches the caret-range
+    compatibility of npm, Cargo, and Pub. At and after 1.0.0, ordinary SemVer
+    applies. No bump moves a release unit from 0.x to 1.0.0.
+  graduation: >-
+    An intent that sets `graduate` on a release unit is the only way to reach
+    1.0.0. The release unit's next version is exactly 1.0.0, and its other
+    pending intents fold into that release. Graduation requires an effective
+    major bump and a 0.x version to graduate from; otherwise check, status,
+    and plan fail. In a fixed group, one graduating member graduates every
+    member; in a linked group, it graduates the releasing members. A group's
+    shared version line graduates, so its highest current version must be
+    0.x. With a channel, graduation produces 1.0.0-<channel>.N, and the
+    intent stays pending until the final release. Workspace tags are
+    independent version lines, so a graduation counts as a major bump for
+    them. The release plan marks a graduating release unit, status reports
+    it, and its changelog section opens with a graduation line.
   release-groups: >-
     Fixed and linked groups contain release unit ids. When any managed
     member of a fixed group receives a direct or dependency-derived bump, all
     managed members release. The group takes the highest current member
-    version, selects the highest requested bump, applies the configured
-    pre-1.0 mapping once, and assigns the result to every member. A suspended
+    version, selects the highest requested bump, applies it once, and assigns
+    the result to every member. A suspended
     member blocks a fixed-group release because the shared release cannot be
     completed. In a linked group, only members with direct or
     dependency-derived bumps release. Every releasing member uses the highest
@@ -305,10 +319,12 @@ proposed-design:
     A .changeset/config.json source activates the Changesets importer. The
     importer maps package identities, pending changes, fixed and linked groups,
     internal-dependency bump policy, ignored packages, and private-package
-    version behavior into the initialization plan. Changesets bump names use
-    component pre-1.0 mapping. Each pending Changesets file becomes one
-    Intentional intent: its markdown body is preserved and its manifest-native
-    package names are mapped to release unit ids. The importer independently
+    version behavior into the initialization plan. Changesets bump names name
+    the version component to increment, so the importer translates pending
+    bumps once, as the plan's bump-translation field selects. Each pending
+    Changesets file becomes one Intentional intent: its markdown body is
+    preserved and its manifest-native package names are mapped to release
+    unit ids. The importer independently
     computes the source Changesets release result and the proposed Intentional
     release result, including dependency propagation and group constraints,
     then records release-unit membership, requested bumps, and next-version parity.
@@ -330,6 +346,43 @@ proposed-design:
     package boundary that defines source authority. The merged target remains
     in the source and proposed inventories, and parity reports a blocker until
     the ignore entry is removed or the candidate resolution is revised.
+  bump-translation: >-
+    The initialization plan's bump-translation field, set by
+    `init --bump-translation`, decides how pending component-style bumps
+    become intents. It applies to Changesets adoption and to a contract-1
+    component upgrade. The base of a release unit is the highest current
+    version of its fixed or linked group, else its own current version. With
+    `parity`, the default, a 0.x base translates major to major with
+    graduate and minor to major, so that every next version matches the
+    source tool; patch and every bump on a 1.x base stay. With
+    `significance`, bump names stay. An intent whose bump name changes keeps
+    its body and gains an HTML comment that names the original bump and the
+    version it keeps, so that review shows the reason and the rendered
+    changelog does not. Parity always compares the source result with the
+    `parity` translation, which proves the inventory and configuration. With
+    `significance`, a release unit whose result differs from the source only
+    because of the translation is marked expected-difference, and the parity
+    status is expected-difference rather than blocked. A later init keeps the
+    plan's translation unless the flag is given again.
+  contract-upgrade: >-
+    The binary interprets one contract, contract-2. Every command except
+    init refuses a contract-1 configuration with a message that names the
+    fix: run intentional init. Init upgrades contract-1 by setting
+    contract-2 and removing pre-1-0-bump-mapping, and keeps the comments of
+    the configuration file. A configuration that used compatibility, or that
+    omits the setting, already read bump names as significance, so it
+    upgrades at once, even while discovery candidates still need
+    resolutions. A component configuration whose pending intents would
+    release other versions under contract-2 needs a bump translation: init
+    writes a ready plan with source kind contract-1, the default translation,
+    and the intents it rewrites, and writes nothing else. A rerun with an
+    unchanged configuration and unchanged intents applies the reviewed
+    translation, and `--bump-translation` applies it in one step. The config
+    and the intent rewrites change together, so that no intent is read under
+    the wrong contract. A plan written under contract-1 keeps its
+    resolutions; only its inferred configuration is upgraded. Annotated tag
+    records keep the contract they were created under: contract-1 records
+    stay valid history for status and check.
   release-unit-disposition: >-
     Managed release units belong to the inventory and participate in release
     computation. Suspended release units remain configured and visible to status
@@ -381,9 +434,10 @@ proposed-design:
   command-surface: >-
     init requires a Git repository, discovers candidates, and produces or
     reconciles the single initialization plan before writing complete
-    configuration. --take-over performs a validated authority handoff. add
-    authors an intent through repeatable
-    --release-unit selectors or an interactive prompt. status reports pending intents, computed next
+    configuration. --take-over performs a validated authority handoff, and
+    --bump-translation selects the bump translation. add authors an intent
+    through repeatable --release-unit selectors or an interactive prompt, and
+    repeatable --graduate selectors mark graduating release units. status reports pending intents, computed next
     versions, drift, suspended release blockers, and missing baselines. plan
     emits the canonical release plan without mutation. apply writes projections
     and changelogs and consumes intents in the working tree. stamp writes
@@ -397,7 +451,7 @@ proposed-design:
     forge choreography belong to the harness.
   release-plan: >-
     Plan emits canonical JSON listing release units, old and new versions,
-    contributing intent ids, primary, projection, and workspace tags, tag-after
+    graduation, contributing intent ids, primary, projection, and workspace tags, tag-after
     prerequisites, required phase declarations, and rendered release notes per
     release unit. The interpretation contract and generator record are part of the
     canonical payload sealed by its digest. CD consumes the plan as release
@@ -407,7 +461,8 @@ proposed-design:
     apply writes each affected release unit's CHANGELOG.md from the consumed intent
     bodies; a multi-release-unit intent's body lands in each affected release unit's
     changelog, and a multi-projection release unit has exactly one changelog.
-    Sections group by bump level (breaking, features, fixes); an optional kind
+    A graduating release opens its section with a graduation line. Sections
+    group by bump level (breaking, features, fixes); an optional kind
     frontmatter field can refine grouping later without schema breakage.
     Internal dependency bumps generate their own entries. Channel releases
     write a section for the channel version; the final release replaces that
@@ -429,12 +484,12 @@ proposed-design:
     gate is opt-in per release unit, and add can prefill the suggested bump from
     the current diff.
   interpretation-contract: >-
-    Interpretation semantics — bump aggregation, the pre-1.0 mapping,
-    canonicalization rules, changelog grouping — are versioned as a contract,
-    distinct from file-shape schemas. Config declares `contract` (written by
-    init); the binary carries an interpreter per contract it supports, so any
-    tool version interpreting a contract-1 workspace applies contract-1
-    semantics regardless of the binary's age. The release plan embeds the
+    Interpretation semantics — bump aggregation, the meaning of bump names
+    before 1.0.0, graduation, canonicalization rules, changelog grouping —
+    are versioned as a contract, distinct from file-shape schemas. Config
+    declares `contract` (written by init). A binary interprets only the
+    contracts it supports; it refuses any other contract, and init upgrades
+    a previous contract. The release plan embeds the
     contract and a plan-generator record (tool name and version of the Intentional
     binary that sealed the plan) inside the digested payload, making the plan
     self-describing evidence of what was decided and under which rules. Tags are
@@ -450,10 +505,7 @@ proposed-design:
     Intentional, parses as SemVer, is not newer than the tagging binary, and the
     recovered plan bytes match when reconstructed with the recorded plan-generator
     version. Intent files and changelogs stay unbranded; they are authoring
-    artifacts interpreted under the workspace contract. The configured
-    pre-1-0-bump-mapping is an input to that contract, so component and
-    compatibility workspaces remain deterministic under every supporting tool
-    version.
+    artifacts interpreted under the workspace contract.
   release-recovery-and-verification: >-
     Because apply consumes intents before tag runs, tag re-derives the
     release rather than trusting a materialized artifact. In CD, tag accepts

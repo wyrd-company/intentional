@@ -62,15 +62,40 @@ pub enum ProjectionMode {
     None,
 }
 
-/// How bump names are interpreted before semantic version 1.0.0.
+/// How adoption translates pending bumps written under component semantics.
+///
+/// Changesets and `contract-1` component configs read a bump name as the
+/// version component to increment. Intentional reads it as change
+/// significance. Adoption translates pending bumps once.
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum Pre1BumpMapping {
-    /// Bump the named semantic-version component, matching Changesets.
-    Component,
-    /// Treat bump names as compatibility significance.
+pub enum BumpTranslation {
+    /// Rewrite bumps so that the next versions match the source tool.
     #[default]
-    Compatibility,
+    Parity,
+    /// Keep bump names and read them as change significance.
+    Significance,
+}
+
+impl fmt::Display for BumpTranslation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Parity => "parity",
+            Self::Significance => "significance",
+        })
+    }
+}
+
+impl FromStr for BumpTranslation {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "parity" => Ok(Self::Parity),
+            "significance" => Ok(Self::Significance),
+            _ => Err(format!("expected parity or significance; got {value}")),
+        }
+    }
 }
 
 /// Whether a discovered release unit participates in releases.

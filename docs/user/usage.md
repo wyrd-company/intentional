@@ -61,6 +61,49 @@ sample-application: patch
 Add a user-visible capability.
 ```
 
+A bump name states the significance of the change. Before 1.0.0, `major`
+gives `0.(x+1).0`, and `minor` and `patch` give `0.x.(y+1)`; see
+[Version interpretation](https://wyrd.foo/docs/intentional/config#version-interpretation-and-release-groups).
+
+## Graduate to 1.0.0
+
+No bump moves a `0.x` release unit to 1.0.0 by itself. To release 1.0.0, add
+an intent that graduates the release unit. `--graduate` requires a `major`
+bump for the same release unit:
+
+```bash
+intentional add \
+  --release-unit sample-library:major \
+  --graduate sample-library \
+  --message "Declare the stable public interface."
+```
+
+The intent uses the long form for the graduating release unit:
+
+```markdown
+---
+sample-library:
+  bump: major
+  graduate: true
+---
+
+Declare the stable public interface.
+```
+
+The next version of the release unit is exactly 1.0.0. Other pending intents
+for the release unit go into the same release. `status` shows
+`0.4.1 -> 1.0.0 (major, graduates to 1.0.0)`, the plan marks the release unit
+with `"graduates": true`, and the changelog section starts with
+"Graduates from `0.x` to `1.0.0`."
+
+- `check` fails when a graduating release unit is already at 1.0.0 or later.
+- In a fixed group, one graduating member graduates every member. In a linked
+  group, it graduates the members that release.
+- With `--channel`, a graduating release is a prerelease of 1.0.0, for example
+  `1.0.0-rc.1`. The intent stays pending until the final release.
+- Workspace tags are separate version lines. A graduation counts as a `major`
+  bump for them.
+
 ## Inspect pending state
 
 ```bash
@@ -232,6 +275,8 @@ the real invocation:
 intentional init --dry-run
 intentional init --take-over --dry-run
 intentional add --release-unit library:patch --message "Correct a defect." --dry-run
+intentional add --release-unit library:major --graduate library --dry-run \
+  --message "Declare the stable interface."
 intentional apply --dry-run
 intentional stamp --prerelease alpha --dry-run
 intentional tag --dry-run

@@ -4,7 +4,9 @@
 // ---
 
 use assert_cmd::Command;
-use intentional_core::{initialize, Adapter, CandidateResolution, InitPlan, InitState};
+use intentional_core::{
+    initialize, Adapter, Bump, BumpTranslation, CandidateResolution, InitPlan, InitState,
+};
 use predicates::prelude::*;
 use std::collections::BTreeSet;
 use std::fs;
@@ -761,8 +763,12 @@ fn changesets_plan_reconciles_verified_edits_and_takes_over_atomically() {
             .join(".intentional/intents/useful-change.md"),
     )
     .unwrap();
-    assert!(converted.contains("package-a: minor"));
-    assert!(converted.ends_with("Add a useful capability.\n"));
+    // Changesets `minor` at 0.x names the minor component; the parity
+    // translation keeps the next version with `major`.
+    assert!(converted.contains("package-a: major"), "{converted}");
+    assert!(converted.contains(
+        "Add a useful capability.\n\n<!-- bump translation: Changesets `minor` for `package-a` at"
+    ));
 
     let interrupted = repository
         .root
@@ -1692,7 +1698,7 @@ fn baseline_requires_agreeing_projection_evidence_and_explicit_tag_only_versions
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1785,7 +1791,7 @@ fn baseline_retry_rejects_conflicting_existing_records_without_creating_tags() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1816,7 +1822,7 @@ release-units:
             "-a",
             "witness@1.0.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
+            "intentional release record\n\ncontract: contract-2\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.0.0\nbaseline: true\n",
         ],
     );
     let tags_before = git(
@@ -1854,7 +1860,7 @@ fn phased_tags_are_created_only_by_matching_declarations_and_honor_tag_order() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: .
@@ -1977,7 +1983,7 @@ release-units:
             "-a",
             "witness@1.1.0",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
+            "intentional release record\n\ncontract: contract-2\ngenerator: intentional 0.1.4\nplan-digest: sha256:different\ntag-id: release-unit/package-a/witness\nversion: 1.1.0\nbaseline: false\n",
         ],
     );
     repository
@@ -1999,7 +2005,7 @@ fn phased_multi_package_release_resumes_after_one_package_is_fully_tagged() {
     let repository = Repository::new();
     repository.write(
         ".intentional/config.yml",
-        r#"contract: contract-1
+        r#"contract: contract-2
 release-units:
   package-a:
     path: packages/package-a
@@ -2064,4 +2070,146 @@ release-units:
         "tag"
     );
     repository.cli().arg("check").assert().success();
+}
+
+fn write_translation_fixture(repository: &Repository) {
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    for name in ["package-a", "package-b", "package-c"] {
+        repository.write(
+            &format!("packages/{name}/package.json"),
+            &format!("{{\n  \"name\": \"{name}\",\n  \"version\": \"0.4.1\"\n}}\n"),
+        );
+    }
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/breaking-change.md",
+        "---\n\"package-a\": major\n---\n\nChange a contract.\n",
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-b\": minor\n---\n\nAdd a capability.\n",
+    );
+    repository.write(
+        ".changeset/small-fix.md",
+        "---\n\"package-c\": patch\n---\n\nCorrect a defect.\n",
+    );
+}
+
+fn translation_plan(repository: &Repository, extra: &[&str]) -> InitPlan {
+    let output = repository
+        .cli()
+        .args(["init", "--dry-run", "--json"])
+        .args(extra)
+        .output()
+        .expect("translation plan");
+    serde_json::from_slice(&output.stdout).expect("structured plan")
+}
+
+fn parity_next(plan: &InitPlan, id: &str) -> (String, String, bool) {
+    let unit = plan
+        .parity
+        .release_units
+        .iter()
+        .find(|unit| unit.release_unit == id)
+        .expect("parity row");
+    (
+        unit.source.as_ref().unwrap().next_version.clone(),
+        unit.proposed.as_ref().unwrap().next_version.clone(),
+        unit.expected_difference,
+    )
+}
+
+#[test]
+fn changesets_default_translation_keeps_the_changesets_versions() {
+    let repository = Repository::new();
+    write_translation_fixture(&repository);
+    let plan = translation_plan(&repository, &[]);
+    assert_eq!(plan.bump_translation, Some(BumpTranslation::Parity));
+    assert_eq!(plan.parity.status, "equivalent");
+    assert_eq!(
+        parity_next(&plan, "package-a"),
+        ("1.0.0".into(), "1.0.0".into(), false)
+    );
+    assert_eq!(
+        parity_next(&plan, "package-b"),
+        ("0.5.0".into(), "0.5.0".into(), false)
+    );
+    assert_eq!(
+        parity_next(&plan, "package-c"),
+        ("0.4.2".into(), "0.4.2".into(), false)
+    );
+    let intent = |id: &str| {
+        plan.converted_intents
+            .iter()
+            .find(|intent| intent.id == id)
+            .expect("converted intent")
+    };
+    let breaking = intent("breaking-change");
+    assert_eq!(breaking.release_units["package-a"], Bump::Major);
+    assert!(breaking.graduates.contains("package-a"));
+    assert!(breaking
+        .message
+        .contains("is `major` with `graduate` here, so that the next version stays 1.0.0."));
+    let useful = intent("useful-change");
+    assert_eq!(useful.release_units["package-b"], Bump::Major);
+    assert!(useful.graduates.is_empty());
+    assert!(useful
+        .message
+        .contains("Changesets `minor` for `package-b` at 0.4.1 is `major` here"));
+    let fix = intent("small-fix");
+    assert_eq!(fix.release_units["package-c"], Bump::Patch);
+    assert_eq!(fix.message, "Correct a defect.");
+}
+
+#[test]
+fn changesets_significance_translation_reports_expected_differences() {
+    let repository = Repository::new();
+    write_translation_fixture(&repository);
+    let plan = translation_plan(&repository, &["--bump-translation", "significance"]);
+    assert_eq!(plan.bump_translation, Some(BumpTranslation::Significance));
+    assert_eq!(plan.parity.status, "expected-difference");
+    assert_eq!(
+        parity_next(&plan, "package-a"),
+        ("1.0.0".into(), "0.5.0".into(), true)
+    );
+    assert_eq!(
+        parity_next(&plan, "package-b"),
+        ("0.5.0".into(), "0.4.2".into(), true)
+    );
+    assert_eq!(
+        parity_next(&plan, "package-c"),
+        ("0.4.2".into(), "0.4.2".into(), false)
+    );
+    assert!(plan
+        .converted_intents
+        .iter()
+        .all(|intent| intent.graduates.is_empty() && !intent.message.contains("<!--")));
+    // Expected differences do not block the plan; only open choices do.
+    assert!(!plan.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "changesets-release-invalid"
+            || diagnostic.code == "proposed-release-invalid"
+    }));
+
+    // A written plan keeps its translation on the next run.
+    repository
+        .cli()
+        .args(["init", "--bump-translation", "significance"])
+        .assert()
+        .code(2);
+    let rerun = translation_plan(&repository, &[]);
+    assert_eq!(rerun.bump_translation, Some(BumpTranslation::Significance));
 }

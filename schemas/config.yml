@@ -13,7 +13,7 @@ properties:
     type: string
     format: uri
   contract:
-    const: contract-1
+    const: contract-2
   settings:
     type: object
     additionalProperties: false
@@ -21,9 +21,6 @@ properties:
       internal-dependency-bump:
         $ref: "#/$defs/bump"
         default: patch
-      pre-1-0-bump-mapping:
-        enum: [ component, compatibility ]
-        default: compatibility
   fixed:
     $ref: "#/$defs/groups"
   linked:

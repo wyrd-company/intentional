@@ -6,18 +6,20 @@
 //! Workspace-aware initialization and explicit Changesets takeover.
 
 use crate::config::{
+    upgrade_contract_1, upgrade_contract_1_value, Contract1Mapping, Contract1Upgrade,
+};
+use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
     Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ProjectionFile, ReleaseUnitConfig,
     TagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT,
 };
 use crate::error::{Error, Result};
+use crate::intent::{render_intent, Intent};
 use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagRole,
+    Adapter, Bump, BumpTranslation, ProjectionMode, ReleaseUnitDisposition, TagRole,
 };
 use crate::plan::{canonical_json, lower_hex, sha256_digest};
-use crate::version::{
-    bump_version_with_mapping, effective_bumps, resolve_versions, ReleaseUnitVersion,
-};
+use crate::version::{effective_bumps, resolve_versions, ReleaseUnitVersion, VersionRepository};
 use glob::glob;
 use node_semver::{Range as NodeRange, Version as NodeVersion};
 use semver::Version;
@@ -480,13 +482,18 @@ pub struct ParityReleaseUnit {
     /// Proposed Intentional result, when the proposed contract releases this release unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposed: Option<ParityRelease>,
+    /// The results differ only because `bump-translation` is `significance`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expected_difference: bool,
 }
 
 /// Deterministic parity comparison.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct ParityResult {
-    /// `equivalent` when all logical releases agree; otherwise `blocked`.
+    /// `equivalent` when all logical releases agree, `expected-difference`
+    /// when they differ only because of the chosen bump translation, and
+    /// otherwise `blocked`.
     pub status: String,
     /// Per-release-unit results.
     pub release_units: Vec<ParityReleaseUnit>,
@@ -498,11 +505,14 @@ pub struct ParityResult {
 pub struct ConvertedIntent {
     /// Changeset filename stem retained as the Intentional intent id.
     pub id: String,
-    /// Release-unit bumps.
+    /// Release-unit bumps after bump translation.
     pub release_units: BTreeMap<String, Bump>,
-    /// Markdown body, excluding Changesets frontmatter delimiters.
+    /// Release units the translated intent graduates to `1.0.0`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub graduates: BTreeSet<String>,
+    /// Markdown body, excluding frontmatter delimiters.
     pub message: String,
-    /// Original Changesets file.
+    /// Original file.
     pub source: PathBuf,
     /// Intentional target file.
     pub target: PathBuf,
@@ -510,11 +520,7 @@ pub struct ConvertedIntent {
 
 impl ConvertedIntent {
     fn contents(&self) -> Result<String> {
-        Ok(format!(
-            "---\n{}---\n\n{}\n",
-            serde_yaml::to_string(&self.release_units)?,
-            self.message.trim()
-        ))
+        render_intent(&self.release_units, &self.graduates, &self.message)
     }
 }
 
@@ -537,7 +543,11 @@ pub struct InitPlan {
     pub discovery_candidates: Vec<DiscoveryCandidate>,
     /// Finite choices, warnings, and verified repository integration outcomes.
     pub diagnostics: Vec<InitDiagnostic>,
-    /// Pending source intents and their lossless targets.
+    /// How pending bumps written under component semantics translate. Present
+    /// for Changesets adoption and for a `contract-1` component upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bump_translation: Option<BumpTranslation>,
+    /// Pending source intents and their targets.
     pub converted_intents: Vec<ConvertedIntent>,
     /// Independent source/proposed release comparison.
     pub parity: ParityResult,
@@ -838,8 +848,30 @@ impl InitResult {
     }
 }
 
+/// Options for one `intentional init` run.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InitOptions {
+    /// Perform the explicit takeover from a ready Changesets plan.
+    pub take_over: bool,
+    /// Set the plan's `bump-translation`. Without it, the previous plan's
+    /// value applies, else `parity`.
+    pub bump_translation: Option<BumpTranslation>,
+}
+
 /// Discover or reconcile initialization, optionally executing explicit takeover.
 pub fn initialize(root: &Path, take_over: bool) -> Result<InitResult> {
+    initialize_with(
+        root,
+        InitOptions {
+            take_over,
+            bump_translation: None,
+        },
+    )
+}
+
+/// Discover or reconcile initialization with explicit options.
+pub fn initialize_with(root: &Path, options: InitOptions) -> Result<InitResult> {
+    let take_over = options.take_over;
     let root = root
         .canonicalize()
         .map_err(|error| Error::io(root, error))?;
@@ -848,14 +880,14 @@ pub fn initialize(root: &Path, take_over: bool) -> Result<InitResult> {
         .map_err(|_| Error::Validation("intentional init requires a Git repository".to_owned()))?;
     recover_interrupted_takeover(root)?;
     if root.join(CHANGESETS_CONFIG).exists() {
-        return changesets_plan(root, take_over);
+        return changesets_plan(root, take_over, options.bump_translation);
     }
     if take_over {
         return Err(Error::Validation(
             "--take-over requires an existing .changeset/config.json".to_owned(),
         ));
     }
-    ordinary_plan(root)
+    ordinary_plan(root, options.bump_translation)
 }
 
 /// Compatibility wrapper for callers performing ordinary initialization.
@@ -911,32 +943,49 @@ struct ChangesetsSourceSemantics<'a> {
     preflight_error: Option<String>,
 }
 
-fn ordinary_plan(root: &Path) -> Result<InitResult> {
+/// Source kind of an initialization plan that upgrades a `contract-1` config.
+const CONTRACT_1_SOURCE_KIND: &str = "contract-1";
+
+fn ordinary_plan(root: &Path, bump_translation: Option<BumpTranslation>) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
     let had_previous_plan = previous.is_some();
-    let configured = if root.join(CONFIG_PATH).is_file() {
-        Config::load(root)?
-    } else {
-        Config::default()
-    };
+    let (configured, upgrade) = load_configured(root)?;
     let mut discovery = discover(root)?;
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
     let mut candidates = unresolved_by_receipts(&configured, discovery.candidates);
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
+    let upgrade = match &upgrade {
+        Some(upgrade) => Some(plan_contract_1_upgrade(
+            root,
+            upgrade,
+            bump_translation,
+            previous.as_ref(),
+            &candidates,
+        )?),
+        None => None,
+    };
 
-    if candidates.is_empty() {
+    if candidates.is_empty() && upgrade.as_ref().is_none_or(|upgrade| !upgrade.pending) {
         if configured.release_units.is_empty() {
             return Err(Error::Validation(
                 "no supported workspace manifests found".to_owned(),
             ));
         }
-        let contents = configured.to_yaml()?;
-        let (operations, deletes) = if had_previous_plan {
-            (
-                vec![format!("delete {INIT_PLAN_PATH}")],
-                vec![PathBuf::from(INIT_PLAN_PATH)],
-            )
+        let mut operations = Vec::new();
+        let mut writes = Vec::new();
+        let contents = match &upgrade {
+            Some(upgrade) => {
+                operations.extend(upgrade.operations.clone());
+                writes.extend(upgrade.writes.clone());
+                upgrade.config_text.clone()
+            }
+            None => configured.to_yaml()?,
+        };
+        let deletes = if had_previous_plan {
+            operations.push(format!("delete {INIT_PLAN_PATH}"));
+            vec![PathBuf::from(INIT_PLAN_PATH)]
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
         return Ok(InitResult {
             state: InitState::Success,
@@ -944,7 +993,7 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
             operations,
             contents,
             plan: None,
-            writes: Vec::new(),
+            writes,
             deletes,
             proxy_removals: Vec::new(),
             takeover: false,
@@ -952,24 +1001,29 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
         });
     }
 
-    candidates.sort_by(|left, right| left.id.cmp(&right.id));
     let all_resolved = candidates
         .iter()
         .all(|candidate| candidate.resolution.is_some());
-    if all_resolved {
+    if all_resolved && upgrade.as_ref().is_none_or(|upgrade| !upgrade.pending) {
         let applied = apply_candidate_resolutions(root, configured, &candidates)?;
         let contents = applied.to_yaml()?;
+        let mut operations = vec![format!("write {CONFIG_PATH}")];
+        let mut writes = vec![(PathBuf::from(CONFIG_PATH), contents.clone())];
+        if let Some(upgrade) = &upgrade {
+            // The applied config already carries the upgrade; keep only
+            // the intent rewrites.
+            operations.extend(upgrade.intent_operations());
+            writes.extend(upgrade.intent_writes()?);
+        }
+        operations.push(format!("create {}", crate::intent::INTENTS_PATH));
+        operations.push(format!("delete {INIT_PLAN_PATH}"));
         return Ok(InitResult {
             state: InitState::Success,
             path: PathBuf::from(CONFIG_PATH),
-            operations: vec![
-                format!("write {CONFIG_PATH}"),
-                format!("create {}", crate::intent::INTENTS_PATH),
-                format!("delete {INIT_PLAN_PATH}"),
-            ],
-            contents: contents.clone(),
+            operations,
+            contents,
             plan: None,
-            writes: vec![(PathBuf::from(CONFIG_PATH), contents)],
+            writes,
             deletes: vec![PathBuf::from(INIT_PLAN_PATH)],
             proxy_removals: Vec::new(),
             takeover: false,
@@ -977,46 +1031,260 @@ fn ordinary_plan(root: &Path) -> Result<InitResult> {
         });
     }
 
-    let evidence_paths = candidates
-        .iter()
-        .flat_map(|candidate| candidate.evidence.iter().map(|item| item.path.clone()))
-        .collect::<BTreeSet<_>>();
+    let mut planned_operations = vec![format!("write {CONFIG_PATH}")];
+    // A config-only upgrade is safe on its own, so it does not wait for
+    // unrelated discovery candidates.
+    let mut operations = Vec::new();
+    let mut writes = Vec::new();
+    let upgrade = match upgrade {
+        Some(upgrade) if !upgrade.pending => {
+            operations.extend(upgrade.operations);
+            writes.extend(upgrade.writes);
+            None
+        }
+        upgrade => upgrade,
+    };
+    let (source_kind, source_fingerprint, bump_translation, converted_intents) = match upgrade {
+        Some(upgrade) => {
+            planned_operations.extend(upgrade.intent_operations());
+            (
+                CONTRACT_1_SOURCE_KIND.to_owned(),
+                upgrade.fingerprint,
+                upgrade.translation,
+                upgrade.rewrites,
+            )
+        }
+        None => {
+            let evidence_paths = candidates
+                .iter()
+                .flat_map(|candidate| candidate.evidence.iter().map(|item| item.path.clone()))
+                .collect::<BTreeSet<_>>();
+            (
+                if root.join(CONFIG_PATH).is_file() {
+                    "intentional".to_owned()
+                } else {
+                    "workspace".to_owned()
+                },
+                fingerprint(root, &evidence_paths)?,
+                None,
+                Vec::new(),
+            )
+        }
+    };
+    planned_operations.push(format!("create {}", crate::intent::INTENTS_PATH));
+    planned_operations.push(format!("delete {INIT_PLAN_PATH}"));
+    let state = if all_resolved {
+        InitState::Ready
+    } else {
+        InitState::NeedsInput
+    };
     let plan = InitPlan {
         schema: INIT_PLAN_SCHEMA.to_owned(),
-        state: InitState::NeedsInput,
-        source_kind: if root.join(CONFIG_PATH).is_file() {
-            "intentional".to_owned()
-        } else {
-            "workspace".to_owned()
-        },
-        source_fingerprint: fingerprint(root, &evidence_paths)?,
+        state,
+        source_kind,
+        source_fingerprint,
         inferred_config: configured,
         discovery_candidates: candidates,
         diagnostics: Vec::new(),
-        converted_intents: Vec::new(),
+        bump_translation,
+        converted_intents,
         parity: ParityResult {
             status: "equivalent".to_owned(),
             release_units: Vec::new(),
         },
-        planned_operations: vec![
-            format!("write {CONFIG_PATH}"),
-            format!("create {}", crate::intent::INTENTS_PATH),
-            format!("delete {INIT_PLAN_PATH}"),
-        ],
+        planned_operations,
         post_commit_action: String::new(),
     };
     let contents = plan.to_yaml()?;
+    operations.push(format!("write {INIT_PLAN_PATH}"));
+    writes.push((PathBuf::from(INIT_PLAN_PATH), contents.clone()));
     Ok(InitResult {
-        state: InitState::NeedsInput,
+        state,
         path: PathBuf::from(INIT_PLAN_PATH),
-        operations: vec![format!("write {INIT_PLAN_PATH}")],
-        contents: contents.clone(),
+        operations,
+        contents,
         plan: Some(plan),
-        writes: vec![(PathBuf::from(INIT_PLAN_PATH), contents)],
+        writes,
         deletes: Vec::new(),
         proxy_removals: Vec::new(),
         takeover: false,
         takeover_evidence: None,
+    })
+}
+
+/// Load the configured inventory. A `contract-1` config is upgraded in
+/// memory and returned with its upgrade.
+fn load_configured(root: &Path) -> Result<(Config, Option<Contract1Upgrade>)> {
+    let path = root.join(CONFIG_PATH);
+    if !path.is_file() {
+        return Ok((Config::default(), None));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+    match upgrade_contract_1(&text)? {
+        Some(upgrade) => Ok((upgrade.config.clone(), Some(upgrade))),
+        None => Ok((Config::from_yaml(&text)?, None)),
+    }
+}
+
+/// Planned upgrade of a `contract-1` config.
+struct UpgradePlan {
+    /// Upgraded config text, with comments kept where possible.
+    config_text: String,
+    /// Pending intents rewritten by the chosen translation.
+    rewrites: Vec<ConvertedIntent>,
+    /// Chosen translation, or the default while the choice is pending.
+    translation: Option<BumpTranslation>,
+    /// Whether the translation waits for review in the init plan.
+    pending: bool,
+    /// Digest over the config, pending intents, and candidate evidence.
+    fingerprint: String,
+    /// Config and intent writes when the upgrade applies now.
+    writes: Vec<(PathBuf, String)>,
+    /// Operations when the upgrade applies now.
+    operations: Vec<String>,
+}
+
+impl UpgradePlan {
+    fn intent_operations(&self) -> Vec<String> {
+        self.rewrites
+            .iter()
+            .map(|intent| format!("rewrite {} with bump translation", intent.target.display()))
+            .collect()
+    }
+
+    fn intent_writes(&self) -> Result<Vec<(PathBuf, String)>> {
+        self.rewrites
+            .iter()
+            .map(|intent| Ok((intent.target.clone(), intent.contents()?)))
+            .collect()
+    }
+}
+
+/// Plan a `contract-1` upgrade.
+///
+/// A `compatibility` config, or one without the mapping, already reads bump
+/// names as significance: only the config changes. A `component` config
+/// with pending intents whose bumps read differently needs a translation
+/// choice. A `--bump-translation` flag, or an unchanged reviewed init plan,
+/// supplies it; otherwise init records the default in the init plan for
+/// review.
+fn plan_contract_1_upgrade(
+    root: &Path,
+    upgrade: &Contract1Upgrade,
+    flag: Option<BumpTranslation>,
+    previous: Option<&InitPlan>,
+    candidates: &[DiscoveryCandidate],
+) -> Result<UpgradePlan> {
+    let mut evidence_paths = candidates
+        .iter()
+        .flat_map(|candidate| candidate.evidence.iter().map(|item| item.path.clone()))
+        .collect::<BTreeSet<_>>();
+    evidence_paths.insert(PathBuf::from(CONFIG_PATH));
+    let pending_intents = if upgrade.mapping == Contract1Mapping::Component {
+        Intent::load_all(root, &upgrade.config)?
+    } else {
+        Vec::new()
+    };
+    for intent in &pending_intents {
+        evidence_paths.insert(
+            intent
+                .path
+                .strip_prefix(root)
+                .unwrap_or(&intent.path)
+                .to_owned(),
+        );
+    }
+    let fingerprint = fingerprint(root, &evidence_paths)?;
+    let converted = pending_intents
+        .iter()
+        .map(|intent| {
+            let path = intent
+                .path
+                .strip_prefix(root)
+                .unwrap_or(&intent.path)
+                .to_owned();
+            ConvertedIntent {
+                id: intent.id.clone(),
+                release_units: intent.release_units.clone(),
+                graduates: intent.graduates.clone(),
+                message: intent.message.clone(),
+                source: path.clone(),
+                target: path,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut current = BTreeMap::new();
+    if !converted.is_empty() {
+        let repository = VersionRepository::discover(root)?;
+        for id in upgrade.config.release_units.keys() {
+            let (_, primary) = upgrade.config.primary_tag(id)?;
+            current.insert(
+                id.clone(),
+                repository.current_version(id, &primary.template)?,
+            );
+        }
+    }
+    let bases = component_bases(&upgrade.config, &current);
+    let changed = |intents: Vec<ConvertedIntent>| {
+        intents
+            .into_iter()
+            .zip(&converted)
+            .filter(|(translated, original)| translated != *original)
+            .map(|(translated, _)| translated)
+            .collect::<Vec<_>>()
+    };
+    let parity_rewrites = changed(translate_converted_intents(
+        &converted,
+        &bases,
+        BumpTranslation::Parity,
+        "contract-1",
+    ));
+    let mut config_operation = vec![format!(
+        "upgrade {CONFIG_PATH} from contract-1 to {CURRENT_CONTRACT}"
+    )];
+    let config_write = (PathBuf::from(CONFIG_PATH), upgrade.text.clone());
+    if parity_rewrites.is_empty() {
+        return Ok(UpgradePlan {
+            config_text: upgrade.text.clone(),
+            rewrites: Vec::new(),
+            translation: None,
+            pending: false,
+            fingerprint,
+            writes: vec![config_write],
+            operations: config_operation,
+        });
+    }
+    let reviewed = previous
+        .filter(|plan| {
+            plan.source_kind == CONTRACT_1_SOURCE_KIND && plan.source_fingerprint == fingerprint
+        })
+        .and_then(|plan| plan.bump_translation);
+    let (translation, pending) = match flag.or(reviewed) {
+        Some(translation) => (translation, false),
+        None => (BumpTranslation::default(), true),
+    };
+    let rewrites = changed(translate_converted_intents(
+        &converted,
+        &bases,
+        translation,
+        "contract-1",
+    ));
+    let mut writes = vec![config_write];
+    for intent in &rewrites {
+        writes.push((intent.target.clone(), intent.contents()?));
+        config_operation.push(format!(
+            "rewrite {} with bump translation",
+            intent.target.display()
+        ));
+    }
+    Ok(UpgradePlan {
+        config_text: upgrade.text.clone(),
+        rewrites,
+        translation: Some(translation),
+        pending,
+        fingerprint,
+        writes,
+        operations: config_operation,
     })
 }
 
@@ -1095,6 +1363,7 @@ fn apply_candidate_resolutions(
         inferred_config: config.clone(),
         discovery_candidates: candidates.to_vec(),
         diagnostics: Vec::new(),
+        bump_translation: None,
         converted_intents: Vec::new(),
         parity: ParityResult {
             status: "equivalent".to_owned(),
@@ -1542,7 +1811,11 @@ fn candidate_projection_owner<'a>(
     })
 }
 
-fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
+fn changesets_plan(
+    root: &Path,
+    take_over: bool,
+    bump_translation: Option<BumpTranslation>,
+) -> Result<InitResult> {
     let previous = load_previous_plan(root)?;
     let changesets_config_path = root.join(CHANGESETS_CONFIG);
     let changesets_text = std::fs::read_to_string(&changesets_config_path)
@@ -1561,7 +1834,6 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
     let candidates = discovery.candidates.clone();
     let identity_map = apply_changesets_candidate_resolutions(&mut discovery, &candidates)?;
-    discovery.config.settings.pre_1_0_bump_mapping = Pre1BumpMapping::Component;
     discovery.config.settings.internal_dependency_bump = changesets["updateInternalDependencies"]
         .as_str()
         .and_then(|value| value.parse().ok())
@@ -1839,18 +2111,20 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
     retain_materialized_npm_dependencies(&mut discovery.config, &mut discovery.npm_dependencies);
     discovery.config.validate()?;
 
-    let declared: BTreeMap<String, Bump> =
-        converted_intents
-            .iter()
-            .fold(BTreeMap::new(), |mut aggregate, intent| {
-                for (id, bump) in &intent.release_units {
-                    aggregate
-                        .entry(id.clone())
-                        .and_modify(|existing| *existing = (*existing).max(*bump))
-                        .or_insert(*bump);
-                }
-                aggregate
-            });
+    // Changesets bump names name a version component. Translate them once.
+    let bump_translation = bump_translation
+        .or_else(|| previous.as_ref().and_then(|plan| plan.bump_translation))
+        .unwrap_or_default();
+    let source_declared = aggregate_converted(&converted_intents);
+    let bases = component_bases(&discovery.config, &discovery.versions);
+    let parity_intents = translate_converted_intents(
+        &converted_intents,
+        &bases,
+        BumpTranslation::Parity,
+        "Changesets",
+    );
+    let converted_intents =
+        translate_converted_intents(&converted_intents, &bases, bump_translation, "Changesets");
     let suppress_private_versions =
         changesets_private_package_settings(&changesets["privatePackages"])
             .is_some_and(|(versions_private, _)| !versions_private);
@@ -1905,7 +2179,9 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         &source_config,
         &discovery.config,
         &discovery.versions,
-        &declared,
+        &source_declared,
+        &parity_intents,
+        &converted_intents,
         &source_semantics,
     )?;
     if let Some(message) = &parity.source_error {
@@ -1949,7 +2225,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
             !diagnostic.choices.is_empty()
                 && (diagnostic.resolution.is_none() || !diagnostic.verified)
         });
-    let state = if unresolved || parity.result.status != "equivalent" {
+    let state = if unresolved || parity.result.status == "blocked" {
         InitState::NeedsInput
     } else {
         InitState::Ready
@@ -1975,6 +2251,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         inferred_config: discovery.config,
         discovery_candidates: discovery.candidates,
         diagnostics,
+        bump_translation: Some(bump_translation),
         converted_intents,
         parity: parity.result,
         planned_operations: planned_operations.clone(),
@@ -2879,6 +3156,7 @@ fn load_changesets_intents(root: &Path) -> Result<Vec<ConvertedIntent>> {
                 source: path.strip_prefix(root).unwrap_or(&path).to_owned(),
                 id,
                 release_units: packages,
+                graduates: BTreeSet::new(),
                 message: message.trim().to_owned(),
             })
         })
@@ -3639,13 +3917,24 @@ fn exclude_release_units(config: &mut Config, excluded: &BTreeSet<String>) {
     }
 }
 
+/// Compare the Changesets result with the proposed Intentional result.
+///
+/// The `parity` translation must reproduce the Changesets result, which
+/// proves the inventory and configuration. With `significance`, differences
+/// that the `parity` translation does not have are expected.
 fn parity_result(
     source_config: &Config,
     proposed_config: &Config,
     current: &BTreeMap<String, Version>,
-    declared: &BTreeMap<String, Bump>,
+    source_declared: &BTreeMap<String, Bump>,
+    parity_intents: &[ConvertedIntent],
+    chosen_intents: &[ConvertedIntent],
     source_semantics: &ChangesetsSourceSemantics<'_>,
 ) -> Result<ParityComputation> {
+    let declared = &aggregate_converted(chosen_intents);
+    let graduating = aggregate_converted_graduations(chosen_intents);
+    let parity_declared = aggregate_converted(parity_intents);
+    let parity_graduating = aggregate_converted_graduations(parity_intents);
     let mut source_config = source_config.clone();
     let mut proposed_config = proposed_config.clone();
     let effective = effective_bumps(&proposed_config, declared);
@@ -3699,15 +3988,28 @@ fn parity_result(
         });
     }
     let (source, source_error) =
-        match resolve_changesets_source(&source_config, declared, current, source_semantics) {
+        match resolve_changesets_source(&source_config, source_declared, current, source_semantics)
+        {
             Ok(resolved) => (resolved, None),
             Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
             Err(error) => return Err(error),
         };
-    let (proposed, proposed_error) = match resolve_versions(&proposed_config, declared, current) {
-        Ok(resolved) => (resolved, None),
-        Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
-        Err(error) => return Err(error),
+    let (proposed, proposed_error) =
+        match resolve_versions(&proposed_config, declared, &graduating, current) {
+            Ok(resolved) => (resolved, None),
+            Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
+            Err(error) => return Err(error),
+        };
+    let parity_proposed = if parity_declared == *declared && parity_graduating == graduating {
+        proposed.clone()
+    } else {
+        resolve_versions(
+            &proposed_config,
+            &parity_declared,
+            &parity_graduating,
+            current,
+        )
+        .unwrap_or_default()
     };
     let release_ids = source
         .iter()
@@ -3717,21 +4019,39 @@ fn parity_result(
         .collect::<BTreeSet<_>>();
     let release_units = release_ids
         .into_iter()
-        .map(|release_unit| ParityReleaseUnit {
-            current_version: current[&release_unit].to_string(),
-            source: parity_release(source.get(&release_unit)),
-            proposed: parity_release(proposed.get(&release_unit)),
-            release_unit,
+        .map(|release_unit| {
+            let source = parity_release(source.get(&release_unit));
+            let proposed = parity_release(proposed.get(&release_unit));
+            let parity = parity_release(parity_proposed.get(&release_unit));
+            ParityReleaseUnit {
+                current_version: current[&release_unit].to_string(),
+                expected_difference: !same_release(&source, &proposed)
+                    && same_release(&source, &parity),
+                source,
+                proposed,
+                release_unit,
+            }
         })
         .collect::<Vec<_>>();
-    let equivalent = source_error.is_none()
+    let consistent = source_error.is_none()
         && proposed_error.is_none()
-        && release_units
-            .iter()
-            .all(|release_unit| release_unit.source == release_unit.proposed);
+        && release_units.iter().all(|release_unit| {
+            release_unit.expected_difference
+                || same_release(&release_unit.source, &release_unit.proposed)
+        });
+    let status = if !consistent {
+        "blocked"
+    } else if release_units
+        .iter()
+        .any(|release_unit| release_unit.expected_difference)
+    {
+        "expected-difference"
+    } else {
+        "equivalent"
+    };
     Ok(ParityComputation {
         result: ParityResult {
-            status: if equivalent { "equivalent" } else { "blocked" }.to_owned(),
+            status: status.to_owned(),
             release_units,
         },
         source_error,
@@ -3774,6 +4094,120 @@ fn parity_release(version: Option<&ReleaseUnitVersion>) -> Option<ParityRelease>
             requested_bump: version.bump,
             next_version: version.next.to_string(),
         })
+}
+
+/// Whether two sides release the same version. Bump names may differ,
+/// because translation renames bumps on purpose.
+fn same_release(left: &Option<ParityRelease>, right: &Option<ParityRelease>) -> bool {
+    left.as_ref().map(|release| &release.next_version)
+        == right.as_ref().map(|release| &release.next_version)
+}
+
+fn aggregate_converted(intents: &[ConvertedIntent]) -> BTreeMap<String, Bump> {
+    crate::version::aggregate_bumps(intents.iter().map(|intent| &intent.release_units))
+}
+
+fn aggregate_converted_graduations(intents: &[ConvertedIntent]) -> BTreeSet<String> {
+    crate::version::aggregate_graduations(intents.iter().map(|intent| &intent.graduates))
+}
+
+/// The version that each release unit's pending bump applies to under
+/// component semantics: the highest current version of its release group,
+/// else its own current version.
+fn component_bases(
+    config: &Config,
+    current: &BTreeMap<String, Version>,
+) -> BTreeMap<String, Version> {
+    let mut bases = current.clone();
+    for group in config.fixed.iter().chain(&config.linked) {
+        let Some(highest) = group.iter().filter_map(|id| current.get(id)).max().cloned() else {
+            continue;
+        };
+        for id in group {
+            if current.contains_key(id) {
+                bases.insert(id.clone(), highest.clone());
+            }
+        }
+    }
+    bases
+}
+
+/// Translate intents whose bump names name a version component.
+///
+/// With `parity`, a release unit whose base is `0.x` translates `major` to
+/// `major` with `graduate`, and `minor` to `major`, so that the next version
+/// does not change. With `significance`, bump names stay. A translated
+/// intent records each renamed bump in an HTML comment, so that reviewers
+/// see why and the rendered changelog does not.
+fn translate_converted_intents(
+    intents: &[ConvertedIntent],
+    bases: &BTreeMap<String, Version>,
+    translation: BumpTranslation,
+    source_name: &str,
+) -> Vec<ConvertedIntent> {
+    intents
+        .iter()
+        .map(|intent| {
+            let mut translated = intent.clone();
+            if translation == BumpTranslation::Significance {
+                return translated;
+            }
+            let mut notes = Vec::new();
+            for (id, bump) in &intent.release_units {
+                let Some(base) = bases.get(id).filter(|base| base.major == 0) else {
+                    continue;
+                };
+                let (renamed, graduates) = match bump {
+                    Bump::Major => (Bump::Major, true),
+                    Bump::Minor => (Bump::Major, false),
+                    Bump::Patch | Bump::None => continue,
+                };
+                translated.release_units.insert(id.clone(), renamed);
+                if graduates {
+                    translated.graduates.insert(id.clone());
+                }
+                let target = if graduates {
+                    "`major` with `graduate`".to_owned()
+                } else {
+                    format!("`{renamed}`")
+                };
+                notes.push(format!(
+                    "{source_name} `{bump}` for `{id}` at {base} is {target} here, so that the next version stays {}.",
+                    component_bump(base, *bump)
+                ));
+            }
+            if !notes.is_empty() {
+                translated.message = format!(
+                    "{}\n\n<!-- bump translation: {} -->",
+                    intent.message.trim(),
+                    notes.join(" ")
+                );
+            }
+            translated
+        })
+        .collect()
+}
+
+/// Increment the named version component, as Changesets and `contract-1`
+/// component configs do.
+fn component_bump(current: &Version, bump: Bump) -> Version {
+    let mut next = current.clone();
+    next.pre = semver::Prerelease::EMPTY;
+    next.build = semver::BuildMetadata::EMPTY;
+    match bump {
+        Bump::None => {}
+        Bump::Patch => next.patch += 1,
+        Bump::Minor => {
+            next.minor += 1;
+            next.patch = 0;
+        }
+        Bump::Major => {
+            next.major += 1;
+            next.minor = 0;
+            next.patch = 0;
+        }
+    }
+    next
 }
 
 /// Compute the source Changesets result without invoking Intentional's resolver.
@@ -3879,11 +4313,12 @@ fn resolve_changesets_source(
             })?;
             Ok((
                 id.clone(),
-                ReleaseUnitVersion::new_with_mapping(
-                    current_version.clone(),
-                    effective[id],
-                    Pre1BumpMapping::Component,
-                ),
+                ReleaseUnitVersion {
+                    current: current_version.clone(),
+                    next: component_bump(current_version, effective[id]),
+                    bump: effective[id],
+                    graduates: false,
+                },
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
@@ -3900,11 +4335,7 @@ fn resolve_changesets_source(
                 .map(|id| effective[id])
                 .max()
                 .unwrap_or_default();
-            let next = bump_version_with_mapping(
-                &highest_current,
-                highest_bump,
-                Pre1BumpMapping::Component,
-            );
+            let next = component_bump(&highest_current, highest_bump);
             for id in group {
                 let suppressed =
                     semantics.suppress_private_versions && semantics.private_packages.contains(id);
@@ -3921,6 +4352,7 @@ fn resolve_changesets_source(
                             current[id].clone()
                         },
                         bump: if releases { highest_bump } else { Bump::None },
+                        graduates: false,
                     },
                 );
             }
@@ -3947,14 +4379,10 @@ fn changesets_dependency_next(
                 .map(|member| effective[member])
                 .max()
                 .unwrap_or_default();
-            return bump_version_with_mapping(
-                highest_current,
-                highest_bump,
-                Pre1BumpMapping::Component,
-            );
+            return component_bump(highest_current, highest_bump);
         }
     }
-    bump_version_with_mapping(&current[id], effective[id], Pre1BumpMapping::Component)
+    component_bump(&current[id], effective[id])
 }
 
 fn npm_range_satisfies(range: &str, current: &Version, next: &Version) -> Result<bool> {
@@ -3977,7 +4405,17 @@ fn load_previous_plan(root: &Path) -> Result<Option<InitPlan>> {
     let path = root.join(INIT_PLAN_PATH);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let plan: InitPlan = serde_yaml::from_str(&text)?;
+            let mut value: serde_yaml::Value = serde_yaml::from_str(&text)?;
+            // A plan written before the contract-2 upgrade keeps its
+            // resolutions; only its inferred config is upgraded.
+            if let Some(inferred) = value.get_mut("inferred-config") {
+                if inferred.get("contract").and_then(serde_yaml::Value::as_str)
+                    == Some(crate::config::CONTRACT_1)
+                {
+                    upgrade_contract_1_value(inferred)?;
+                }
+            }
+            let plan: InitPlan = serde_yaml::from_value(value)?;
             plan.validate()?;
             Ok(Some(plan))
         }
@@ -4357,7 +4795,7 @@ mod tests {
 
     fn candidate_plan(candidates: Vec<DiscoveryCandidate>) -> InitPlan {
         let config = Config::from_yaml(
-            "contract: contract-1\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
+            "contract: contract-2\nrelease-units:\n  configured:\n    path: configured\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n",
         )
         .expect("candidate test config");
         InitPlan {
@@ -4368,6 +4806,7 @@ mod tests {
             inferred_config: config,
             discovery_candidates: candidates,
             diagnostics: Vec::new(),
+            bump_translation: None,
             converted_intents: Vec::new(),
             parity: ParityResult {
                 status: "equivalent".to_owned(),
@@ -4507,7 +4946,7 @@ mod tests {
         )
         .expect("write second duplicate");
         let mut config = Config::from_yaml(
-            r#"contract: contract-1
+            r#"contract: contract-2
 release-units:
   sample-base:
     path: base
@@ -4695,7 +5134,7 @@ release-units:
     #[test]
     fn changesets_projection_rejects_an_unrelated_existing_owner() {
         let config = Config::from_yaml(
-            r#"contract: contract-1
+            r#"contract: contract-2
 release-units:
   alpha:
     path: examples

@@ -22,10 +22,9 @@ produces explicit candidates before it writes canonical configuration.
 
 ```yaml
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 settings:
   internal-dependency-bump: patch
-  pre-1-0-bump-mapping: compatibility
 workspace-tags:
   release:
     template: "{version}"
@@ -78,11 +77,6 @@ release-units:
 | Key | Values | Meaning |
 | --- | --- | --- |
 | `internal-dependency-bump` | `major`, `minor`, `patch` | Minimum bump propagated to internal dependents that share an ecosystem adapter with the dependency. |
-| `pre-1-0-bump-mapping` | `component`, `compatibility` | Interpretation of bump names before 1.0.0. |
-
-New workspaces use `compatibility`: before 1.0.0, `major` advances the minor
-component while `minor` and `patch` advance the patch component. `component`
-always applies the named Semantic Versioning component directly.
 
 ### Release units
 
@@ -316,14 +310,41 @@ new or changed excluded paths reopen the same candidate workflow.
 
 ## Version interpretation and release groups
 
-`settings.pre-1-0-bump-mapping` selects one of two contracts:
+Under `contract-2`, a bump name always states the significance of a change:
+`major` is a breaking change, `minor` is a new capability, and `patch` is a
+fix.
 
-- `component`: `major`, `minor`, and `patch` increment the corresponding
-  SemVer component. This matches Changesets and is recommended during adoption.
-- `compatibility`: before 1.0, `major` advances `0.x.y` to `0.(x+1).0`, while
-  `minor` and `patch` advance to `0.x.(y+1)`. New repositories use this mapping.
+| Bump at `0.4.1` | Next version | Bump at `1.4.1` | Next version |
+| --- | --- | --- | --- |
+| `major` | `0.5.0` | `major` | `2.0.0` |
+| `minor` | `0.4.2` | `minor` | `1.5.0` |
+| `patch` | `0.4.2` | `patch` | `1.4.2` |
 
-At and after 1.0, both mappings use ordinary SemVer component increments.
+Before 1.0.0, `major` advances `0.x.y` to `0.(x+1).0`, and `minor` and
+`patch` advance to `0.x.(y+1)`. This matches the caret ranges of npm, Cargo,
+and Pub, which treat `0.x` as the compatibility boundary. At and after 1.0.0,
+ordinary SemVer applies.
+
+No bump reaches 1.0.0 from `0.x`. An intent that sets `graduate` on a `major`
+release unit is the only way to release 1.0.0; see
+[Graduate to 1.0.0](https://wyrd.foo/docs/intentional/usage#graduate-to-100).
+
+### Upgrade from `contract-1`
+
+`contract-1` had a `settings.pre-1-0-bump-mapping` setting. Every command
+except `init` refuses a `contract-1` configuration and tells you to run
+`intentional init`. `init` upgrades the configuration: it sets
+`contract: contract-2` and removes the setting.
+
+- `compatibility`, or no setting: bump names already stated significance, so
+  the upgrade changes no behavior.
+- `component`: bump names named the version component to increment. If
+  pending intents would release other versions under `contract-2`, `init`
+  writes `.intentional/init-plan.yml` with a `bump-translation` field and the
+  intents it would rewrite. Review the plan, then run `init` again. See
+  [Bump translation](https://wyrd.foo/docs/intentional/initialization#bump-translation).
+
+Release tags created under `contract-1` stay valid history.
 
 ```yaml
 fixed:
@@ -335,12 +356,15 @@ linked:
 When any fixed member receives a direct or dependency-propagated bump, every
 member releases at one version derived from the group's highest current version
 and highest requested bump. A suspended fixed member blocks the shared release.
+One graduating member graduates the whole fixed group to 1.0.0.
 
 Linked groups release only affected members. Releasing members use the highest
 current version across the whole group and the highest bump among affected
 members; unaffected members retain their current versions. A suspended linked
-member blocks only when it would release. A release unit belongs to at most one
-fixed or linked group.
+member blocks only when it would release. One graduating member graduates the
+releasing members of a linked group to 1.0.0; the group's highest current
+version must be `0.x`. A release unit belongs to at most one fixed or linked
+group.
 
 When init reconciles an existing configuration, current non-development npm
 manifest dependencies own edges between npm release units. Removing such a

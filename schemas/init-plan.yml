@@ -25,7 +25,7 @@ properties:
   state:
     enum: [ needs-input, ready ]
   source-kind:
-    enum: [ workspace, intentional, changesets ]
+    enum: [ workspace, intentional, changesets, contract-1 ]
   source-fingerprint:
     type: string
     pattern: "^sha256:[0-9a-f]{64}$"
@@ -41,6 +41,11 @@ properties:
     type: array
     items:
       $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/diagnostic"
+  bump-translation:
+    description: >-
+      How pending bumps that name a version component translate. parity keeps
+      the source tool's next versions; significance keeps the bump names.
+    enum: [ parity, significance ]
   converted-intents:
     type: array
     items:
@@ -53,6 +58,10 @@ properties:
           type: object
           additionalProperties:
             enum: [ major, minor, patch ]
+        graduates:
+          type: array
+          uniqueItems: true
+          items: { type: string }
         message: { type: string }
         source: { type: string }
         target: { type: string }
@@ -62,7 +71,7 @@ properties:
     required: [ status, release-units ]
     properties:
       status:
-        enum: [ equivalent, blocked ]
+        enum: [ equivalent, expected-difference, blocked ]
       release-units:
         type: array
         items:
@@ -76,6 +85,9 @@ properties:
               $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
             proposed:
               $ref: "https://intentional.foo/schemas/init-plan.yml#/$defs/parity-release"
+            expected-difference:
+              description: The results differ only because bump-translation is significance.
+              const: true
   planned-operations:
     type: array
     items: { type: string }
@@ -90,7 +102,7 @@ $defs:
       $schema:
         const: https://intentional.foo/schemas/config.yml
       contract:
-        const: contract-1
+        const: contract-2
       settings:
         type: object
         additionalProperties: false
@@ -98,9 +110,6 @@ $defs:
           internal-dependency-bump:
             enum: [ major, minor, patch ]
             default: patch
-          pre-1-0-bump-mapping:
-            enum: [ component, compatibility ]
-            default: compatibility
       release-units:
         type: object
         maxProperties: 0

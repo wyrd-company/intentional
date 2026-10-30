@@ -6,9 +6,7 @@
 //! Workspace configuration and validation.
 
 use crate::error::{Error, Result};
-use crate::model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
-};
+use crate::model::{Adapter, Bump, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole};
 use crate::ownership::check_ownership;
 use crate::projection_file::validate_relative_path;
 pub use crate::projection_file::ProjectionFile;
@@ -23,7 +21,11 @@ pub const CONFIG_PATH: &str = ".intentional/config.yml";
 pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
 
 /// Current interpretation contract written by initialization.
-pub const CURRENT_CONTRACT: &str = "contract-1";
+pub const CURRENT_CONTRACT: &str = "contract-2";
+
+/// Previous interpretation contract. `intentional init` upgrades it; every
+/// other command refuses to load it.
+pub const CONTRACT_1: &str = "contract-1";
 
 /// Complete workspace configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -66,6 +68,133 @@ impl Default for Config {
             release_units: BTreeMap::new(),
         }
     }
+}
+
+/// How a `contract-1` configuration read bump names before `1.0.0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Contract1Mapping {
+    /// Bump names stated change significance, as `contract-2` does.
+    Compatibility,
+    /// Bump names named the version component to increment.
+    Component,
+}
+
+/// A `contract-1` configuration upgraded to the current contract.
+#[derive(Debug, Clone)]
+pub(crate) struct Contract1Upgrade {
+    /// Upgraded configuration.
+    pub config: Config,
+    /// Upgraded file text. Comments and layout are kept where possible.
+    pub text: String,
+    /// The removed `settings.pre-1-0-bump-mapping`.
+    pub mapping: Contract1Mapping,
+}
+
+fn declares_contract_1(value: &serde_yaml::Value) -> bool {
+    value.get("contract").and_then(serde_yaml::Value::as_str) == Some(CONTRACT_1)
+}
+
+/// Upgrade `contract-1` configuration YAML. Returns `None` when the text
+/// declares another contract.
+pub(crate) fn upgrade_contract_1(text: &str) -> Result<Option<Contract1Upgrade>> {
+    let mut value: serde_yaml::Value = serde_yaml::from_str(text)?;
+    if !declares_contract_1(&value) {
+        return Ok(None);
+    }
+    let mapping = upgrade_contract_1_value(&mut value)?;
+    let config: Config = serde_yaml::from_value(value)?;
+    config.validate()?;
+    let text = match upgrade_contract_1_text(text) {
+        Some(edited) if Config::from_yaml(&edited).is_ok_and(|parsed| parsed == config) => edited,
+        _ => config.to_yaml()?,
+    };
+    Ok(Some(Contract1Upgrade {
+        config,
+        text,
+        mapping,
+    }))
+}
+
+/// Upgrade a parsed `contract-1` configuration value in place.
+pub(crate) fn upgrade_contract_1_value(value: &mut serde_yaml::Value) -> Result<Contract1Mapping> {
+    let mapping = match value
+        .get("settings")
+        .and_then(|settings| settings.get("pre-1-0-bump-mapping"))
+        .map(|mapping| mapping.as_str())
+    {
+        None | Some(Some("compatibility")) => Contract1Mapping::Compatibility,
+        Some(Some("component")) => Contract1Mapping::Component,
+        Some(_) => {
+            return Err(Error::Validation(
+                "contract-1 pre-1-0-bump-mapping must be compatibility or component".to_owned(),
+            ))
+        }
+    };
+    let root = value
+        .as_mapping_mut()
+        .ok_or_else(|| Error::Validation("config must be a YAML mapping".to_owned()))?;
+    root.insert("contract".into(), CURRENT_CONTRACT.into());
+    let settings_empty = match root
+        .get_mut("settings")
+        .and_then(|settings| settings.as_mapping_mut())
+    {
+        Some(settings) => {
+            settings.remove("pre-1-0-bump-mapping");
+            settings.is_empty()
+        }
+        None => false,
+    };
+    if settings_empty {
+        root.remove("settings");
+    }
+    Ok(mapping)
+}
+
+/// Line edit that keeps comments: set the contract and remove the mapping
+/// line, and an empty `settings:` block. The caller verifies the result.
+fn upgrade_contract_1_text(text: &str) -> Option<String> {
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(lines.len());
+    let mut contract_lines = 0;
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if !line.starts_with(' ') && trimmed.starts_with("contract:") {
+            let value = trimmed["contract:".len()..].trim();
+            let value = value.split(" #").next().unwrap_or(value).trim();
+            if value.trim_matches(['"', '\'']) != CONTRACT_1 {
+                return None;
+            }
+            contract_lines += 1;
+            output.push(format!("contract: {CURRENT_CONTRACT}"));
+        } else if line.starts_with(' ') && trimmed.starts_with("pre-1-0-bump-mapping:") {
+            continue;
+        } else {
+            output.push((*line).to_owned());
+        }
+    }
+    if contract_lines != 1 {
+        return None;
+    }
+    // Remove a `settings:` key that no longer has an indented child.
+    let mut index = 0;
+    while index < output.len() {
+        if output[index].trim_end() == "settings:" {
+            let has_child = output[index + 1..]
+                .iter()
+                .find(|line| !line.trim().is_empty() && !line.trim_start().starts_with('#'))
+                .is_some_and(|line| line.starts_with(' '));
+            if !has_child {
+                output.remove(index);
+                continue;
+            }
+        }
+        index += 1;
+    }
+    let mut edited = output.join("\n");
+    if text.ends_with('\n') {
+        edited.push('\n');
+    }
+    Some(edited)
 }
 
 /// Durable receipts for resolved discovery candidates.
@@ -117,16 +246,12 @@ pub struct Settings {
     /// Minimum bump propagated to internal dependents.
     #[serde(default = "default_dependency_bump")]
     pub internal_dependency_bump: Bump,
-    /// Interpretation of bump names before semantic version 1.0.0.
-    #[serde(default)]
-    pub pre_1_0_bump_mapping: Pre1BumpMapping,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             internal_dependency_bump: default_dependency_bump(),
-            pre_1_0_bump_mapping: Pre1BumpMapping::default(),
         }
     }
 }
@@ -213,8 +338,15 @@ impl Config {
     }
 
     /// Parse and validate configuration YAML.
+    ///
+    /// A `contract-1` configuration fails with
+    /// [`Error::ContractUpgradeRequired`]. Only `intentional init` upgrades it.
     pub fn from_yaml(text: &str) -> Result<Self> {
-        let config: Self = serde_yaml::from_str(text)?;
+        let value: serde_yaml::Value = serde_yaml::from_str(text)?;
+        if declares_contract_1(&value) {
+            return Err(Error::ContractUpgradeRequired);
+        }
+        let config: Self = serde_yaml::from_value(value)?;
         config.validate()?;
         Ok(config)
     }
@@ -630,10 +762,9 @@ mod tests {
 
     const VALID: &str = r#"
 $schema: https://intentional.foo/schemas/config.yml
-contract: contract-1
+contract: contract-2
 settings:
   internal-dependency-bump: patch
-  pre-1-0-bump-mapping: component
 workspace-tags:
   release:
     template: '{version}'
@@ -660,10 +791,6 @@ release-units:
     fn parses_complete_contract() {
         let config = Config::from_yaml(VALID).expect("valid config");
         assert_eq!(config.contract, CURRENT_CONTRACT);
-        assert_eq!(
-            config.settings.pre_1_0_bump_mapping,
-            Pre1BumpMapping::Component
-        );
         assert_eq!(config.primary_tag("library").expect("primary").0, "primary");
     }
 
@@ -914,7 +1041,7 @@ release-units:
     /// A config of release units built from `(id, path, projections)`,
     /// where each projection is a flow mapping.
     fn units(units: &[(&str, &str, &[&str])]) -> String {
-        let mut text = "contract: contract-1\nrelease-units:\n".to_owned();
+        let mut text = "contract: contract-2\nrelease-units:\n".to_owned();
         for (id, path, projections) in units {
             text.push_str(&format!("  {id}:\n    path: {path}\n    projections:\n"));
             for projection in *projections {
@@ -1233,5 +1360,64 @@ release-units:
             "internal-dependency-bump: patch\n  global-tag: true",
         );
         assert!(Config::from_yaml(&legacy).is_err());
+    }
+
+    #[test]
+    fn contract_1_requires_an_init_upgrade() {
+        let legacy = VALID.replace(
+            "contract: contract-2\nsettings:\n",
+            "contract: contract-1\nsettings:\n  pre-1-0-bump-mapping: component\n",
+        );
+        let error = Config::from_yaml(&legacy).expect_err("contract-1 rejected");
+        assert!(matches!(error, Error::ContractUpgradeRequired));
+        assert!(error.to_string().contains("run `intentional init`"));
+    }
+
+    #[test]
+    fn removed_mapping_setting_is_rejected_under_contract_2() {
+        let stale = VALID.replace(
+            "settings:\n",
+            "settings:\n  pre-1-0-bump-mapping: compatibility\n",
+        );
+        assert!(Config::from_yaml(&stale).is_err());
+    }
+
+    #[test]
+    fn contract_1_upgrade_keeps_comments_and_drops_the_mapping() {
+        let legacy = "# Release config.\ncontract: contract-1\nsettings:\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n  library:\n    # The library.\n    path: .\n    projections:\n      - { adapter: npm, file: package.json, mode: committed }\n    tags:\n      primary: { role: primary, template: '{id}@{version}' }\n";
+        let upgrade = upgrade_contract_1(legacy)
+            .expect("upgraded")
+            .expect("contract-1 detected");
+        assert_eq!(upgrade.mapping, Contract1Mapping::Compatibility);
+        assert_eq!(upgrade.config.contract, CURRENT_CONTRACT);
+        assert!(upgrade
+            .text
+            .starts_with("# Release config.\ncontract: contract-2\nrelease-units:\n"));
+        assert!(upgrade.text.contains("    # The library.\n"));
+        assert!(!upgrade.text.contains("pre-1-0-bump-mapping"));
+
+        let kept = legacy.replace(
+            "  pre-1-0-bump-mapping: compatibility\n",
+            "  internal-dependency-bump: minor\n  pre-1-0-bump-mapping: component\n",
+        );
+        let upgrade = upgrade_contract_1(&kept)
+            .expect("upgraded")
+            .expect("detected");
+        assert_eq!(upgrade.mapping, Contract1Mapping::Component);
+        assert!(upgrade
+            .text
+            .contains("settings:\n  internal-dependency-bump: minor\n"));
+        assert_eq!(
+            upgrade.config.settings.internal_dependency_bump,
+            Bump::Minor
+        );
+
+        let omitted = legacy.replace("settings:\n  pre-1-0-bump-mapping: compatibility\n", "");
+        let upgrade = upgrade_contract_1(&omitted)
+            .expect("upgraded")
+            .expect("detected");
+        assert_eq!(upgrade.mapping, Contract1Mapping::Compatibility);
+
+        assert!(upgrade_contract_1(VALID).expect("parsed").is_none());
     }
 }

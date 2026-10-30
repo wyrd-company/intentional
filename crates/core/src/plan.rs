@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Bump, TagPhase, TagRole};
 use crate::version::{
-    aggregate_bumps, bump_version_with_mapping, resolve_versions, VersionRepository,
+    aggregate_bumps, aggregate_graduations, bump_version, resolve_versions, VersionRepository,
 };
 use semver::{Prerelease, Version};
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,9 @@ pub struct PlanReleaseUnit {
     pub new_version: String,
     /// Effective aggregate bump.
     pub bump: Bump,
+    /// Whether this release graduates the release unit from `0.x` to `1.0.0`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub graduates: bool,
     /// Directly contributing intent ids.
     pub contributing_intent_ids: Vec<String>,
     /// Canonical ids of release-unit tags to create.
@@ -141,6 +144,7 @@ impl ReleasePlan {
         }
         let repository = VersionRepository::discover(root)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
+        let graduating = aggregate_graduations(intents.iter().map(|intent| &intent.graduates));
         let mut current_versions = BTreeMap::new();
         for id in config.release_units.keys() {
             let (_, primary) = config.primary_tag(id)?;
@@ -150,7 +154,7 @@ impl ReleasePlan {
             };
             current_versions.insert(id.clone(), current);
         }
-        let resolved = resolve_versions(config, &declared, &current_versions)?;
+        let resolved = resolve_versions(config, &declared, &graduating, &current_versions)?;
         let changed: BTreeSet<_> = resolved
             .iter()
             .filter(|(_, versions)| versions.bump != Bump::None)
@@ -188,12 +192,13 @@ impl ReleasePlan {
                 .map(|(id, versions)| (id.clone(), versions.bump))
                 .collect();
             let entries = note_entries(id, config, intents, &effective, &versions);
-            let release_notes = render_changelog_section(release, &entries);
+            let release_notes = render_changelog_section(release, resolved[id].graduates, &entries);
             release_units.push(PlanReleaseUnit {
                 id: id.clone(),
                 old_version: current.to_string(),
                 new_version: release.to_string(),
                 bump: resolved[id].bump,
+                graduates: resolved[id].graduates,
                 contributing_intent_ids: intent_ids,
                 tag_ids: config.release_units[id]
                     .tags
@@ -234,11 +239,9 @@ impl ReleasePlan {
                     }
                     None => repository.current_version(tag_id, &tag.template)?,
                 };
-                let base = bump_version_with_mapping(
-                    &current,
-                    highest_bump,
-                    config.settings.pre_1_0_bump_mapping,
-                );
+                // Workspace tags are independent version lines. A release-unit
+                // graduation is a major change for them, not a graduation.
+                let base = bump_version(&current, highest_bump);
                 let version = match channel.as_deref() {
                     Some(channel) => channel_version(
                         &repository,
@@ -466,9 +469,17 @@ fn shares_ecosystem(config: &Config, left: &str, right: &str) -> bool {
         })
 }
 
-/// Render one deterministic CommonMark changelog section.
-pub fn render_changelog_section(version: &Version, entries: &[ChangelogEntry]) -> String {
+/// Render one deterministic CommonMark changelog section. A graduating
+/// release states the graduation before its entries.
+pub fn render_changelog_section(
+    version: &Version,
+    graduates: bool,
+    entries: &[ChangelogEntry],
+) -> String {
     let mut output = format!("## {version}\n");
+    if graduates {
+        output.push_str("\nGraduates from `0.x` to `1.0.0`.\n");
+    }
     for (bump, heading) in [
         (Bump::Major, "Breaking"),
         (Bump::Minor, "Features"),
@@ -561,6 +572,7 @@ mod tests {
             old_version: "1.0.0".to_owned(),
             new_version: "1.1.0".to_owned(),
             bump: Bump::Minor,
+            graduates: false,
             contributing_intent_ids: vec!["clear-river-1234".to_owned()],
             tag_ids: vec!["release-unit/sample/primary".to_owned()],
             release_notes: "## 1.1.0\n".to_owned(),
@@ -572,7 +584,7 @@ mod tests {
         let tags = Vec::new();
         let order = Vec::new();
         let payload = PlanPayload {
-            contract: "contract-1",
+            contract: "contract-2",
             generator: &generator,
             channel: &None,
             release_units: &release_units,
@@ -602,10 +614,23 @@ mod tests {
                 text: "Add a capability.".to_owned(),
             },
         ];
-        let rendered = render_changelog_section(&Version::new(2, 0, 0), &entries);
+        let rendered = render_changelog_section(&Version::new(2, 0, 0), false, &entries);
         assert_eq!(
             rendered,
             "## 2.0.0\n\n### Breaking\n\n- Change a contract.\n\n### Features\n\n- Add a capability.\n\n### Fixes\n\n- Correct a defect.\n"
+        );
+    }
+
+    #[test]
+    fn changelog_states_graduation_first() {
+        let entries = vec![ChangelogEntry {
+            bump: Bump::Major,
+            text: "Declare the stable interface.".to_owned(),
+        }];
+        let rendered = render_changelog_section(&Version::new(1, 0, 0), true, &entries);
+        assert_eq!(
+            rendered,
+            "## 1.0.0\n\nGraduates from `0.x` to `1.0.0`.\n\n### Breaking\n\n- Declare the stable interface.\n"
         );
     }
 }

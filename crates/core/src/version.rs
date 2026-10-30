@@ -7,9 +7,9 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::model::{Bump, Pre1BumpMapping, ReleaseUnitDisposition};
+use crate::model::{Bump, ReleaseUnitDisposition};
 use semver::Version;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 /// Current and next version of a release unit.
@@ -21,21 +21,19 @@ pub struct ReleaseUnitVersion {
     pub next: Version,
     /// Aggregate intent bump.
     pub bump: Bump,
+    /// Whether this release graduates the release unit to `1.0.0`.
+    pub graduates: bool,
 }
 
 impl ReleaseUnitVersion {
     /// Compute release-unit versions from a current tag and aggregate bump.
     pub fn new(current: Version, bump: Bump) -> Self {
-        Self::new_with_mapping(current, bump, Pre1BumpMapping::Compatibility)
-    }
-
-    /// Compute release-unit versions with an explicit pre-1.0 interpretation.
-    pub fn new_with_mapping(current: Version, bump: Bump, mapping: Pre1BumpMapping) -> Self {
-        let next = bump_version_with_mapping(&current, bump, mapping);
+        let next = bump_version(&current, bump);
         Self {
             current,
             next,
             bump,
+            graduates: false,
         }
     }
 }
@@ -54,6 +52,13 @@ pub fn aggregate_bumps<'a>(
         }
     }
     aggregate
+}
+
+/// Collect every release unit that at least one intent graduates.
+pub fn aggregate_graduations<'a>(
+    intents: impl IntoIterator<Item = &'a BTreeSet<String>>,
+) -> BTreeSet<String> {
+    intents.into_iter().flatten().cloned().collect()
 }
 
 /// Propagate the configured minimum bump to internal dependents in a shared ecosystem.
@@ -122,9 +127,15 @@ pub fn effective_bumps(
 }
 
 /// Resolve current and next versions after dependency and release-group constraints.
+///
+/// A graduating release unit releases exactly `1.0.0`. In a fixed group, one
+/// graduating member graduates every member. In a linked group, it graduates
+/// the releasing members. Graduation is valid only while the version it
+/// applies to is `0.x`.
 pub fn resolve_versions(
     config: &Config,
     declared: &BTreeMap<String, Bump>,
+    graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
 ) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
     let effective = effective_bumps(config, declared);
@@ -137,8 +148,14 @@ pub fn resolve_versions(
             )));
         }
     }
+    for id in graduating {
+        if config.release_units.contains_key(id) && effective[id] != Bump::Major {
+            return Err(Error::Validation(format!(
+                "release unit {id} graduates, which requires bump major"
+            )));
+        }
+    }
 
-    let mapping = config.settings.pre_1_0_bump_mapping;
     let mut resolved = BTreeMap::new();
     let mut grouped = BTreeMap::<String, (&str, usize)>::new();
     for (index, group) in config.fixed.iter().enumerate() {
@@ -159,30 +176,51 @@ pub fn resolve_versions(
         let current_version = current.get(id).ok_or_else(|| {
             Error::Validation(format!("missing current version for release unit {id}"))
         })?;
-        resolved.insert(
-            id.clone(),
-            ReleaseUnitVersion::new_with_mapping(current_version.clone(), effective[id], mapping),
-        );
+        let versions = if graduating.contains(id) {
+            graduation(id, current_version)?
+        } else {
+            ReleaseUnitVersion::new(current_version.clone(), effective[id])
+        };
+        resolved.insert(id.clone(), versions);
         if release_unit.disposition == ReleaseUnitDisposition::Suspended {
             debug_assert_eq!(effective[id], Bump::None);
         }
     }
 
     for group in &config.fixed {
-        resolve_group(group, true, &effective, current, mapping, &mut resolved)?;
+        resolve_group(group, true, &effective, graduating, current, &mut resolved)?;
     }
     for group in &config.linked {
-        resolve_group(group, false, &effective, current, mapping, &mut resolved)?;
+        resolve_group(group, false, &effective, graduating, current, &mut resolved)?;
     }
     Ok(resolved)
+}
+
+fn graduation(id: &str, current: &Version) -> Result<ReleaseUnitVersion> {
+    ensure_graduation_source(id, current)?;
+    Ok(ReleaseUnitVersion {
+        current: current.clone(),
+        next: Version::new(1, 0, 0),
+        bump: Bump::Major,
+        graduates: true,
+    })
+}
+
+fn ensure_graduation_source(id: &str, version: &Version) -> Result<()> {
+    if version.major != 0 {
+        return Err(Error::Validation(format!(
+            "release unit {id} graduates, but its version is {version}; graduate is valid only at 0.x"
+        )));
+    }
+    Ok(())
 }
 
 fn resolve_group(
     group: &[String],
     fixed: bool,
     effective: &BTreeMap<String, Bump>,
+    graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
-    mapping: Pre1BumpMapping,
     resolved: &mut BTreeMap<String, ReleaseUnitVersion>,
 ) -> Result<()> {
     let highest_current = group
@@ -202,7 +240,16 @@ fn resolve_group(
         .map(|id| effective[id])
         .max()
         .unwrap_or(Bump::None);
-    let shared_next = bump_version_with_mapping(&highest_current, highest_bump, mapping);
+    let graduate = group.iter().find(|id| graduating.contains(*id));
+    let shared_next = match graduate {
+        Some(id) => {
+            // The group shares one version line, so its highest current
+            // version is the one that graduates.
+            ensure_graduation_source(id, &highest_current)?;
+            Version::new(1, 0, 0)
+        }
+        None => bump_version(&highest_current, highest_bump),
+    };
     for id in group {
         let member_current = current[id].clone();
         let releases = highest_bump != Bump::None && (fixed || effective[id] != Bump::None);
@@ -216,6 +263,7 @@ fn resolve_group(
                     member_current
                 },
                 bump: if releases { highest_bump } else { Bump::None },
+                graduates: releases && graduate.is_some(),
             },
         );
     }
@@ -237,28 +285,19 @@ fn share_ecosystem(config: &Config, left: &str, right: &str) -> bool {
         })
 }
 
-/// Apply compatibility-significance mapping before 1.0 and strict SemVer after it.
+/// Apply a bump that states change significance.
 ///
 /// For a `0.x.y` version, `major` advances the compatibility boundary to
 /// `0.(x+1).0`, while both `minor` and `patch` advance to `0.x.(y+1)`. This
 /// matches caret-range compatibility semantics across npm, Cargo, and Pub.
-/// Graduation to `1.0.0` is deliberately never inferred from an intent: a
-/// human tags `1.0.0` explicitly, and subsequent releases compute from that
-/// tag using strict SemVer semantics.
+/// At `1.0.0` and later, ordinary SemVer applies. No bump reaches `1.0.0`
+/// from `0.x`: only an intent that sets `graduate` does, through
+/// [`resolve_versions`].
 pub fn bump_version(current: &Version, bump: Bump) -> Version {
-    bump_version_with_mapping(current, bump, Pre1BumpMapping::Compatibility)
-}
-
-/// Apply a bump under the selected pre-1.0 interpretation contract.
-pub fn bump_version_with_mapping(
-    current: &Version,
-    bump: Bump,
-    mapping: Pre1BumpMapping,
-) -> Version {
     let mut next = current.clone();
     next.pre = semver::Prerelease::EMPTY;
     next.build = semver::BuildMetadata::EMPTY;
-    if next.major == 0 && mapping == Pre1BumpMapping::Compatibility {
+    if next.major == 0 {
         match bump {
             Bump::None => {}
             Bump::Major => {
@@ -461,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_significance_pre_1_0_mapping() {
+    fn significance_before_1_0() {
         let current = Version::parse("0.4.1").expect("valid version");
         assert_eq!(bump_version(&current, Bump::Major), Version::new(0, 5, 0));
         assert_eq!(bump_version(&current, Bump::Minor), Version::new(0, 4, 2));
@@ -469,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_semver_mapping_at_1_0_and_later() {
+    fn strict_semver_at_1_0_and_later() {
         let current = Version::parse("1.4.1").expect("valid version");
         assert_eq!(bump_version(&current, Bump::Major), Version::new(2, 0, 0));
         assert_eq!(bump_version(&current, Bump::Minor), Version::new(1, 5, 0));
@@ -486,7 +525,7 @@ mod tests {
     fn dependency_bumps_propagate_only_in_shared_ecosystems() {
         let config = Config::from_yaml(
             r#"
-contract: contract-1
+contract: contract-2
 release-units:
   library:
     path: library
@@ -545,12 +584,11 @@ release-units:
         assert_eq!(effective["manual-index"], Bump::None);
     }
 
-    fn group_config(group: &str, mapping: &str, suspended: bool) -> Config {
+    fn group_config(group: &str, suspended: bool) -> Config {
         Config::from_yaml(&format!(
             r#"
-contract: contract-1
+contract: contract-2
 settings:
-  pre-1-0-bump-mapping: {mapping}
   internal-dependency-bump: patch
 {group}
 release-units:
@@ -591,51 +629,58 @@ release-units:
 
     #[test]
     fn fixed_group_releases_every_member_at_one_version() {
-        let config = group_config("fixed: [[package-a, package-b]]", "component", false);
+        let config = group_config("fixed: [[package-a, package-b]]", false);
         let declared = BTreeMap::from([
             ("package-a".to_owned(), Bump::Patch),
             ("package-b".to_owned(), Bump::Minor),
         ]);
-        let resolved = resolve_versions(&config, &declared, &mixed_current()).expect("resolved");
-        assert_eq!(resolved["package-a"].next, Version::new(0, 5, 0));
-        assert_eq!(resolved["package-b"].next, Version::new(0, 5, 0));
+        let resolved =
+            resolve_versions(&config, &declared, &none(), &mixed_current()).expect("resolved");
+        assert_eq!(resolved["package-a"].next, Version::new(0, 4, 2));
+        assert_eq!(resolved["package-b"].next, Version::new(0, 4, 2));
         assert_eq!(resolved["package-a"].bump, Bump::Minor);
     }
 
     #[test]
     fn linked_group_releases_only_affected_members_from_highest_current() {
-        let config = group_config("linked: [[package-a, package-b]]", "component", false);
+        let config = group_config("linked: [[package-a, package-b]]", false);
         let declared = BTreeMap::from([("package-a".to_owned(), Bump::Patch)]);
-        let resolved = resolve_versions(&config, &declared, &mixed_current()).expect("resolved");
+        let resolved =
+            resolve_versions(&config, &declared, &none(), &mixed_current()).expect("resolved");
         assert_eq!(resolved["package-a"].next, Version::new(0, 4, 2));
         assert_eq!(resolved["package-b"].next, Version::new(0, 4, 1));
         assert_eq!(resolved["package-b"].bump, Bump::None);
     }
 
     #[test]
-    fn release_groups_honor_both_pre_1_0_mappings() {
+    fn release_groups_read_bumps_as_significance() {
         let declared = BTreeMap::from([("package-a".to_owned(), Bump::Minor)]);
-        let component = resolve_versions(
-            &group_config("linked: [[package-a, package-b]]", "component", false),
+        let resolved = resolve_versions(
+            &group_config("linked: [[package-a, package-b]]", false),
             &declared,
+            &none(),
             &mixed_current(),
         )
-        .expect("component");
-        let compatibility = resolve_versions(
-            &group_config("linked: [[package-a, package-b]]", "compatibility", false),
+        .expect("resolved");
+        assert_eq!(resolved["package-a"].next, Version::new(0, 4, 2));
+        let declared = BTreeMap::from([("package-a".to_owned(), Bump::Major)]);
+        let resolved = resolve_versions(
+            &group_config("linked: [[package-a, package-b]]", false),
             &declared,
+            &none(),
             &mixed_current(),
         )
-        .expect("compatibility");
-        assert_eq!(component["package-a"].next, Version::new(0, 5, 0));
-        assert_eq!(compatibility["package-a"].next, Version::new(0, 4, 2));
+        .expect("resolved");
+        assert_eq!(resolved["package-a"].next, Version::new(0, 5, 0));
+        assert!(!resolved["package-a"].graduates);
     }
 
     #[test]
     fn dependency_propagation_participates_in_group_fixed_point() {
-        let config = group_config("fixed: [[package-b, application]]", "component", false);
+        let config = group_config("fixed: [[package-b, application]]", false);
         let declared = BTreeMap::from([("package-a".to_owned(), Bump::Minor)]);
-        let resolved = resolve_versions(&config, &declared, &mixed_current()).expect("resolved");
+        let resolved =
+            resolve_versions(&config, &declared, &none(), &mixed_current()).expect("resolved");
         assert_eq!(resolved["application"].bump, Bump::Patch);
         assert_eq!(resolved["package-b"].bump, Bump::Patch);
         assert_eq!(resolved["application"].next, Version::new(1, 0, 1));
@@ -644,14 +689,121 @@ release-units:
 
     #[test]
     fn suspended_group_member_blocks_only_when_required() {
-        let fixed = group_config("fixed: [[package-a, package-b]]", "component", true);
-        let linked = group_config("linked: [[package-a, package-b]]", "component", true);
+        let fixed = group_config("fixed: [[package-a, package-b]]", true);
+        let linked = group_config("linked: [[package-a, package-b]]", true);
         let declared = BTreeMap::from([("package-a".to_owned(), Bump::Patch)]);
-        assert!(resolve_versions(&fixed, &declared, &mixed_current())
-            .expect_err("fixed member blocks")
-            .to_string()
-            .contains("suspended release unit package-b"));
-        resolve_versions(&linked, &declared, &mixed_current())
+        assert!(
+            resolve_versions(&fixed, &declared, &none(), &mixed_current())
+                .expect_err("fixed member blocks")
+                .to_string()
+                .contains("suspended release unit package-b")
+        );
+        resolve_versions(&linked, &declared, &none(), &mixed_current())
             .expect("unaffected linked suspended member does not block");
+    }
+
+    fn none() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
+    fn graduating(id: &str) -> BTreeSet<String> {
+        BTreeSet::from([id.to_owned()])
+    }
+
+    #[test]
+    fn graduation_releases_exactly_1_0_0() {
+        let config = group_config("", false);
+        let declared = BTreeMap::from([
+            ("package-b".to_owned(), Bump::Major),
+            ("package-a".to_owned(), Bump::Patch),
+        ]);
+        let resolved = resolve_versions(
+            &config,
+            &declared,
+            &graduating("package-b"),
+            &mixed_current(),
+        )
+        .expect("resolved");
+        assert_eq!(resolved["package-b"].next, Version::new(1, 0, 0));
+        assert!(resolved["package-b"].graduates);
+        assert_eq!(resolved["package-b"].bump, Bump::Major);
+        assert_eq!(resolved["package-a"].next, Version::new(0, 2, 5));
+        assert!(!resolved["package-a"].graduates);
+    }
+
+    #[test]
+    fn graduation_is_rejected_at_1_0_0_and_later() {
+        let config = group_config("", false);
+        let declared = BTreeMap::from([("application".to_owned(), Bump::Major)]);
+        let error = resolve_versions(
+            &config,
+            &declared,
+            &graduating("application"),
+            &mixed_current(),
+        )
+        .expect_err("graduation at 1.x rejected");
+        assert!(error.to_string().contains("graduate is valid only at 0.x"));
+    }
+
+    #[test]
+    fn graduation_requires_an_effective_major() {
+        let config = group_config("", false);
+        let declared = BTreeMap::from([("package-a".to_owned(), Bump::Minor)]);
+        let error = resolve_versions(
+            &config,
+            &declared,
+            &graduating("package-a"),
+            &mixed_current(),
+        )
+        .expect_err("graduation without major rejected");
+        assert!(error.to_string().contains("requires bump major"));
+    }
+
+    #[test]
+    fn one_graduating_member_graduates_a_fixed_group() {
+        let config = group_config("fixed: [[package-a, package-b]]", false);
+        let declared = BTreeMap::from([("package-a".to_owned(), Bump::Major)]);
+        let resolved = resolve_versions(
+            &config,
+            &declared,
+            &graduating("package-a"),
+            &mixed_current(),
+        )
+        .expect("resolved");
+        for id in ["package-a", "package-b"] {
+            assert_eq!(resolved[id].next, Version::new(1, 0, 0));
+            assert!(resolved[id].graduates);
+        }
+    }
+
+    #[test]
+    fn linked_group_graduates_only_releasing_members() {
+        let config = group_config("linked: [[package-a, package-b]]", false);
+        let declared = BTreeMap::from([("package-a".to_owned(), Bump::Major)]);
+        let resolved = resolve_versions(
+            &config,
+            &declared,
+            &graduating("package-a"),
+            &mixed_current(),
+        )
+        .expect("resolved");
+        assert_eq!(resolved["package-a"].next, Version::new(1, 0, 0));
+        assert!(resolved["package-a"].graduates);
+        assert_eq!(resolved["package-b"].next, Version::new(0, 4, 1));
+        assert!(!resolved["package-b"].graduates);
+    }
+
+    #[test]
+    fn group_graduation_is_rejected_when_the_group_is_past_0_x() {
+        let config = group_config("linked: [[package-a, application]]", false);
+        let declared = BTreeMap::from([("package-a".to_owned(), Bump::Major)]);
+        let error = resolve_versions(
+            &config,
+            &declared,
+            &graduating("package-a"),
+            &mixed_current(),
+        )
+        .expect_err("group at 1.x cannot graduate");
+        assert!(error.to_string().contains("graduate is valid only at 0.x"));
     }
 }

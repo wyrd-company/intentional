@@ -26,18 +26,19 @@ pub use apply::{ApplyResult, FileWrite};
 pub use check::check_workspace;
 pub use config::{
     Config, DiscoveryConfig, ExcludedPathReceipt, ManagedPathReceipt, Projection, ProjectionFile,
-    ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CURRENT_CONTRACT,
+    ReleaseUnitConfig, Settings, TagConfig, WorkspaceTagConfig, CONFIG_PATH, CONTRACT_1,
+    CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
 pub use init::{
-    discover_config, initialize, CandidateProjectionSuggestion, CandidateResolution,
-    CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate, ExtractionDiagnostic,
-    InitDiagnostic, InitPlan, InitResult, InitState, ParityReleaseUnit, ParityResult,
-    RawVersionEvidence, SourceEvidence, INIT_PLAN_PATH,
+    discover_config, initialize, initialize_with, CandidateProjectionSuggestion,
+    CandidateResolution, CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate,
+    ExtractionDiagnostic, InitDiagnostic, InitOptions, InitPlan, InitResult, InitState,
+    ParityReleaseUnit, ParityResult, RawVersionEvidence, SourceEvidence, INIT_PLAN_PATH,
 };
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{
-    Adapter, Bump, Pre1BumpMapping, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, Bump, BumpTranslation, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
 };
 pub use plan::{
     canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,
@@ -49,7 +50,7 @@ pub use status::{
 };
 pub use tag::{tag_record_issues, PlannedTag, TagResult};
 pub use version::{
-    aggregate_bumps, bump_version, bump_version_with_mapping, effective_bumps, resolve_versions,
+    aggregate_bumps, aggregate_graduations, bump_version, effective_bumps, resolve_versions,
     ReleaseUnitVersion, VersionRepository,
 };
 
