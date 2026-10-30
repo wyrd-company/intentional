@@ -358,11 +358,14 @@ proposed-design:
     `significance`, bump names stay. An intent whose bump name changes keeps
     its body and gains an HTML comment that names the original bump and the
     version it keeps, so that review shows the reason and the rendered
-    changelog does not. Parity always compares the source result with the
-    `parity` translation, which proves the inventory and configuration. With
-    `significance`, a release unit whose result differs from the source only
-    because of the translation is marked expected-difference, and the parity
-    status is expected-difference rather than blocked. A later init keeps the
+    changelog does not. With `parity`, the proposed result must equal the
+    complete source result, including dependency-derived releases; a version
+    that no intent rewrite can keep blocks the plan. With `significance`, the
+    proposed result must equal the source algorithm with bump names read as
+    significance, which proves the inventory and configuration; each release
+    unit whose result differs from the source result is marked
+    expected-difference, and the parity status is expected-difference rather
+    than blocked. A later init keeps the
     plan's translation unless the flag is given again.
   contract-upgrade: >-
     The binary interprets one contract, contract-2. Every command except
@@ -372,17 +375,19 @@ proposed-design:
     the configuration file. A configuration that used compatibility, or that
     omits the setting, already read bump names as significance, so it
     upgrades at once, even while discovery candidates still need
-    resolutions. A component configuration whose pending intents would
-    release other versions under contract-2 needs a bump translation: init
-    writes a ready plan with source kind contract-1, the default translation,
-    and the intents it rewrites, and writes nothing else. A rerun with an
+    resolutions. A component configuration whose pending release, including
+    dependency-derived releases, has other versions under contract-2 needs a
+    bump translation: init writes a plan with source kind contract-1, the
+    default translation, the intents it rewrites, and a parity comparison of
+    the contract-1 and contract-2 versions, and writes nothing else. The
+    plan is ready unless `parity` cannot keep a version, which blocks it. A rerun with an
     unchanged configuration and unchanged intents applies the reviewed
     translation, and `--bump-translation` applies it in one step. The config
     and the intent rewrites change together, so that no intent is read under
     the wrong contract. A plan written under contract-1 keeps its
     resolutions; only its inferred configuration is upgraded. Annotated tag
     records keep the contract they were created under: contract-1 records
-    stay valid history for status and check.
+    stay valid history for status, check, and baseline establishment.
   release-unit-disposition: >-
     Managed release units belong to the inventory and participate in release
     computation. Suspended release units remain configured and visible to status

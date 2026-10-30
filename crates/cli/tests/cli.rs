@@ -2271,3 +2271,130 @@ fn config_upgrade_does_not_wait_for_unresolved_candidates() {
         .iter()
         .any(|candidate| candidate.path == Path::new("extra/package.json")));
 }
+
+fn dependency_upgrade_fixture() -> TestRepo {
+    let repo = TestRepo::new();
+    repo.write(
+        "packages/sample-a/package.json",
+        "{\n  \"name\": \"sample-a\",\n  \"version\": \"0.4.1\"\n}\n",
+    );
+    repo.write(
+        "packages/sample-b/package.json",
+        "{\n  \"name\": \"sample-b\",\n  \"version\": \"0.4.1\",\n  \"dependencies\": { \"sample-a\": \"^0.4.1\" }\n}\n",
+    );
+    let unit = |id: &str, depends: &str| {
+        format!("  {id}:\n    path: packages/{id}\n{depends}    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: '{{id}}@{{version}}'\n")
+    };
+    repo.write(
+        ".intentional/config.yml",
+        &format!(
+            "contract: contract-1\nsettings:\n  internal-dependency-bump: minor\n  pre-1-0-bump-mapping: component\ndiscovery:\n  managed-paths:\n    - detector: npm-package\n      path: packages/sample-a/package.json\n      release-unit: sample-a\n    - detector: npm-package\n      path: packages/sample-b/package.json\n      release-unit: sample-b\nrelease-units:\n{}{}",
+            unit("sample-a", ""),
+            unit("sample-b", "    depends-on: [ sample-a ]\n"),
+        ),
+    );
+    repo.write(
+        ".intentional/intents/quiet-otter-0001.md",
+        "---\nsample-a: patch\n---\n\nCorrect a defect.\n",
+    );
+    repo.commit("add fixture");
+    repo.tag("sample-a@0.4.1");
+    repo.tag("sample-b@0.4.1");
+    repo
+}
+
+#[test]
+fn parity_upgrade_blocks_when_a_dependency_derived_version_changes() {
+    let repo = dependency_upgrade_fixture();
+    // contract-1 releases sample-b at 0.5.0 through internal-dependency-bump
+    // minor; no intent rewrite can keep that under contract-2.
+    repo.cli()
+        .args(["init", "--bump-translation", "parity"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "cannot keep every contract-1 version",
+        ));
+    let plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(repo.root.join(".intentional/init-plan.yml")).unwrap(),
+    )
+    .expect("blocked upgrade plan");
+    assert_eq!(plan.state, InitState::NeedsInput);
+    assert_eq!(plan.parity.status, "blocked");
+    let dependent = plan
+        .parity
+        .release_units
+        .iter()
+        .find(|unit| unit.release_unit == "sample-b")
+        .expect("dependent row");
+    assert_eq!(dependent.source.as_ref().unwrap().next_version, "0.5.0");
+    assert_eq!(dependent.proposed.as_ref().unwrap().next_version, "0.4.2");
+    assert!(!dependent.expected_difference);
+    assert!(
+        fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("contract: contract-1")
+    );
+
+    repo.cli()
+        .args(["init", "--bump-translation", "significance"])
+        .assert()
+        .success();
+    repo.cli()
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample-b: 0.4.1 -> 0.4.2 (minor)"));
+}
+
+#[test]
+fn significance_upgrade_records_dependency_differences_as_expected() {
+    let repo = dependency_upgrade_fixture();
+    repo.cli().arg("init").assert().code(2);
+    let path = repo.root.join(".intentional/init-plan.yml");
+    let edited = fs::read_to_string(&path)
+        .unwrap()
+        .replace("bump-translation: parity", "bump-translation: significance");
+    fs::write(&path, edited).unwrap();
+    // The reviewed significance plan applies on the next run.
+    repo.cli().arg("init").assert().success();
+    assert!(!path.exists());
+    assert!(
+        fs::read_to_string(repo.root.join(".intentional/config.yml"))
+            .unwrap()
+            .contains("contract: contract-2")
+    );
+}
+
+#[test]
+fn baseline_for_a_new_unit_accepts_contract_1_history() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(
+        ".intentional/config.yml",
+        &contract_1_config("compatibility"),
+    );
+    repo.commit("add fixture");
+    git(
+        &repo.root,
+        &[
+            "tag",
+            "-a",
+            "sample@0.4.1",
+            "-m",
+            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.3.0\nplan-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\ntag-id: release-unit/sample/primary\nversion: 0.4.1\nbaseline: true\n",
+        ],
+    );
+    repo.cli().arg("init").assert().success();
+    let config = fs::read_to_string(repo.root.join(".intentional/config.yml")).unwrap()
+        + "  sample-docs:\n    path: docs\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n";
+    repo.write(".intentional/config.yml", &config);
+    repo.write("docs/.keep", "");
+    repo.commit("upgrade and add a tag-only unit");
+    repo.cli()
+        .args(["tag", "--baseline", "--version", "sample-docs=0.1.0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("sample-docs@0.1.0"));
+    repo.cli().arg("check").assert().success();
+}

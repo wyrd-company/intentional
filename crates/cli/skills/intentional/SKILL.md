@@ -430,8 +430,11 @@ between those operations.
 - Treat "uses contract-1" as a required upgrade. Run `intentional init`. A
   `component` configuration with pending intents writes a `ready` plan with
   `source-kind: contract-1` and a `bump-translation`; show the rewritten
-  intents to the user, then run `intentional init` again to upgrade. Commit
-  the upgraded config and intents together.
+  intents to the user, then run `intentional init` again to upgrade. A
+  `blocked` parity status means `parity` cannot keep a version, usually a
+  dependency-derived one; ask the user before passing
+  `--bump-translation significance`. Commit the upgraded config and intents
+  together.
 - If a command would require committing, pushing, publishing, or forge access,
   stop at the Intentional boundary unless that external action is explicitly in
   scope.

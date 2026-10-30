@@ -330,11 +330,16 @@ pending bumps one time. The init plan records the choice in its
 | `patch` | `patch`: 0.4.2 | `patch`: 0.4.2 |
 
 - `parity` keeps the versions that the source tool would release. The parity
-  comparison must be `equivalent`.
-- `significance` keeps the bump names. The parity comparison shows each
-  version that changes because of this choice with `expected-difference: true`,
-  and its status is `expected-difference`. Such a plan can still be `ready`.
-  Any other difference blocks the plan.
+  comparison must be `equivalent`, including releases that dependency
+  propagation causes. A rewrite cannot keep a dependency-derived version, for
+  example from an internal dependency policy of `minor` at `0.x`; such a
+  release blocks the plan. Choose `significance` or change the pending
+  changes.
+- `significance` keeps the bump names. Intentional's result must equal the
+  source tool's algorithm with bump names read as significance. The parity
+  comparison then shows each version that differs from the source tool with
+  `expected-difference: true`, and its status is `expected-difference`. Such a
+  plan can still be `ready`. Any other difference blocks the plan.
 
 At and after 1.0.0, and for release units without a version, bumps do not
 change. The version a bump applies to is the highest current version of the
@@ -369,11 +374,15 @@ intentional init
 ```
 
 A configuration without `pre-1-0-bump-mapping: component`, or without pending
-intents whose versions change, upgrades at once, even when discovery
-candidates still need resolutions. A `component` configuration with such
-intents writes a `ready` plan with `source-kind: contract-1`, the default
-`bump-translation`, and the intents it rewrites. Nothing else changes until
-you run `init` again:
+intents whose release changes, upgrades at once, even when discovery
+candidates still need resolutions. A release changes when any next version
+differs, including versions from dependency propagation. A `component`
+configuration with such a release writes a plan with
+`source-kind: contract-1`, the default `bump-translation`, the intents it
+rewrites, and a parity comparison of the `contract-1` and `contract-2`
+versions. The plan is `ready` unless `parity` cannot keep a version; then it
+is `needs-input` with parity status `blocked`. Nothing else changes until you
+run `init` again:
 
 ```console
 intentional init

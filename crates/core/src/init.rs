@@ -19,7 +19,10 @@ use crate::model::{
     Adapter, Bump, BumpTranslation, ProjectionMode, ReleaseUnitDisposition, TagRole,
 };
 use crate::plan::{canonical_json, lower_hex, sha256_digest};
-use crate::version::{effective_bumps, resolve_versions, ReleaseUnitVersion, VersionRepository};
+use crate::version::{
+    bump_version, component_bump, effective_bumps, resolve_versions, resolve_versions_with,
+    ReleaseUnitVersion, VersionRepository,
+};
 use glob::glob;
 use node_semver::{Range as NodeRange, Version as NodeVersion};
 use semver::Version;
@@ -1044,9 +1047,14 @@ fn ordinary_plan(root: &Path, bump_translation: Option<BumpTranslation>) -> Resu
         }
         upgrade => upgrade,
     };
+    let mut parity = ParityResult {
+        status: "equivalent".to_owned(),
+        release_units: Vec::new(),
+    };
     let (source_kind, source_fingerprint, bump_translation, converted_intents) = match upgrade {
         Some(upgrade) => {
             planned_operations.extend(upgrade.intent_operations());
+            parity = upgrade.parity;
             (
                 CONTRACT_1_SOURCE_KIND.to_owned(),
                 upgrade.fingerprint,
@@ -1073,7 +1081,7 @@ fn ordinary_plan(root: &Path, bump_translation: Option<BumpTranslation>) -> Resu
     };
     planned_operations.push(format!("create {}", crate::intent::INTENTS_PATH));
     planned_operations.push(format!("delete {INIT_PLAN_PATH}"));
-    let state = if all_resolved {
+    let state = if all_resolved && parity.status != "blocked" {
         InitState::Ready
     } else {
         InitState::NeedsInput
@@ -1088,10 +1096,7 @@ fn ordinary_plan(root: &Path, bump_translation: Option<BumpTranslation>) -> Resu
         diagnostics: Vec::new(),
         bump_translation,
         converted_intents,
-        parity: ParityResult {
-            status: "equivalent".to_owned(),
-            release_units: Vec::new(),
-        },
+        parity,
         planned_operations,
         post_commit_action: String::new(),
     };
@@ -1134,8 +1139,11 @@ struct UpgradePlan {
     rewrites: Vec<ConvertedIntent>,
     /// Chosen translation, or the default while the choice is pending.
     translation: Option<BumpTranslation>,
-    /// Whether the translation waits for review in the init plan.
+    /// Whether the upgrade waits in the init plan: for review, or because
+    /// the translation cannot keep the versions.
     pending: bool,
+    /// Comparison of the `contract-1` result with the upgraded result.
+    parity: ParityResult,
     /// Digest over the config, pending intents, and candidate evidence.
     fingerprint: String,
     /// Config and intent writes when the upgrade applies now.
@@ -1164,10 +1172,12 @@ impl UpgradePlan {
 ///
 /// A `compatibility` config, or one without the mapping, already reads bump
 /// names as significance: only the config changes. A `component` config
-/// with pending intents whose bumps read differently needs a translation
-/// choice. A `--bump-translation` flag, or an unchanged reviewed init plan,
-/// supplies it; otherwise init records the default in the init plan for
-/// review.
+/// whose pending release, including dependency-derived releases, has other
+/// versions under `contract-2` needs a translation choice. A
+/// `--bump-translation` flag, or an unchanged reviewed init plan, supplies
+/// it; otherwise init records the default in the init plan for review.
+/// `parity` applies only when the rewritten intents release every version
+/// that `contract-1` would release; otherwise the plan is blocked.
 fn plan_contract_1_upgrade(
     root: &Path,
     upgrade: &Contract1Upgrade,
@@ -1195,6 +1205,28 @@ fn plan_contract_1_upgrade(
         );
     }
     let fingerprint = fingerprint(root, &evidence_paths)?;
+    let config_write = (PathBuf::from(CONFIG_PATH), upgrade.text.clone());
+    let mut operations = vec![format!(
+        "upgrade {CONFIG_PATH} from contract-1 to {CURRENT_CONTRACT}"
+    )];
+    let direct = |parity: ParityResult| UpgradePlan {
+        config_text: upgrade.text.clone(),
+        rewrites: Vec::new(),
+        translation: None,
+        pending: false,
+        parity,
+        fingerprint: fingerprint.clone(),
+        writes: vec![config_write.clone()],
+        operations: operations.clone(),
+    };
+    let equivalent = ParityResult {
+        status: "equivalent".to_owned(),
+        release_units: Vec::new(),
+    };
+    if pending_intents.is_empty() {
+        return Ok(direct(equivalent));
+    }
+
     let converted = pending_intents
         .iter()
         .map(|intent| {
@@ -1213,66 +1245,89 @@ fn plan_contract_1_upgrade(
             }
         })
         .collect::<Vec<_>>();
+    let repository = VersionRepository::discover(root)?;
     let mut current = BTreeMap::new();
-    if !converted.is_empty() {
-        let repository = VersionRepository::discover(root)?;
-        for id in upgrade.config.release_units.keys() {
-            let (_, primary) = upgrade.config.primary_tag(id)?;
-            current.insert(
-                id.clone(),
-                repository.current_version(id, &primary.template)?,
-            );
-        }
+    for id in upgrade.config.release_units.keys() {
+        let (_, primary) = upgrade.config.primary_tag(id)?;
+        current.insert(
+            id.clone(),
+            repository.current_version(id, &primary.template)?,
+        );
     }
-    let bases = component_bases(&upgrade.config, &current);
-    let changed = |intents: Vec<ConvertedIntent>| {
-        intents
-            .into_iter()
-            .zip(&converted)
-            .filter(|(translated, original)| translated != *original)
-            .map(|(translated, _)| translated)
-            .collect::<Vec<_>>()
+    let declared = aggregate_converted(&converted);
+    let none = BTreeSet::new();
+    // The contract-1 component result, with its dependency propagation and
+    // release groups.
+    let source =
+        resolve_versions_with(&upgrade.config, &declared, &none, &current, component_bump)?;
+    let significance = resolve_versions(&upgrade.config, &declared, &none, &current)?;
+    let releases = |resolved: &BTreeMap<String, ReleaseUnitVersion>, id: &str| {
+        parity_release(resolved.get(id))
     };
-    let parity_rewrites = changed(translate_converted_intents(
-        &converted,
-        &bases,
-        BumpTranslation::Parity,
-        "contract-1",
-    ));
-    let mut config_operation = vec![format!(
-        "upgrade {CONFIG_PATH} from contract-1 to {CURRENT_CONTRACT}"
-    )];
-    let config_write = (PathBuf::from(CONFIG_PATH), upgrade.text.clone());
-    if parity_rewrites.is_empty() {
-        return Ok(UpgradePlan {
-            config_text: upgrade.text.clone(),
-            rewrites: Vec::new(),
-            translation: None,
-            pending: false,
-            fingerprint,
-            writes: vec![config_write],
-            operations: config_operation,
-        });
+    if source
+        .keys()
+        .all(|id| same_release(&releases(&source, id), &releases(&significance, id)))
+    {
+        return Ok(direct(equivalent));
     }
+
     let reviewed = previous
         .filter(|plan| {
             plan.source_kind == CONTRACT_1_SOURCE_KIND && plan.source_fingerprint == fingerprint
         })
         .and_then(|plan| plan.bump_translation);
-    let (translation, pending) = match flag.or(reviewed) {
-        Some(translation) => (translation, false),
-        None => (BumpTranslation::default(), true),
+    let chosen = flag.or(reviewed);
+    let translation = chosen.unwrap_or_default();
+    let bases = component_bases(&upgrade.config, &current);
+    let translated = translate_converted_intents(&converted, &bases, translation, "contract-1");
+    let proposed = resolve_versions(
+        &upgrade.config,
+        &aggregate_converted(&translated),
+        &aggregate_converted_graduations(&translated),
+        &current,
+    )
+    .unwrap_or_default();
+    let release_units = source
+        .keys()
+        .filter(|id| releases(&source, id).is_some() || releases(&proposed, id).is_some())
+        .map(|id| {
+            let source = releases(&source, id);
+            let proposed = releases(&proposed, id);
+            ParityReleaseUnit {
+                release_unit: id.clone(),
+                current_version: current[id].to_string(),
+                // `significance` accepts every contract-2 version.
+                expected_difference: translation == BumpTranslation::Significance
+                    && !same_release(&source, &proposed),
+                source,
+                proposed,
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked = release_units
+        .iter()
+        .any(|unit| !unit.expected_difference && !same_release(&unit.source, &unit.proposed));
+    let status = if blocked {
+        "blocked"
+    } else if release_units.iter().any(|unit| unit.expected_difference) {
+        "expected-difference"
+    } else {
+        "equivalent"
     };
-    let rewrites = changed(translate_converted_intents(
-        &converted,
-        &bases,
-        translation,
-        "contract-1",
-    ));
+    let parity = ParityResult {
+        status: status.to_owned(),
+        release_units,
+    };
+    let rewrites = translated
+        .into_iter()
+        .zip(&converted)
+        .filter(|(translated, original)| translated != *original)
+        .map(|(translated, _)| translated)
+        .collect::<Vec<_>>();
     let mut writes = vec![config_write];
     for intent in &rewrites {
         writes.push((intent.target.clone(), intent.contents()?));
-        config_operation.push(format!(
+        operations.push(format!(
             "rewrite {} with bump translation",
             intent.target.display()
         ));
@@ -1281,10 +1336,11 @@ fn plan_contract_1_upgrade(
         config_text: upgrade.text.clone(),
         rewrites,
         translation: Some(translation),
-        pending,
+        pending: chosen.is_none() || blocked,
+        parity,
         fingerprint,
         writes,
-        operations: config_operation,
+        operations,
     })
 }
 
@@ -2117,12 +2173,6 @@ fn changesets_plan(
         .unwrap_or_default();
     let source_declared = aggregate_converted(&converted_intents);
     let bases = component_bases(&discovery.config, &discovery.versions);
-    let parity_intents = translate_converted_intents(
-        &converted_intents,
-        &bases,
-        BumpTranslation::Parity,
-        "Changesets",
-    );
     let converted_intents =
         translate_converted_intents(&converted_intents, &bases, bump_translation, "Changesets");
     let suppress_private_versions =
@@ -2180,8 +2230,8 @@ fn changesets_plan(
         &discovery.config,
         &discovery.versions,
         &source_declared,
-        &parity_intents,
         &converted_intents,
+        bump_translation,
         &source_semantics,
     )?;
     if let Some(message) = &parity.source_error {
@@ -3919,22 +3969,22 @@ fn exclude_release_units(config: &mut Config, excluded: &BTreeSet<String>) {
 
 /// Compare the Changesets result with the proposed Intentional result.
 ///
-/// The `parity` translation must reproduce the Changesets result, which
-/// proves the inventory and configuration. With `significance`, differences
-/// that the `parity` translation does not have are expected.
+/// With `parity`, the proposed result must equal the Changesets result,
+/// including dependency-derived releases. With `significance`, the proposed
+/// result must equal the Changesets algorithm with bump names read as
+/// significance, which proves the inventory and configuration; each
+/// remaining difference from the Changesets result is expected.
 fn parity_result(
     source_config: &Config,
     proposed_config: &Config,
     current: &BTreeMap<String, Version>,
     source_declared: &BTreeMap<String, Bump>,
-    parity_intents: &[ConvertedIntent],
     chosen_intents: &[ConvertedIntent],
+    translation: BumpTranslation,
     source_semantics: &ChangesetsSourceSemantics<'_>,
 ) -> Result<ParityComputation> {
     let declared = &aggregate_converted(chosen_intents);
     let graduating = aggregate_converted_graduations(chosen_intents);
-    let parity_declared = aggregate_converted(parity_intents);
-    let parity_graduating = aggregate_converted_graduations(parity_intents);
     let mut source_config = source_config.clone();
     let mut proposed_config = proposed_config.clone();
     let effective = effective_bumps(&proposed_config, declared);
@@ -3987,29 +4037,34 @@ fn parity_result(
             )),
         });
     }
-    let (source, source_error) =
-        match resolve_changesets_source(&source_config, source_declared, current, source_semantics)
-        {
-            Ok(resolved) => (resolved, None),
-            Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
-            Err(error) => return Err(error),
-        };
+    let (source, source_error) = match resolve_changesets_source(
+        &source_config,
+        source_declared,
+        current,
+        source_semantics,
+        component_bump,
+    ) {
+        Ok(resolved) => (resolved, None),
+        Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
+        Err(error) => return Err(error),
+    };
     let (proposed, proposed_error) =
         match resolve_versions(&proposed_config, declared, &graduating, current) {
             Ok(resolved) => (resolved, None),
             Err(Error::Validation(message)) => (BTreeMap::new(), Some(message)),
             Err(error) => return Err(error),
         };
-    let parity_proposed = if parity_declared == *declared && parity_graduating == graduating {
-        proposed.clone()
-    } else {
-        resolve_versions(
-            &proposed_config,
-            &parity_declared,
-            &parity_graduating,
+    // The reference the proposed result must equal.
+    let reference = match translation {
+        BumpTranslation::Parity => source.clone(),
+        BumpTranslation::Significance => resolve_changesets_source(
+            &source_config,
+            source_declared,
             current,
+            source_semantics,
+            bump_version,
         )
-        .unwrap_or_default()
+        .unwrap_or_default(),
     };
     let release_ids = source
         .iter()
@@ -4022,11 +4077,11 @@ fn parity_result(
         .map(|release_unit| {
             let source = parity_release(source.get(&release_unit));
             let proposed = parity_release(proposed.get(&release_unit));
-            let parity = parity_release(parity_proposed.get(&release_unit));
+            let reference = parity_release(reference.get(&release_unit));
             ParityReleaseUnit {
                 current_version: current[&release_unit].to_string(),
                 expected_difference: !same_release(&source, &proposed)
-                    && same_release(&source, &parity),
+                    && same_release(&reference, &proposed),
                 source,
                 proposed,
                 release_unit,
@@ -4188,28 +4243,6 @@ fn translate_converted_intents(
         .collect()
 }
 
-/// Increment the named version component, as Changesets and `contract-1`
-/// component configs do.
-fn component_bump(current: &Version, bump: Bump) -> Version {
-    let mut next = current.clone();
-    next.pre = semver::Prerelease::EMPTY;
-    next.build = semver::BuildMetadata::EMPTY;
-    match bump {
-        Bump::None => {}
-        Bump::Patch => next.patch += 1,
-        Bump::Minor => {
-            next.minor += 1;
-            next.patch = 0;
-        }
-        Bump::Major => {
-            next.major += 1;
-            next.minor = 0;
-            next.patch = 0;
-        }
-    }
-    next
-}
-
 /// Compute the source Changesets result without invoking Intentional's resolver.
 ///
 /// This deliberately duplicates the small release-propagation algorithm so the
@@ -4220,6 +4253,7 @@ fn resolve_changesets_source(
     declared: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
     semantics: &ChangesetsSourceSemantics<'_>,
+    bump: fn(&Version, Bump) -> Version,
 ) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
     let mut effective = config
         .release_units
@@ -4251,7 +4285,8 @@ fn resolve_changesets_source(
             if dependency_bump == Bump::None {
                 continue;
             }
-            let next = changesets_dependency_next(config, &edge.dependency, &effective, current);
+            let next =
+                changesets_dependency_next(config, &edge.dependency, &effective, current, bump);
             let in_range = npm_range_satisfies(&edge.range, &current[&edge.dependency], &next)?;
             let required = if edge.kind == NpmDependencyKind::Peer
                 && dependency_bump >= Bump::Minor
@@ -4315,7 +4350,7 @@ fn resolve_changesets_source(
                 id.clone(),
                 ReleaseUnitVersion {
                     current: current_version.clone(),
-                    next: component_bump(current_version, effective[id]),
+                    next: bump(current_version, effective[id]),
                     bump: effective[id],
                     graduates: false,
                 },
@@ -4335,7 +4370,7 @@ fn resolve_changesets_source(
                 .map(|id| effective[id])
                 .max()
                 .unwrap_or_default();
-            let next = component_bump(&highest_current, highest_bump);
+            let next = bump(&highest_current, highest_bump);
             for id in group {
                 let suppressed =
                     semantics.suppress_private_versions && semantics.private_packages.contains(id);
@@ -4366,6 +4401,7 @@ fn changesets_dependency_next(
     id: &str,
     effective: &BTreeMap<String, Bump>,
     current: &BTreeMap<String, Version>,
+    bump: fn(&Version, Bump) -> Version,
 ) -> Version {
     for group in config.fixed.iter().chain(&config.linked) {
         if group.iter().any(|member| member == id) && effective[id] != Bump::None {
@@ -4379,10 +4415,10 @@ fn changesets_dependency_next(
                 .map(|member| effective[member])
                 .max()
                 .unwrap_or_default();
-            return component_bump(highest_current, highest_bump);
+            return bump(highest_current, highest_bump);
         }
     }
-    component_bump(&current[id], effective[id])
+    bump(&current[id], effective[id])
 }
 
 fn npm_range_satisfies(range: &str, current: &Version, next: &Version) -> Result<bool> {

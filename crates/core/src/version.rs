@@ -138,6 +138,18 @@ pub fn resolve_versions(
     graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
 ) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
+    resolve_versions_with(config, declared, graduating, current, bump_version)
+}
+
+/// Resolve versions with another reading of bump names. Initialization uses
+/// [`component_bump`] to compute what a component-style tool would release.
+pub(crate) fn resolve_versions_with(
+    config: &Config,
+    declared: &BTreeMap<String, Bump>,
+    graduating: &BTreeSet<String>,
+    current: &BTreeMap<String, Version>,
+    bump: fn(&Version, Bump) -> Version,
+) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
     let effective = effective_bumps(config, declared);
     for (id, bump) in &effective {
         if *bump != Bump::None
@@ -179,7 +191,12 @@ pub fn resolve_versions(
         let versions = if graduating.contains(id) {
             graduation(id, current_version)?
         } else {
-            ReleaseUnitVersion::new(current_version.clone(), effective[id])
+            ReleaseUnitVersion {
+                current: current_version.clone(),
+                next: bump(current_version, effective[id]),
+                bump: effective[id],
+                graduates: false,
+            }
         };
         resolved.insert(id.clone(), versions);
         if release_unit.disposition == ReleaseUnitDisposition::Suspended {
@@ -188,10 +205,26 @@ pub fn resolve_versions(
     }
 
     for group in &config.fixed {
-        resolve_group(group, true, &effective, graduating, current, &mut resolved)?;
+        resolve_group(
+            group,
+            true,
+            &effective,
+            graduating,
+            current,
+            bump,
+            &mut resolved,
+        )?;
     }
     for group in &config.linked {
-        resolve_group(group, false, &effective, graduating, current, &mut resolved)?;
+        resolve_group(
+            group,
+            false,
+            &effective,
+            graduating,
+            current,
+            bump,
+            &mut resolved,
+        )?;
     }
     Ok(resolved)
 }
@@ -221,6 +254,7 @@ fn resolve_group(
     effective: &BTreeMap<String, Bump>,
     graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
+    bump: fn(&Version, Bump) -> Version,
     resolved: &mut BTreeMap<String, ReleaseUnitVersion>,
 ) -> Result<()> {
     let highest_current = group
@@ -248,7 +282,7 @@ fn resolve_group(
             ensure_graduation_source(id, &highest_current)?;
             Version::new(1, 0, 0)
         }
-        None => bump_version(&highest_current, highest_bump),
+        None => bump(&highest_current, highest_bump),
     };
     for id in group {
         let member_current = current[id].clone();
@@ -308,6 +342,28 @@ pub fn bump_version(current: &Version, bump: Bump) -> Version {
         }
         return next;
     }
+    match bump {
+        Bump::None => {}
+        Bump::Patch => next.patch += 1,
+        Bump::Minor => {
+            next.minor += 1;
+            next.patch = 0;
+        }
+        Bump::Major => {
+            next.major += 1;
+            next.minor = 0;
+            next.patch = 0;
+        }
+    }
+    next
+}
+
+/// Increment the named version component, as Changesets and `contract-1`
+/// component configs read bump names.
+pub(crate) fn component_bump(current: &Version, bump: Bump) -> Version {
+    let mut next = current.clone();
+    next.pre = semver::Prerelease::EMPTY;
+    next.build = semver::BuildMetadata::EMPTY;
     match bump {
         Bump::None => {}
         Bump::Patch => next.patch += 1,

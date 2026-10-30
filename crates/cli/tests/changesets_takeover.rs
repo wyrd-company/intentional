@@ -2213,3 +2213,58 @@ fn changesets_significance_translation_reports_expected_differences() {
     let rerun = translation_plan(&repository, &[]);
     assert_eq!(rerun.bump_translation, Some(BumpTranslation::Significance));
 }
+
+#[test]
+fn dependency_derived_changesets_versions_follow_the_translation_choice() {
+    let repository = Repository::new();
+    repository.write(
+        "package.json",
+        "{\n  \"name\": \"fixture-root\",\n  \"private\": true,\n  \"workspaces\": [\"packages/*\"]\n}\n",
+    );
+    repository.write(
+        "packages/package-a/package.json",
+        "{\n  \"name\": \"package-a\",\n  \"version\": \"0.4.1\"\n}\n",
+    );
+    repository.write(
+        "packages/package-b/package.json",
+        "{\n  \"name\": \"package-b\",\n  \"version\": \"0.4.1\",\n  \"dependencies\": { \"package-a\": \"0.4.1\" }\n}\n",
+    );
+    repository.write(
+        ".changeset/config.json",
+        r#"{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "updateInternalDependencies": "minor",
+  "ignore": []
+}
+"#,
+    );
+    repository.write(
+        ".changeset/useful-change.md",
+        "---\n\"package-a\": minor\n---\n\nAdd a capability.\n",
+    );
+
+    // Changesets releases package-b at 0.5.0 through its minor dependency
+    // policy. No intent rewrite keeps that version under Intentional.
+    let parity = translation_plan(&repository, &[]);
+    assert_eq!(parity.parity.status, "blocked");
+    assert_eq!(
+        parity_next(&parity, "package-b"),
+        ("0.5.0".into(), "0.4.2".into(), false)
+    );
+
+    // Read as significance, the Changesets algorithm releases what
+    // Intentional releases, so each difference is expected.
+    let significance = translation_plan(&repository, &["--bump-translation", "significance"]);
+    assert_eq!(significance.parity.status, "expected-difference");
+    assert_eq!(
+        parity_next(&significance, "package-a"),
+        ("0.5.0".into(), "0.4.2".into(), true)
+    );
+    assert_eq!(
+        parity_next(&significance, "package-b"),
+        ("0.5.0".into(), "0.4.2".into(), true)
+    );
+}

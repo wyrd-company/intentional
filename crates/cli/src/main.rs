@@ -276,7 +276,11 @@ fn init(root: &std::path::Path, args: InitArgs) -> Result<u8> {
             println!("plan: {}", result.path.display());
             if let Some(translation) = plan.bump_translation {
                 println!("bump translation: {translation}");
-                if plan.source_kind == "contract-1" && result.state == InitState::Ready {
+                if plan.source_kind == "contract-1" && plan.parity.status == "blocked" {
+                    println!(
+                        "bump translation {translation} cannot keep every contract-1 version; see parity in the plan, then run intentional init --bump-translation significance or change the pending intents"
+                    );
+                } else if plan.source_kind == "contract-1" && result.state == InitState::Ready {
                     println!(
                         "review the bump translation and rewritten intents in the plan, then run intentional init again to upgrade"
                     );

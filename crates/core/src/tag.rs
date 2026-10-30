@@ -1113,15 +1113,22 @@ fn is_established(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(false);
     };
-    for (field, expected) in [
-        ("tag-id", expected_id),
-        ("version", expected_version),
-        ("contract", expected_contract),
-    ] {
+    for (field, expected) in [("tag-id", expected_id), ("version", expected_version)] {
         if record.fields.get(field).map(String::as_str) != Some(expected) {
             return Err(Error::Validation(format!(
                 "release tag {name} has unexpected {field}"
             )));
+        }
+    }
+    // A record created under contract-1 before an `init` upgrade is
+    // established history; it is never recreated under the new contract.
+    match record.fields.get("contract").map(String::as_str) {
+        Some(contract) if contract == expected_contract => {}
+        Some(crate::config::CONTRACT_1) => return Ok(true),
+        _ => {
+            return Err(Error::Validation(format!(
+                "release tag {name} has unexpected contract"
+            )))
         }
     }
     let baseline = match record.fields.get("baseline").map(String::as_str) {
