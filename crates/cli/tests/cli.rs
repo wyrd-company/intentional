@@ -2398,3 +2398,25 @@ fn baseline_for_a_new_unit_accepts_contract_1_history() {
         .stdout(predicate::str::contains("sample-docs@0.1.0"));
     repo.cli().arg("check").assert().success();
 }
+
+#[test]
+fn nameless_npm_manifest_is_not_a_discovery_candidate() {
+    let repo = TestRepo::new();
+    repo.write("package.json", &npm_manifest("0.4.1"));
+    repo.write(
+        "tools/helper/package.json",
+        "{\n  \"private\": true,\n  \"dependencies\": { \"left-pad\": \"^1.3.0\" }\n}\n",
+    );
+    repo.commit("add fixture");
+    repo.cli().arg("init").assert().code(2);
+    let plan: InitPlan = serde_yaml::from_str(
+        &fs::read_to_string(repo.root.join(".intentional/init-plan.yml")).unwrap(),
+    )
+    .expect("candidate plan");
+    let paths = plan
+        .discovery_candidates
+        .iter()
+        .map(|candidate| candidate.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec![PathBuf::from("package.json")]);
+}

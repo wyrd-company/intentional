@@ -2954,7 +2954,16 @@ fn adapter_for(path: &Path) -> Option<Adapter> {
     }
 }
 
+/// Whether a manifest describes a versioned project. A Cargo manifest
+/// without `[package]` (a virtual workspace) and an npm manifest without a
+/// string `name` (it cannot be published) are not projects.
 fn is_project_manifest(path: &Path, adapter: Adapter) -> Result<bool> {
+    if adapter == Adapter::Npm {
+        let text = std::fs::read_to_string(path).map_err(|error| Error::io(path, error))?;
+        let value: JsonValue = serde_json::from_str(&text)
+            .map_err(|error| Error::Validation(format!("invalid {}: {error}", path.display())))?;
+        return Ok(value["name"].is_string());
+    }
     if adapter != Adapter::Cargo {
         return Ok(true);
     }

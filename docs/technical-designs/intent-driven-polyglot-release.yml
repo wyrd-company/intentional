@@ -255,7 +255,10 @@ proposed-design:
     artifact-neutral candidate contract: stable detector/path identity,
     evidence digests, optional native identity and raw version evidence,
     conditional projection and tag suggestions, and narrow extraction
-    diagnostics. Detector evidence does not infer publication.
+    diagnostics. Detector evidence does not infer publication. A manifest
+    that describes no versioned project, such as a Cargo manifest without a
+    package table or an npm manifest without a string name, is not a
+    candidate.
     Walking hard-excludes version-control metadata, Intentional state, and
     ecosystem cache directories. Broad names such as build, dist, bin, and
     vendor have no built-in meaning and are controlled only by repository ignore

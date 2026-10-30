@@ -24,6 +24,8 @@ Package-manager workspace membership informs recommendations, dependency
 analysis, and Changesets parity; it never limits discovery. Version-control
 metadata, Intentional state, and ecosystem caches are skipped. Ordinary names
 such as `build`, `dist`, `bin`, and `vendor` are scanned unless ignored.
+A manifest that describes no versioned project is not a candidate: a Cargo
+manifest without `[package]`, or a `package.json` without a string `name`.
 
 The first run writes `.intentional/init-plan.yml` when candidates need input
 and exits with code `2`. This is a request for decisions, not an operational
