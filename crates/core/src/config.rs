@@ -1,12 +1,14 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: release-workspace
 // ---
 
 //! Workspace configuration and validation.
 
 use crate::error::{Error, Result};
-use crate::model::{Adapter, Bump, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole};
+use crate::model::{
+    Adapter, Bump, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition, TagPhase, TagRole,
+};
 use crate::ownership::check_ownership;
 use crate::projection_file::validate_relative_path;
 pub use crate::projection_file::ProjectionFile;
@@ -17,8 +19,11 @@ use std::path::{Component, Path, PathBuf};
 /// Location of the workspace configuration.
 pub const CONFIG_PATH: &str = ".intentional/config.yml";
 
-/// Published configuration schema identifier.
-pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
+/// Configuration schema identifier for the current compatibility line, written by initialization.
+pub const CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/0.2/config";
+
+/// Configuration schema identifier written by Intentional 0.1.x and 0.2.0. Readers accept it.
+pub const LEGACY_CONFIG_SCHEMA: &str = "https://intentional.foo/schemas/config.yml";
 
 /// Current interpretation contract written by initialization.
 pub const CURRENT_CONTRACT: &str = "contract-2";
@@ -30,6 +35,7 @@ pub const CONTRACT_1: &str = "contract-1";
 /// Complete workspace configuration.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Config {
     /// Optional schema URL for editor and validation tooling.
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
@@ -90,7 +96,7 @@ pub(crate) struct Contract1Upgrade {
     pub mapping: Contract1Mapping,
 }
 
-fn declares_contract_1(value: &serde_yaml::Value) -> bool {
+pub(crate) fn declares_contract_1(value: &serde_yaml::Value) -> bool {
     value.get("contract").and_then(serde_yaml::Value::as_str) == Some(CONTRACT_1)
 }
 
@@ -200,6 +206,7 @@ fn upgrade_contract_1_text(text: &str) -> Option<String> {
 /// Durable receipts for resolved discovery candidates.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DiscoveryConfig {
     /// Candidate paths incorporated into configured release units.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -218,6 +225,7 @@ impl DiscoveryConfig {
 /// Receipt connecting one detector/path identity to a configured release unit.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ManagedPathReceipt {
     /// Stable detector id.
     pub detector: String,
@@ -230,6 +238,7 @@ pub struct ManagedPathReceipt {
 /// Receipt excluding one detector/path identity while its evidence is unchanged.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ExcludedPathReceipt {
     /// Stable detector id.
     pub detector: String,
@@ -242,6 +251,7 @@ pub struct ExcludedPathReceipt {
 /// Workspace-wide release behavior.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Settings {
     /// Minimum bump propagated to internal dependents.
     #[serde(default = "default_dependency_bump")]
@@ -263,12 +273,16 @@ const fn default_dependency_bump() -> Bump {
 /// One independently versioned release unit.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ReleaseUnitConfig {
     /// Release-unit directory relative to the workspace root.
     pub path: PathBuf,
     /// Whether releases may include this release unit.
     #[serde(default, skip_serializing_if = "is_managed")]
     pub disposition: ReleaseUnitDisposition,
+    /// Whether every release has a release record that the surrounding process creates.
+    #[serde(default, skip_serializing_if = "is_required")]
+    pub release_record: ReleaseRecordPolicy,
     /// Version-bearing ecosystem and format projections. Empty means tag-only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projections: Vec<Projection>,
@@ -283,9 +297,14 @@ fn is_managed(disposition: &ReleaseUnitDisposition) -> bool {
     *disposition == ReleaseUnitDisposition::Managed
 }
 
+fn is_required(policy: &ReleaseRecordPolicy) -> bool {
+    *policy == ReleaseRecordPolicy::Required
+}
+
 /// One named release-unit tag.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct TagConfig {
     /// Whether this tag supplies version authority or projects it.
     pub role: TagRole,
@@ -302,6 +321,7 @@ pub struct TagConfig {
 /// One named workspace-level tag.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct WorkspaceTagConfig {
     /// Tag name template containing `{version}`.
     pub template: String,
@@ -316,6 +336,7 @@ pub struct WorkspaceTagConfig {
 /// A version projection into a manifest or arbitrary file.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[non_exhaustive]
 pub struct Projection {
     /// Adapter specialization.
     pub adapter: Adapter,
@@ -401,7 +422,6 @@ impl Config {
                 "internal-dependency-bump must be major, minor, or patch".to_owned(),
             ));
         }
-
         let mut canonical_tags = BTreeSet::new();
         let mut resolved_templates = BTreeMap::new();
         for (id, release_unit) in &self.release_units {
@@ -437,6 +457,7 @@ impl Config {
                     &format!("release unit {id} tag {tag_id}"),
                     &tag.template,
                     true,
+                    tag.role == TagRole::Projection,
                 )?;
                 let canonical = Self::release_unit_tag_id(id, tag_id);
                 canonical_tags.insert(canonical);
@@ -453,7 +474,7 @@ impl Config {
 
         for (id, tag) in &self.workspace_tags {
             validate_id(id, "workspace tag")?;
-            validate_tag_template(&format!("workspace tag {id}"), &tag.template, false)?;
+            validate_tag_template(&format!("workspace tag {id}"), &tag.template, false, false)?;
             canonical_tags.insert(Self::workspace_tag_id(id));
             if let Some(other) =
                 resolved_templates.insert(tag.template.clone(), format!("workspace tag {id}"))
@@ -735,6 +756,7 @@ pub(crate) fn validate_tag_template(
     description: &str,
     template: &str,
     allow_id: bool,
+    allow_v_prefix: bool,
 ) -> Result<()> {
     if template.matches("{version}").count() != 1
         || template.matches("{id}").count() > usize::from(allow_id)
@@ -748,7 +770,7 @@ pub(crate) fn validate_tag_template(
             }
         )));
     }
-    if template.contains("v{version}") {
+    if !allow_v_prefix && template.contains("v{version}") {
         return Err(Error::Validation(format!(
             "{description} template must not prefix versions with v"
         )));
@@ -795,6 +817,68 @@ release-units:
     }
 
     #[test]
+    fn release_record_policy_defaults_to_required_and_omits_it_when_written() {
+        let config = Config::from_yaml(VALID).expect("valid config");
+        assert!(config
+            .release_units
+            .values()
+            .all(|unit| unit.release_record == ReleaseRecordPolicy::Required));
+        assert!(!config
+            .to_yaml()
+            .expect("serializes")
+            .contains("release-record"));
+
+        let none = VALID.replace(
+            "    path: packages/library\n",
+            "    path: packages/library\n    release-record: none\n",
+        );
+        let config = Config::from_yaml(&none).expect("release-record none loads");
+        assert_eq!(
+            config.release_units["library"].release_record,
+            ReleaseRecordPolicy::None
+        );
+        assert_eq!(
+            config.release_units["application"].release_record,
+            ReleaseRecordPolicy::Required
+        );
+        let written = config.to_yaml().expect("serializes");
+        assert!(written.contains("release-record: none"), "{written}");
+        assert_eq!(Config::from_yaml(&written).expect("reloads"), config);
+    }
+
+    #[test]
+    fn rejects_a_workflow_key_like_any_unknown_field() {
+        for key in ["workflow", "sample-unknown"] {
+            let config = VALID.replace(
+                "contract: contract-2\n",
+                &format!("contract: contract-2\n{key}:\n  adoption: declined\n"),
+            );
+            let error = Config::from_yaml(&config).expect_err("unknown top-level key rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("unknown field `{key}`")),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn permits_required_v_prefix_only_on_projection_tags() {
+        let go_projection = VALID.replace(
+            "primary: { role: primary, template: '{id}@{version}' }",
+            "primary: { role: primary, template: '{id}@{version}' }\n      go: { role: projection, template: 'v{version}' }",
+        );
+        Config::from_yaml(&go_projection).expect("Go projection tag accepted");
+
+        let invalid_primary = VALID.replace("'{id}@{version}'", "'v{version}'");
+        assert!(Config::from_yaml(&invalid_primary)
+            .expect_err("v-prefixed primary tag rejected")
+            .to_string()
+            .contains("must not prefix versions with v"));
+    }
+
+    #[test]
     fn validates_managed_and_exact_excluded_discovery_receipts() {
         let receipts = VALID.replace(
             "release-units:\n",
@@ -834,9 +918,10 @@ release-units:
 
     #[test]
     fn published_config_schema_carries_discovery_receipt_contracts() {
-        let schema: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../../schemas/config.yml"))
-                .expect("config schema parses");
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/release-workspace.schema.yml"
+        ))
+        .expect("config schema parses");
         let discovery = &schema["$defs"]["discovery"];
         assert_eq!(discovery["additionalProperties"].as_bool(), Some(false));
         assert_eq!(
@@ -846,12 +931,59 @@ release-units:
                 .len(),
             3
         );
+        assert!(
+            discovery["properties"]["managed-paths"]["items"]["properties"]
+                .get("package")
+                .is_none()
+        );
         assert_eq!(
             discovery["properties"]["excluded-paths"]["items"]["properties"]["evidence-digest"]
                 ["pattern"]
                 .as_str(),
             Some("^sha256:[0-9a-f]{64}$")
         );
+        let identities: Vec<&str> = schema["properties"]["$schema"]["enum"]
+            .as_sequence()
+            .expect("configuration schema identities")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        assert_eq!(identities, [CONFIG_SCHEMA, LEGACY_CONFIG_SCHEMA]);
+        assert_eq!(
+            schema["properties"]["contract"]["const"].as_str(),
+            Some(CURRENT_CONTRACT)
+        );
+        assert_eq!(
+            schema["properties"]["workspace-tags"]["propertyNames"]["$ref"].as_str(),
+            Some("#/$defs/stable-id")
+        );
+        assert_eq!(
+            schema["$defs"]["release-unit-tag"]["properties"]["template"]["$ref"].as_str(),
+            Some("#/$defs/tag-template")
+        );
+        assert_eq!(
+            schema["$defs"]["projection"]["allOf"][0]["then"]["required"][0].as_str(),
+            Some("pointer")
+        );
+        assert_eq!(
+            schema["$defs"]["workspace-tag"]["properties"]["tag-after"]["items"]["$ref"].as_str(),
+            Some("#/$defs/tag-id")
+        );
+        for tag in ["release-unit-tag", "workspace-tag"] {
+            assert_eq!(
+                schema["$defs"][tag]["properties"]["require-phase"]["$ref"].as_str(),
+                Some("#/$defs/tag-phase")
+            );
+        }
+        let phases: Vec<&str> = schema["$defs"]["tag-phase"]["enum"]
+            .as_sequence()
+            .expect("tag phase values")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
+        let implemented = [TagPhase::BeforePublication, TagPhase::AfterPublication]
+            .map(|phase| phase.to_string());
+        assert_eq!(phases, implemented);
     }
 
     /// `VALID` with one more release unit `beta` at `site` whose single
@@ -990,9 +1122,10 @@ release-units:
 
     #[test]
     fn published_projection_file_pattern_agrees_with_config_validation() {
-        let schema: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../../schemas/config.yml"))
-                .expect("config schema parses");
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/release-workspace.schema.yml"
+        ))
+        .expect("config schema parses");
         let pattern = schema["$defs"]["projection"]["properties"]["file"]["pattern"]
             .as_str()
             .expect("projection file pattern");

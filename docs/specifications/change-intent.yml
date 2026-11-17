@@ -1,0 +1,33 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - intent-and-versioning
+  models:
+    - intentional
+description: >-
+  Defines one pending Change Intent stored at
+  `.intentional/intents/<stable-id>.md`. The filename stem is the Change Intent
+  identity. The file contains a YAML frontmatter mapping from stable Release Unit
+  IDs to `major`, `minor`, or `patch`, followed by non-empty CommonMark changelog
+  prose. The frontmatter carries no duplicate identity field. Pending files are
+  repository-owned and remain editable or removable until a Release consumes
+  them. Channel Releases retain their contributing files. Channel-less
+  materialization removes them from the candidate tree, and verified release
+  establishment makes that consumption durable. Imported release-tool entries
+  receive deterministic stable IDs through the Initialization Plan; collisions
+  remain explicit plan resolutions. `docs/specifications/change-intent.schema.yml`
+  is the machine-readable frontmatter definition.
+format: json-schema
+validation-criteria: >-
+  A conforming file is UTF-8 Markdown whose logical lines accept LF or CRLF input
+  and whose canonical rendering uses LF. A line containing only `---` opens the
+  file and another closes its YAML frontmatter. The frontmatter validates against
+  `docs/specifications/change-intent.schema.yml`, contains at least one unique
+  Release Unit key, and every key names a configured Release Unit. Its mapping
+  order has no meaning. The remaining CommonMark body contains non-whitespace
+  changelog prose and has no line-count limit. The `.md` filename stem validates
+  against the Release Workspace stable-ID definition and is unique among pending
+  intents. Parsing rejects duplicate YAML keys, unknown Release Units, unknown
+  bumps, malformed delimiters, invalid UTF-8, and empty prose. Serialization sorts
+  Release Unit keys lexically, emits one trailing newline, and preserves the
+  authored CommonMark body apart from surrounding blank-line normalization.

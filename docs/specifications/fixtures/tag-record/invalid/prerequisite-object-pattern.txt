@@ -1,0 +1,12 @@
+intentional release record
+
+contract: contract-1
+generator: intentional 0.3.0
+plan-digest: sha256:5d12df2da6da303081635e34f1edde2526305e3ce6434bb4d8676228c0df4c22
+tag-id: workspace/release
+tag-role: workspace
+version: 0.0.1-rc.1
+target: 3333333333333333333333333333333333333333
+baseline: false
+prerequisite: release-unit/sample-library/mirror 444444444444444444444444444444444444444
+prerequisite: release-unit/sample-library/primary 5555555555555555555555555555555555555555

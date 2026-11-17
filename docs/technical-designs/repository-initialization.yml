@@ -1,0 +1,146 @@
+$schema: https://refinery.systems/ontology/technical-design
+relationships:
+  part-of: intent-driven-polyglot-release
+  realizes: intentional
+objective: >-
+  Reconcile repository evidence and explicit owner decisions into one complete
+  Release Workspace configuration, including authority transfer from
+  recognized release tools, and hand the result to a release process.
+proposed-design:
+  reconciliation-model: >-
+    `intentional init` implements the `Reconcile Release Workspace` command. It
+    scans current repository state, combines that evidence with durable prior
+    resolutions, and constructs one canonical Initialization Plan. The same
+    operation initializes an empty workspace, adds newly discovered capabilities
+    to a configured workspace, and reopens decisions whose evidence changed.
+    Configuration changes are applied only from a complete valid plan.
+
+  repository-boundary: >-
+    Initialization requires a Git work tree and resolves every path relative to
+    its root. Discovery follows Git ignore rules and excludes version-control
+    metadata, Intentional state, and known ecosystem caches. Ordinary directory
+    names carry no semantic meaning. Package-manager workspace membership,
+    manifest fields, dependency graphs, existing configuration, scripts,
+    workflows, and lockfiles are evidence rather than inclusion boundaries.
+
+  detector-contract: >-
+    Every detector emits the same artifact-neutral candidate shape: a stable
+    detector identifier, exact workspace-relative path, evidence locations and
+    digests, optional native identity, raw version evidence, one optional
+    projection suggestion, one optional tag suggestion, diagnostics, and the
+    narrow facts used to derive each suggestion. Detectors extract only facts
+    native to their format and never infer repository policy from prose,
+    directory proximity, or naming style.
+
+  candidate-identity: >-
+    Discovery retains candidates by detector and exact path before constructing
+    Release Units. Repeated native names at different paths remain separate
+    candidates. A resolution makes a candidate an independent Release Unit,
+    projects it into another candidate or configured Release Unit, or excludes
+    it. Independent and projection resolutions name final Release Unit identity.
+    Projection graphs must resolve to one independent owner and contain no
+    cycles, absent targets, duplicate creators, or conflicting ownership.
+
+  evidence-bound-resolutions: >-
+    A managed receipt binds detector and path identity to its configured Release
+    Unit. An exclusion receipt also binds the evidence digest that justified the
+    exclusion. A matching receipt resolves the candidate on later runs. Changed
+    excluded evidence becomes an unresolved candidate. Changed managed evidence
+    is reconciled against current configuration and can require an explicit
+    decision when ownership or native identity no longer agrees.
+
+  initialization-plan: >-
+    The Initialization Plan is a deterministic schema-backed document. It
+    contains the source fingerprint, inferred configuration, candidate evidence,
+    diagnostics, planned operations, finite resolution choices, recommendations,
+    imported-source parity, and editable resolution fields. A workspace with no
+    imported release tool records trivially equivalent parity with no Release
+    Unit comparisons. Computed readiness derives from validated content. Human-
+    readable output and structured output expose the same state, evidence,
+    choices, and next actions.
+
+    Rerunning initialization reconstructs computed fields from repository state
+    and retains a supplied resolution only while its bound evidence remains
+    valid. A complete plan materializes all accepted decisions atomically and is
+    consumed. An incomplete plan remains the single handoff for owner input. A
+    scan with no unresolved or changed candidates and no configuration delta
+    performs no mutation.
+
+  release-workspace-materialization: >-
+    Accepted candidate ownership creates or updates Release Units, projections,
+    dependencies, tag streams, and discovery receipts. Reconciliation validates
+    the complete resulting Release Workspace rather than applying candidates one
+    at a time.
+
+  release-process-handoff: >-
+    Initialization configures no release process and never runs a template
+    tool. Each Release Unit it creates takes the default `required`
+    release-record policy; initialization never proposes `none`. Whenever
+    initialization writes `.intentional/config.yml`, it writes the Release Model
+    in the same operation set, as the Release Model design's command surface
+    requires. A ready result names applying a release process template as the next
+    action. If no Release Model exists after the planned operations, it first
+    names `intentional model`. A no-op reconciliation leaves an absent model
+    absent and names both actions in that order. A plan that needs input names
+    no release process handoff. A ready imported plan counts the model write in
+    its planned takeover operations before takeover is applied; its handoff names
+    only the template step, to follow completion of those operations.
+    The core release protocol needs no release process: planning,
+    materialization, versioning, changelog production, and verified
+    establishment from a harness-created commit and Intentional-created tags
+    remain available without one.
+
+  imported-authority: >-
+    A recognized release tool activates an importer that reads its configuration,
+    pending intent, dependency semantics, release groups, exclusions, and
+    executable repository integrations. The importer computes both the source
+    tool's next release and Intentional's proposed next release. It reports
+    identity membership, bumps, versions, dependency effects, and group effects
+    as parity evidence. Unsupported or ambiguous source semantics remain explicit
+    plan decisions.
+
+  changesets-import: >-
+    Changesets package names map through resolved candidates to Release Unit
+    identities. Pending Changesets files become Change Intents while preserving
+    their Markdown bodies. Fixed and linked groups, ignored packages, private
+    package behavior, dependency kinds, workspace ranges, peer behavior, and
+    supported dependent-update settings participate in parity computation.
+    Manifest-owned npm dependency edges are derived from the materialized
+    package graph. Authored edges remain authoritative where the manifest cannot
+    express a cross-ecosystem or non-native dependency.
+
+  repository-integrations: >-
+    References to imported tooling outside its owned state are repository-owned
+    integrations. The plan records each exact location and the required observed
+    outcome. Reconciliation accepts the resolution only after a rerun sees that
+    outcome in the repository. Proxy-package removal requires structural evidence
+    that no non-source-tool reference remains and an explicit owner resolution.
+
+  authority-transfer: >-
+    Imported state remains authoritative until an explicit takeover applies a
+    ready plan. Takeover rechecks the source fingerprint, every resolution,
+    release parity, repository integrations, and complete operation set. A
+    rollback-capable filesystem transaction writes Release Workspace
+    configuration and converted Change Intents, removes recognized imported
+    state and explicitly authorized proxy files, and consumes the plan as one
+    operation. Staging data supports recovery after interruption and is removed
+    after success.
+
+  baseline-continuation: >-
+    Takeover produces the exact post-commit baseline command as structured and
+    human-readable output. Status and conformance checks independently rediscover
+    missing baseline authority until configured annotated tags exist. Baseline
+    establishment reads agreeing version-bearing projections or explicit values
+    for tag-only Release Units, then creates primary, projection, and workspace
+    tag streams against the externally created takeover commit. A Release Unit
+    or workspace tag stream whose current tag already carries a tag record is
+    established and outside the baseline set, unless that tag record is a
+    baseline at the commit being tagged; a Release Unit added after others have
+    released therefore receives its baseline alone.
+
+  diagnostics: >-
+    Stable diagnostic codes describe contract conditions. Diagnostic identity
+    adds the affected Release Unit, candidate, tag, or repository path.
+    Needs-input, successful reconciliation, and invalid repository state are
+    distinct process outcomes. Dry-run renders the complete planned operation
+    set without changing repository state.

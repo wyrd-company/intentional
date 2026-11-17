@@ -1,0 +1,152 @@
+$schema: https://refinery.systems/ontology/standard
+title: Intentional Backward Compatibility Standard
+description: >-
+  Defines measurable requirements for preserving durable records, migrating
+  workspace state, changing public surfaces, and maintaining released lines.
+purpose:
+  - >-
+    Make the Intentional backward-compatibility policy auditable in development
+    and release review.
+  - Define the evidence required before a compatibility-affecting change can ship.
+relationships:
+  enforces:
+    - pol-backward-compatibility
+scope:
+  - Intentional releases at version 0.2.0 and later.
+  - >-
+    Intentional code, schemas, records, integrations, release artifacts, and
+    review processes.
+requirements:
+  1:
+    mandates:
+      pol-backward-compatibility: [ 1, 2 ]
+    statement: >-
+      Current Intentional MUST parse and historically verify every durable-record
+      contract published by Intentional version 0.2.0 or later.
+    substatements:
+      A: >-
+        Verification MUST report historical conformance under the producing
+        contract separately from current trust assessment.
+      B: >-
+        A current trust failure MUST NOT change the historical conformance result.
+    compliance:
+      review: [ 1, A, B ]
+  2:
+    mandates:
+      pol-backward-compatibility: [ 3 ]
+    statement: >-
+      Current Intentional MUST parse every published Release Workspace
+      configuration and Change Intent from version 0.2.0 or later and produce a
+      migration plan to current state.
+    substatements:
+      A: >-
+        A migration plan MUST preserve unsupported selections as explicit user
+        decisions or blockers rather than discard them.
+      B: >-
+        Reading historical workspace state MUST NOT modify repository files.
+    compliance:
+      review: [ 2, A, B ]
+  3:
+    mandates:
+      pol-backward-compatibility: [ 3 ]
+    statement: >-
+      Applying a workspace migration MUST require an explicit operation against
+      an unchanged migration-plan input set.
+    substatements:
+      A: >-
+        Migration application MUST stop when a source file changed after plan
+        computation.
+      B: >-
+        Migration application MUST expose every required user choice before
+        writing.
+    compliance:
+      review: [ 3, A, B ]
+  4:
+    mandates:
+      pol-backward-compatibility: [ 3 ]
+    statement: >-
+      Ownership-manifest migration MUST distinguish unchanged Intentional-owned
+      files, edited Intentional-owned files, and user-owned files.
+    substatements:
+      A: >-
+        Reconciliation MUST replace or remove only unchanged Intentional-owned
+        files without further user resolution.
+      B: >-
+        Reconciliation MUST report an edited Intentional-owned file as a conflict.
+      C: User-owned files MUST remain unchanged.
+    compliance:
+      review: [ 4, A, B, C ]
+  5:
+    mandates:
+      pol-backward-compatibility: [ 4 ]
+    statement: >-
+      Every published compatibility-line schema endpoint MUST remain resolvable
+      and immutable in meaning.
+    substatements:
+      A: >-
+        The authoritative YAML and served JSON representations MUST remain
+        semantically equivalent.
+    compliance:
+      review: [ 5, A ]
+  6:
+    mandates:
+      pol-backward-compatibility: [ 4, 9 ]
+    statement: >-
+      Every released Intentional binary and its integrity information MUST remain
+      available from Intentional's own immutable release record.
+    substatements:
+      A: >-
+        Current Intentional MUST direct historical Release Plan execution to the
+        exact producing version recorded by that plan.
+      B: >-
+        Artifact retention MUST NOT claim that a historical operating system,
+        toolchain, network service, or external input remains executable or
+        available.
+    compliance:
+      review: [ 6, A, B ]
+  7:
+    mandates:
+      pol-backward-compatibility: [ 5 ]
+    statement: >-
+      Removal of a public command, crate API, automation integration, operating
+      system, architecture, or installation channel MUST be announced
+      by deprecation in a minor release of the preceding compatibility line and
+      removed only in a release classified as major by the Intentional semantic
+      versioning design.
+    substatements:
+      A: >-
+        Before version 1.0.0, a compatible deprecation MUST use a patch release
+        within the preceding `0.<minor>` compatibility line.
+      B: >-
+        A deprecation release MAY be followed immediately by its removal release.
+    compliance:
+      review: [ 7, A, B ]
+  8:
+    mandates:
+      pol-backward-compatibility: [ 7 ]
+    statement: >-
+      Supported-platform removal MUST identify the removed capability
+      without requiring Intentional to provide a replacement.
+    compliance:
+      review: [ 8 ]
+  9:
+    mandates:
+      pol-backward-compatibility: [ 6 ]
+    statement: >-
+      Only the latest published Intentional compatibility line MUST receive
+      fixes, security updates, and project support.
+    substatements:
+      A: >-
+        Publication of another compatibility line MUST end active maintenance of
+        its predecessor without a required overlap period.
+    compliance:
+      review: [ 9, A ]
+  10:
+    mandates:
+      pol-backward-compatibility: [ 8 ]
+    statement: >-
+      Initialization Plans, unsealed candidate Release Plans, and conformance
+      reports from another Intentional version MUST be rejected with an
+      instruction to regenerate them.
+    compliance:
+      review: [ 10 ]

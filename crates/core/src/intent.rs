@@ -1,6 +1,6 @@
 // ---
 // relationships:
-//   implements: intent-driven-polyglot-release
+//   implements: change-intent
 // ---
 
 //! Intent file parsing, validation, and authoring.
@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 /// Directory containing pending intent files.
 pub const INTENTS_PATH: &str = ".intentional/intents";
 
+/// Published Change Intent frontmatter schema identifier.
+pub const CHANGE_INTENT_SCHEMA: &str = "https://intentional.foo/schemas/change-intent.yml";
+
 const ADJECTIVES: &[&str] = &[
     "amber", "brisk", "calm", "clear", "gentle", "lucky", "quiet", "swift",
 ];
@@ -26,6 +29,7 @@ const NOUNS: &[&str] = &[
 
 /// Parsed change intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Intent {
     /// Stable identifier derived from the filename stem.
     pub id: String,
@@ -52,6 +56,7 @@ pub struct IntentDraft {
 
 /// Planned intent file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IntentWrite {
     /// Target path relative to the workspace.
     pub path: PathBuf,
@@ -306,6 +311,23 @@ release-units:
             .plan(Path::new("."), &config())
             .expect_err("unknown release unit rejected");
         assert!(error.to_string().contains("unknown release unit missing"));
+    }
+
+    #[test]
+    fn published_change_intent_schema_uses_release_workspace_identity() {
+        let schema: serde_yaml::Value = serde_yaml::from_str(include_str!(
+            "../../../docs/specifications/change-intent.schema.yml"
+        ))
+        .expect("Change Intent schema parses");
+        assert_eq!(
+            schema["$id"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/change-intent")
+        );
+        assert_eq!(
+            schema["propertyNames"]["$ref"].as_str(),
+            Some("https://intentional.foo/schemas/0.2/config#/$defs/stable-id")
+        );
+        assert_eq!(schema["minProperties"].as_u64(), Some(1));
     }
 
     #[test]

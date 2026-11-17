@@ -20,9 +20,6 @@ inputs:
   prerelease:
     description: "Optional prerelease identifier for stamp"
     required: false
-  phase:
-    description: "Optional tag executor phase: before-publication or after-publication"
-    required: false
   release-plan:
     description: "Optional digest-sealed release plan path for tag verification"
     required: false
@@ -140,7 +137,6 @@ runs:
         INPUT_COMMAND: ${{ inputs.command }}
         INPUT_CHANNEL: ${{ inputs.channel }}
         INPUT_PRERELEASE: ${{ inputs.prerelease }}
-        INPUT_PHASE: ${{ inputs.phase }}
         INPUT_RELEASE_PLAN: ${{ inputs.release-plan }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_BASELINE_VERSIONS: ${{ inputs.baseline-versions }}
@@ -187,14 +183,6 @@ runs:
             exit 1
           fi
           ARGS+=(--prerelease "$INPUT_PRERELEASE")
-        fi
-
-        if [[ -n "$INPUT_PHASE" ]]; then
-          if [[ "$INPUT_COMMAND" != "tag" ]]; then
-            echo "::error::phase is only valid for tag."
-            exit 1
-          fi
-          ARGS+=(--phase "$INPUT_PHASE")
         fi
 
         if [[ -n "$INPUT_RELEASE_PLAN" ]]; then

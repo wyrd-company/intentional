@@ -14,6 +14,7 @@ use std::path::Path;
 
 /// Current and next version of a release unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ReleaseUnitVersion {
     /// Latest final version tag on the first-parent history.
     pub current: Version,

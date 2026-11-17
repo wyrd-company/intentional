@@ -16,8 +16,9 @@ tasks:
       - cargo test --workspace
 
   self-check:
-    desc: Verify Intentional can load its own release configuration
+    desc: Run intentional check and status here with the workspace binary, not the ambient one
     cmds:
+      - cargo run --quiet -p intentional-cli -- check
       - cargo run --quiet -p intentional-cli -- status
 
   lint:
@@ -36,7 +37,8 @@ tasks:
       - cargo fmt --all -- --check
 
   ci:
-    desc: Run all continuous-integration checks locally
+    desc: Run all continuous-integration checks locally (the handoff gate)
+    aliases: [ check ]
     deps: [ docs:check, fmt-check, lint, npm:test, release:check, self-check, test ]
 
   npm:test:

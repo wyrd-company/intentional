@@ -426,6 +426,7 @@ fn baseline_for_a_unit_added_after_others_released_tags_only_that_unit() {
     assert_eq!(record_field(&repo, "gamma@0.0.0", "baseline"), "true");
     assert_eq!(repo.tag_target("alpha@0.1.1"), alpha_release);
     assert_eq!(repo.tag_target("beta@0.1.1"), beta_release);
+    assert_baseline_verifies(&repo, &["gamma@0.0.0", "alpha@0.1.0", "beta@0.1.0"]);
 
     // A retry at the same commit is idempotent.
     repo.cli()
@@ -434,6 +435,7 @@ fn baseline_for_a_unit_added_after_others_released_tags_only_that_unit() {
         .success()
         .stdout(predicate::str::is_empty());
     assert_eq!(repo.tags().len(), before.len() + 1);
+    assert_baseline_verifies(&repo, &["gamma@0.0.0"]);
 
     // The new unit then releases alone while the others stay put.
     repo.intent("gamma-first-0004", &[("gamma", "patch")], "Ship gamma.");
@@ -476,6 +478,7 @@ fn baseline_for_a_unit_added_after_an_earlier_baseline_tags_only_that_unit() {
     tags.sort();
     assert_eq!(tags, ["alpha@0.1.0", "gamma@0.0.0"]);
     assert_eq!(repo.tag_target("alpha@0.1.0"), alpha_baseline);
+    assert_baseline_verifies(&repo, &["alpha@0.1.0", "gamma@0.0.0"]);
 }
 
 #[test]
@@ -527,6 +530,24 @@ fn baseline_for_a_unit_added_later_leaves_an_established_workspace_tag_alone() {
     tags.sort();
     assert_eq!(tags, ["alpha@0.1.0", "gamma@0.0.0", "release-1.0.0"]);
     assert_eq!(repo.tag_target("release-1.0.0"), workspace_baseline);
+    assert_baseline_verifies(&repo, &["alpha@0.1.0", "release-1.0.0", "gamma@0.0.0"]);
+}
+
+/// `intentional verify` accepts each tag that `tag --baseline` created, so
+/// that verification agrees with every sequence baseline creation permits.
+fn assert_baseline_verifies(repo: &TestRepo, tags: &[&str]) {
+    for tag in tags {
+        let output = repo
+            .cli()
+            .args(["verify", tag, "--json"])
+            .output()
+            .expect("verify command");
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("verify JSON report");
+        assert!(output.status.success(), "verify {tag}: {report:#}");
+        assert_eq!(report["baseline"], true, "verify {tag}: {report:#}");
+        assert_eq!(report["verified"], true, "verify {tag}: {report:#}");
+    }
 }
 
 /// Rewrite annotated tag `tag` in place with `field` replaced by `value`.
@@ -548,11 +569,17 @@ fn forge_record_field(repo: &TestRepo, tag: &str, field: &str, value: &str) {
 
 #[test]
 fn baseline_refuses_an_established_record_with_a_foreign_identity() {
-    for (field, value) in [
-        ("tag-id", "release-unit/other/primary"),
-        ("version", "8.8.8"),
-        ("contract", "contract-other"),
-        ("baseline", "maybe"),
+    let unexpected = |field: &str| format!("release tag alpha@0.1.1 has unexpected {field}");
+    let schema = |field: &str| {
+        format!(
+            "Tag Record of annotated tag alpha@0.1.1 violates its published schema at #/{field}"
+        )
+    };
+    for (field, value, failure) in [
+        ("tag-id", "release-unit/other/primary", unexpected("tag-id")),
+        ("version", "8.8.8", unexpected("version")),
+        ("contract", "contract-other", schema("contract")),
+        ("baseline", "maybe", schema("baseline")),
     ] {
         let repo = shared_yaml_repository();
         forge_record_field(&repo, "alpha@0.1.1", field, value);
@@ -562,9 +589,7 @@ fn baseline_refuses_an_established_record_with_a_foreign_identity() {
             .args(["tag", "--baseline"])
             .assert()
             .failure()
-            .stderr(predicate::str::contains(format!(
-                "release tag alpha@0.1.1 has unexpected {field}"
-            )));
+            .stderr(predicate::str::contains(failure));
         assert_eq!(repo.tags(), before, "{field} forgery created tags");
     }
 }

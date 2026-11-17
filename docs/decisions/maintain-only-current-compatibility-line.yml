@@ -1,0 +1,68 @@
+$schema: https://refinery.systems/ontology/decision-record
+name: Maintain only current Intentional compatibility line
+
+relationships:
+  contextualizes:
+    - intentional
+    - semantic-versioning
+    - pol-backward-compatibility
+    - std-backward-compatibility
+    - compatibility-and-migration
+
+description: >-
+  Intentional preserves historical schemas, released binaries, durable-record
+  verification, and migration knowledge. Those permanent capabilities can be
+  mistaken for a promise to issue fixes and provide support for every historical
+  release line. Active maintenance needs a distinct boundary so release
+  planning, security response, contributor expectations, and adopter support do
+  not assume an unstated overlap between compatibility lines.
+
+considered-options:
+  1: >-
+    Maintain only the current compatibility line. Publishing another
+    compatibility line ends active maintenance of the preceding line without an
+    overlap period. Historical artifacts and compatibility capabilities remain
+    available under their separate contracts.
+  2: >-
+    Maintain the current and immediately preceding compatibility lines. This
+    gives adopters one complete line in which to migrate, but every new line
+    creates parallel fix, release, validation, and support work.
+  3: >-
+    Maintain each compatibility line for a fixed period after its replacement.
+    This gives adopters a predictable support window, but ties release work to
+    elapsed time and requires concurrent maintenance whenever releases occur
+    within that window.
+
+decision-outcome:
+  chosen-option: 1
+  justification: >-
+    Intentional provides permanent access and migration so adopters can
+    understand historical state and move to the current line. Active maintenance
+    serves a different purpose: delivering fixes against the product Intentional
+    currently supports. Concentrating maintenance on one line keeps every fix,
+    security response, and conformance change aligned with that current product.
+    A new compatibility line therefore becomes the sole supported line when it
+    is published. Permanent historical verification and migration do not create
+    a parallel maintenance obligation.
+
+expected-outcomes:
+  positive:
+    - >-
+      Fixes, security work, and support effort apply to one current Intentional
+      contract and one release branch.
+    - >-
+      Publishing a compatibility line creates an unambiguous support boundary
+      without a time-based overlap or long-term-support designation.
+    - >-
+      Historical schemas, binaries, records, and migration readers retain their
+      promised value without implying that historical binaries receive patches.
+  negative:
+    - >-
+      Adopters must migrate to the current compatibility line to receive fixes
+      or project support.
+    - >-
+      A new compatibility line can end maintenance of its predecessor
+      immediately, including when an adopter has not completed migration.
+    - >-
+      A defect discovered only in an historical line remains unfixed there even
+      when its current-line equivalent is corrected.

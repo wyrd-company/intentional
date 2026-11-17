@@ -1,0 +1,63 @@
+{
+  "tags": [
+    {
+      "version": "1.3.0-rc.1",
+      "tag_after": [
+        "release-unit/sample-library/primary"
+      ],
+      "role": "projection",
+      "release_unit": "sample-library",
+      "name": "mirror/v1.3.0-rc.1",
+      "id": "release-unit/sample-library/mirror"
+    },
+    {
+      "version": "1.3.0-rc.1",
+      "role": "primary",
+      "release_unit": "sample-library",
+      "name": "sample-library@1.3.0-rc.1",
+      "id": "release-unit/sample-library/primary"
+    },
+    {
+      "version": "0.0.1-rc.1",
+      "tag_after": [
+        "release-unit/sample-library/primary"
+      ],
+      "require_phase": "after-publication",
+      "name": "0.0.1-rc.1",
+      "id": "workspace/release"
+    }
+  ],
+  "tag_order": [
+    "release-unit/sample-library/primary",
+    "release-unit/sample-library/mirror",
+    "workspace/release"
+  ],
+  "source": {
+    "tree": "2222222222222222222222222222222222222222",
+    "commit": "1111111111111111111111111111111111111111"
+  },
+  "release_units": [
+    {
+      "tag_ids": [
+        "release-unit/sample-library/mirror",
+        "release-unit/sample-library/primary"
+      ],
+      "release_notes": "## 1.3.0-rc.1\n\n### Features\n\n- Add a sample capability.\n",
+      "old_version": "1.2.3",
+      "new_version": "1.3.0-rc.1",
+      "id": "sample-library",
+      "contributing_intent_ids": [
+        "swift-falcon-c3b1"
+      ],
+      "bump": "minor"
+    }
+  ],
+  "generator": {
+    "version": "0.3.0",
+    "tool": "intentional"
+  },
+  "digest": "sha256:5d12df2da6da303081635e34f1edde2526305e3ce6434bb4d8676228c0df4c22",
+  "contract": "contract-1",
+  "channel": "rc",
+  "$schema": "https://intentional.foo/schemas/0.3/release-plan"
+}

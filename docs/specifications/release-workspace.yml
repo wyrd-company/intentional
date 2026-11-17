@@ -1,0 +1,43 @@
+$schema: https://refinery.systems/ontology/specification
+relationships:
+  realizes:
+    - repository-initialization
+    - intent-and-versioning
+  models:
+    - intentional
+description: >-
+  Defines the normative `.intentional/config.yml` contract for one Release
+  Workspace. The document records an optional schema identity, the required
+  interpretation contract `contract-1`, workspace settings, Release Units with
+  their version projections, dependencies, dispositions, release-record
+  policies, and tag streams, fixed and linked release groups, workspace tag
+  streams, and discovery receipts. A Release Unit's `release-record` is
+  `required`, the default, or `none`; it states whether the surrounding release
+  process creates a release record for each release, and Intentional creates
+  none under either value.
+  Workspace-tag mappings use bare stable keys; normalized records qualify them
+  as `workspace/<key>`. Release-unit tag references use
+  `release-unit/<release-unit>/<tag>`. A tag stream can require an executor
+  phase, `before-publication` or `after-publication`, before Intentional
+  creates its tag. The configuration names no release process, publication
+  target, credential, or gate location; a release process reads Release
+  Workspace facts from the Release Model. The Release Workspace schema
+  compatibility line and the exact producing Intentional version own
+  configuration and runtime meaning.
+  `docs/specifications/release-workspace.schema.yml` is the machine-readable
+  definition.
+format: json-schema
+validation-criteria: >-
+  A conforming configuration validates against
+  `docs/specifications/release-workspace.schema.yml` as YAML interpreted by JSON
+  Schema Draft 2020-12, passes Intentional's semantic validation, and produces
+  the same normalized model regardless of mapping key order. Unknown fields are
+  rejected. A present `$schema` is either the compatibility-line identity
+  `https://intentional.foo/schemas/0.2/config`, which initialization writes, or
+  `https://intentional.foo/schemas/config.yml`, which readers also accept.
+  Semantic validation proves Release Unit, group, dependency, tag,
+  and discovery-receipt references; exactly one primary tag per Release Unit;
+  unique rendered tag templates; and an acyclic `tag-after` graph. Primary and
+  workspace tag templates never use a `v` version prefix. A Release Unit
+  projection tag may use one only when its native ecosystem contract requires
+  that platform syntax.

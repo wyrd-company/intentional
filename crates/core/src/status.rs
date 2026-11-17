@@ -17,6 +17,7 @@ use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, aggregate_graduations, resolve_versions, VersionRepository};
 use crate::workspace_files::read_contained;
 use semver::Version;
+use serde::Serialize;
 use std::path::Path;
 
 /// Stable diagnostic code emitted while primary baseline authority is absent.
@@ -25,8 +26,23 @@ pub const MISSING_BASELINE_CODE: &str = "missing-baseline";
 /// Stable recovery action emitted with missing-baseline diagnostics.
 pub const MISSING_BASELINE_NEXT_ACTION: &str = "intentional tag --baseline";
 
+/// Stable diagnostic code for a derived model that differs from workspace inputs.
+pub const RELEASE_MODEL_STALE_CODE: &str = "release-model-stale";
+
+/// Stable recovery action for a stale Release Model.
+pub const RELEASE_MODEL_STALE_NEXT_ACTION: &str = "intentional model";
+
+/// Shared human diagnostic for a stale Release Model, including its repair action.
+pub fn release_model_stale_message() -> String {
+    format!(
+        "[{}] .intentional/release-model.json differs from workspace inputs; run {}",
+        RELEASE_MODEL_STALE_CODE, RELEASE_MODEL_STALE_NEXT_ACTION
+    )
+}
+
 /// Version status for one release unit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct ReleaseUnitStatus {
     /// Release-unit id.
     pub id: String,
@@ -41,7 +57,8 @@ pub struct ReleaseUnitStatus {
 }
 
 /// Complete read-only workspace status.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct WorkspaceStatus {
     /// Pending intent ids.
     pub intents: Vec<String>,
@@ -51,12 +68,15 @@ pub struct WorkspaceStatus {
     pub drift: Vec<Drift>,
     /// Release units whose primary baseline tag has not been established.
     pub missing_baselines: Vec<String>,
-    /// Recoverable missing or inconsistent annotated release records.
+    /// Recoverable missing or inconsistent annotated tag records.
     pub tag_record_issues: Vec<String>,
+    /// Whether an existing Release Model differs from the working-tree inputs.
+    pub release_model_stale: bool,
 }
 
 /// One manifest drift finding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
 pub struct Drift {
     /// Release-unit id.
     pub release_unit: String,
@@ -128,6 +148,7 @@ impl WorkspaceStatus {
             drift,
             missing_baselines,
             tag_record_issues: crate::tag::tag_record_issues(root, config)?,
+            release_model_stale: release_model_stale(root, config)?,
         })
     }
 }
@@ -165,4 +186,17 @@ pub(crate) fn read_projection_version(
         ),
         Adapter::Go => unreachable!("Go has no manifest version"),
     }
+}
+
+// Compare canonical producer bytes with the working-tree file. Malformed JSON,
+// another schema, and noncanonical formatting necessarily differ from these bytes.
+fn release_model_stale(root: &Path, config: &Config) -> Result<bool> {
+    let path = root.join(crate::RELEASE_MODEL_PATH);
+    let current = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(crate::Error::io(&path, error)),
+    };
+    let expected = crate::ReleaseModel::from_config(root, config)?.encode()?;
+    Ok(current != expected.as_bytes())
 }
