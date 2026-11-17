@@ -16,8 +16,9 @@ use crate::adapters::format::json_pointer;
 use crate::config::{declares_contract_1, upgrade_contract_1_value, Contract1Mapping};
 use crate::config::{Config, CONFIG_PATH, CONTRACT_1};
 use crate::error::{Error, Result};
-use crate::model::{Adapter, Bump};
+use crate::model::{Adapter, Bump, ProjectionMode};
 use crate::version::{bump_version, component_bump};
+use crate::workspace_files::contained;
 use semver::Version;
 use std::path::Path;
 
@@ -89,7 +90,7 @@ pub(crate) fn load_released(root: &Path) -> Result<(Config, Interpretation)> {
     let mapping = upgrade_contract_1_value(&mut value)?;
     let mut config: Config = serde_yaml::from_value(value)?;
     config.validate_released()?;
-    released_json_pointers(root, &mut config);
+    released_json_pointers(root, &mut config)?;
     config.contract = CONTRACT_1.to_owned();
     Ok((config, Interpretation::Contract1(Contract1 { mapping })))
 }
@@ -100,20 +101,23 @@ pub(crate) fn load_released(root: &Path) -> Result<(Config, Interpretation)> {
 /// `01` and `+1` selected element 1. Since 0.2.1 only the canonical `1`
 /// does. The array structure along a pointer is the same in every tree of a
 /// release, because a release writes only the scalar at its end, so the
-/// pointer is resolved once against the file at `root`. An unreadable file
-/// keeps its pointer, and the rebuild reports it as before.
-fn released_json_pointers(root: &Path, config: &mut Config) {
+/// pointer is resolved once against the file at `root`. A `none` projection
+/// is never read, so it is not resolved. A missing file or one that is not
+/// JSON keeps its pointer, and the rebuild reports it as before. A file
+/// outside the repository, or one that is not a regular file, is refused
+/// before it is opened.
+fn released_json_pointers(root: &Path, config: &mut Config) -> Result<()> {
     for unit in config.release_units.values_mut() {
         let unit_path = unit.path.clone();
         for projection in &mut unit.projections {
-            if projection.adapter != Adapter::Json {
+            if projection.adapter != Adapter::Json || projection.mode == ProjectionMode::None {
                 continue;
             }
             let Some(pointer) = projection.pointer.as_deref() else {
                 continue;
             };
-            let path = root.join(projection.file.workspace_path(&unit_path));
-            let Ok(text) = std::fs::read_to_string(&path) else {
+            let relative = projection.file.workspace_path(&unit_path);
+            let Some(text) = released_projection_text(root, &relative)? else {
                 continue;
             };
             let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -124,6 +128,30 @@ fn released_json_pointers(root: &Path, config: &mut Config) {
             }
         }
     }
+    Ok(())
+}
+
+/// The text of a projection file, read in the strict reader's order: the
+/// path is resolved and must stay inside the repository before anything is
+/// opened. Between that check and the read, the file must also be a regular
+/// file, so that a FIFO or a device is refused instead of read. `None` when
+/// the file does not exist.
+fn released_projection_text(root: &Path, relative: &Path) -> Result<Option<String>> {
+    let path = contained(root, relative)?;
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::io(&path, error)),
+    };
+    if !metadata.is_file() {
+        return Err(Error::Validation(format!(
+            "{} is not a regular file",
+            relative.display()
+        )));
+    }
+    std::fs::read_to_string(&path)
+        .map(Some)
+        .map_err(|error| Error::io(&path, error))
 }
 
 /// `pointer` with every array segment respelled as its canonical index, or
@@ -211,6 +239,50 @@ mod tests {
             );
         }
         assert_eq!(canonical_json_pointer(&document, "versions"), None);
+    }
+
+    #[test]
+    fn a_released_projection_that_is_not_a_regular_file_is_refused() {
+        let root = tempfile::tempdir().expect("root");
+        std::fs::create_dir(root.path().join("meta.json")).expect("directory");
+        let error = released_projection_text(root.path(), Path::new("meta.json"))
+            .expect_err("a directory is refused");
+        assert!(
+            error
+                .to_string()
+                .contains("meta.json is not a regular file"),
+            "{error}"
+        );
+        assert_eq!(
+            released_projection_text(root.path(), Path::new("absent.json")).expect("absent"),
+            None
+        );
+    }
+
+    /// The target outside the repository is unreadable, so opening it would
+    /// fail with a permission error. The containment refusal shows it was
+    /// never opened, as a FIFO there would block an open.
+    #[cfg(unix)]
+    #[test]
+    fn a_released_projection_outside_the_repository_is_refused_before_it_is_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().expect("root");
+        let outside = tempfile::tempdir().expect("outside");
+        let target = outside.path().join("meta.json");
+        std::fs::write(&target, r#"{"versions":["a","1.2.3"]}"#).expect("target");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000))
+            .expect("unreadable");
+        std::os::unix::fs::symlink(&target, root.path().join("meta.json")).expect("symlink");
+        let error = released_projection_text(root.path(), Path::new("meta.json"))
+            .expect_err("outside the repository");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).expect("restore");
+        assert!(matches!(error, Error::Validation(_)), "{error:?}");
+        assert!(
+            error
+                .to_string()
+                .contains("resolves outside the repository"),
+            "{error}"
+        );
     }
 
     #[test]
