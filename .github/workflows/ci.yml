@@ -88,8 +88,9 @@ jobs:
         run: |
           scripts/release/test-retry.sh
           scripts/release/test-homebrew-publication.sh
-      - name: Guard Linux GNU release baseline and consumer contract
+      - name: Guard Linux GNU release baseline, consumer contract, and Action inputs
         run: |
           scripts/release/assert-release-workflow-baseline.sh
           scripts/release/assert-linux-gnu-baseline-provenance.sh
           scripts/release/assert-consumer-contract.sh
+          scripts/release/assert-action-inputs.sh
