@@ -64,7 +64,7 @@ release-units:
 | Key | Purpose |
 | --- | --- |
 | `$schema` | Optional schema identity for editor validation. `init` writes `https://intentional.foo/schemas/0.2/config`; the earlier value `https://intentional.foo/schemas/config.yml` is also accepted. |
-| `contract` | Required. Versioned interpretation semantics used by plans and tags; `contract-1` is the only value. |
+| `contract` | Required. Versioned interpretation semantics used by plans and tags; `contract-2` is the only value commands accept. `init` upgrades a `contract-1` configuration; see [Upgrade from `contract-1`](https://wyrd.foo/docs/intentional/config#upgrade-from-contract-1). |
 | `settings` | Workspace-wide bump behavior. |
 | `release-units` | Logical version and changelog inventory. |
 | `workspace-tags` | Repository-level tag streams and triggers. |
@@ -354,7 +354,11 @@ except `init` refuses a `contract-1` configuration and tells you to run
   intents it would rewrite. Review the plan, then run `init` again. See
   [Bump translation](https://wyrd.foo/docs/intentional/initialization#bump-translation).
 
-Release tags created under `contract-1` stay valid history.
+Release tags created under `contract-1` stay valid history. Besides `init`,
+`intentional verify` is the one command that reads a `contract-1`
+configuration: it rebuilds a release made under `contract-1` by that
+contract's rules, including the `component` mapping, so that the release
+verifies exactly.
 
 ```yaml
 fixed:
