@@ -20,7 +20,7 @@ impl Repo {
             repo.path(),
             &["config", "user.email", "fixture@example.invalid"],
         );
-        repo.write(".intentional/config.yml", "contract: contract-1\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n");
+        repo.write(".intentional/config.yml", "contract: contract-2\nrelease-units:\n  sample:\n    path: .\n    projections:\n      - adapter: npm\n        file: package.json\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n");
         repo.write(
             "package.json",
             r#"{"name":"sample-library","version":"1.0.0"}"#,
@@ -974,7 +974,7 @@ fn ordinary_init_replaces_attributes_without_truncating_existing_inode() {
 #[test]
 fn model_keeps_a_root_projection_file_and_resolves_it_from_the_workspace_root() {
     let repo = Repo::new();
-    repo.write(".intentional/config.yml", "contract: contract-1\nrelease-units:\n  sample:\n    path: packages/sample\n    projections:\n      - adapter: yaml\n        file: /site/meta.yml\n        pointer: /sample/version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n");
+    repo.write(".intentional/config.yml", "contract: contract-2\nrelease-units:\n  sample:\n    path: packages/sample\n    projections:\n      - adapter: yaml\n        file: /site/meta.yml\n        pointer: /sample/version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n");
     repo.write("site/meta.yml", "sample:\n  version: 1.0.0\n");
     repo.cli().arg("model").assert().success();
     let value: Value = serde_json::from_slice(&repo.read_model()).unwrap();

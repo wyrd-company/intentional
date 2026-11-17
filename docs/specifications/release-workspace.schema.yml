@@ -14,7 +14,7 @@ properties:
       - https://intentional.foo/schemas/0.2/config
       - https://intentional.foo/schemas/config.yml
   contract:
-    const: contract-1
+    const: contract-2
   settings:
     type: object
     additionalProperties: false
@@ -22,9 +22,6 @@ properties:
       internal-dependency-bump:
         $ref: "#/$defs/bump"
         default: patch
-      pre-1-0-bump-mapping:
-        enum: [ component, compatibility ]
-        default: compatibility
   fixed:
     $ref: "#/$defs/groups"
   linked:

@@ -214,7 +214,7 @@ mod tests {
         fs::write(root.join("a/meta.yml"), "version: 1.0.0\n").expect("shared file");
         fs::hard_link(root.join("a/meta.yml"), root.join("a/alias.yml")).expect("hard link");
         let config = Config::from_yaml(
-            "contract: contract-1\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: yaml, file: meta.yml, pointer: /version, mode: committed }\n      - { adapter: yaml, file: alias.yml, pointer: version, mode: injected }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
+            "contract: contract-2\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: yaml, file: meta.yml, pointer: /version, mode: committed }\n      - { adapter: yaml, file: alias.yml, pointer: version, mode: injected }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
         )
         .expect("lexically distinct files load");
         let error = check_physical_ownership(root, &config)
@@ -237,7 +237,7 @@ mod tests {
         check_physical_ownership(root, &ignored).expect("mode none does not own a field");
 
         let go = Config::from_yaml(
-            "contract: contract-1\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: go, file: meta.yml, mode: none }\n      - { adapter: go, file: alias.yml, mode: none }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
+            "contract: contract-2\nrelease-units:\n  alpha:\n    path: a\n    projections:\n      - { adapter: go, file: meta.yml, mode: none }\n      - { adapter: go, file: alias.yml, mode: none }\n    tags:\n      primary: { role: primary, template: '{version}' }\n",
         )
         .expect("lexically distinct module files load");
         let error = check_physical_ownership(root, &go)

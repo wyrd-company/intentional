@@ -150,7 +150,8 @@ fn established_before(
     let agrees = tagger == Tagger::Fixed
         && record.tag_id == id
         && record.version == version
-        && record.contract == contract;
+        // A record keeps the contract it was created under.
+        && (record.contract == contract || record.contract == crate::config::CONTRACT_1);
     Ok(agrees
         && (target != baseline_commit
             || (!record.baseline && is_release_tag(repository, target, &record, name))))

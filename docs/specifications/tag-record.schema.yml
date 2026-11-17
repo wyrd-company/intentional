@@ -18,7 +18,10 @@ required:
   - baseline
 properties:
   contract:
-    const: contract-1
+    description: >-
+      Contract the record was created under. Records created before an init
+      upgrade keep contract-1.
+    enum: [ contract-1, contract-2 ]
   generator:
     type: string
     pattern: '^intentional (0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][\dA-Za-z-]*))*))?(?:\+(?:[\dA-Za-z-]+(?:\.[\dA-Za-z-]+)*))?$'
@@ -60,7 +63,7 @@ $defs:
     required: [ contract, generator, versions, baseline ]
     properties:
       contract:
-        const: contract-1
+        enum: [ contract-1, contract-2 ]
       generator:
         $ref: "https://intentional.foo/schemas/0.3/release-plan#/$defs/semver"
       versions:

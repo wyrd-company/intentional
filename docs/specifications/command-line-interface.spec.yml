@@ -32,6 +32,21 @@ commands:
         description: Apply the explicit authority handoff from a ready imported-tool plan.
         required: false
         repeatable: false
+      - name: bump-translation
+        flags:
+          - --bump-translation
+        kind: option
+        description: >-
+          How pending component-style bumps translate, for Changesets adoption
+          and a contract-1 component upgrade: parity keeps the next versions,
+          significance keeps the bump names.
+        required: false
+        repeatable: false
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
       - name: json
         flags:
           - --json
@@ -93,6 +108,18 @@ commands:
         repeatable: true
         examples:
           - example-unit:minor
+        value:
+          type: string
+          arity:
+            min: 1
+            max: 1
+      - name: graduate
+        flags:
+          - --graduate
+        kind: option
+        description: Graduate this Release Unit from 0.x to 1.0.0; its bump must be major.
+        required: false
+        repeatable: true
         value:
           type: string
           arity:

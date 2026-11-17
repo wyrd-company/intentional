@@ -39,11 +39,50 @@ proposed-design:
 
   versioned-semantics: >-
     Intentional's semantic version owns bump aggregation, dependency
-    propagation, release-group behavior, pre-1.0 semantic-version mapping,
-    changelog construction, canonical serialization, tag records, and recovery.
+    propagation, release-group behavior, the meaning of bump names before
+    1.0.0, graduation, changelog construction, canonical serialization, tag records, and recovery.
     Release Plans and tags carry the exact producing Intentional version so the
     same semantics can be selected for execution and verification. The Release
     Model carries its own contract line instead.
+
+  bump-significance: >-
+    Bump names always state change significance. Before 1.0.0, major advances
+    0.x.y to 0.(x+1).0, while minor and patch advance to 0.x.(y+1), which
+    matches the caret-range compatibility of npm, Cargo, and Pub. At and after
+    1.0.0, ordinary SemVer applies. No bump moves a release unit from 0.x to
+    1.0.0. A Change Intent frontmatter value is a bump name, or a mapping with
+    `bump` and an optional `graduate` flag; `graduate: true` is valid only
+    with `bump: major`.
+
+  graduation: >-
+    An intent that sets `graduate` on a release unit is the only way to reach
+    1.0.0. The release unit's next version is exactly 1.0.0, and its other
+    pending intents fold into that release. Graduation requires an effective
+    major bump and a 0.x version to graduate from; otherwise check, status,
+    and plan fail. In a fixed group, one graduating member graduates every
+    member; in a linked group, it graduates the releasing members. A group's
+    shared version line graduates, so its highest current version must be
+    0.x. With a channel, graduation produces 1.0.0-<channel>.N, and the
+    intent stays pending until the final release. Workspace tags are
+    independent version lines, so a graduation counts as a major bump for
+    them. The release plan marks a graduating release unit, status reports
+    it, and its changelog section opens with a graduation line.
+
+  contract-upgrade: >-
+    The binary interprets one configuration contract, contract-2. Every
+    command except init refuses a contract-1 configuration with a message
+    that names the fix: run intentional init. Init upgrades contract-1 by
+    setting contract-2 and removing pre-1-0-bump-mapping, and keeps the
+    comments of the configuration file. A configuration that used
+    compatibility, or that omits the setting, already read bump names as
+    significance, so it upgrades at once. A component configuration whose
+    pending intents would release other versions under contract-2 needs a
+    bump translation, which the initialization plan's bump-translation field
+    selects (`parity` by default, or `significance`); Changesets adoption uses
+    the same translation. The config and the intent rewrites change together,
+    so that no intent is read under the wrong contract. Annotated tag records
+    and Release Plans keep the contract they were created under: contract-1
+    records stay valid history.
 
   initialization: >-
     `intentional init` configures the Release Workspace from repository

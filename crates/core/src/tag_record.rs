@@ -342,9 +342,16 @@ mod tests {
                 "baseline"
             ]
         );
+        // A record keeps the contract it was created under.
+        let contracts: Vec<&str> = schema["properties"]["contract"]["enum"]
+            .as_sequence()
+            .expect("Tag Record contracts")
+            .iter()
+            .filter_map(serde_yaml::Value::as_str)
+            .collect();
         assert_eq!(
-            schema["properties"]["contract"]["const"].as_str(),
-            Some(crate::config::CURRENT_CONTRACT)
+            contracts,
+            [crate::config::CONTRACT_1, crate::config::CURRENT_CONTRACT]
         );
     }
 

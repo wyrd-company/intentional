@@ -98,7 +98,7 @@ fn invalid_tag_records_fail_at_the_codec_for_their_stated_reason() {
     for (name, expected_location, expected_keyword) in [
         ("undeclared-member", "", "additionalProperties"),
         ("schema-member", "", "additionalProperties"),
-        ("wrong-contract", "/contract", "const"),
+        ("wrong-contract", "/contract", "enum"),
         ("digest-pattern", "/plan-digest", "pattern"),
         ("semver-pattern", "/version", "pattern"),
         ("git-object-pattern", "/target", "pattern"),

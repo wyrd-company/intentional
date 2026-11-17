@@ -141,7 +141,7 @@ fn yaml_unit(id: &str, path: &str, file: &str, pointer: &str, mode: &str) -> Str
 
 fn config(units: &[String]) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n{}",
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\nrelease-units:\n{}",
         units.concat()
     )
 }
@@ -175,7 +175,7 @@ fn stamp_merges_equivalent_paths_in_shared_file() {
 /// `site/beta`. Both write fields of the shared root file `/site/meta.yml`.
 fn root_projection_config(mode: &str) -> String {
     format!(
-        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-1\nsettings:\n  internal-dependency-bump: patch\n  pre-1-0-bump-mapping: compatibility\nrelease-units:\n  alpha:\n    path: packages/alpha\n    projections:\n      - {{ adapter: json, file: manifest.json, pointer: /version, mode: {mode} }}\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: /products/alpha/version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n  beta:\n    path: site/beta\n    projections:\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: products.alpha.docs-version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n"
+        "$schema: https://intentional.foo/schemas/config.yml\ncontract: contract-2\nsettings:\n  internal-dependency-bump: patch\nrelease-units:\n  alpha:\n    path: packages/alpha\n    projections:\n      - {{ adapter: json, file: manifest.json, pointer: /version, mode: {mode} }}\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: /products/alpha/version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n  beta:\n    path: site/beta\n    projections:\n      - {{ adapter: yaml, file: /site/meta.yml, pointer: products.alpha.docs-version, mode: {mode} }}\n    tags:\n      primary: {{ role: primary, template: '{{id}}@{{version}}' }}\n"
     )
 }
 

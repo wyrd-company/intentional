@@ -11,12 +11,16 @@
 /// Module path and reason for each intentionally open public type.
 pub const OPEN_TYPES: &[(&str, &str)] = &[
     (
+        "init::InitOptions",
+        "an input callers build; the command-line crate constructs it",
+    ),
+    (
         "intent::IntentDraft",
         "an input callers build; a new member must be supplied, so closing does not make it additive",
     ),
     ("model::Bump", "vocabulary enum mirroring a published schema enum"),
     ("model::ProjectionMode", "vocabulary enum mirroring a published schema enum"),
-    ("model::Pre1BumpMapping", "vocabulary enum mirroring a published schema enum"),
+    ("model::BumpTranslation", "vocabulary enum mirroring a published schema enum"),
     ("model::ReleaseUnitDisposition", "vocabulary enum mirroring a published schema enum"),
     (
         "model::ReleaseRecordPolicy",

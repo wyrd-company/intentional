@@ -20,7 +20,11 @@ properties:
   digest:
     $ref: "#/$defs/digest"
   contract:
-    const: contract-1
+    description: >-
+      Interpretation contract of the configuration the plan was computed
+      under. Plans recomputed for releases made before an init upgrade keep
+      contract-1.
+    enum: [ contract-1, contract-2 ]
   generator:
     $ref: "#/$defs/generator"
   source:
@@ -95,6 +99,9 @@ $defs:
         $ref: "#/$defs/semver"
       bump:
         enum: [ major, minor, patch ]
+      graduates:
+        description: The release graduates the release unit from 0.x to 1.0.0.
+        const: true
       contributing_intent_ids:
         type: array
         uniqueItems: true

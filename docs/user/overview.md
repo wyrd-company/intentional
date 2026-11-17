@@ -11,6 +11,11 @@ declare what should change. Annotated Git tags record what was released.
 Manifests are format-preserving projections of that state, never competing
 version authorities.
 
+A bump name in an intent states the significance of the change. Before 1.0.0,
+a breaking change advances `0.x`, and a feature or fix advances the patch
+version. A release unit leaves `0.x` only through an intent that graduates it
+to 1.0.0.
+
 ![Intentional computes and previews the next version from a pending change intent](assets/demo.gif)
 
 ## Release units

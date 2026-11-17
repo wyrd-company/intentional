@@ -15,6 +15,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// The configuration uses `contract-1`, which only `intentional init` loads.
+    #[error(
+        ".intentional/config.yml uses contract-1, which this version of intentional does not load; run `intentional init` to upgrade it to contract-2"
+    )]
+    ContractUpgradeRequired,
+
     /// A configuration or intent is invalid.
     #[error("validation failed: {0}")]
     Validation(String),

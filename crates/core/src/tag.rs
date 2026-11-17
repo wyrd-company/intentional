@@ -1105,13 +1105,19 @@ pub fn tag_record_issues(root: &Path, config: &Config) -> Result<Vec<String>> {
                 primary.tag_id == Config::release_unit_tag_id(release_unit_id, primary_id),
             ),
             ("version", primary.version == version.to_string()),
-            ("contract", primary.contract == config.contract),
         ] {
             if !matches {
                 issues.push(format!(
                     "release unit {release_unit_id} primary tag {primary_name} has unexpected {field}"
                 ));
             }
+        }
+        // A record keeps the contract it was created under. Records from
+        // before an `init` upgrade carry contract-1 and stay valid history.
+        if primary.contract != config.contract && primary.contract != crate::config::CONTRACT_1 {
+            issues.push(format!(
+                "release unit {release_unit_id} primary tag {primary_name} has unexpected contract"
+            ));
         }
         for (tag_id, tag) in &release_unit.tags {
             let name = render_tag(&tag.template, release_unit_id, &version.to_string());
@@ -1218,10 +1224,14 @@ fn is_established(
     let Some(record) = read_tag_record(repository, name)? else {
         return Ok(false);
     };
+    // A record keeps the contract it was created under, so a stream
+    // established before an `init` upgrade stays established.
+    let contract = record.record.contract == expected_contract
+        || record.record.contract == crate::config::CONTRACT_1;
     for (field, matches) in [
         ("tag-id", record.record.tag_id == expected_id),
         ("version", record.record.version == expected_version),
-        ("contract", record.record.contract == expected_contract),
+        ("contract", contract),
     ] {
         if !matches {
             return Err(Error::Validation(format!(

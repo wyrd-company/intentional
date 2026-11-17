@@ -160,9 +160,9 @@ fn release_fixture_repo() -> TestRepo {
         "package.json",
         "{\n  \"name\": \"sample-library\",\n  \"version\": \"1.2.3\"\n}\n",
     );
-    let config = read_repository_file(
+    let config = upgraded(&read_repository_file(
         "docs/specifications/fixtures/released-0.2.0/release-config.yml",
-    )
+    ))
     .replace(
         "        template: '{id}@{version}'\n",
         "        template: '{id}@{version}'\n      mirror:\n        role: projection\n        template: 'mirror@{version}'\n        tag-after:\n          - release-unit/sample-library/primary\n",
@@ -181,6 +181,19 @@ fn release_fixture_repo() -> TestRepo {
     );
     repo.commit("add intent");
     repo
+}
+
+/// A released `contract-1` configuration as `intentional init` upgrades it:
+/// `contract-2` without `pre-1-0-bump-mapping`. A compatibility
+/// configuration upgrades without any other change.
+fn upgraded(released: &str) -> String {
+    assert!(
+        released.contains("contract: contract-1\n"),
+        "released fixture"
+    );
+    released
+        .replace("contract: contract-1\n", "contract: contract-2\n")
+        .replace("  pre-1-0-bump-mapping: compatibility\n", "")
 }
 
 fn emitted_plan(repo: &TestRepo, args: &[&str]) -> Value {
@@ -223,14 +236,24 @@ fn repository_configuration_validates_against_release_workspace_schema() {
 }
 
 #[test]
-fn configuration_written_by_released_versions_loads_and_validates() {
+fn configuration_written_by_released_versions_upgrades_and_validates() {
     for fixture in [
         "released-0.1.2/config.yml",
         "released-0.1.8/config.yml",
         "released-0.2.0/config.yml",
         "released-0.2.0/release-config.yml",
     ] {
-        let text = read_repository_file(&format!("docs/specifications/fixtures/{fixture}"));
+        // Released configurations are contract-1: every command but init
+        // refuses them, and init's upgrade loads and validates.
+        let released = read_repository_file(&format!("docs/specifications/fixtures/{fixture}"));
+        assert!(
+            matches!(
+                Config::from_yaml(&released),
+                Err(intentional_core::Error::ContractUpgradeRequired)
+            ),
+            "{fixture}"
+        );
+        let text = upgraded(&released);
         let config = Config::from_yaml(&text).unwrap_or_else(|error| panic!("{fixture}: {error}"));
         assert_eq!(
             config.schema.as_deref(),
@@ -272,7 +295,9 @@ fn initialization_writes_the_compatibility_line_configuration_schema() {
 
 #[test]
 fn release_workspace_schema_takes_an_optional_published_identity_and_requires_contract() {
-    let text = read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml");
+    let text = upgraded(&read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/config.yml",
+    ));
     let mut config = yaml_to_json(&text);
     config["$schema"] = json!(CONFIG_ID);
     assert_valid(CONFIG_ID, &config);
@@ -304,7 +329,9 @@ fn parser_and_release_workspace_schema_agree_on_release_record_values() {
     assert_eq!(field["enum"], json!(["required", "none"]));
     assert_eq!(field["default"], json!("required"));
 
-    let text = read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml");
+    let text = upgraded(&read_repository_file(
+        "docs/specifications/fixtures/released-0.2.0/config.yml",
+    ));
     let with_policy = |value: &str| {
         text.replace(
             "    path: .\n",
@@ -473,7 +500,9 @@ fn emitted_plan_carries_its_schema_identity_and_the_source_of_head() {
     );
     unborn.write(
         ".intentional/config.yml",
-        &read_repository_file("docs/specifications/fixtures/released-0.2.0/config.yml"),
+        &upgraded(&read_repository_file(
+            "docs/specifications/fixtures/released-0.2.0/config.yml",
+        )),
     );
     unborn.write(
         ".intentional/intents/sample-otter-0001.md",
@@ -516,7 +545,7 @@ fn tags_recovered_without_the_plan_record_the_digest_of_the_emitted_plan() {
 #[test]
 fn initialization_ready_json_validates_next_actions_against_published_schema() {
     let repo = TestRepo::new();
-    repo.write(".intentional/config.yml", "contract: contract-1\nrelease-units:\n  sample:\n    path: .\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n");
+    repo.write(".intentional/config.yml", "contract: contract-2\nrelease-units:\n  sample:\n    path: .\n    tags:\n      primary:\n        role: primary\n        template: '{id}@{version}'\n");
     let output = repo
         .cli()
         .args(["init", "--json"])

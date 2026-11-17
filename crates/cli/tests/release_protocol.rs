@@ -121,10 +121,9 @@ fn release_repo(extra_tags: &str) -> TestRepo {
     repo.write(
         ".intentional/config.yml",
         &format!(
-            r#"contract: contract-1
+            r#"contract: contract-2
 settings:
   internal-dependency-bump: patch
-  pre-1-0-bump-mapping: compatibility
 release-units:
   sample-library:
     path: .
@@ -423,7 +422,7 @@ fn an_existing_tag_with_another_target_is_a_conflict_and_stays_unchanged() {
             "mirror@1.3.0",
             "HEAD^",
             "-m",
-            "intentional release record\n\ncontract: contract-1\ngenerator: intentional 0.2.0\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/sample-library/mirror\nversion: 1.3.0\nbaseline: false\n",
+            "intentional release record\n\ncontract: contract-2\ngenerator: intentional 0.2.0\nplan-digest: sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ntag-id: release-unit/sample-library/mirror\nversion: 1.3.0\nbaseline: false\n",
         ],
     );
     let before = git(&repo.root, &["rev-parse", "mirror@1.3.0"]);
