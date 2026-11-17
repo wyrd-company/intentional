@@ -53,6 +53,16 @@ Git-writing command. Primary and workspace tag templates do not add a `v`
 prefix. A projection tag may use one where its ecosystem requires it, such as a
 Go module tag.
 
+## Release processes
+
+Intentional generates no CI workflow and runs none. It computes versions,
+writes the release tree, creates annotated tags, and verifies them. A release
+process drives those commands and owns commits, pushes, builds, publication,
+release records, and credentials. A release process template, rendered by a
+template tool such as Toha, reads the committed Release Model
+(`.intentional/release-model.json`) and produces that workflow. Intentional
+neither renders nor runs the template.
+
 ## Supported ecosystems
 
 Intentional discovers and projects versions across package formats without
