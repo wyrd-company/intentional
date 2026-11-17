@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.5.0
+
+### Breaking
+
+- Add `$schema` (`https://intentional.foo/schemas/0.3/release-plan`) and `source`, the commit and tree the plan was computed from, to the Release Plan that `plan` emits. Both are inside the plan digest. A plan without them keeps its recorded digest, and `tag --plan` still accepts it. `tag --plan` refuses a plan whose `source` is not the commit its release was planned from.
+  
+  `intentional-core` breaking change: `ReleasePlan` gains the public fields `schema` and `source`, so code that builds a `ReleasePlan` with a struct literal or matches it exhaustively must name them.
+- `intentional-core` breaking change: the public record and result types are marked `#[non_exhaustive]`, so code outside the crate can no longer build them with a struct literal or match them exhaustively. This covers the Release Plan types (`ReleasePlan`, `PlanSource`, `PlanReleaseUnit`, `PlanTag`, `Generator`, `ChangelogEntry`), `TagRecord` and `TagPrerequisite`, the configuration, init, intent, tag, apply, stamp, status, verify, and version result types, and the `Error`, `SchemaRecord`, and `Adapter` enums. A later added member or variant is then a minor change. New: `TagPrerequisite::new` and `ChangelogEntry::new`.
+- Return a ready Initialization Plan from ordinary init --json, with configuration under inferred-config instead of at the top level. Use the published initialization-plan schema identity. Include ordered release process next actions in ready initialization output: write an absent Release Model only when it remains absent after planned operations, then apply a release process template.
+- `intentional-core` breaking change: `ReleasePlan::to_canonical_json` is replaced by `ReleasePlan::encode`, which refuses a plan that breaks the published schema, and `Error` gains the `Schema` variant, so exhaustive matches on `Error` must handle it. New: `ReleasePlan::decode`, the `TagRecord` codec, `baseline_digest`, and the `schema` module.
+- Moving to this release. Configuration stays at `contract-2`, and the tag records and Release Plans this release writes carry `contract: contract-2`; records made under `contract-1` stay valid history. A repository still on a `contract-1` configuration (Intentional 0.3.x or earlier) runs `intentional init`, reviews any bump translation the init plan proposes, and commits the upgraded `.intentional/config.yml` with any rewritten intents; every other command refuses `contract-1`.
+  
+  A repository on 0.4.x runs `intentional model` and commits `.intentional/release-model.json` with root `.gitattributes`, so that a release process template can read the Release Model; from then on `check` fails and `status` reports `release-model-stale` when the model falls behind the configuration. Tools that read ordinary `init --json` output find the configuration under `inferred-config`. Tags that earlier releases created, including releases made under `contract-1` with `pre-1-0-bump-mapping: component`, verify with `intentional verify <tag>`, which rebuilds them under the contract they were made under.
+  
+  Intentional generates no CI workflow and runs none. A release process template, rendered by a template tool such as Toha, reads the Release Model and owns the workflow, its commits, pushes, publication and credentials.
+
+### Features
+
+- Accept a `v` version prefix in Release Unit projection tag templates where the
+  ecosystem requires it, such as Go module tags. Primary and workspace tag
+  templates still reject the prefix.
+- Add `intentional verify <tag>`, which verifies one established Release from its annotated tag with Git history only: the tag record and tagger, the plan recomputed at the commit the release was planned from against the recorded digest, the files the release commit materialized, and the tag records of every identity tag. It exits 1 with a typed diagnostic on any failure and prints a structured report with `--json`. A digest difference for a tag produced by another Intentional version is an advisory. `intentional-core` adds `verify_release` and its report types.
+- Add the optional Release Unit field `release-record`, `required` (the default) or `none`, to `.intentional/config.yml` and its schema. It states whether the surrounding release process creates a release record, such as a GitHub Release, for each release of the unit; Intentional creates none and its commands behave the same for both values. Configuration without the field is unchanged. `intentional-core` adds `ReleaseUnitConfig::release_record` and the `ReleaseRecordPolicy` enum.
+- Add intentional model to write a canonical, schema-validated Release Model for release process templates. Initialization writes the model with configuration and resolves empty MSBuild PackageId through AssemblyName or the project file name.
+- Report `release-model-stale` from check and status when an existing Release Model differs from the working-tree inputs; regenerate it with `intentional model`. Add `status --json` with `release_model_stale` and expose the same condition through `WorkspaceStatus` in intentional-core.
+- Make `intentional verify` check a baseline tag: it recomputes the baseline set at the tagged commit from configuration and history, compares the baseline digest under the tag record's generator version, and checks that every tag `tag --baseline` creates for that set carries a baseline tag record for the same digest under the fixed tagger. A stream leaves the recomputed set only through a tag record with the fixed tagger that agrees with its tag and sits on an earlier commit or is a tag of a Release reconstructed at the baseline commit; a tag without a tag record supplies its version and is not checked. Each Release Unit whose primary tag the baseline created must have its version-bearing projections at that commit at its baseline version, or verification fails with `baseline-projection-mismatch`. A baseline created from uncommitted configuration or projection versions fails, because verification reads Git history only. A differing digest fails with `baseline-digest-mismatch`, or is the advisory `producing-version-differs` for another generator version; the `baseline-record` diagnostic is removed. The report adds `baseline`, and a verified baseline reports the `baseline-reconstruction` guarantee.
+- Keep Release Models fresh across CRLF Git checkouts: `model` and initialization
+  ensure `.intentional/release-model.json text eol=lf` in root `.gitattributes`,
+  preserving unrelated rules. Commit the attributes file with the model. `model`
+  reports `written` when either file needs repair; dry-run changes neither file.
+  
+  `intentional-core` adds the optional `release_model_stale_message` formatter,
+  shared by check and human status so that both report the same repair text.
+- `intentional-core` adds `native_identity`, a public function that resolves the native package identity of a manifest from its adapter, path, and text, by the rule initialization uses. It returns no identity, not an error, when a readable manifest declares none, and none for the generic JSON, TOML, and YAML adapters. It returns an error only when the manifest cannot be parsed for its adapter.
+
+### Fixes
+
+- Call the annotated tag message a tag record in `tag` help and in diagnostics,
+  so that it is not confused with the GitHub Release published for a release unit.
+- Correct agent initialization guidance to commit configuration, the Release
+  Model, and root .gitattributes before applying a release process template, and
+  count both model and attributes writes in a ready imported plan.
+- Write the compatibility-line schema identity `https://intentional.foo/schemas/0.2/config` as `$schema` when `init` creates configuration. Configuration that carries `https://intentional.foo/schemas/config.yml` still loads.
+- Validate a Release Plan read by `tag --plan` and every tag record that `tag`, `status`, and `check` read against their published schemas. A violation names the record, the failing location, and the schema keyword, and the command exits 1. A tag record must also begin with the protocol header and list its fields in canonical order. Plans and tag records that released versions wrote still pass.
+
 ## 0.4.1
 
 ### Fixes

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+### Features
+
+- Document the Release Model, `intentional model`, `intentional verify`, release-record policy and the release process handoff, and state that Intentional generates and runs no workflow: a release process template reads the Release Model and owns the workflow.
+
 ## 0.1.3
 
 ### Fixes
