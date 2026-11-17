@@ -409,4 +409,5 @@ The plumbing action downloads a released Linux binary and runs one command.
 Pin it to a plain SemVer tag. The action exposes canonical `plan` JSON and a
 changed-release-unit boolean. It accepts `status`, `plan`, `stamp`, `apply`, and
 `tag`; `channel` applies to release commands, `prerelease` applies to `stamp`,
-and `dry-run` applies to mutating commands.
+`phase` applies to `tag` and passes `--phase`, and `dry-run` applies to
+mutating commands.
