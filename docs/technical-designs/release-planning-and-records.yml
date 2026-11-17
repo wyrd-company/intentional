@@ -98,13 +98,13 @@ proposed-design:
     release versions, and commits after the release commit leave that source
     unchanged. Tagging with a sealed plan derives the source the same way and
     refuses a plan whose `source` names another commit or tree; a plan without
-    `source` is accepted. The witnessed release set holds each Release Unit whose leading
-    changelog section is newer than its latest primary tag, or equal to it while
-    that tag already marks the commit being tagged; a Release Unit whose leading
-    section equals a tag on an earlier commit did not move and is outside the
-    comparison, so a Release may move any subset of Release Units. Self-hosted
-    releases retain the exact producing binary and its integrity data for
-    execution and canonical reconstruction.
+    `source` is accepted. The witnessed release set holds each Release Unit
+    whose leading changelog section is newer than its latest primary tag, or
+    equal to it while that tag already marks the commit being tagged; a Release
+    Unit whose leading section equals a tag on an earlier commit did not move
+    and is outside the comparison, so a Release may move any subset of Release
+    Units. Self-hosted releases retain the exact producing binary and its
+    integrity data for execution and canonical reconstruction.
 
   idempotency-and-conflict: >-
     Every mutating operation computes an expected immutable result before
@@ -126,38 +126,35 @@ proposed-design:
   verification: >-
     `intentional verify <tag>` checks one established Release from any of its
     identity tags with Git history only and without hosting-platform
-    credentials. It checks the tag record and its fixed tagger, finds the
-    commit the release was planned from as recovery does, and recomputes the
-    plan there under the tag record's producing version. For a channel
-    Release, it takes the Release Unit and version that locate the source only
-    from a tag record with the fixed tagger whose tag ID names a configured
-    Release Unit tag and whose template renders that tag's own name at the
-    recorded version. It then checks that
-    the recomputed plan has the recorded digest, that the release commit holds
-    the content that materializing the plan writes at each path it writes and
-    none of the intents it consumes, and that every tag in the plan carries a
-    tag record for the same digest at the release commit under the same fixed
-    tagger. A recomputed digest
-    that differs for a tag record naming another producing version is an
-    advisory, because
-    the running binary does not carry earlier versions' planning semantics; a
-    difference under the running version fails. A baseline tag establishes
-    authority without a Release. For a baseline tag record, verify recomputes
-    the complete baseline set at the tagged commit from configuration and the
-    tags that commit reaches, computes the baseline digest payload under the
-    tag record's generator version, and compares its digest with the
-    recorded `plan-digest` under the same advisory rule. A stream leaves the
-    recomputed set only through a tag record that the same reader accepts:
-    the fixed tagger, and the tag ID, version, and contract of the tag it
-    occupies, on an earlier commit or as a tag of a Release that verify
-    reconstructs at the baseline commit, whose plan names the tag and whose
-    digest the release check accepts. It then checks that
-    every tag that baseline establishment creates for the set carries a
-    baseline tag record for the same digest at that commit under the fixed
-    tagger. A tag without a tag record is pre-Intentional history that
-    supplies its version and is not checked as a baseline tag. Each Release
-    Unit whose primary tag at the baseline commit carries a baseline tag
-    record must have every version-bearing projection there at its baseline
-    version, the projection rule of baseline establishment. A baseline
-    created from configuration or projection versions that the baseline
-    commit does not hold fails.
+    credentials. It checks the tag record and its fixed tagger, finds the commit
+    the release was planned from as recovery does, and recomputes the plan there
+    under the tag record's producing version. For a channel Release, it takes
+    the Release Unit and version that locate the source only from a tag record
+    with the fixed tagger whose tag ID names a configured Release Unit tag and
+    whose template renders that tag's own name at the recorded version. It then
+    checks that the recomputed plan has the recorded digest, that the release
+    commit holds the content that materializing the plan writes at each path it
+    writes and none of the intents it consumes, and that every tag in the plan
+    carries a tag record for the same digest at the release commit under the
+    same fixed tagger. A recomputed digest that differs for a tag record naming
+    another producing version is an advisory, because the running binary does
+    not carry earlier versions' planning semantics; a difference under the
+    running version fails. A baseline tag establishes authority without a
+    Release. For a baseline tag record, verify recomputes the complete baseline
+    set at the tagged commit from configuration and the tags that commit
+    reaches, computes the baseline digest payload under the tag record's
+    generator version, and compares its digest with the recorded `plan-digest`
+    under the same advisory rule. A stream leaves the recomputed set only
+    through a tag record that the same reader accepts: the fixed tagger, and the
+    tag ID, version, and contract of the tag it occupies, on an earlier commit
+    or as a tag of a Release that verify reconstructs at the baseline commit,
+    whose plan names the tag and whose digest the release check accepts. It then
+    checks that every tag that baseline establishment creates for the set
+    carries a baseline tag record for the same digest at that commit under the
+    fixed tagger. A tag without a tag record is pre-Intentional history that
+    supplies its version and is not checked as a baseline tag. Each Release Unit
+    whose primary tag at the baseline commit carries a baseline tag record must
+    have every version-bearing projection there at its baseline version, the
+    projection rule of baseline establishment. A baseline created from
+    configuration or projection versions that the baseline commit does not hold
+    fails.
