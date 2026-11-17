@@ -92,7 +92,13 @@ proposed-design:
     plan, prior tag records, and the materialized tree. It reads deleted Change
     Intents from the release commit's parent when plan bytes are unavailable
     locally and recomputes the expected release with the recorded Intentional
-    version. The witnessed release set holds each Release Unit whose leading
+    version. A Release was planned from the parent of the commit that removed
+    its contributing intents. A channel Release keeps its intents, so it was
+    planned from the parent of the first-parent commit that materialized its
+    release versions, and commits after the release commit leave that source
+    unchanged. Tagging with a sealed plan derives the source the same way and
+    refuses a plan whose `source` names another commit or tree; a plan without
+    `source` is accepted. The witnessed release set holds each Release Unit whose leading
     changelog section is newer than its latest primary tag, or equal to it while
     that tag already marks the commit being tagged; a Release Unit whose leading
     section equals a tag on an earlier commit did not move and is outside the
@@ -106,7 +112,9 @@ proposed-design:
     at the same identity with another target, tag ID, version, contract, plan
     digest, or baseline status is a conflict and remains unchanged. Partial
     execution can therefore rerun the same protocol without a separate
-    recovery mode.
+    recovery mode. Detecting a partially tagged Release decodes only the tag
+    records at HEAD, so a malformed tag message elsewhere in history does not
+    stop a release.
 
   channel-records: >-
     Channel Releases carry the same sealed-plan and tag-record guarantees as
@@ -120,7 +128,11 @@ proposed-design:
     identity tags with Git history only and without hosting-platform
     credentials. It checks the tag record and its fixed tagger, finds the
     commit the release was planned from as recovery does, and recomputes the
-    plan there under the tag record's producing version. It then checks that
+    plan there under the tag record's producing version. For a channel
+    Release, it takes the Release Unit and version that locate the source only
+    from a tag record with the fixed tagger whose tag ID names a configured
+    Release Unit tag and whose template renders that tag's own name at the
+    recorded version. It then checks that
     the recomputed plan has the recorded digest, that the release commit holds
     the content that materializing the plan writes at each path it writes and
     none of the intents it consumes, and that every tag in the plan carries a
