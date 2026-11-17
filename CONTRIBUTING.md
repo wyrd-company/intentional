@@ -19,14 +19,14 @@ Every adopter-visible change needs a Change Intent under
 ## Code review
 
 Reviewers use `docs/technical-designs/semantic-versioning.yml` to evaluate the
-command-line interface, published crate application programming interface
-(API), configuration, Change Intent format, recipes, generated workflows,
-security postures, durable records, and verification behavior.
+command-line interface, GitHub Action inputs and outputs, published crate
+application programming interface (API), configuration, Change Intent format,
+the Release Model, durable records, and verification behavior.
 
-Classify required or incompatible config and recipe changes as major. Classify
-an optional capability as minor only when existing users must select it and
-omission preserves their behavior. Classify a correction within the existing
-contract as patch. Correct an understated Change Intent before acceptance.
+Classify required or incompatible config changes as major. Classify an optional
+capability as minor only when existing users must select it and omission
+preserves their behavior. Classify a correction within the existing contract as
+patch. Correct an understated Change Intent before acceptance.
 
 Backward compatibility is a separate acceptance gate. Review against
 `docs/policies/backward-compatibility.yml` and
