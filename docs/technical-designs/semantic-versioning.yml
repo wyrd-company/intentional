@@ -67,8 +67,9 @@ proposed-design:
     Action's inputs classify as command options and its outputs as
     machine-readable output: removing or renaming an input or output that a
     released Action accepts or sets is major. The `release:check` task fails
-    when the Action stops declaring a released input or stops passing it to the
-    command.
+    when the Action stops declaring a released input or stops mapping it into
+    the run step's environment. It exercises forwarding to the command only for
+    `phase`; forwarding of the other inputs is not checked.
 
   published-crate-classification: >-
     Every externally reachable public item, re-export, feature, type contract,
