@@ -27,12 +27,12 @@ Check this repository with the workspace binary: `task self-check` runs
 
 ## Code review
 
-Review every change against
-`docs/technical-designs/semantic-versioning.yml`. Enumerate affected public
-surfaces before accepting its Change Intent: command-line interface, published
-crate application programming interface (API), configuration, Change Intents,
-the Release Model, durable records, and verification behavior. The Intent
-records the highest Semantic Versioning (SemVer) impact among them.
+Review every change against `docs/technical-designs/semantic-versioning.yml`.
+Enumerate affected public surfaces before accepting its Change Intent:
+command-line interface, GitHub Action inputs and outputs, published crate
+application programming interface (API), configuration, Change Intents, the
+Release Model, durable records, and verification behavior. The Intent records
+the highest Semantic Versioning (SemVer) impact among them.
 
 An added config field is minor only when it is optional, requires
 explicit selection, and omission preserves existing behavior. A required change
