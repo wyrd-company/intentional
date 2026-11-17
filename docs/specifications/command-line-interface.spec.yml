@@ -499,9 +499,10 @@ commands:
         Verification reconstructs a Release under the contract its
         configuration names. A Release made under contract-1 is rebuilt with
         the contract-1 interpreter, including its component pre-1.0 bump
-        mapping, and its plan keeps contract-1. Verify is the only command
-        that reads a contract-1 configuration this way; every other command
-        but init refuses it.
+        mapping and the configuration and projection rules that contract-1
+        releases were made under, and its plan keeps contract-1. Verify is the
+        only command that reads a contract-1 configuration this way; every
+        other command but init refuses it.
       - >-
         For a baseline tag record, it recomputes the baseline set at the
         tagged commit and verifies the baseline digest and every tag that

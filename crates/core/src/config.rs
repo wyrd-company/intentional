@@ -10,8 +10,8 @@ use crate::model::{
     Adapter, Bump, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition, TagPhase, TagRole,
 };
 use crate::ownership::check_ownership;
-use crate::projection_file::validate_relative_path;
 pub use crate::projection_file::ProjectionFile;
+use crate::projection_file::{validate_relative_path, validate_relative_shape};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -94,6 +94,33 @@ pub(crate) struct Contract1Upgrade {
     pub text: String,
     /// The removed `settings.pre-1-0-bump-mapping`.
     pub mapping: Contract1Mapping,
+}
+
+/// Which rules configuration validation applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Validation {
+    /// The rules every command applies.
+    Current,
+    /// The rules `contract-1` releases were made under; `verify` only.
+    Released,
+}
+
+/// Released 0.2.0's one ownership rule: a release unit must not repeat the
+/// same projection file and pointer text.
+fn check_released_repeats(release_units: &BTreeMap<String, ReleaseUnitConfig>) -> Result<()> {
+    for (id, release_unit) in release_units {
+        let mut keys = BTreeSet::new();
+        for projection in &release_unit.projections {
+            let file = std::path::PathBuf::from(projection.file.to_string());
+            if !keys.insert((file, projection.pointer.as_deref())) {
+                return Err(Error::Validation(format!(
+                    "release unit {id} repeats projection {}",
+                    projection.file
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn declares_contract_1(value: &serde_yaml::Value) -> bool {
@@ -406,6 +433,19 @@ impl Config {
 
     /// Validate release-unit ids, projections, release groups, tags, and dependency graphs.
     pub fn validate(&self) -> Result<()> {
+        self.validate_as(Validation::Current)
+    }
+
+    /// Validate an upgraded `contract-1` configuration by the rules its
+    /// releases were made under. Released 0.2.0 refused no drive prefix and
+    /// checked projection ownership only as one release unit repeating the
+    /// same file and pointer text; later rules only refuse more. Only
+    /// `verify` reaches this, through `contract_1::load_released`.
+    pub(crate) fn validate_released(&self) -> Result<()> {
+        self.validate_as(Validation::Released)
+    }
+
+    fn validate_as(&self, validation: Validation) -> Result<()> {
         if self.contract != CURRENT_CONTRACT {
             return Err(Error::Validation(format!(
                 "unsupported interpretation contract {:?}; expected {CURRENT_CONTRACT}",
@@ -426,7 +466,11 @@ impl Config {
         let mut resolved_templates = BTreeMap::new();
         for (id, release_unit) in &self.release_units {
             validate_id(id, "release unit")?;
-            validate_relative_path(&release_unit.path, &format!("release unit {id} path"))?;
+            let description = format!("release unit {id} path");
+            match validation {
+                Validation::Current => validate_relative_path(&release_unit.path, &description)?,
+                Validation::Released => validate_relative_shape(&release_unit.path, &description)?,
+            }
             let primary_count = release_unit
                 .tags
                 .values()
@@ -439,7 +483,12 @@ impl Config {
             }
 
             for projection in &release_unit.projections {
-                projection.file.validate(id, projection.adapter)?;
+                match validation {
+                    Validation::Current => projection.file.validate(id, projection.adapter)?,
+                    Validation::Released => {
+                        projection.file.validate_released(id, projection.adapter)?;
+                    }
+                }
                 if projection.adapter.requires_pointer()
                     && projection.pointer.as_deref().is_none_or(str::is_empty)
                 {
@@ -485,7 +534,10 @@ impl Config {
             }
         }
 
-        check_ownership(&self.release_units)?;
+        match validation {
+            Validation::Current => check_ownership(&self.release_units)?,
+            Validation::Released => check_released_repeats(&self.release_units)?,
+        }
         self.validate_discovery()?;
         self.validate_release_groups()?;
         self.validate_dependency_acyclic()?;

@@ -12,10 +12,11 @@
 //! [`load_released`] is the only way to that interpretation, and only the
 //! `verify` module calls it.
 
+use crate::adapters::format::json_pointer;
 use crate::config::{declares_contract_1, upgrade_contract_1_value, Contract1Mapping};
 use crate::config::{Config, CONFIG_PATH, CONTRACT_1};
 use crate::error::{Error, Result};
-use crate::model::Bump;
+use crate::model::{Adapter, Bump};
 use crate::version::{bump_version, component_bump};
 use semver::Version;
 use std::path::Path;
@@ -87,9 +88,67 @@ pub(crate) fn load_released(root: &Path) -> Result<(Config, Interpretation)> {
     }
     let mapping = upgrade_contract_1_value(&mut value)?;
     let mut config: Config = serde_yaml::from_value(value)?;
-    config.validate()?;
+    config.validate_released()?;
+    released_json_pointers(root, &mut config);
     config.contract = CONTRACT_1.to_owned();
     Ok((config, Interpretation::Contract1(Contract1 { mapping })))
+}
+
+/// Spell each JSON array index the way the current reader selects it.
+///
+/// Released 0.2.0 read an array segment as any text `usize` parses, so
+/// `01` and `+1` selected element 1. Since 0.2.1 only the canonical `1`
+/// does. The array structure along a pointer is the same in every tree of a
+/// release, because a release writes only the scalar at its end, so the
+/// pointer is resolved once against the file at `root`. An unreadable file
+/// keeps its pointer, and the rebuild reports it as before.
+fn released_json_pointers(root: &Path, config: &mut Config) {
+    for unit in config.release_units.values_mut() {
+        let unit_path = unit.path.clone();
+        for projection in &mut unit.projections {
+            if projection.adapter != Adapter::Json {
+                continue;
+            }
+            let Some(pointer) = projection.pointer.as_deref() else {
+                continue;
+            };
+            let path = root.join(projection.file.workspace_path(&unit_path));
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
+                continue;
+            };
+            if let Some(canonical) = canonical_json_pointer(&document, pointer) {
+                projection.pointer = Some(canonical);
+            }
+        }
+    }
+}
+
+/// `pointer` with every array segment respelled as its canonical index, or
+/// `None` when it does not start with `/`.
+fn canonical_json_pointer(document: &serde_json::Value, pointer: &str) -> Option<String> {
+    let segments = json_pointer(pointer).ok()?;
+    let mut node = Some(document);
+    let mut canonical = String::new();
+    for segment in segments {
+        let (text, next) = match node {
+            Some(serde_json::Value::Array(items)) => match segment.parse::<usize>() {
+                Ok(index) => (index.to_string(), items.get(index)),
+                Err(_) => (segment, None),
+            },
+            Some(serde_json::Value::Object(members)) => {
+                let next = members.get(&segment);
+                (segment, next)
+            }
+            _ => (segment, None),
+        };
+        canonical.push('/');
+        canonical.push_str(&text.replace('~', "~0").replace('/', "~1"));
+        node = next;
+    }
+    Some(canonical)
 }
 
 #[cfg(test)]
@@ -132,6 +191,26 @@ mod tests {
                 COMPATIBILITY.bump(&current, bump)
             );
         }
+    }
+
+    #[test]
+    fn released_array_indexes_take_their_canonical_spelling() {
+        let document: serde_json::Value =
+            serde_json::from_str(r#"{"versions":["a","b"],"01":{"x":[1,2]}}"#).unwrap();
+        for (released, canonical) in [
+            ("/versions/1", "/versions/1"),
+            ("/versions/01", "/versions/1"),
+            ("/versions/+1", "/versions/1"),
+            ("/01/x/001", "/01/x/1"),
+            ("/missing/01", "/missing/01"),
+        ] {
+            assert_eq!(
+                canonical_json_pointer(&document, released).as_deref(),
+                Some(canonical),
+                "{released}"
+            );
+        }
+        assert_eq!(canonical_json_pointer(&document, "versions"), None);
     }
 
     #[test]

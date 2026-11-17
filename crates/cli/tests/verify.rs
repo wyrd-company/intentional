@@ -1361,6 +1361,95 @@ fn tags_created_by_released_0_2_0_verify() {
     assert_eq!(report["generator"], "intentional 0.2.0");
 }
 
+/// Files under one fixture tree, as repository paths. A top-level
+/// `c-colon-x` stands for the release-unit path `c:x`, which a Windows
+/// checkout of this repository could not hold.
+fn fixture_tree(root: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).expect("fixture directory") {
+            let path = entry.expect("fixture entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .expect("below the fixture tree")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let relative = match relative.strip_prefix("c-colon-x/") {
+                Some(rest) => format!("c:x/{rest}"),
+                None => relative,
+            };
+            files.push((relative, fs::read_to_string(&path).expect("fixture file")));
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Releases that published 0.2.0 made under `contract-1` with projection
+/// configurations that later versions refuse: a JSON array index written
+/// `01` or `+1`, two adapters projecting one field, and a release-unit path
+/// whose segment starts like a drive prefix. Each verifies exactly, because
+/// verify rebuilds a contract-1 release by the rules it was made under.
+#[test]
+fn projections_released_by_0_2_0_verify_under_their_own_rules() {
+    let cases = [
+        "json-index-leading-zero",
+        "json-index-plus-sign",
+        "same-field-two-adapters",
+        #[cfg(unix)]
+        "drive-prefix-path",
+    ];
+    for case in cases {
+        let fixtures = format!("docs/specifications/fixtures/released-0.2.0-projections/{case}");
+        let tree = |name: &str| {
+            fixture_tree(
+                &Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(&fixtures)
+                    .join(name),
+            )
+        };
+        let repo = TestRepo::new();
+        for (path, text) in tree("before") {
+            repo.write(&path, &text);
+        }
+        repo.write(
+            ".intentional/config.yml",
+            &repository_file(&format!("{fixtures}/release-config.yml")),
+        );
+        repo.write(".intentional/intents/.gitkeep", "");
+        repo.commit("add fixture");
+        git(&repo.root, &["tag", "sample-library@1.2.3"]);
+        let intent = ".intentional/intents/swift-falcon-c3b1.md";
+        repo.write(
+            intent,
+            "---\nsample-library: minor\n---\n\nAdd a sample capability.\n",
+        );
+        repo.commit("add intent");
+        for (path, text) in tree("after") {
+            repo.write(&path, &text);
+        }
+        fs::remove_file(repo.root.join(intent)).expect("consume intent");
+        repo.commit("apply release");
+        repo.forge(
+            "sample-library@1.3.0",
+            "HEAD",
+            &repository_file(&format!("{fixtures}/release-unit-tag-record.txt")),
+        );
+        let plan: Value =
+            serde_json::from_str(&repository_file(&format!("{fixtures}/release-plan.json")))
+                .expect("fixture plan");
+        let report = assert_verified(&repo, "sample-library@1.3.0", &["sample-library@1.3.0"]);
+        assert_eq!(report["plan_digest"], plan["digest"], "{case}");
+        assert_eq!(report["generator"], "intentional 0.2.0", "{case}");
+    }
+}
+
 /// Records that released 0.3.0 wrote under `contract-1` with
 /// `pre-1-0-bump-mapping: component`, the mapping Changesets adoption used.
 /// A minor intent at 0.4.1 released 0.5.0, and the workspace stream started

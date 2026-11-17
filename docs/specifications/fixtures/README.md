@@ -79,6 +79,23 @@ a `package.json` with `"name": "sample-library"` and `"version": "0.4.1"`:
   `intentional tag --plan release-plan.json --phase after-publication` after
   a commit of the applied tree.
 
+`released-0.2.0-projections/<case>/` holds bytes that the published 0.2.0
+`intentional-linux-x86_64` binary wrote under `contract-1` for projection
+configurations that later versions refuse. Each case starts from a fresh
+repository with the files under `before/`, commits
+`release-config.yml` with the lightweight tag `sample-library@1.2.3`, commits
+one minor intent for `sample-library`, then runs `plan` (`release-plan.json`),
+`apply` (the files under `after/`, committed with the consumed intent), and
+`tag` (`release-unit-tag-record.txt`). A top-level `c-colon-x` directory
+stands for the release-unit path `c:x`, which a Windows checkout of this
+repository cannot hold.
+
+- `json-index-leading-zero`: a `json` projection with pointer `/versions/01`.
+- `json-index-plus-sign`: the same with `/versions/+1`.
+- `same-field-two-adapters`: an `npm` projection and a `json` `/version`
+  projection of one `package.json`.
+- `drive-prefix-path`: a release unit at path `c:x`.
+
 # Release Model fixtures
 
 `release-model/` holds hand-built Release Model documents in canonical form:

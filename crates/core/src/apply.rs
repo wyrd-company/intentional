@@ -64,7 +64,11 @@ impl ApplyResult {
         interpretation: Interpretation,
         channel: Option<&str>,
     ) -> Result<Self> {
-        check_physical_ownership(root, &config)?;
+        // contract-1 releases predate the physical ownership check, which
+        // only refuses more; verify rebuilds them without it.
+        if interpretation == Interpretation::Current {
+            check_physical_ownership(root, &config)?;
+        }
         let intents = Intent::load_all(root, &config)?;
         let plan = ReleasePlan::from_inputs_as(root, &config, &intents, channel, interpretation)?;
         let mut tree = EditTree::new(root);

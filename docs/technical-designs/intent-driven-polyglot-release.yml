@@ -74,8 +74,11 @@ proposed-design:
     message that names the fix: run intentional init. Verify is the one
     exception, because durable-record verification retains historical
     semantics: it rebuilds a Release made under contract-1 with the
-    contract-1 interpreter, pre-1-0-bump-mapping component included, and no
-    other command reaches that interpreter. Init upgrades contract-1 by
+    contract-1 interpreter, pre-1-0-bump-mapping component included, under
+    the configuration and projection rules of released 0.2.0 where later
+    versions only refuse more: drive-prefix path segments, one field
+    projected twice, and JSON array indexes such as 01 or +1. No other
+    command reaches that interpreter. Init upgrades contract-1 by
     setting contract-2 and removing pre-1-0-bump-mapping, and keeps the
     comments of the configuration file. A configuration that used
     compatibility, or that omits the setting, already read bump names as
