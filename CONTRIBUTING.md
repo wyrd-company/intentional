@@ -38,3 +38,12 @@ it does not permit breaking Intentional's permanent compatibility promises.
 Close each new public struct or enum with `#[non_exhaustive]`, so that an added
 member is a minor change. A test enforces this and holds the list of types that
 are open on purpose; see `crates/core/tests/closed_public_types/README.md`.
+
+## Published schemas
+
+The Release Workspace, Release Plan, Tag Record, and Release Model schemas in
+`docs/specifications/` are part of the binary: `crates/core/build.rs` embeds
+them, and the links in `crates/core/schemas/` carry the same bytes into the
+packaged crate. Editing a schema changes what Intentional accepts and writes, so
+it follows the published schema stability rule in
+`docs/technical-designs/semantic-versioning.yml`.
