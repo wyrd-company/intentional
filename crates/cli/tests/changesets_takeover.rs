@@ -132,7 +132,7 @@ fn resolved_fixture_copy(source: &Path, plan: &mut InitPlan) -> Repository {
             copy_file(
                 source,
                 &repository.root,
-                &package.path.join(&projection.file),
+                &projection.file.workspace_path(&package.path),
             );
         }
     }
@@ -195,7 +195,7 @@ fn resolve_discovery_candidates(plan: &mut InitPlan) {
             .find_map(|(id, unit)| {
                 unit.projections
                     .iter()
-                    .any(|projection| unit.path.join(&projection.file) == candidate.path)
+                    .any(|projection| projection.file.workspace_path(&unit.path) == candidate.path)
                     .then(|| id.clone())
             });
         candidate.resolution = Some(match release_unit {
@@ -268,7 +268,7 @@ fn changesets_resolution_materializes_a_devcontainer_projection() {
         .projections
         .iter()
         .any(|projection| {
-            projection.file == Path::new("devcontainer-feature.json")
+            projection.file == "devcontainer-feature.json"
                 && projection.pointer.as_deref() == Some("/version")
         }));
 }
@@ -1672,10 +1672,7 @@ fn design_system_topology_rehearsal_resolves_and_removes_only_the_authorized_pro
         .any(|projection| projection.adapter == Adapter::Pub));
     let feature = &ready.inferred_config.release_units["flutter"];
     assert_eq!(feature.projections.len(), 1);
-    assert_eq!(
-        feature.projections[0].file,
-        Path::new("devcontainer-feature.json")
-    );
+    assert_eq!(feature.projections[0].file, "devcontainer-feature.json");
     assert!(ready
         .planned_operations
         .iter()
@@ -2096,10 +2093,12 @@ fn init_handoff_takeover_orders_baseline_model_and_template() {
     repository.cli().arg("init").assert().code(2);
     let path = repository.root.join(".intentional/init-plan.yml");
     let mut plan: InitPlan = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    resolve_discovery_candidates(&mut plan);
+    // Resolve diagnostics first: candidate resolution reads the excluded
+    // dispositions, so the private root package stays out of the config.
     for diagnostic in &mut plan.diagnostics {
         diagnostic.resolution = diagnostic.recommended.clone();
     }
+    resolve_discovery_candidates(&mut plan);
     repository.write(".intentional/init-plan.yml", &plan.to_yaml().unwrap());
     // The ready plan includes the model write performed by explicit takeover.
     let output = repository

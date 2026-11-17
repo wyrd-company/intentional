@@ -18,6 +18,7 @@ glob.workspace = true
 jsonschema.workspace = true
 node-semver.workspace = true
 rand.workspace = true
+same-file.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,3 +31,5 @@ walkdir.workspace = true
 
 [dev-dependencies]
 syn = { workspace = true, features = ["full", "parsing"] }
+regex = "1.13"
+tempfile = "3.8"

@@ -13,7 +13,9 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::intent::Intent;
 use crate::model::{Adapter, Bump, ProjectionMode};
+use crate::ownership::check_physical_ownership;
 use crate::version::{aggregate_bumps, resolve_versions, VersionRepository};
+use crate::workspace_files::read_contained;
 use semver::Version;
 use serde::Serialize;
 use std::path::Path;
@@ -94,6 +96,7 @@ impl WorkspaceStatus {
 
     /// Compute status from already-loaded inputs.
     pub fn compute(root: &Path, config: &Config, intents: &[Intent]) -> Result<Self> {
+        check_physical_ownership(root, config)?;
         let repository = VersionRepository::discover(root)?;
         let declared = aggregate_bumps(intents.iter().map(|intent| &intent.release_units));
         let mut current_versions = std::collections::BTreeMap::new();
@@ -122,9 +125,8 @@ impl WorkspaceStatus {
                 if projection.mode == ProjectionMode::None || projection.adapter == Adapter::Go {
                     continue;
                 }
-                let relative = release_unit.path.join(&projection.file);
-                let text = std::fs::read_to_string(root.join(&relative))
-                    .map_err(|error| crate::Error::io(root.join(&relative), error))?;
+                let relative = projection.file.workspace_path(&release_unit.path);
+                let text = read_contained(root, &relative)?;
                 let actual = read_projection_version(root, &relative, projection, &text)?;
                 if actual != expected {
                     drift.push(Drift {
@@ -159,8 +161,7 @@ pub(crate) fn read_projection_version(
             Some(version) => Ok(version),
             None => {
                 let workspace_path = crate::apply::workspace_manifest(root, relative)?;
-                let workspace = std::fs::read_to_string(root.join(&workspace_path))
-                    .map_err(|error| crate::Error::io(root.join(&workspace_path), error))?;
+                let workspace = read_contained(root, &workspace_path)?;
                 TomlFormat.read_text(&workspace, "/workspace/package/version")
             }
         },

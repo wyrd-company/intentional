@@ -99,8 +99,9 @@ proposed-design:
     tags.
 
   projection-entry: >-
-    Each `projections` item has `adapter`, `file` relative to the unit path,
-    `workspace_file` relative to the workspace root, `mode`, and a required
+    Each `projections` item has `adapter`, `file` as configured (relative to
+    the unit path, or a root file that starts with `/`), `workspace_file`
+    relative to the workspace root, `mode`, and a required
     boolean `generic`. `generic` is true for a generic format adapter and false
     for an ecosystem adapter. `json`, `toml`, and `yaml` require `generic: true`.
     `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go` require `generic: false`.

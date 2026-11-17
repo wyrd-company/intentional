@@ -360,7 +360,7 @@ fn model_projects_all_workspace_facts_and_preserves_projection_order() {
         repo.write(file, text);
         let mut projection = config.release_units["sample"].projections[0].clone();
         projection.adapter = adapter;
-        projection.file = file.into();
+        projection.file = intentional_core::ProjectionFile::unit_relative(Path::new(file));
         projection.pointer = pointer.map(str::to_owned);
         if adapter == intentional_core::Adapter::Go {
             projection.mode = intentional_core::ProjectionMode::None;
@@ -969,4 +969,27 @@ fn ordinary_init_replaces_attributes_without_truncating_existing_inode() {
     repo.cli().arg("init").assert().success();
     assert_eq!(fs::read(retained).unwrap(), original);
     assert_model_attributes(&repo);
+}
+
+#[test]
+fn model_keeps_a_root_projection_file_and_resolves_it_from_the_workspace_root() {
+    let repo = Repo::new();
+    repo.write(".intentional/config.yml", "contract: contract-1\nrelease-units:\n  sample:\n    path: packages/sample\n    projections:\n      - adapter: yaml\n        file: /site/meta.yml\n        pointer: /sample/version\n        mode: committed\n    tags:\n      primary:\n        role: primary\n        template: 'sample@{version}'\n");
+    repo.write("site/meta.yml", "sample:\n  version: 1.0.0\n");
+    repo.cli().arg("model").assert().success();
+    let value: Value = serde_json::from_slice(&repo.read_model()).unwrap();
+    let projection = &value["release_units"]["sample"]["projections"][0];
+    assert_eq!(projection["file"], "/site/meta.yml");
+    assert_eq!(projection["workspace_file"], "site/meta.yml");
+    assert_eq!(projection["generic"], true);
+    let output = repo
+        .cli()
+        .args(["status", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let status: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(status["release_model_stale"], false);
 }

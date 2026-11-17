@@ -38,8 +38,9 @@ validation-criteria: >-
   to a fixed or linked group, and then holds that group's `kind` and its
   complete `members` list. An empty `projections` list marks a Release Unit
   whose version exists only in its tags. Every projection carries `adapter`,
-  `file` relative to the Release Unit path, `workspace_file` relative to the
-  workspace root, `mode` (`committed`, `injected`, or `none`), and the boolean
+  `file` as configured (relative to the Release Unit path, or a root file
+  that starts with `/` and is relative to the workspace root),
+  `workspace_file` relative to the workspace root, `mode` (`committed`, `injected`, or `none`), and the boolean
   `generic`. `generic` is true for a generic format adapter and false for an
   ecosystem adapter. `json`, `toml`, and `yaml` require `generic: true`.
   `npm`, `cargo`, `pub`, `python`, `msbuild`, and `go` require `generic: false`.

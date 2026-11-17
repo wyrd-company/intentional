@@ -32,6 +32,10 @@ pub const OPEN_TYPES: &[(&str, &str)] = &[
         "vocabulary enum mirroring a published schema enum; tests build it as an init answer",
     ),
     ("version::VersionRepository", "fields are private; not a record or result"),
+    (
+        "projection_file::ProjectionFile",
+        "its one field is private; a value type, not a record or result",
+    ),
     ("adapters::ecosystem::NpmAdapter", "unit adapter struct; not a record or result"),
     ("adapters::ecosystem::CargoAdapter", "unit adapter struct; not a record or result"),
     ("adapters::ecosystem::PubAdapter", "unit adapter struct; not a record or result"),

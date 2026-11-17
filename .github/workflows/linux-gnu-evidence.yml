@@ -85,7 +85,7 @@ jobs:
           --format tar.gz \
           --output "${{ matrix.artifact_name }}.tar.gz"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}-evidence
           path: ${{ matrix.artifact_name }}.tar.gz
@@ -129,7 +129,7 @@ jobs:
             image: ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: intentional-linux-x86_64-evidence
           path: dist
@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: intentional-linux-arm64-evidence
           path: dist

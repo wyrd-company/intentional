@@ -7,8 +7,8 @@
 
 use crate::config::{
     validate_detector_id, validate_exact_discovery_path, validate_sha256, validate_tag_template,
-    Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ReleaseUnitConfig, TagConfig,
-    CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT, LEGACY_CONFIG_SCHEMA,
+    Config, ExcludedPathReceipt, ManagedPathReceipt, Projection, ProjectionFile, ReleaseUnitConfig,
+    TagConfig, CONFIG_PATH, CONFIG_SCHEMA, CURRENT_CONTRACT, LEGACY_CONFIG_SCHEMA,
 };
 use crate::error::{Error, Result};
 use crate::identity::{native_identity, xml_element};
@@ -1405,14 +1405,13 @@ fn candidate_projection(candidate: &DiscoveryCandidate, unit_path: &Path) -> Res
     };
     Ok(Projection {
         adapter: suggestion.adapter,
-        file,
+        file: ProjectionFile::unit_relative(&file),
         mode: suggestion.mode,
         pointer: suggestion.pointer.clone(),
     })
 }
 
 fn apply_changesets_candidate_resolutions(
-    root: &Path,
     discovery: &mut Discovery,
     candidates: &[DiscoveryCandidate],
 ) -> Result<BTreeMap<String, String>> {
@@ -1456,7 +1455,7 @@ fn apply_changesets_candidate_resolutions(
                             return Err(Error::Validation(format!(
                                 "Changesets discovery candidate {} conflicts with existing projection {} on release unit {release_unit}: adapter or mode differs",
                                 candidate.id,
-                                projection.file.display()
+                                projection.file
                             )));
                         }
                     } else {
@@ -1478,8 +1477,7 @@ fn apply_changesets_candidate_resolutions(
                             discovery.config.release_units.get_mut(native_identity)
                         {
                             source.projections.retain(|projection| {
-                                root.join(&source.path).join(&projection.file)
-                                    != root.join(&candidate.path)
+                                projection.file.workspace_path(&source.path) != candidate.path
                             });
                             if source.projections.is_empty() {
                                 removed_release_units.insert(native_identity.clone());
@@ -1502,12 +1500,7 @@ fn apply_changesets_candidate_resolutions(
                     if let Some(unit) = discovery.config.release_units.get_mut(native_identity) {
                         let unit_path = unit.path.clone();
                         unit.projections.retain(|projection| {
-                            let path = if unit_path == Path::new(".") {
-                                projection.file.clone()
-                            } else {
-                                unit_path.join(&projection.file)
-                            };
-                            path != candidate.path
+                            projection.file.workspace_path(&unit_path) != candidate.path
                         });
                         if unit.projections.is_empty() {
                             removed_release_units.insert(native_identity.clone());
@@ -1663,19 +1656,11 @@ fn candidate_projection_owner<'a>(
         unit.projections
             .iter()
             .any(|projection| {
-                projection_workspace_path(unit, projection) == suggestion.path
+                projection.file.workspace_path(&unit.path) == suggestion.path
                     && projection.pointer == suggestion.pointer
             })
             .then_some(id.as_str())
     })
-}
-
-fn projection_workspace_path(unit: &ReleaseUnitConfig, projection: &Projection) -> PathBuf {
-    if unit.path == Path::new(".") {
-        projection.file.clone()
-    } else {
-        unit.path.join(&projection.file)
-    }
 }
 
 fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
@@ -1696,7 +1681,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
     let mut discovery = discover(root)?;
     reconcile_candidate_resolutions(&mut discovery.candidates, previous.as_ref());
     let candidates = discovery.candidates.clone();
-    let identity_map = apply_changesets_candidate_resolutions(root, &mut discovery, &candidates)?;
+    let identity_map = apply_changesets_candidate_resolutions(&mut discovery, &candidates)?;
     discovery.config.settings.pre_1_0_bump_mapping = Pre1BumpMapping::Component;
     discovery.config.settings.internal_dependency_bump = changesets["updateInternalDependencies"]
         .as_str()
@@ -1840,7 +1825,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
                     .projections
                     .iter()
                     .find(|projection| projection.adapter == Adapter::Npm)
-                    .map(|projection| release_unit.path.join(&projection.file))
+                    .map(|projection| projection.file.workspace_path(&release_unit.path))
             })
             .map(|path| evidence(root, &path, Vec::new()))
             .collect::<Result<Vec<_>>>()?;
@@ -1877,7 +1862,7 @@ fn changesets_plan(root: &Path, take_over: bool) -> Result<InitResult> {
         let manifest = release_unit_config
             .projections
             .first()
-            .map(|projection| release_unit_config.path.join(&projection.file))
+            .map(|projection| projection.file.workspace_path(&release_unit_config.path))
             .ok_or_else(|| {
                 Error::Validation(format!(
                     "discovered release unit {release_unit} has no manifest evidence"
@@ -2315,7 +2300,7 @@ fn materialize_discovery_inventory(
                 };
                 Ok(Projection {
                     adapter: observation.projection.adapter,
-                    file,
+                    file: ProjectionFile::unit_relative(&file),
                     mode: observation.projection.mode,
                     pointer: observation.projection.pointer.clone(),
                 })
@@ -2859,7 +2844,7 @@ fn derive_npm_dependencies(root: &Path, config: &mut Config) -> Result<Vec<NpmDe
             .projections
             .iter()
             .filter(|projection| projection.adapter == Adapter::Npm)
-            .map(|projection| projection_workspace_path(release_unit, projection))
+            .map(|projection| projection.file.workspace_path(&release_unit.path))
             .collect::<Vec<_>>();
         if npm_manifests.is_empty() {
             continue;
@@ -2925,7 +2910,7 @@ fn retain_materialized_npm_dependencies(config: &mut Config, edges: &mut Vec<Npm
             .is_some_and(|unit| {
                 unit.projections.iter().any(|projection| {
                     projection.adapter == Adapter::Npm
-                        && projection_workspace_path(unit, projection) == edge.manifest
+                        && projection.file.workspace_path(&unit.path) == edge.manifest
                 })
             })
             && config.release_units.contains_key(&edge.dependency)
@@ -3694,12 +3679,7 @@ fn apply_proxy_manifest_resolutions(
                 })?;
                 let unit_path = unit.path.clone();
                 unit.projections.retain(|projection| {
-                    let path = if unit_path == Path::new(".") {
-                        projection.file.clone()
-                    } else {
-                        unit_path.join(&projection.file)
-                    };
-                    path != candidate.path
+                    projection.file.workspace_path(&unit_path) != candidate.path
                 });
                 config.discovery.managed_paths.retain(|receipt| {
                     receipt.detector != candidate.detector || receipt.path != candidate.path
@@ -4769,7 +4749,7 @@ release-units:
             .get_mut("sample-duplicate")
             .expect("duplicate unit")
             .projections
-            .retain(|projection| projection.file != Path::new("duplicates/beta/package.json"));
+            .retain(|projection| projection.file != "duplicates/beta/package.json");
         retain_materialized_npm_dependencies(&mut config, &mut edges);
         assert!(edges.is_empty());
         assert!(config.release_units["sample-duplicate"]
@@ -4862,7 +4842,7 @@ release-units:
             release_unit.path = PathBuf::from("examples");
             release_unit.projections = vec![Projection {
                 adapter: Adapter::Npm,
-                file: PathBuf::from("sample.json"),
+                file: ProjectionFile::unit_relative(Path::new("sample.json")),
                 mode: ProjectionMode::Committed,
                 pointer: None,
             }];
@@ -4884,12 +4864,8 @@ release-units:
                 ..Discovery::default()
             };
 
-            let error = apply_changesets_candidate_resolutions(
-                Path::new("."),
-                &mut discovery,
-                &[candidate],
-            )
-            .expect_err("same target with different semantics rejected");
+            let error = apply_changesets_candidate_resolutions(&mut discovery, &[candidate])
+                .expect_err("same target with different semantics rejected");
             assert!(error
                 .to_string()
                 .contains("conflicts with existing projection"));
@@ -4966,9 +4942,8 @@ release-units:
             ..Discovery::default()
         };
 
-        let error =
-            apply_changesets_candidate_resolutions(Path::new("."), &mut discovery, &[candidate])
-                .expect_err("unrelated projection ownership rejected");
+        let error = apply_changesets_candidate_resolutions(&mut discovery, &[candidate])
+            .expect_err("unrelated projection ownership rejected");
         assert_eq!(
             error.to_string(),
             format!(
@@ -5152,12 +5127,8 @@ release-units:
             config,
             ..Discovery::default()
         };
-        apply_changesets_candidate_resolutions(
-            Path::new("."),
-            &mut discovery,
-            std::slice::from_ref(&generic),
-        )
-        .expect("generic projection materialized");
+        apply_changesets_candidate_resolutions(&mut discovery, std::slice::from_ref(&generic))
+            .expect("generic projection materialized");
         assert_eq!(
             discovery.config.release_units["configured"]
                 .projections
@@ -5171,12 +5142,8 @@ release-units:
             Some("/version")
         );
 
-        apply_changesets_candidate_resolutions(
-            Path::new("."),
-            &mut discovery,
-            std::slice::from_ref(&generic),
-        )
-        .expect("represented projection not duplicated");
+        apply_changesets_candidate_resolutions(&mut discovery, std::slice::from_ref(&generic))
+            .expect("represented projection not duplicated");
         assert_eq!(
             discovery.config.release_units["configured"]
                 .projections

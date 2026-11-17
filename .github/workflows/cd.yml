@@ -140,7 +140,7 @@ jobs:
           --output "${{ matrix.artifact_name }}.${{ matrix.archive_ext }}"
 
       - name: Upload release archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
@@ -161,7 +161,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download release archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: "intentional-*"
           path: dist

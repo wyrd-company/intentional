@@ -80,7 +80,8 @@ pub struct ReleaseUnitEntry {
 pub struct ProjectionEntry {
     /// Adapter name, an open schema value.
     pub adapter: String,
-    /// File relative to its unit.
+    /// File as configured: relative to its unit, or a root file that starts
+    /// with `/` and is relative to the workspace root.
     pub file: PathBuf,
     /// File relative to the workspace.
     pub workspace_file: PathBuf,
@@ -170,10 +171,9 @@ impl ReleaseModel {
             let mut projections = Vec::new();
             let mut ecosystems = BTreeSet::new();
             for projection in &unit.projections {
-                let workspace_file = relative_path(&unit.path.join(&projection.file));
+                let workspace_file = relative_path(&projection.file.workspace_path(&unit.path));
                 let path = root.join(&workspace_file);
-                let text =
-                    std::fs::read_to_string(&path).map_err(|error| Error::io(&path, error))?;
+                let text = crate::workspace_files::read_contained(root, &workspace_file)?;
                 // Exercise the same adapter reader as status, including inherited
                 // Cargo versions. Go has no version field to read.
                 if projection.mode != ProjectionMode::None
@@ -214,7 +214,7 @@ impl ReleaseModel {
                     .to_owned();
                 projections.push(ProjectionEntry {
                     adapter,
-                    file: projection.file.clone(),
+                    file: PathBuf::from(projection.file.to_string()),
                     workspace_file,
                     mode: projection.mode,
                     generic: projection.adapter.requires_pointer(),
