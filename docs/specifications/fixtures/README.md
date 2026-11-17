@@ -51,6 +51,13 @@ gives its bytes. A Release Plan document ends with the one newline that
 - `tag-record/baseline-digest-payload-reordered.json`: the released `0.2.0`
   baseline digest payload with its keys in reverse order and indented. Its
   canonical bytes, and so its digest, are those of the released payload.
+- `tag-record/complete-contract-2.txt`: `complete.txt` under `contract-2`.
+- `tag-record/primary-role-contract-1.txt`, `primary-role-contract-2.txt`,
+  `projection-role-contract-1.txt`, and `projection-role-contract-2.txt`:
+  Release Unit tag records that carry the optional `tag-role`, one per role
+  and contract.
+- `released-0.4.1/release-unit-tag-record.txt`: the message of Intentional's
+  own `0.4.1` tag, which released 0.4.1 wrote under `contract-2`.
 - `tag-record/invalid/`: `complete.txt` with one schema violation each, named
   for the violation. A tag record carries no `$schema` member;
   `schema-member.txt` shows that such a line is an undeclared member.

@@ -62,6 +62,57 @@ fn tag_records_written_by_released_0_2_0_decode() {
     assert_eq!(baseline.plan_digest, RELEASED_BASELINE_DIGEST);
 }
 
+/// A record keeps the contract it was created under, and `tag-role` is an
+/// optional member with one meaning under `contract-1` and `contract-2`: a
+/// reader that has no Release Model for the tagged commit can take the role
+/// of the tag from it.
+#[test]
+fn tag_role_is_optional_with_one_meaning_under_both_contracts() {
+    for contract in ["contract-1", "contract-2"] {
+        for (fixture_name, role) in [
+            ("primary-role", TagRecordRole::Primary),
+            ("projection-role", TagRecordRole::Projection),
+        ] {
+            let name = format!("tag-record/{fixture_name}-{contract}.txt");
+            let message = fixture(&name);
+            let record =
+                TagRecord::decode(&message).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(record.contract, contract, "{name}");
+            assert_eq!(record.tag_role, Some(role), "{name}");
+            assert_eq!(record.encode().expect("encode"), message, "{name}");
+            let without_role: String = message
+                .lines()
+                .filter(|line| !line.starts_with("tag-role:"))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            let record = TagRecord::decode(&without_role)
+                .unwrap_or_else(|error| panic!("{name} without tag-role: {error}"));
+            assert_eq!(record.tag_role, None, "{name}");
+        }
+        let name = if contract == "contract-1" {
+            COMPLETE_RECORD.to_owned()
+        } else {
+            "tag-record/complete-contract-2.txt".to_owned()
+        };
+        let message = fixture(&name);
+        let record = TagRecord::decode(&message).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(record.tag_role, Some(TagRecordRole::Workspace), "{name}");
+        assert_eq!(record.encode().expect("encode"), message, "{name}");
+        // A workspace tag ID takes only the workspace role, under either contract.
+        let wrong = message.replace("tag-role: workspace", "tag-role: primary");
+        assert!(TagRecord::decode(&wrong).is_err(), "{name}");
+    }
+}
+
+#[test]
+fn tag_records_written_by_released_0_4_1_decode() {
+    let record = TagRecord::decode(&fixture("released-0.4.1/release-unit-tag-record.txt"))
+        .expect("released contract-2 record");
+    assert_eq!(record.contract, "contract-2");
+    assert_eq!(record.generator, "intentional 0.4.1");
+    assert_eq!(record.tag_role, None);
+}
+
 #[test]
 fn repeated_prerequisite_lines_project_into_the_prerequisites_array() {
     let record = TagRecord::decode(&fixture(COMPLETE_RECORD)).expect("complete record");

@@ -1,0 +1,8 @@
+intentional release record
+
+contract: contract-2
+generator: intentional 0.4.1
+plan-digest: sha256:f05737bdedabcfdb98c53201461d2631fffdbb6f249b20c4cdc91c6d69fb0115
+tag-id: release-unit/intentional/primary
+version: 0.4.1
+baseline: false

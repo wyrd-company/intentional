@@ -44,3 +44,8 @@ validation-criteria: >-
   validation resolves every prerequisite record and verifies its tag ID,
   target, version, contract, and plan digest against the sealed plan. Exact existing objects satisfy creation; any disagreement is
   a conflict.
+  The `contract` field names the contract the record was created under,
+  `contract-1` or `contract-2`; a record keeps it after an init upgrade. The
+  optional `tag-role` has the same meaning under both contracts: the role of
+  the tag's configured tag ID, which a reader without the Release Model of the
+  tagged commit can use. Intentional does not write it today.
