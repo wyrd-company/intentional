@@ -71,6 +71,21 @@ impl ProjectionFile {
         validate_relative_path(Path::new(&self.0), &description)
     }
 
+    /// Refuse a file as `contract-1` releases did: a root file in its one
+    /// canonical form, as 0.2.1 introduced it, or a non-empty relative file
+    /// without `..`. Released 0.2.0 refused no drive prefix, so its releases
+    /// still rebuild. Only `verify` reaches this, through
+    /// [`crate::config::Config::validate_released`].
+    pub(crate) fn validate_released(&self, release_unit_id: &str, adapter: Adapter) -> Result<()> {
+        if self.is_root() {
+            return self.validate(release_unit_id, adapter);
+        }
+        validate_relative_shape(
+            Path::new(&self.0),
+            &format!("release unit {release_unit_id} projection file"),
+        )
+    }
+
     fn as_path(&self) -> &Path {
         Path::new(&self.0)
     }
@@ -126,6 +141,22 @@ pub(crate) fn normalized(relative: &Path) -> PathBuf {
 /// `..`, or has a segment that starts with a drive prefix. Segments split on
 /// both `/` and `\`, so that every platform refuses the same text.
 pub(crate) fn validate_relative_path(path: &Path, description: &str) -> Result<()> {
+    validate_relative_shape(path, description)?;
+    let text = path.to_string_lossy();
+    if let Some(segment) = text
+        .split(['/', '\\'])
+        .find(|segment| has_drive_prefix(segment))
+    {
+        return Err(Error::Validation(format!(
+            "{description} {text} has a segment {segment} that starts with a drive prefix; on Windows the path would leave the repository"
+        )));
+    }
+    Ok(())
+}
+
+/// Refuse a configured relative path that is empty, absolute, or contains
+/// `..`: the rule of released 0.2.0, before drive prefixes were refused.
+pub(crate) fn validate_relative_shape(path: &Path, description: &str) -> Result<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
         || path
@@ -134,15 +165,6 @@ pub(crate) fn validate_relative_path(path: &Path, description: &str) -> Result<(
     {
         return Err(Error::Validation(format!(
             "{description} must be a non-empty relative path without .."
-        )));
-    }
-    let text = path.to_string_lossy();
-    if let Some(segment) = text
-        .split(['/', '\\'])
-        .find(|segment| has_drive_prefix(segment))
-    {
-        return Err(Error::Validation(format!(
-            "{description} {text} has a segment {segment} that starts with a drive prefix; on Windows the path would leave the repository"
         )));
     }
     Ok(())

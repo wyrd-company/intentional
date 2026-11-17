@@ -1,0 +1,95 @@
+{
+  "$schema": "https://intentional.foo/schemas/release-model/1",
+  "paths": {
+    "config": ".intentional/config.yml",
+    "intents": ".intentional/intents",
+    "model": ".intentional/release-model.json"
+  },
+  "release_groups": {
+    "fixed": [],
+    "linked": []
+  },
+  "release_units": {
+    "intentional": {
+      "changelog": "CHANGELOG.md",
+      "depends_on": [],
+      "disposition": "managed",
+      "ecosystems": [
+        "npm"
+      ],
+      "path": ".",
+      "projections": [
+        {
+          "adapter": "toml",
+          "file": "Cargo.toml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/workspace/package/version",
+          "workspace_file": "Cargo.toml"
+        },
+        {
+          "adapter": "toml",
+          "file": "crates/cli/Cargo.toml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/dependencies/intentional-core/version",
+          "workspace_file": "crates/cli/Cargo.toml"
+        },
+        {
+          "adapter": "npm",
+          "file": "npm/package.json",
+          "generic": false,
+          "mode": "committed",
+          "native_identity": "@wyrd-company/intentional",
+          "workspace_file": "npm/package.json"
+        },
+        {
+          "adapter": "yaml",
+          "file": "/docs/user/docs.yml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/products/intentional/version",
+          "workspace_file": "docs/user/docs.yml"
+        }
+      ],
+      "release_record": "required",
+      "sources": [],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{version}"
+        }
+      }
+    },
+    "intentional-docs": {
+      "changelog": "docs/user/CHANGELOG.md",
+      "depends_on": [
+        "intentional"
+      ],
+      "disposition": "managed",
+      "ecosystems": [],
+      "path": "docs/user",
+      "projections": [
+        {
+          "adapter": "yaml",
+          "file": "/docs/user/docs.yml",
+          "generic": true,
+          "mode": "committed",
+          "pointer": "/products/intentional/docs-version",
+          "workspace_file": "docs/user/docs.yml"
+        }
+      ],
+      "release_record": "required",
+      "sources": [],
+      "tags": {
+        "primary": {
+          "role": "primary",
+          "tag_after": [],
+          "template": "{id}@{version}"
+        }
+      }
+    }
+  },
+  "workspace_tags": {}
+}

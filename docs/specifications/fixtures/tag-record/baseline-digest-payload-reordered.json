@@ -1,0 +1,9 @@
+{
+  "versions": {
+    "workspace/release": "0.1.0",
+    "sample-library": "1.2.3"
+  },
+  "generator": "0.2.0",
+  "contract": "contract-1",
+  "baseline": true
+}

@@ -10,6 +10,7 @@ use crate::adapters::{
     PythonAdapter, TomlFormat, YamlFormat,
 };
 use crate::config::{Config, Projection, ReleaseUnitConfig};
+use crate::contract_1::Interpretation;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Adapter, ProjectionMode};
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 /// One planned file write.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FileWrite {
     /// Workspace-relative target.
     pub path: PathBuf,
@@ -31,6 +33,7 @@ pub struct FileWrite {
 
 /// Complete tree mutation produced by `apply`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ApplyResult {
     /// Changed or created files in path order.
     pub writes: Vec<FileWrite>,
@@ -45,10 +48,29 @@ pub struct ApplyResult {
 impl ApplyResult {
     /// Plan all release tree mutations.
     pub fn build(root: &Path, channel: Option<&str>) -> Result<Self> {
-        let config = Config::load(root)?;
-        check_physical_ownership(root, &config)?;
+        Self::build_as(root, Config::load(root)?, Interpretation::Current, channel)
+    }
+
+    /// Plan the release tree mutations of a Release that `verify` rebuilds,
+    /// with the configuration and interpretation it was made under.
+    pub(crate) fn build_released(root: &Path, channel: Option<&str>) -> Result<Self> {
+        let (config, interpretation) = crate::contract_1::load_released(root)?;
+        Self::build_as(root, config, interpretation, channel)
+    }
+
+    fn build_as(
+        root: &Path,
+        config: Config,
+        interpretation: Interpretation,
+        channel: Option<&str>,
+    ) -> Result<Self> {
+        // contract-1 releases predate the physical ownership check, which
+        // only refuses more; verify rebuilds them without it.
+        if interpretation == Interpretation::Current {
+            check_physical_ownership(root, &config)?;
+        }
         let intents = Intent::load_all(root, &config)?;
-        let plan = ReleasePlan::from_inputs(root, &config, &intents, channel)?;
+        let plan = ReleasePlan::from_inputs_as(root, &config, &intents, channel, interpretation)?;
         let mut tree = EditTree::new(root);
         let by_id: BTreeMap<_, _> = plan
             .release_units

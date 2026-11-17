@@ -19,7 +19,7 @@ products:
     tagline: Intent-driven polyglot releases.
     blurb: >-
       Declare release intent once, project versions across package ecosystems,
-      and create verifiable annotated release records without handing
+      and create verifiable annotated tag records without handing
       publication or repository choreography to the versioning tool.
     status: stable
     category: Release & Versioning

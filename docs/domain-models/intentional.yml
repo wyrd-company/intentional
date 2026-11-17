@@ -1,0 +1,104 @@
+$schema: https://refinery.systems/ontology/domain-model
+relationships:
+  models: intentional
+description: >-
+  Intentional models a release workspace that turns pending change intent into
+  one authoritative tag-backed Release. A release process outside Intentional
+  drives the protocol and owns release records and publication; it reads the
+  workspace through the Release Model, a derived projection of Release
+  Workspace configuration. Git repositories, release processes, the Release
+  Model, and serialized record files are infrastructure or projections rather
+  than domain aggregates.
+aggregates:
+  - name: Release Workspace
+    description: >-
+      The consistency boundary for release configuration. It owns Release
+      Units, their version projections, dependency and release groups, tag
+      streams and their required phases, workspace settings, and discovery
+      receipts. A Release Unit is an entity that owns one version, one
+      changelog, and one release-record policy, which states whether every
+      release of the unit has a release record: the GitHub Release that the
+      release process publishes for the unit on its primary tag. The Release
+      Model is a projection of this state.
+    commands:
+      - name: Reconcile Release Workspace
+        description: >-
+          Apply one reviewed Initialization Plan to initialize or converge the
+          complete workspace configuration without reversing explicit
+          exclusion or ownership decisions.
+    events:
+      - name: Release Workspace Initialized
+        description: A release workspace and its initial configuration were established.
+      - name: Release Unit Registered
+        description: A discovered or declared release unit entered workspace ownership.
+      - name: Release Unit Reconfigured
+        description: >-
+          A release unit's projections, dependencies, groups, tags, or
+          release-record policy changed through reconciliation.
+      - name: Release Unit Removed
+        description: A release unit left workspace ownership through reconciliation.
+      - name: Discovery Candidate Excluded
+        description: >-
+          A discovered candidate was explicitly declined against its observed
+          evidence.
+      - name: Release Workspace Reconciled
+        description: >-
+          Every accepted Initialization Plan resolution was applied and the
+          resulting workspace satisfies its configuration invariants.
+
+  - name: Change Intent
+    description: >-
+      One independently identified statement of user-visible change and the
+      semantic version effect claimed for one or more Release Units. Pending
+      intent may change until an authoritative Release consumes it. Consumed
+      intent is immutable.
+    commands:
+      - name: Record Change Intent
+        description: Record a new pending change and its release-unit bump claims.
+      - name: Revise Change Intent
+        description: Correct the claims or changelog text of pending intent.
+      - name: Withdraw Change Intent
+        description: Remove pending intent before any Release consumes it.
+      - name: Consume Change Intent
+        description: Bind pending intent to the Release established from a plan that includes it.
+    events:
+      - name: Change Intent Recorded
+        description: A valid change statement became pending release input.
+      - name: Change Intent Revised
+        description: A pending change statement or its bump claims changed.
+      - name: Change Intent Withdrawn
+        description: A pending change statement was removed from future planning.
+      - name: Change Intent Consumed
+        description: An established Release accepted the intent as immutable release input.
+
+  - name: Release
+    description: >-
+      One durable authoritative transition from a source state to released
+      versions. It comes into existence when the verified release commit and
+      annotated identity tags exist as authoritative repository objects. It owns
+      its sealed global Release Plan, source identity, and tag records, the
+      canonical messages of its annotated tags. Plan computation and
+      materialization are candidate operations and do not create a Release. A
+      tag that requires an executor phase joins the Release when the process
+      declares that phase.
+    commands:
+      - name: Establish Release
+        description: >-
+          Create the verified release commit's annotated identity tags as
+          repository authority, seal the plan as durable Release identity, and
+          consume its contributing Change Intents when the Release is
+          channel-less.
+      - name: Record Phase Tags
+        description: >-
+          Create the planned tags that require a declared executor phase after
+          verifying their prerequisites against the sealed plan.
+    events:
+      - name: Release Established
+        description: >-
+          The authoritative source commit and annotated identity tags became
+          observable and bound the sealed plan as durable Release state. A
+          channel-less Release also consumed its Change Intents.
+      - name: Phase Tags Recorded
+        description: >-
+          The tags that require one declared executor phase were created and
+          bound to the sealed plan.

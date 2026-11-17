@@ -15,6 +15,7 @@ description = "Core model and release planning for intentional"
 [dependencies]
 gix.workspace = true
 glob.workspace = true
+jsonschema.workspace = true
 node-semver.workspace = true
 rand.workspace = true
 same-file.workspace = true
@@ -29,5 +30,6 @@ toml_edit.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+syn = { workspace = true, features = ["full", "parsing"] }
 regex = "1.13"
 tempfile = "3.8"

@@ -1,0 +1,9 @@
+contract: contract-1
+release-units:
+  sample-library:
+    path: .
+    projections:
+      - { adapter: npm, file: package.json, mode: committed }
+      - { adapter: json, file: meta.json, pointer: /versions/+1, mode: committed }
+    tags:
+      primary: { role: primary, template: 'sample-library@{version}' }

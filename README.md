@@ -20,8 +20,11 @@ The tool supports npm, Cargo, Pub, PEP 621 Python projects, MSBuild projects,
 Go modules, Dev Container Features and Templates, and arbitrary JSON, TOML,
 and YAML version fields. It writes release state in the working tree and
 creates annotated tags. The surrounding harness owns commits, pushes,
-publication, registry observation, and forge operations. Generated tag
-templates do not prefix versions with `v`.
+publication, registry observation, and forge operations. Intentional generates
+no CI workflow and runs none; a release process template reads the committed
+Release Model and produces the workflow. Primary and workspace
+tag templates do not prefix versions with `v`; ecosystem projection tags can
+use a required platform prefix.
 
 ## Install
 

@@ -9,16 +9,23 @@ pub mod adapters;
 pub mod apply;
 pub mod check;
 pub mod config;
+mod contract_1;
 pub mod error;
+pub mod identity;
 pub mod init;
 pub mod intent;
+mod materialize;
 pub mod model;
 mod ownership;
 pub mod plan;
 pub mod projection_file;
+pub mod release_model;
+pub mod schema;
 pub mod stamp;
 pub mod status;
 pub mod tag;
+pub mod tag_record;
+pub mod verify;
 pub mod version;
 mod workspace_files;
 
@@ -30,6 +37,7 @@ pub use config::{
     CURRENT_CONTRACT,
 };
 pub use error::{Error, Result};
+pub use identity::native_identity;
 pub use init::{
     discover_config, initialize, initialize_with, CandidateProjectionSuggestion,
     CandidateResolution, CandidateTagSuggestion, ConvertedIntent, DiscoveryCandidate,
@@ -38,17 +46,28 @@ pub use init::{
 };
 pub use intent::{Intent, IntentDraft, IntentWrite, INTENTS_PATH};
 pub use model::{
-    Adapter, Bump, BumpTranslation, ProjectionMode, ReleaseUnitDisposition, TagPhase, TagRole,
+    Adapter, Bump, BumpTranslation, ProjectionMode, ReleaseRecordPolicy, ReleaseUnitDisposition,
+    TagPhase, TagRole,
 };
 pub use plan::{
     canonical_json, render_changelog_section, sha256_digest, ChangelogEntry, Generator,
-    PlanReleaseUnit, PlanTag, ReleasePlan,
+    PlanReleaseUnit, PlanSource, PlanTag, ReleasePlan, RELEASE_PLAN_SCHEMA,
+};
+pub use release_model::{
+    write_release_model, ModelPaths, ProjectionEntry, ReleaseGroupMembership, ReleaseGroups,
+    ReleaseModel, ReleaseUnitEntry, ReleaseUnitTagEntry, SourceEntry, WorkspaceTagEntry,
+    RELEASE_MODEL_PATH, RELEASE_MODEL_SCHEMA_ID,
 };
 pub use stamp::StampResult;
 pub use status::{
-    Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE, MISSING_BASELINE_NEXT_ACTION,
+    release_model_stale_message, Drift, ReleaseUnitStatus, WorkspaceStatus, MISSING_BASELINE_CODE,
+    MISSING_BASELINE_NEXT_ACTION, RELEASE_MODEL_STALE_CODE, RELEASE_MODEL_STALE_NEXT_ACTION,
 };
 pub use tag::{tag_record_issues, PlannedTag, TagResult};
+pub use tag_record::{
+    baseline_digest, TagPrerequisite, TagRecord, TagRecordRole, TAG_RECORD_HEADER,
+};
+pub use verify::{verify_release, Severity, Verification, VerifyDiagnostic};
 pub use version::{
     aggregate_bumps, aggregate_graduations, bump_version, effective_bumps, resolve_versions,
     ReleaseUnitVersion, VersionRepository,

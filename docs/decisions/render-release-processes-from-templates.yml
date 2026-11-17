@@ -1,0 +1,74 @@
+$schema: https://refinery.systems/ontology/decision-record
+name: Render release processes from templates that read the Release Model
+
+relationships:
+  contextualizes:
+    - intent-driven-polyglot-release
+    - release-model
+    - release-planning-and-records
+    - repository-initialization
+
+description: >-
+  A Release needs more than versions and tags: a release commit, pushes,
+  builds, signing, release records, publication to registries and package
+  repositories, and the gates and credentials around them. Intentional
+  computes versions, seals Release Plans, materializes them, and creates the
+  annotated tag records that establish a Release. Some component has to own
+  the rest of the release process and keep it in agreement with the Release
+  Workspace across every repository that adopts Intentional.
+
+considered-options:
+  1: >-
+    Intentional generates and reconciles a managed release workflow. A
+    generator builds a typed job graph from configuration, selected security
+    postures, Packages, Signing selections, Distribution Targets, and a recipe
+    catalog compiled into each Intentional version, then renders
+    repository-resident GitHub Actions workflows with an ownership manifest,
+    candidate bundles, Custom Release Gate interfaces, Release Artifact
+    records, and Release Evidence. Intentional owns every packaging, signing,
+    and publication recipe and the hosting-platform protocol around them.
+  2: >-
+    Intentional provides a portable command-line protocol and a committed
+    Release Model document. A release process template, rendered by Toha,
+    reads the Release Model and drives the protocol. The template owns the
+    workflow, its gate locations and workflow names, credentials,
+    publication targets, and release records, and records them itself.
+
+decision-outcome:
+  chosen-option: 2
+  justification: >-
+    Release processes come from Toha templates, and the
+    templates own publication designs. A process fact such as a gate path, a
+    workflow name, a credential, or a publication target then has one owner,
+    the template that records it, and Intentional configuration holds none of
+    them. Intentional's protocol needs Git and no hosting platform, so the
+    same commands serve a person, a harness, and a rendered release process.
+    A template reads one schema-identified document instead of the
+    configuration grammar, so templates and Intentional evolve on separate
+    contract lines.
+
+expected-outcomes:
+  positive:
+    - >-
+      Every Intentional command runs with Git alone; no command needs a
+      hosting platform, its credentials, or its API.
+    - >-
+      Intentional ships no packaging, signing, or distribution recipe, so a
+      new destination or a recipe fix is a template change and needs no
+      Intentional release.
+    - >-
+      One Release Model serves every template that reads it, and its own
+      contract line leaves applied templates valid across Intentional
+      compatibility-line changes.
+  negative:
+    - >-
+      Intentional does not observe publication. A tag phase is the process's
+      declaration of what it completed, and Intentional creates phased tags
+      on that declaration alone.
+    - >-
+      Release records, release evidence, and security posture belong to the
+      process. Intentional's verification covers the tag-backed Release, not
+      what a process published.
+    - >-
+      Each template vendors the Release Model schema it accepts and moves to
+      a new Release Model line on its own schedule.

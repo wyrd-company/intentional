@@ -1,0 +1,28 @@
+# ---
+# relationships:
+#   realizes: change-intent
+# ---
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://intentional.foo/schemas/0.2/change-intent
+title: Intentional Change Intent frontmatter
+type: object
+minProperties: 1
+propertyNames:
+  $ref: "https://intentional.foo/schemas/0.2/config#/$defs/stable-id"
+additionalProperties:
+  oneOf:
+    - $ref: "#/$defs/bump"
+    - description: >-
+        Long form. `graduate: true` graduates a 0.x Release Unit to exactly
+        1.0.0 and requires `bump: major`.
+      type: object
+      additionalProperties: false
+      required: [ bump ]
+      properties:
+        bump:
+          $ref: "#/$defs/bump"
+        graduate:
+          type: boolean
+$defs:
+  bump:
+    enum: [ major, minor, patch ]

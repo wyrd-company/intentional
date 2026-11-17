@@ -1,0 +1,47 @@
+$schema: https://refinery.systems/ontology/policy
+name: Intentional Backward Compatibility
+description: >-
+  Intentional preserves access to released meaning and provides an explicit path
+  from historical mutable workspace state to its current product contract.
+purpose:
+  - Keep durable release claims useful for the lifetime of their records.
+  - Prevent Intentional upgrades from silently stranding repository state.
+  - Make compatibility impact and active support boundaries predictable.
+relationships:
+  implements:
+    - semantic-transparency
+    - verifiable-by-design
+scope:
+  - Intentional public contract surfaces published by version 0.2.0 or later.
+  - >-
+    Intentional repositories, released records, schemas, binaries, and
+    integrations governed by those surfaces.
+mandates:
+  1: >-
+    Current Intentional releases permanently preserve historical verification
+    of every durable record published by Intentional.
+  2: >-
+    Current trust assessment remains distinct from historical conformance so
+    new security knowledge does not rewrite a record's historical result.
+  3: >-
+    Current Intentional provides committed mutable workspace state a path to its
+    product contract without silent mutation or silent data loss.
+  4: >-
+    Published schema identities, released Intentional binaries, and their
+    integrity information remain available permanently.
+  5: >-
+    Breaking changes to public interfaces and supported capabilities are
+    announced through a compatible release before removal in an incompatible
+    release.
+  6: >-
+    Only the current Intentional compatibility line receives fixes and project
+    support.
+  7: >-
+    Capability deprecation and removal does not imply that Intentional provides
+    an operational replacement.
+  8: >-
+    Unsealed reproducible outputs regenerate under the current contract
+    rather than treated as permanently migratable state.
+  9: >-
+    Historical execution uses the producing Intentional binary without a
+    promise that its execution environment or external inputs remain available.
