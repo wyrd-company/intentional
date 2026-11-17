@@ -55,6 +55,23 @@ gives its bytes. A Release Plan document ends with the one newline that
   for the violation. A tag record carries no `$schema` member;
   `schema-member.txt` shows that such a line is an undeclared member.
 
+`released-0.3.0-component/` holds bytes that the published 0.3.0
+`intentional-linux-x86_64` binary wrote under `contract-1` with
+`pre-1-0-bump-mapping: component`, from a fresh repository whose only file is
+a `package.json` with `"name": "sample-library"` and `"version": "0.4.1"`:
+
+- `release-config.yml`: `released-0.2.0/release-config.yml` with mapping
+  `component`, committed with the tag `sample-library@0.4.1`.
+- `release-plan.json`: `intentional plan` with one committed minor intent for
+  `sample-library`. Component mapping gives 0.5.0 and the workspace stream
+  0.1.0.
+- `CHANGELOG.md`: what `intentional apply` wrote.
+- `release-unit-tag-record.txt` and `workspace-tag-record.txt`: the messages
+  of `sample-library@0.5.0` and `0.1.0`, created by
+  `intentional tag --plan release-plan.json` and
+  `intentional tag --plan release-plan.json --phase after-publication` after
+  a commit of the applied tree.
+
 # Release Model fixtures
 
 `release-model/` holds hand-built Release Model documents in canonical form:

@@ -69,9 +69,13 @@ proposed-design:
     it, and its changelog section opens with a graduation line.
 
   contract-upgrade: >-
-    The binary interprets one configuration contract, contract-2. Every
-    command except init refuses a contract-1 configuration with a message
-    that names the fix: run intentional init. Init upgrades contract-1 by
+    The binary runs one configuration contract, contract-2. Every
+    command except init and verify refuses a contract-1 configuration with a
+    message that names the fix: run intentional init. Verify is the one
+    exception, because durable-record verification retains historical
+    semantics: it rebuilds a Release made under contract-1 with the
+    contract-1 interpreter, pre-1-0-bump-mapping component included, and no
+    other command reaches that interpreter. Init upgrades contract-1 by
     setting contract-2 and removing pre-1-0-bump-mapping, and keeps the
     comments of the configuration file. A configuration that used
     compatibility, or that omits the setting, already read bump names as

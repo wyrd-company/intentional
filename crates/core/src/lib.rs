@@ -9,6 +9,7 @@ pub mod adapters;
 pub mod apply;
 pub mod check;
 pub mod config;
+mod contract_1;
 pub mod error;
 pub mod identity;
 pub mod init;

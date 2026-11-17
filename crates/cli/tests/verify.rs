@@ -1153,7 +1153,6 @@ fn verify_fails_for_a_baseline_peer_disguised_as_a_tag_of_the_release_at_its_com
 /// The baseline tags written by released `0.2.0` on the workspace the fixture
 /// README describes.
 #[test]
-#[ignore = "verify does not yet rebuild releases made under contract-1"]
 fn a_baseline_created_by_released_0_2_0_verifies() {
     let fixtures = "docs/specifications/fixtures/released-0.2.0";
     let repo = TestRepo::new();
@@ -1309,7 +1308,6 @@ fn verify_fails_for_an_identity_tag_from_another_release() {
 /// `docs/specifications/fixtures/released-0.2.0`, on the workspace the
 /// fixture README describes.
 #[test]
-#[ignore = "verify does not yet rebuild releases made under contract-1"]
 fn tags_created_by_released_0_2_0_verify() {
     let fixtures = "docs/specifications/fixtures/released-0.2.0";
     let repo = TestRepo::new();
@@ -1361,6 +1359,63 @@ fn tags_created_by_released_0_2_0_verify() {
     );
     assert_eq!(report["plan_digest"], plan["digest"]);
     assert_eq!(report["generator"], "intentional 0.2.0");
+}
+
+/// Records that released 0.3.0 wrote under `contract-1` with
+/// `pre-1-0-bump-mapping: component`, the mapping Changesets adoption used.
+/// A minor intent at 0.4.1 released 0.5.0, and the workspace stream started
+/// at 0.1.0; under `contract-2` the same intent gives 0.4.2 and 0.0.1. This
+/// version does not plan or apply under `contract-1`, so the release commit
+/// is the tree 0.3.0 applied, from the fixture.
+#[test]
+fn tags_created_by_released_0_3_0_under_component_mapping_verify() {
+    let fixtures = "docs/specifications/fixtures/released-0.3.0-component";
+    let repo = TestRepo::new();
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"0.4.1\"\n}\n",
+    );
+    repo.write(
+        ".intentional/config.yml",
+        &repository_file(&format!("{fixtures}/release-config.yml")),
+    );
+    repo.write(".intentional/intents/.gitkeep", "");
+    repo.commit("add fixture");
+    git(&repo.root, &["tag", "sample-library@0.4.1"]);
+    let intent = ".intentional/intents/swift-falcon-c3b1.md";
+    repo.write(
+        intent,
+        "---\nsample-library: minor\n---\n\nAdd a sample capability.\n",
+    );
+    repo.commit("add intent");
+    repo.write(
+        "package.json",
+        "{\n  \"name\": \"sample-library\",\n  \"version\": \"0.5.0\"\n}\n",
+    );
+    repo.write(
+        "CHANGELOG.md",
+        &repository_file(&format!("{fixtures}/CHANGELOG.md")),
+    );
+    fs::remove_file(repo.root.join(intent)).expect("consume intent");
+    repo.commit("apply release");
+    repo.forge(
+        "sample-library@0.5.0",
+        "HEAD",
+        &repository_file(&format!("{fixtures}/release-unit-tag-record.txt")),
+    );
+    repo.forge(
+        "0.1.0",
+        "HEAD",
+        &repository_file(&format!("{fixtures}/workspace-tag-record.txt")),
+    );
+    let plan: Value =
+        serde_json::from_str(&repository_file(&format!("{fixtures}/release-plan.json")))
+            .expect("fixture plan");
+    for tag in ["sample-library@0.5.0", "0.1.0"] {
+        let report = assert_verified(&repo, tag, &["sample-library@0.5.0", "0.1.0"]);
+        assert_eq!(report["plan_digest"], plan["digest"]);
+        assert_eq!(report["generator"], "intentional 0.3.0");
+    }
 }
 
 #[test]

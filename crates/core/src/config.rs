@@ -96,7 +96,7 @@ pub(crate) struct Contract1Upgrade {
     pub mapping: Contract1Mapping,
 }
 
-fn declares_contract_1(value: &serde_yaml::Value) -> bool {
+pub(crate) fn declares_contract_1(value: &serde_yaml::Value) -> bool {
     value.get("contract").and_then(serde_yaml::Value::as_str) == Some(CONTRACT_1)
 }
 

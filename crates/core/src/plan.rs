@@ -6,12 +6,13 @@
 //! Deterministic release planning, changelog rendering, and digest sealing.
 
 use crate::config::Config;
+use crate::contract_1::Interpretation;
 use crate::error::{Error, Result};
 use crate::intent::Intent;
 use crate::model::{Bump, TagPhase, TagRole};
 use crate::schema::{self, SchemaRecord};
 use crate::version::{
-    aggregate_bumps, aggregate_graduations, bump_version, resolve_versions, VersionRepository,
+    aggregate_bumps, aggregate_graduations, resolve_versions_as, VersionRepository,
 };
 use semver::{Prerelease, Version};
 use serde::{Deserialize, Serialize};
@@ -296,6 +297,51 @@ impl ReleasePlan {
         generator_version: Option<&str>,
         source: Option<PlanSource>,
     ) -> Result<Self> {
+        Self::from_inputs_interpreted(
+            root,
+            config,
+            intents,
+            channel,
+            excluded_target,
+            generator_version,
+            source,
+            Interpretation::Current,
+        )
+    }
+
+    /// Build the plan of a Release that `verify` rebuilds, under the
+    /// interpretation it was made under.
+    pub(crate) fn from_inputs_as(
+        root: &Path,
+        config: &Config,
+        intents: &[Intent],
+        channel: Option<&str>,
+        interpretation: Interpretation,
+    ) -> Result<Self> {
+        let source = PlanSource::at_head(root)?;
+        Self::from_inputs_interpreted(
+            root,
+            config,
+            intents,
+            channel,
+            None,
+            None,
+            source,
+            interpretation,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_inputs_interpreted(
+        root: &Path,
+        config: &Config,
+        intents: &[Intent],
+        channel: Option<&str>,
+        excluded_target: Option<gix::ObjectId>,
+        generator_version: Option<&str>,
+        source: Option<PlanSource>,
+        interpretation: Interpretation,
+    ) -> Result<Self> {
         if channel.is_some_and(str::is_empty) {
             return Err(Error::Validation("channel must not be empty".to_owned()));
         }
@@ -311,7 +357,13 @@ impl ReleasePlan {
             };
             current_versions.insert(id.clone(), current);
         }
-        let resolved = resolve_versions(config, &declared, &graduating, &current_versions)?;
+        let resolved = resolve_versions_as(
+            config,
+            &declared,
+            &graduating,
+            &current_versions,
+            interpretation,
+        )?;
         let changed: BTreeSet<_> = resolved
             .iter()
             .filter(|(_, versions)| versions.bump != Bump::None)
@@ -398,7 +450,7 @@ impl ReleasePlan {
                 };
                 // Workspace tags are independent version lines. A release-unit
                 // graduation is a major change for them, not a graduation.
-                let base = bump_version(&current, highest_bump);
+                let base = interpretation.bump(&current, highest_bump);
                 let version = match channel.as_deref() {
                     Some(channel) => channel_version(
                         &repository,

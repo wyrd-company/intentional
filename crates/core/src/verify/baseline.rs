@@ -41,25 +41,26 @@ pub(super) fn verify(
     // cannot stand in for one the baseline established.
     let history = gix::discover(checkout.root())
         .map_err(|error| Error::Git(format!("failed to open the checkout: {error}")))?;
-    let reconstructed = Config::load(checkout.root()).and_then(|config| {
-        let versions = baseline_versions(
-            checkout.root(),
-            &config,
-            &BTreeMap::new(),
-            &|name, id, version| {
-                established_before(
-                    repository,
-                    &history,
-                    target,
-                    &config.contract,
-                    name,
-                    id,
-                    version,
-                )
-            },
-        )?;
-        Ok((config, versions))
-    });
+    let reconstructed =
+        crate::contract_1::load_released(checkout.root()).and_then(|(config, _)| {
+            let versions = baseline_versions(
+                checkout.root(),
+                &config,
+                &BTreeMap::new(),
+                &|name, id, version| {
+                    established_before(
+                        repository,
+                        &history,
+                        target,
+                        &config.contract,
+                        name,
+                        id,
+                        version,
+                    )
+                },
+            )?;
+            Ok((config, versions))
+        });
     let (config, versions) = match reconstructed {
         Ok(reconstructed) => reconstructed,
         Err(error) => {

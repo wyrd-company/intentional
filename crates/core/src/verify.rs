@@ -360,7 +360,7 @@ fn reconstruct(
     record: &TagRecord,
 ) -> Result<Reconstruction> {
     let release = Checkout::of(repository, target)?;
-    let config = Config::load(release.root())?;
+    let (config, _) = crate::contract_1::load_released(release.root())?;
     let channel = channel_of(&record.version);
     let source = match channel {
         Some(_) => {
@@ -374,7 +374,7 @@ fn reconstruct(
         None => recover_deleted_intents(release.root(), &config)?.1,
     };
     let planned = Checkout::of(repository, source)?;
-    let apply = ApplyResult::build(planned.root(), channel)?;
+    let apply = ApplyResult::build_released(planned.root(), channel)?;
     Ok(Reconstruction { apply, source })
 }
 

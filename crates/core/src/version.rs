@@ -6,6 +6,7 @@
 //! Tag-derived current versions and intent-derived next versions.
 
 use crate::config::Config;
+use crate::contract_1::Interpretation;
 use crate::error::{Error, Result};
 use crate::model::{Bump, ReleaseUnitDisposition};
 use semver::Version;
@@ -139,6 +140,25 @@ pub fn resolve_versions(
     graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
 ) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
+    resolve_versions_as(
+        config,
+        declared,
+        graduating,
+        current,
+        Interpretation::Current,
+    )
+}
+
+/// [`resolve_versions`] under an interpretation; only `verify` passes one
+/// other than the current contract.
+pub(crate) fn resolve_versions_as(
+    config: &Config,
+    declared: &BTreeMap<String, Bump>,
+    graduating: &BTreeSet<String>,
+    current: &BTreeMap<String, Version>,
+    interpretation: Interpretation,
+) -> Result<BTreeMap<String, ReleaseUnitVersion>> {
+    interpretation.check_graduation(graduating.len())?;
     let effective = effective_bumps(config, declared);
     for (id, bump) in &effective {
         if *bump != Bump::None
@@ -180,7 +200,12 @@ pub fn resolve_versions(
         let versions = if graduating.contains(id) {
             graduation(id, current_version)?
         } else {
-            ReleaseUnitVersion::new(current_version.clone(), effective[id])
+            ReleaseUnitVersion {
+                current: current_version.clone(),
+                next: interpretation.bump(current_version, effective[id]),
+                bump: effective[id],
+                graduates: false,
+            }
         };
         resolved.insert(id.clone(), versions);
         if release_unit.disposition == ReleaseUnitDisposition::Suspended {
@@ -189,10 +214,26 @@ pub fn resolve_versions(
     }
 
     for group in &config.fixed {
-        resolve_group(group, true, &effective, graduating, current, &mut resolved)?;
+        resolve_group(
+            group,
+            true,
+            &effective,
+            graduating,
+            current,
+            interpretation,
+            &mut resolved,
+        )?;
     }
     for group in &config.linked {
-        resolve_group(group, false, &effective, graduating, current, &mut resolved)?;
+        resolve_group(
+            group,
+            false,
+            &effective,
+            graduating,
+            current,
+            interpretation,
+            &mut resolved,
+        )?;
     }
     Ok(resolved)
 }
@@ -222,6 +263,7 @@ fn resolve_group(
     effective: &BTreeMap<String, Bump>,
     graduating: &BTreeSet<String>,
     current: &BTreeMap<String, Version>,
+    interpretation: Interpretation,
     resolved: &mut BTreeMap<String, ReleaseUnitVersion>,
 ) -> Result<()> {
     let highest_current = group
@@ -249,7 +291,7 @@ fn resolve_group(
             ensure_graduation_source(id, &highest_current)?;
             Version::new(1, 0, 0)
         }
-        None => bump_version(&highest_current, highest_bump),
+        None => interpretation.bump(&highest_current, highest_bump),
     };
     for id in group {
         let member_current = current[id].clone();
