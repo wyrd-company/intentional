@@ -32,8 +32,8 @@ validation-criteria: >-
   requires exactly one baseline or plan mode. Plan mode verifies the
   materialized candidate before creating annotated Release authority, and
   creates a phased tag only under a matching `--phase` declaration. `check`
-  applies Release Workspace conformance and reports a stale committed Release
-  Model. `verify` reconstructs core Release identity from an exact annotated
+  applies Release Workspace conformance, including committed projection drift,
+  and reports a stale committed Release Model. `verify` reconstructs core Release identity from an exact annotated
   tag. `model` writes the canonical Release Model to
   `.intentional/release-model.json`, or to standard output under `--stdout`.
   Model writes and initialization model writes ensure the root `.gitattributes`

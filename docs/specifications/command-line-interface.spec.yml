@@ -412,6 +412,16 @@ commands:
         JSON, or a file outside the current contract is the `release-model-stale`
         error; run `intentional model` to repair it. An absent model is not a
         diagnostic. A dirty working tree is not itself a diagnostic.
+      - >-
+        Drift on a committed projection fails check. The expected version is
+        the tag version or, when the Release Unit has an applied release that
+        waits for its tag, that release version for every committed projection
+        of the unit, detected by the same rule as tag. A prerelease version
+        above the last stable tag also supplies this version, including after
+        its channel tag. A leading changelog heading that is not plain SemVer
+        supplies no applied release, so the expected version falls back to the
+        tag. A partly applied release fails. Drift on injected projections is
+        reported only by status, and none projections are not read.
   - name: verify
     summary: Verify one established Release or baseline from its annotated tag.
     mode: non-interactive

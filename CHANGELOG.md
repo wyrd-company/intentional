@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+### Breaking
+
+- `check` fails when a `committed` projection holds a version other than the tag-derived current version, naming the release unit, file, pointer, found version, and expected version. When a release unit has an applied release that waits for its tag, every `committed` projection of the unit must hold that release version, including a prerelease above the last stable tag, so the commit of a full apply passes and a partly applied release fails. An existing changelog whose leading heading is not plain SemVer supplies no applied release to `check`, which compares projections with the tag-derived version. `tag` retains strict release validation. `status` reports drift on `injected` projections without failing `check`; neither command reads `none` projections.
+
+## 0.2.1
+
+### Features
+
+- A projection `file` that starts with `/` is relative to the repository root, so that several release units can write their versions into one shared `json`, `toml`, or `yaml` file while each changelog stays at its release-unit path. Configuration load refuses two projections that write the same field of one file, and `status`, `check`, `apply`, `stamp`, and `tag` also refuse them when they reach one file through a symlink, a hard link, or letter case. Every command refuses a projection file or changelog that resolves outside the repository.
+
+### Fixes
+
+- Refuse a baseline when an existing release record's tag id, version, contract, or baseline field does not match the tag it occupies.
+- `apply` and `stamp` no longer lose an edit when release units reach one shared projection file through different paths, such as symlinks, letter case, or a `./` prefix. A `json` pointer now selects an array element only by its index without leading zeros, so that `/versions/01` cannot write the same element as `/versions/1`.
+- Document that an internal dependency bump propagates only between release units that share an ecosystem adapter.
+
 ## 0.2.0
 
 ### Breaking

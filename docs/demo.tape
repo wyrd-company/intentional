@@ -4,7 +4,7 @@
 #   implements: intent-driven-polyglot-release
 # ---
 
-Output docs/assets/demo.gif
+Output docs/user/assets/demo.gif
 
 Require bash
 Require git

@@ -1,8 +1,8 @@
 ---
-docs: true
 title: Installation
 order: 2
 install: true
+product: intentional
 relationships:
   implements: intent-driven-polyglot-release
 ---

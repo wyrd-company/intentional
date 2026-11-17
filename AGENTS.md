@@ -50,5 +50,5 @@ their authoritative source or use the owning command.
 
 ## Documentation
 
-User documentation is at the root of `docs/`. Designs, specifications, policy,
+User documentation is in `docs/user/`. Designs, specifications, policy,
 standards, and decisions are in their named `docs/` subdirectories.
