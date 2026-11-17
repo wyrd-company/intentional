@@ -108,7 +108,10 @@ proposed-design:
     to compatibility-line naming: release process templates outside Intentional
     read it, so its identifier names its own contract line, such as
     `https://intentional.foo/schemas/release-model/1`, and only a change to the
-    Release Model contract starts its next line.
+    Release Model contract starts its next line. An identifier keeps the line
+    it was named on when a later release first publishes it: Intentional 0.5.0
+    first publishes `0.2/config`, `0.2/change-intent`, `0.2/init-plan`,
+    `0.2/tag-record`, and `0.3/release-plan` under those names.
 
   published-schema-stability: >-
     A schema identifier is published when a released Intentional first names
