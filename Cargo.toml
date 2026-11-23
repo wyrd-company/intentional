@@ -17,7 +17,7 @@ repository = "https://github.com/wyrd-company/intentional"
 [workspace.dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-gix = "0.89"
+gix = "0.91"
 glob = "0.3"
 jsonschema = { version = "0.59", default-features = false }
 node-semver = "2.2"
